@@ -1,0 +1,53 @@
+@import "tailwindcss";
+@config "../tailwind.config.js";
+
+@layer base {
+    body {
+        @apply bg-background-light dark:bg-background-dark text-umber antialiased selection:bg-primary selection:text-white;
+        font-family: 'EB Garamond', serif;
+    }
+}
+
+@layer components {
+    .double-gold-border {
+        border: 1px solid #C5A065;
+        outline: 3px solid #C5A065;
+        outline-offset: 3px;
+        margin: 4px;
+        /* Space for outline */
+    }
+
+    .hide-scrollbar::-webkit-scrollbar {
+        display: none;
+    }
+
+    .hide-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
+
+    .hover-lift {
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease;
+    }
+
+    .hover-lift:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 30px -10px rgba(27, 54, 93, 0.15);
+    }
+
+    /* Decorative Divider */
+    .divider-cloud {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        color: #C5A065;
+        margin-bottom: 2rem;
+    }
+
+    .divider-line {
+        height: 1px;
+        width: 60px;
+        background-color: #C5A065;
+    }
+}

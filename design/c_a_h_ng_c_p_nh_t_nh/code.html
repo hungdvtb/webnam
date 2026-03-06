@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+
+<html lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Cửa Hàng - Di Sản Gốm Việt</title>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&amp;family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&amp;family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#1B365D", // Cobalt Blue
+                        "background-light": "#F9F5F0", // Rice Paper
+                        "background-dark": "#111821",
+                        "surface": "#FFFFFF",
+                        "umber": "#2C2420", // Dark Umber
+                        "stone": "#8C8681", // Stone Grey
+                        "brick": "#C15949", // Brick Red
+                        "gold": "#C5A065", // Antique Gold
+                    },
+                    fontFamily: {
+                        "display": ['"Playfair Display"', "serif"],
+                        "body": ['"EB Garamond"', "serif"],
+                        "ui": ['"Lora"', "serif"],
+                    },
+                    borderRadius: {
+                        DEFAULT: "2px",
+                        lg: "4px",
+                        xl: "8px",
+                        full: "9999px"
+                    },
+                    boxShadow: {
+                        'hover': '0 10px 30px -10px rgba(27, 54, 93, 0.25)',
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        /* Custom scrollbar for webkit */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #F9F5F0; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #C5A065; 
+            border-radius: 2px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #1B365D; 
+        }
+
+        /* Texture overlay */
+        .bg-texture {
+            background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100' height='100' filter='url(%23noise)' opacity='0.08'/%3E%3C/svg%3E");
+        }
+
+        /* Checkbox styling */
+        .custom-checkbox:checked {
+            background-color: #C5A065;
+            border-color: #C5A065;
+            background-image: url("data:image/svg+xml,%3csvg viewBox='0 0 16 16' fill='white' xmlns='http://www.w3.org/2000/svg'%3e%3cpath d='M12.207 4.793a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0l-2-2a1 1 0 011.414-1.414L6.5 9.086l4.293-4.293a1 1 0 011.414 0z'/%3e%3c/svg%3e");
+        }
+        
+        /* Diamond shape for checkbox container logic if needed, using standard checkbox for now but styled */
+        .diamond-check {
+            transform: rotate(45deg);
+        }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark text-umber antialiased min-h-screen flex flex-col font-body relative">
+<!-- Texture Overlay -->
+<div class="fixed inset-0 pointer-events-none bg-texture z-0 opacity-40 mix-blend-multiply"></div>
+<!-- Header -->
+<div class="relative z-10 w-full flex-col bg-background-light border-b border-[#e8ecf3] dark:bg-background-dark dark:border-gray-800">
+<header class="flex items-center justify-between whitespace-nowrap px-10 py-5 max-w-[1440px] mx-auto w-full">
+<div class="flex items-center gap-12">
+<!-- Logo -->
+<a class="flex items-center gap-3 text-primary group" href="#">
+<div class="size-8 text-primary transition-transform duration-500 group-hover:rotate-180">
+<span class="material-symbols-outlined text-4xl">
+                            pentagon
+                        </span>
+</div>
+<h2 class="text-primary text-2xl font-display font-bold leading-tight tracking-tight uppercase">Di Sản Gốm Việt</h2>
+</a>
+<!-- Nav -->
+<nav class="hidden md:flex items-center gap-10">
+<a class="text-umber hover:text-primary transition-colors text-base font-ui font-medium uppercase tracking-wider" href="#">Trang Chủ</a>
+<a class="text-primary font-bold text-base font-ui font-medium uppercase tracking-wider border-b-2 border-gold" href="#">Cửa Hàng</a>
+<a class="text-umber hover:text-primary transition-colors text-base font-ui font-medium uppercase tracking-wider" href="#">Về Chúng Tôi</a>
+<a class="text-umber hover:text-primary transition-colors text-base font-ui font-medium uppercase tracking-wider" href="#">Liên Hệ</a>
+</nav>
+</div>
+<!-- Actions -->
+<div class="flex items-center gap-6">
+<button class="text-umber hover:text-primary transition-colors">
+<span class="material-symbols-outlined">search</span>
+</button>
+<button class="text-umber hover:text-primary transition-colors relative">
+<span class="material-symbols-outlined">shopping_bag</span>
+<span class="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-brick text-[10px] text-white font-ui font-bold">2</span>
+</button>
+<button class="text-umber hover:text-primary transition-colors">
+<span class="material-symbols-outlined">person</span>
+</button>
+</div>
+</header>
+<!-- Breadcrumbs -->
+<div class="px-10 py-4 max-w-[1440px] mx-auto w-full flex items-center gap-2 text-stone text-sm font-ui">
+<a class="hover:text-primary" href="#">Trang Chủ</a>
+<span class="material-symbols-outlined text-[12px]">chevron_right</span>
+<span class="text-primary font-semibold">Cửa Hàng</span>
+</div>
+</div>
+<!-- Main Content -->
+<main class="relative z-10 flex-1 w-full max-w-[1440px] mx-auto px-10 py-8 grid grid-cols-12 gap-12">
+<!-- Sidebar (Sticky Filter) - 25% width (3/12 cols) -->
+<aside class="col-span-12 lg:col-span-3 hidden lg:block">
+<div class="sticky top-8 space-y-12">
+<!-- Search within Category -->
+<div class="relative">
+<input class="w-full bg-transparent border-b border-gold py-2 pl-0 pr-8 text-umber placeholder-stone focus:outline-none focus:border-primary font-ui text-sm transition-colors" placeholder="Tìm kiếm phẩm vật..." type="text"/>
+<span class="material-symbols-outlined absolute right-0 top-2 text-gold">search</span>
+</div>
+<!-- Categories -->
+<div>
+<h3 class="font-display text-xl font-bold text-primary mb-6 border-l-4 border-gold pl-3">Loại Men</h3>
+<ul class="space-y-4">
+<li class="flex items-center gap-3 group cursor-pointer">
+<div class="relative flex items-center justify-center size-4 border border-gold rotate-45 transition-colors group-hover:border-primary bg-gold/20">
+<div class="size-2 bg-primary rotate-45"></div>
+</div>
+<span class="font-ui text-primary font-bold">Gốm Men Lam</span>
+<span class="ml-auto text-stone text-xs font-ui italic">(42)</span>
+</li>
+<li class="flex items-center gap-3 group cursor-pointer">
+<div class="relative flex items-center justify-center size-4 border border-gold rotate-45 transition-colors group-hover:border-primary">
+</div>
+<span class="font-ui text-umber group-hover:text-primary transition-colors">Gốm Men Rạn</span>
+<span class="ml-auto text-stone text-xs font-ui italic">(18)</span>
+</li>
+<li class="flex items-center gap-3 group cursor-pointer">
+<div class="relative flex items-center justify-center size-4 border border-gold rotate-45 transition-colors group-hover:border-primary">
+</div>
+<span class="font-ui text-umber group-hover:text-primary transition-colors">Gốm Chu Đậu</span>
+<span class="ml-auto text-stone text-xs font-ui italic">(25)</span>
+</li>
+<li class="flex items-center gap-3 group cursor-pointer">
+<div class="relative flex items-center justify-center size-4 border border-gold rotate-45 transition-colors group-hover:border-primary">
+</div>
+<span class="font-ui text-umber group-hover:text-primary transition-colors">Gốm Đất Nung</span>
+<span class="ml-auto text-stone text-xs font-ui italic">(12)</span>
+</li>
+</ul>
+</div>
+<!-- Price Range -->
+<div>
+<h3 class="font-display text-xl font-bold text-primary mb-6 border-l-4 border-gold pl-3">Mức Giá</h3>
+<ul class="space-y-4">
+<li class="flex items-center gap-3 group cursor-pointer">
+<div class="relative flex items-center justify-center size-4 border border-stone/50 rotate-45 transition-colors group-hover:border-primary"></div>
+<span class="font-ui text-umber group-hover:text-primary transition-colors">Dưới 1 triệu</span>
+</li>
+<li class="flex items-center gap-3 group cursor-pointer">
+<div class="relative flex items-center justify-center size-4 border border-stone/50 rotate-45 transition-colors group-hover:border-primary"></div>
+<span class="font-ui text-umber group-hover:text-primary transition-colors">1 triệu - 5 triệu</span>
+</li>
+<li class="flex items-center gap-3 group cursor-pointer">
+<div class="relative flex items-center justify-center size-4 border border-stone/50 rotate-45 transition-colors group-hover:border-primary"></div>
+<span class="font-ui text-umber group-hover:text-primary transition-colors">5 triệu - 20 triệu</span>
+</li>
+<li class="flex items-center gap-3 group cursor-pointer">
+<div class="relative flex items-center justify-center size-4 border border-stone/50 rotate-45 transition-colors group-hover:border-primary"></div>
+<span class="font-ui text-umber group-hover:text-primary transition-colors">Trên 20 triệu</span>
+</li>
+</ul>
+</div>
+<!-- Featured Highlight (Mini) -->
+<div class="mt-12 p-6 border border-gold/30 bg-surface/50 text-center">
+<span class="text-xs font-ui font-bold uppercase tracking-widest text-brick mb-2 block">Nổi Bật</span>
+<div class="w-full aspect-square bg-neutral-200 mb-4 overflow-hidden relative">
+<img alt="Bình gốm cổ điển với hoa văn rồng xanh trên nền trắng" class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBCFZqx6ZiQl1V8_gOjw5QRsn4HHCsoXh_I-6ND1w8XjfPzxt9bElmmydQrRvq4ijUSV-raLDHTH0c8qHHzTHnJTwMQAEQ6fVs-Hf5fdsM8voBWPZkJIkKCYibHpX3rGiwzXWE1omc4aOiNk0HRdNTztkj9m4aRF317921mDqBTL0Jdbz-2qx4qM5Nv5OHqfFUQuZKJ6mHYaD7k4FEu8lybci8919kdD__MF7xixiw5e73IsGrs_US8u1eVNVeffEMoxxoEan6gzLE"/>
+</div>
+<h4 class="font-display text-lg text-primary mb-1">Bình Tỳ Bà</h4>
+<p class="font-body italic text-stone text-sm mb-3">"Vẻ đẹp vượt thời gian"</p>
+<a class="text-xs font-ui font-bold uppercase tracking-wider text-primary border-b border-primary pb-0.5 hover:text-brick hover:border-brick transition-colors" href="#">Xem Chi Tiết</a>
+</div>
+</div>
+</aside>
+<!-- Product Grid - 75% width (9/12 cols) -->
+<section class="col-span-12 lg:col-span-9 flex flex-col">
+<!-- Sort Bar -->
+<div class="flex flex-col sm:flex-row justify-between items-end sm:items-center mb-10 pb-4 border-b border-gold/20">
+<h1 class="font-display text-4xl text-primary font-bold">Gốm Men Lam</h1>
+<div class="flex items-center gap-2 mt-4 sm:mt-0">
+<span class="text-stone font-ui text-sm italic">Sắp xếp theo:</span>
+<div class="group relative cursor-pointer">
+<span class="font-ui text-sm font-bold text-primary uppercase tracking-wide border-b border-primary pb-0.5">Mới nhất</span>
+<div class="absolute right-0 top-full mt-2 w-40 bg-white shadow-xl border border-stone/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto z-20 py-2">
+<div class="px-4 py-2 hover:bg-background-light font-ui text-sm text-umber cursor-pointer">Giá: Thấp đến Cao</div>
+<div class="px-4 py-2 hover:bg-background-light font-ui text-sm text-umber cursor-pointer">Giá: Cao đến Thấp</div>
+<div class="px-4 py-2 hover:bg-background-light font-ui text-sm text-umber cursor-pointer">Bán chạy nhất</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Grid -->
+<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-8 gap-y-16">
+<!-- Product Card 1 -->
+<article class="group cursor-pointer flex flex-col">
+<div class="relative w-full aspect-[3/4] overflow-hidden bg-white mb-6">
+<div class="absolute inset-0 border-[3px] border-double border-transparent group-hover:border-gold transition-colors duration-500 z-10 pointer-events-none"></div>
+<img alt="Bình gốm xanh coban" class="w-full h-full object-cover transform transition-transform duration-700 group-hover:scale-105 group-hover:-translate-y-1" data-alt="Bình gốm xanh coban với họa tiết phượng hoàng" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDcMPQvTYfIcPAg6sqL4OsH2D1p3M4avtONqiSsBS4SgVBikXqzC8ZNsEvivHGMUDL-yNVLDcJ9y4_LXkVwS0nN09mivXIMETxJpnsEKEX0qRwQuOCRAPCj8v01Zm_kYjkejjOSmTio2VKsXpFHuLSIKcwAKUp-ETdSZWwPoAS1RzjnB6Ye2id-YuB0-zKbYStIG-r_2jbcdsdIxBk4dHmgSdRnMl89VdwrpTBP8zblk_M8lW7IOPmkyTYW5HoI0SGzu-4v2eDg6nE"/>
+<!-- Hover Action -->
+<div class="absolute inset-x-0 bottom-0 p-4 translate-y-full group-hover:translate-y-0 transition-transform duration-500 z-20 bg-gradient-to-t from-primary/90 to-transparent pt-12">
+<button class="w-full bg-surface text-primary font-ui font-bold text-xs uppercase tracking-widest py-3 hover:bg-brick hover:text-white transition-colors">
+                                Thêm vào giỏ
+                            </button>
+</div>
+</div>
+<div class="text-center space-y-2 relative">
+<h3 class="font-display text-xl text-primary font-medium group-hover:text-brick transition-colors">Bình Hút Lộc Tứ Quý</h3>
+<p class="font-body text-lg text-brick italic">12.500.000 ₫</p>
+</div>
+</article>
+<!-- Product Card 2 -->
+<article class="group cursor-pointer flex flex-col">
+<div class="relative w-full aspect-[3/4] overflow-hidden bg-white mb-6">
+<div class="absolute top-4 left-4 z-20 bg-brick text-white text-[10px] font-ui font-bold uppercase px-2 py-1 tracking-wider">Mới</div>
+<div class="absolute inset-0 border-[3px] border-double border-transparent group-hover:border-gold transition-colors duration-500 z-10 pointer-events-none"></div>
+<img alt="Bộ ấm trà gốm" class="w-full h-full object-cover transform transition-transform duration-700 group-hover:scale-105 group-hover:-translate-y-1" data-alt="Bộ ấm trà gốm trắng tinh xảo với viền vàng" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDARcHO_zAqwS53-6MOaAOyO_zJumRt1lpwP1xOgBze1yDNaoLu_7Zn1iKS_g_5Gn_vL6UXsijLHdeuGerdkcgtryCGm-BwvosAiPkjx1psMcVHkV3py9w7wXaECttrRJPcrMiE0NYVB4N93Sl9EU6LCiKS3OxANYrxy3MHmVwG0l9hfTZBOI24EZxTtKHzgLxhP3MuiKkGbKJ-THrR-KVcyLQ2WSD--7UXENxR3ytVxuWK92gS78GYUVIRvyMvAVtOly20eQXF39I"/>
+<div class="absolute inset-x-0 bottom-0 p-4 translate-y-full group-hover:translate-y-0 transition-transform duration-500 z-20 bg-gradient-to-t from-primary/90 to-transparent pt-12">
+<button class="w-full bg-surface text-primary font-ui font-bold text-xs uppercase tracking-widest py-3 hover:bg-brick hover:text-white transition-colors">
+                                Thêm vào giỏ
+                            </button>
+</div>
+</div>
+<div class="text-center space-y-2 relative">
+<h3 class="font-display text-xl text-primary font-medium group-hover:text-brick transition-colors">Bộ Trà Bạch Định</h3>
+<p class="font-body text-lg text-brick italic">3.200.000 ₫</p>
+</div>
+</article>
+<!-- Product Card 3 -->
+<article class="group cursor-pointer flex flex-col">
+<div class="relative w-full aspect-[3/4] overflow-hidden bg-white mb-6">
+<div class="absolute inset-0 border-[3px] border-double border-transparent group-hover:border-gold transition-colors duration-500 z-10 pointer-events-none"></div>
+<img alt="Lọ hoa gốm" class="w-full h-full object-cover transform transition-transform duration-700 group-hover:scale-105 group-hover:-translate-y-1" data-alt="Lọ hoa gốm màu kem với họa tiết hoa sen xanh lam" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC1TlX0aPwYJUNZlK4LJZYYX0w2CXzW2iL8QMFpMYLm_OlDFdTtZLxMGWy4fOduiyxDvrpRg5LC4KFM7nnOH-hfKqEMuoOMKe_lzpcofDh0MNl36_nr373_l2AX8kHlA2YeOAvLJW54roNG1FIoYdInQGZ0Ar0MQQanL0_2nyD_a9JHjZgTvl5oLe4p131PpT4fl23OGss1rZjp70uOTBv_kk3WSHPF4BxyaD5APzWyKNMsvBB-UdlNT8VbLTrqxTlP_mTQZiVKhAU"/>
+<div class="absolute inset-x-0 bottom-0 p-4 translate-y-full group-hover:translate-y-0 transition-transform duration-500 z-20 bg-gradient-to-t from-primary/90 to-transparent pt-12">
+<button class="w-full bg-surface text-primary font-ui font-bold text-xs uppercase tracking-widest py-3 hover:bg-brick hover:text-white transition-colors">
+                                Thêm vào giỏ
+                            </button>
+</div>
+</div>
+<div class="text-center space-y-2 relative">
+<h3 class="font-display text-xl text-primary font-medium group-hover:text-brick transition-colors">Lọ Hoa Sen Vẽ Vàng</h3>
+<p class="font-body text-lg text-brick italic">8.900.000 ₫</p>
+</div>
+</article>
+<!-- Product Card 4 -->
+<article class="group cursor-pointer flex flex-col">
+<div class="relative w-full aspect-[3/4] overflow-hidden bg-white mb-6">
+<div class="absolute inset-0 border-[3px] border-double border-transparent group-hover:border-gold transition-colors duration-500 z-10 pointer-events-none"></div>
+<img alt="Đĩa gốm sứ" class="w-full h-full object-cover transform transition-transform duration-700 group-hover:scale-105 group-hover:-translate-y-1" data-alt="Đĩa gốm sứ trang trí với họa tiết cá chép" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAvQbtK43kj4y_qPDRSdr2t4437Kg-FYT7xzydlnCZKLqt8RvEnIzLDSEKhxByHxv4l-r7JagqA8nP3xCs-XmMAXF3MrJqi_uFiBsmw5ampxsmw2XuCeEiCagUy8yGxeEl1LCDJ1TyTJIvFcgx7-BHIOZDmEyqofb2jjLc3MQgt6JwW8q4OTxyQoCedJnbZHUFRiypUiBUSbqyaR0QmbdzsmnhvJHQ7shFbDBXkDwpYM-bjKaOrBU4394z6jmUpbTrhf4lzWTn4Usc"/>
+<div class="absolute inset-x-0 bottom-0 p-4 translate-y-full group-hover:translate-y-0 transition-transform duration-500 z-20 bg-gradient-to-t from-primary/90 to-transparent pt-12">
+<button class="w-full bg-surface text-primary font-ui font-bold text-xs uppercase tracking-widest py-3 hover:bg-brick hover:text-white transition-colors">
+                                Thêm vào giỏ
+                            </button>
+</div>
+</div>
+<div class="text-center space-y-2 relative">
+<h3 class="font-display text-xl text-primary font-medium group-hover:text-brick transition-colors">Đĩa Cảnh Lý Ngư</h3>
+<p class="font-body text-lg text-brick italic">4.500.000 ₫</p>
+</div>
+</article>
+<!-- Product Card 5 -->
+<article class="group cursor-pointer flex flex-col">
+<div class="relative w-full aspect-[3/4] overflow-hidden bg-white mb-6">
+<div class="absolute top-4 left-4 z-20 bg-stone text-white text-[10px] font-ui font-bold uppercase px-2 py-1 tracking-wider">Hết hàng</div>
+<div class="absolute inset-0 border-[3px] border-double border-transparent group-hover:border-gold transition-colors duration-500 z-10 pointer-events-none"></div>
+<img alt="Chậu gốm men rạn" class="w-full h-full object-cover transform transition-transform duration-700 group-hover:scale-105 group-hover:-translate-y-1 opacity-70 grayscale" data-alt="Chậu cây gốm men rạn cổ điển" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDNRZ7dyjxBmYJa62LZib-2GBsBRqmUZSTfBoN5pglSq1eYDlqLvXTqE5D0_iqcL2IupOzSsC3ebT2idDhIN5iomMvZfFuYDeNPdY8wXejV-KQUOWIhsn8V79YywoVq1AIiNZ0MuZud6gFT5Wj1WUNqqHU9IO26n2jYFtsR1bu4x0vs7R6T9sNPWMubAWxdxjssnknGIelSKHRKuTmCvENGsQR-qBOD8ZFa1ChZ8U8ybNjtB37_4llHDWrpiZPJCmdOiZmSPDCv1iE"/>
+</div>
+<div class="text-center space-y-2 relative">
+<h3 class="font-display text-xl text-stone font-medium group-hover:text-brick transition-colors">Chậu Ký Kiểu Men Rạn</h3>
+<p class="font-body text-lg text-stone italic line-through">1.800.000 ₫</p>
+</div>
+</article>
+<!-- Product Card 6 -->
+<article class="group cursor-pointer flex flex-col">
+<div class="relative w-full aspect-[3/4] overflow-hidden bg-white mb-6">
+<div class="absolute inset-0 border-[3px] border-double border-transparent group-hover:border-gold transition-colors duration-500 z-10 pointer-events-none"></div>
+<img alt="Bát gốm trà đạo" class="w-full h-full object-cover transform transition-transform duration-700 group-hover:scale-105 group-hover:-translate-y-1" data-alt="Bát gốm sứ tinh xảo dùng cho trà đạo" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBHUrjZWy4StFvLNhbsZFA8ygOdD7jGeO7dDNTkt8tVKx8kSHrNb7UMvm3OTDNB4qFuW-o707aigb0haQe545pwDp57fpSJZbKNm2a3K9ZQQFF0UJXTiV4azVrnkejP7eApnVNcEsyPKcbfIPS_iZAe5xbJ-XezT0_mAEqnS2Se6BQntDqY5f8O9MNiyhPMAEpNYIUlGe9WgR2yLmkPHK-qT0a0GYWly-B7j3tvjUznaP_8XpSFxid5VjWqqNBsy8N5I6-YVuKr_z8"/>
+<div class="absolute inset-x-0 bottom-0 p-4 translate-y-full group-hover:translate-y-0 transition-transform duration-500 z-20 bg-gradient-to-t from-primary/90 to-transparent pt-12">
+<button class="w-full bg-surface text-primary font-ui font-bold text-xs uppercase tracking-widest py-3 hover:bg-brick hover:text-white transition-colors">
+                                Thêm vào giỏ
+                            </button>
+</div>
+</div>
+<div class="text-center space-y-2 relative">
+<h3 class="font-display text-xl text-primary font-medium group-hover:text-brick transition-colors">Chén Tống Thiên Mục</h3>
+<p class="font-body text-lg text-brick italic">850.000 ₫</p>
+</div>
+</article>
+</div>
+<!-- Empty State (Hidden by default, structure provided) -->
+<!-- 
+            <div class="flex flex-col items-center justify-center py-24 text-center">
+                <div class="text-stone/30 mb-6">
+                   <span class="material-symbols-outlined text-[80px]">filter_vintage</span>
+                </div>
+                <h3 class="font-display text-2xl text-primary mb-2">Hiện chưa có phẩm vật phù hợp</h3>
+                <p class="font-body text-stone mb-8">Xin quý khách vui lòng thử lại với các tiêu chí khác.</p>
+                <button class="px-8 py-3 bg-primary text-white font-ui font-bold uppercase tracking-wider text-sm hover:bg-primary/90 transition-colors">Xóa bộ lọc</button>
+            </div>
+            -->
+<!-- Pagination -->
+<div class="mt-20 flex justify-center items-center gap-8 border-t border-gold/20 pt-8">
+<button class="flex items-center gap-2 text-stone hover:text-primary transition-colors disabled:opacity-30">
+<span class="material-symbols-outlined text-sm">west</span>
+<span class="font-ui text-sm font-bold uppercase tracking-wider">Trước</span>
+</button>
+<div class="flex items-center gap-4">
+<button class="w-10 h-10 flex items-center justify-center font-display text-xl text-primary font-bold border-b-2 border-primary">I</button>
+<button class="w-10 h-10 flex items-center justify-center font-display text-xl text-stone hover:text-primary transition-colors">II</button>
+<button class="w-10 h-10 flex items-center justify-center font-display text-xl text-stone hover:text-primary transition-colors">III</button>
+<span class="font-display text-stone">...</span>
+<button class="w-10 h-10 flex items-center justify-center font-display text-xl text-stone hover:text-primary transition-colors">V</button>
+</div>
+<button class="flex items-center gap-2 text-primary hover:text-brick transition-colors">
+<span class="font-ui text-sm font-bold uppercase tracking-wider">Sau</span>
+<span class="material-symbols-outlined text-sm">east</span>
+</button>
+</div>
+</section>
+</main>
+<!-- Footer Simple -->
+<footer class="relative z-10 bg-[#152945] text-white/80 py-12 border-t-4 border-gold mt-12">
+<div class="max-w-[1440px] mx-auto px-10 flex flex-col md:flex-row justify-between items-center gap-8">
+<div class="flex items-center gap-3">
+<div class="size-8 text-white/90">
+<span class="material-symbols-outlined text-4xl">pentagon</span>
+</div>
+<h2 class="text-white text-xl font-display font-bold uppercase tracking-widest">Di Sản Gốm Việt</h2>
+</div>
+<p class="font-body italic text-sm text-white/50">© 2024. Tinh hoa đất Việt, hồn cốt ngàn năm.</p>
+</div>
+</footer>
+</body></html>

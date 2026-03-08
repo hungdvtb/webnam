@@ -6,7 +6,9 @@ use Illuminate\Database\Eloquent\Model;
 
 class CartItem extends Model
 {
-    protected $fillable = ['cart_id', 'product_id', 'product_group_id', 'quantity', 'price', 'options'];
+    use \App\Traits\BelongsToAccount;
+
+    protected $fillable = ['cart_id', 'product_id', 'product_group_id', 'quantity', 'price', 'options', 'account_id'];
 
     protected $casts = [
         'options' => 'array',

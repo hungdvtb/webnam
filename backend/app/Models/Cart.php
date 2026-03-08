@@ -6,7 +6,9 @@ use Illuminate\Database\Eloquent\Model;
 
 class Cart extends Model
 {
-    protected $fillable = ['user_id', 'session_id'];
+    use \App\Traits\BelongsToAccount;
+
+    protected $fillable = ['user_id', 'session_id', 'account_id'];
 
     public function items()
     {

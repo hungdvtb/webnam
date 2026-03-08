@@ -23,11 +23,17 @@ const ProductCard = ({ product }) => {
         <div className="group flex flex-col items-center gap-6">
             <Link to={`/details/${product.id}`} className="relative w-full aspect-[4/5] overflow-hidden p-2 bg-white shadow-sm hover-lift cursor-pointer">
                 <div className="w-full h-full border-2 border-gold/20 overflow-hidden relative">
-                    <img
-                        alt={product.name}
-                        className="h-full w-full object-cover transition-transform duration-700 group-hover:scale-110"
-                        src={product.image || "https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?auto=format&fit=crop&q=80&w=800"}
-                    />
+                    {(() => {
+                        const primaryImage = product.images?.find(img => img.is_primary) || product.images?.[0];
+                        const imageSrc = primaryImage ? primaryImage.image_url : "https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?auto=format&fit=crop&q=80&w=800";
+                        return (
+                            <img
+                                alt={product.name}
+                                className="h-full w-full object-cover transition-transform duration-700 group-hover:scale-110"
+                                src={imageSrc}
+                            />
+                        );
+                    })()}
                     {/* Add to Cart Overlay */}
                     <div className="absolute inset-x-0 bottom-0 translate-y-full group-hover:translate-y-0 transition-transform duration-300 bg-primary/90 backdrop-blur-sm p-4 text-center">
                         <button
@@ -50,6 +56,7 @@ const ProductCard = ({ product }) => {
                 <Link to={`/details/${product.id}`} className="font-display text-2xl text-umber font-bold group-hover:text-primary transition-colors cursor-pointer block">
                     {product.name}
                 </Link>
+                <div className="font-body text-xs text-stone italic opacity-60 mb-1">{product.sku}</div>
                 <p className="font-body text-lg italic text-brick">
                     {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(product.price)}
                 </p>

@@ -6,9 +6,11 @@ use Illuminate\Database\Eloquent\Model;
 
 class OrderItem extends Model
 {
+    use \App\Traits\BelongsToAccount;
+
     protected $fillable = [
         'order_id', 'product_id', 'product_group_id', 
-        'quantity', 'price', 'options'
+        'quantity', 'price', 'options', 'account_id'
     ];
 
     protected $casts = [

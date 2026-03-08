@@ -1,92 +1,97 @@
 import React, { useState, useEffect } from 'react';
 import Hero from '../components/Hero';
-import ProductCard from '../components/ProductCard';
-import { productApi } from '../services/api';
+import ProductSlider from '../components/cms/ProductSlider';
+import TabContent from '../components/cms/TabContent';
+import Banner from '../components/cms/Banner';
+import { productApi, cmsApi } from '../services/api';
+import siteConfig from '../config/site';
 
 const Home = () => {
-    const [newProducts, setNewProducts] = useState([]);
+    const [featuredProducts, setFeaturedProducts] = useState([]);
+    const [settings, setSettings] = useState({});
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const fetchProducts = async () => {
+        const fetchData = async () => {
             try {
-                const response = await productApi.getAll({ featured: 1, per_page: 6 });
-                setNewProducts(response.data.data);
+                const [prodRes, settingsRes] = await Promise.all([
+                    productApi.getAll({ featured: 1, per_page: 8, site_code: siteConfig.SITE_CODE }),
+                    cmsApi.settings.get({ site_code: siteConfig.SITE_CODE })
+                ]);
+                setFeaturedProducts(prodRes.data.data);
+                setSettings(settingsRes.data);
             } catch (error) {
-                console.error("Error fetching products", error);
+                console.error("Error fetching data", error);
             } finally {
                 setLoading(false);
             }
         };
-        fetchProducts();
+        fetchData();
     }, []);
 
+    const homeTabs = [
+        {
+            label: "Gốm Thủ Công",
+            title: "Tâm Hồn Trong Từng Thớ Đất",
+            description: "Quy trình chế tác thủ công 100% từ khâu nhào đất đến khi thành phẩm. Mỗi sản phẩm là một câu chuyện riêng biệt của người nghệ nhân.",
+            image: "https://images.unsplash.com/photo-1595180630321-df62a690e515?auto=format&fit=crop&q=80&w=800",
+            icon: "handyman",
+            link: "/about"
+        },
+        {
+            label: "Men Cổ Phục Dựng",
+            title: "Sống Lại Những Tuyệt Tác",
+            description: "Phục dựng các loại men quý hiếm từ triều Lý, Trần, Lê như men Lam, men Rạn, men Ngọc. Đem vẻ đẹp vương giả vào không gian sống hiện đại.",
+            image: "https://lh3.googleusercontent.com/aida-public/AB6AXuDxyxuenD-UTiSSDUsliBib3rtgLHsYtiaH9MZN635eMD2i5g6jBh21b_i4PS_GT-soo2VMNLwfy-Oq73sxuHpQzbLd0Q_s9D1BH0YlxEqdZH8QEUgJYgO69GgRJ7_S90Z0flvVhLFMtyRI4JYn5oDhNjJMOQQaPXYg1SOZi9xdBl-CuNrWoXgMx6FnoRXcNlQW805WC7pDVrZpAcA2C5nFT-F8aUk5Y9RG_yhTxI8LujIcyvaI3MKicA_JeOFP3EJ48T_0LzUsYQM",
+            icon: "history_edu",
+            link: "/blog"
+        },
+        {
+            label: "Nghi Thức Trà Đạo",
+            title: "Hương Trà & Cốt Gốm",
+            description: "Bộ sưu tập ấm chén trà được thiết kế chuyên biệt cho những người yêu trà. Khả năng giữ nhiệt và cảm quan tuyệt vời trên tay.",
+            image: "https://images.unsplash.com/photo-1576092768241-dec231879fc3?auto=format&fit=crop&q=80&w=800",
+            icon: "emoji_food_beverage",
+            link: "/shop?category=tra-dao"
+        }
+    ];
+
     return (
-        <div className="flex flex-col">
+        <div className="flex flex-col animate-fade-in">
             <Hero />
 
-            {/* New Arrivals Section */}
-            <section className="py-24 px-6 lg:px-12 bg-background-light">
-                <div className="container mx-auto">
-                    <div className="text-center mb-16">
-                        <div className="flex items-center justify-center gap-4">
-                            <span className="material-symbols-outlined text-gold">cloud</span>
-                            <h2 className="text-primary font-display text-4xl md:text-5xl font-bold tracking-tight px-4">Tuyệt Tác Mới</h2>
-                            <span className="material-symbols-outlined text-gold">cloud</span>
-                        </div>
-                        <p className="font-body text-lg text-stone italic mt-4">Những tác phẩm vừa rời lò nung với men màu độc bản</p>
-                    </div>
+            <ProductSlider
+                title="Báu Vật Mới"
+                subtitle="Những tác phẩm vừa rời lò nung với men màu độc bản, kết tinh từ tay nghề nghệ nhân."
+                products={featuredProducts}
+                loading={loading}
+            />
 
-                    {loading ? (
-                        <div className="flex justify-center py-20">
-                            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gold"></div>
-                        </div>
-                    ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12 lg:gap-16">
-                            {newProducts.map(product => (
-                                <ProductCard key={product.id} product={{
-                                    ...product,
-                                    image: product.images?.[0]?.image_url || 'https://via.placeholder.com/400'
-                                }} />
-                            ))}
-                        </div>
-                    )}
+            <Banner
+                title="Đặc Quyền Hội Viên"
+                subtitle="Nhận ngay ưu đãi 15% cho hóa đơn đầu tiên và đặc quyền tham quan xưởng gốm Bát Tràng."
+                image="https://images.unsplash.com/photo-1594732163339-38b438257008?auto=format&fit=crop&q=80&w=1200"
+                buttonText="Tham Gia Ngay"
+                buttonLink="/register"
+                height="500px"
+                overlayOpacity="0.4"
+                alignment="right"
+            />
 
-                    <div className="flex justify-center mt-16">
-                        <a className="inline-flex items-center gap-2 text-primary font-ui font-semibold uppercase tracking-widest text-sm hover:text-umber transition-colors border-b border-primary pb-1 hover:border-umber" href="/shop">
-                            Xem Tất Cả
-                            <span className="material-symbols-outlined text-base">arrow_forward</span>
-                        </a>
-                    </div>
+            <TabContent
+                title="Cốt Cách & Di Sản"
+                subtitle="Khám phá những giá trị cốt lõi làm nên thương hiệu Gốm Sứ Đại Thành."
+                tabs={homeTabs}
+            />
+
+            {/* Subtle Brand Quote */}
+            <div className="py-20 bg-background-light text-center border-t border-gold/10">
+                <div className="max-w-xl mx-auto space-y-4">
+                    <span className="material-symbols-outlined text-gold opacity-50 text-4xl">format_quote</span>
+                    <p className="font-display text-2xl text-primary italic lowercase tracking-tight">"Gốm không chỉ là đất, gốm là lời thì thầm của thời gian và lửa."</p>
+                    <div className="h-[0.5px] w-20 bg-gold/50 mx-auto"></div>
                 </div>
-            </section>
-
-            {/* Story Section */}
-            <section className="py-24 bg-white px-6 lg:px-12 border-y border-gold/10">
-                <div className="container mx-auto grid grid-cols-1 md:grid-cols-2 items-center gap-16">
-                    <div className="relative group">
-                        <div className="absolute inset-0 border-2 border-gold -translate-x-4 translate-y-4 -z-10 group-hover:translate-x-0 group-hover:translate-y-0 transition-transform"></div>
-                        <img
-                            src="https://images.unsplash.com/photo-1595180630321-df62a690e515?auto=format&fit=crop&q=80&w=800"
-                            alt="Brand Story"
-                            className="w-full h-[500px] object-cover rounded-sm"
-                        />
-                    </div>
-                    <div className="space-y-6">
-                        <span className="font-ui text-sm font-bold uppercase tracking-[0.2em] text-gold">Cốt Cách & Tâm Hồn</span>
-                        <h2 className="text-primary font-display text-4xl lg:text-5xl font-bold leading-tight">Di Sản Ngàn Năm Trong Tầm Tay</h2>
-                        <p className="font-body text-xl text-stone italic leading-relaxed">
-                            "Mỗi tác phẩm gốm là một bản tình ca của đất, nước và lửa. Chúng tôi không chỉ bán gốm, chúng tôi trao gửi một phần tâm hồn Việt."
-                        </p>
-                        <p className="font-body text-lg text-umber/80 leading-relaxed">
-                            Từ những làng nghề truyền thống Bát Tràng, Chu Đậu, mỗi sản phẩm tại Di Sản Gốm Việt đều được chế tác thủ công bởi những nghệ nhân bậc thầy, lưu giữ những kỹ thuật phục dựng men cổ quý hiếm.
-                        </p>
-                        <div className="pt-4">
-                            <a className="bg-primary text-white font-ui font-bold uppercase tracking-widest text-xs px-8 py-4 hover:bg-umber transition-all" href="/about">Tìm hiểu thêm</a>
-                        </div>
-                    </div>
-                </div>
-            </section>
+            </div>
         </div>
     );
 };

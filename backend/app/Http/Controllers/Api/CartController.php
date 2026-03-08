@@ -38,22 +38,38 @@ class CartController extends Controller
 
         $price = 0;
         if ($request->product_id) {
-            $price = Product::find($request->product_id)->price;
+            $product = Product::find($request->product_id);
+            $price = $product ? $product->current_price : 0;
         } elseif ($request->product_group_id) {
             $price = ProductGroup::find($request->product_group_id)->price;
         }
 
-        $cartItem = $cart->items()->updateOrCreate(
-            [
+        $query = $cart->items()
+            ->where('product_id', $request->product_id)
+            ->where('product_group_id', $request->product_group_id);
+
+        if ($request->options && count($request->options) > 0) {
+            // Sort keys to ensure consistent JSON comparison if needed, 
+            // though whereJsonContains/whereJsonLength is often better.
+            $query->where('options', json_encode($request->options));
+        } else {
+            $query->whereNull('options');
+        }
+
+        $cartItem = $query->first();
+
+        if ($cartItem) {
+            $cartItem->increment('quantity', $request->quantity);
+            $cartItem->update(['price' => $price]);
+        } else {
+            $cartItem = $cart->items()->create([
                 'product_id' => $request->product_id,
                 'product_group_id' => $request->product_group_id,
                 'options' => $request->options,
-            ],
-            [
-                'quantity' => \DB::raw('quantity + ' . $request->quantity),
+                'quantity' => $request->quantity,
                 'price' => $price,
-            ]
-        );
+            ]);
+        }
 
         return response()->json([
             'message' => 'Item added to cart',

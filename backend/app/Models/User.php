@@ -48,4 +48,9 @@ class User extends Authenticatable
             'is_admin' => 'boolean',
         ];
     }
+
+    public function accounts()
+    {
+        return $this->belongsToMany(Account::class)->withPivot('role')->withTimestamps();
+    }
 }

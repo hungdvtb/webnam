@@ -33,7 +33,7 @@ const About = () => {
                         <span className="font-ui text-brick font-bold uppercase tracking-widest text-sm">Khởi Nguồn</span>
                         <h2 className="font-display font-bold text-3xl md:text-4xl text-umber">Hồn Đất, Tình Người</h2>
                         <p className="font-body text-lg text-umber/80 leading-loose">
-                            Mỗi tác phẩm tại Di Sản Gốm Việt bắt đầu từ những thớ đất sét trắng tinh khiết, được chọn lọc kỹ lưỡng từ vùng đất linh thiêng bên bờ sông Hồng. Đất phải được phơi sương, nhào nặn qua bàn tay chai sần của những nghệ nhân lão luyện.
+                            Mỗi tác phẩm tại Gốm Sứ Đại Thành bắt đầu từ những thớ đất sét trắng tinh khiết, được chọn lọc kỹ lưỡng từ vùng đất linh thiêng bên bờ sông Hồng. Đất phải được phơi sương, nhào nặn qua bàn tay chai sần của những nghệ nhân lão luyện.
                         </p>
                         <p className="font-body text-lg text-umber/80 leading-loose">
                             Chúng tôi tin rằng, đất có hồn. Người nghệ nhân không chỉ tạo hình, mà còn đang trò chuyện, thổi vào đất những tâm tư, nguyện vọng về một cuộc sống bình an và thịnh vượng.

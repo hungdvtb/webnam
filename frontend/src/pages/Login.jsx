@@ -20,7 +20,7 @@ const Login = () => {
             const response = await authApi.login(credentials);
             localStorage.setItem('token', response.data.token);
             localStorage.setItem('user', JSON.stringify(response.data.user));
-            navigate('/');
+            navigate('/admin');
         } catch (err) {
             setError(err.response?.data?.message || 'Đăng nhập thất bại. Vui lòng thử lại.');
         } finally {

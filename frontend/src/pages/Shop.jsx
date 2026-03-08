@@ -1,27 +1,36 @@
 import React, { useState, useEffect } from 'react';
-import { productApi, categoryApi } from '../services/api';
+import { productApi, categoryApi, attributeApi } from '../services/api';
 import ProductCard from '../components/ProductCard';
 
 const Shop = () => {
     const [products, setProducts] = useState([]);
     const [categories, setCategories] = useState([]);
+    const [attributes, setAttributes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedCategory, setSelectedCategory] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [priceRange, setPriceRange] = useState('');
+    const [attributeFilters, setAttributeFilters] = useState({});
     const [pagination, setPagination] = useState({ current_page: 1, last_page: 1 });
 
     useEffect(() => {
-        fetchCategories();
-        fetchProducts();
-    }, [selectedCategory, searchQuery, priceRange, pagination.current_page]);
+        fetchInitialData();
+    }, []);
 
-    const fetchCategories = async () => {
+    useEffect(() => {
+        fetchProducts();
+    }, [selectedCategory, searchQuery, priceRange, JSON.stringify(attributeFilters), pagination.current_page]);
+
+    const fetchInitialData = async () => {
         try {
-            const response = await categoryApi.getAll();
-            setCategories(response.data);
+            const [catRes, attrRes] = await Promise.all([
+                categoryApi.getAll(),
+                attributeApi.getAll()
+            ]);
+            setCategories(catRes.data);
+            setAttributes(attrRes.data);
         } catch (error) {
-            console.error("Error fetching categories", error);
+            console.error("Error fetching shop filters", error);
         }
     };
 
@@ -32,9 +41,9 @@ const Shop = () => {
                 page: pagination.current_page,
                 category_id: selectedCategory,
                 search: searchQuery,
+                attributes: attributeFilters,
             };
 
-            // Handle price range mapping if needed
             if (priceRange) {
                 const [min, max] = priceRange.split('-');
                 if (min) params.min_price = min;
@@ -52,6 +61,22 @@ const Shop = () => {
         } finally {
             setLoading(false);
         }
+    };
+
+    const handleAttributeToggle = (attrId, optionValue) => {
+        const current = attributeFilters[attrId] || [];
+        const next = current.includes(optionValue)
+            ? current.filter(v => v !== optionValue)
+            : [...current, optionValue];
+
+        const newFilters = { ...attributeFilters };
+        if (next.length > 0) {
+            newFilters[attrId] = next;
+        } else {
+            delete newFilters[attrId];
+        }
+        setAttributeFilters(newFilters);
+        setPagination({ ...pagination, current_page: 1 });
     };
 
     const handleCategoryClick = (id) => {
@@ -128,6 +153,45 @@ const Shop = () => {
                             ))}
                         </ul>
                     </div>
+
+                    {/* Dynamic Attribute filters */}
+                    {attributes.filter(attr => ['select', 'multiselect'].includes(attr.type)).map(attr => (
+                        <div key={attr.id}>
+                            <h3 className="font-display text-xl font-bold text-primary mb-6 border-l-4 border-gold pl-3 uppercase tracking-wider">{attr.label}</h3>
+                            <ul className={`flex flex-wrap gap-4 ${attr.swatch_type === 'color' ? 'flex-row' : 'flex-col'}`}>
+                                {attr.options?.map(opt => (
+                                    <li
+                                        key={opt.value}
+                                        className="flex items-center gap-3 cursor-pointer group"
+                                        onClick={() => handleAttributeToggle(attr.id, opt.value)}
+                                        title={opt.label}
+                                    >
+                                        {attr.swatch_type === 'color' ? (
+                                            <div
+                                                className={`size-10 rounded-full border-2 transition-all flex items-center justify-center p-0.5
+                                                    ${attributeFilters[attr.id]?.includes(opt.value) ? 'border-primary ring-2 ring-primary/20' : 'border-gold/20 hover:border-primary'}`}
+                                            >
+                                                <div
+                                                    className="w-full h-full rounded-full shadow-inner"
+                                                    style={{ backgroundColor: opt.swatch_value || '#ccc' }}
+                                                />
+                                                {attributeFilters[attr.id]?.includes(opt.value) && (
+                                                    <span className="material-symbols-outlined text-white text-xs drop-shadow-md absolute">check</span>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <div className={`size-4 border border-gold flex items-center justify-center transition-all ${attributeFilters[attr.id]?.includes(opt.value) ? 'bg-primary border-primary' : 'bg-transparent'}`}>
+                                                    {attributeFilters[attr.id]?.includes(opt.value) && <span className="material-symbols-outlined text-white text-[10px]">check</span>}
+                                                </div>
+                                                <span className={`font-ui text-sm transition-colors ${attributeFilters[attr.id]?.includes(opt.value) ? 'text-primary font-bold' : 'text-umber group-hover:text-primary'}`}>{opt.label}</span>
+                                            </>
+                                        )}
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    ))}
                 </div>
             </aside>
 

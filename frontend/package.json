@@ -10,10 +10,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@minoru/react-dnd-treeview": "^3.5.3",
     "axios": "^1.13.6",
     "framer-motion": "^12.34.5",
     "react": "^19.2.0",
+    "react-dnd": "^16.0.1",
+    "react-dnd-html5-backend": "^16.0.1",
     "react-dom": "^19.2.0",
+    "react-quill-new": "^3.8.3",
     "react-router-dom": "^7.13.1"
   },
   "devDependencies": {

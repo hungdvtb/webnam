@@ -35,6 +35,76 @@
         box-shadow: 0 10px 30px -10px rgba(27, 54, 93, 0.15);
     }
 
+    .shadow-premium {
+        box-shadow: 0 20px 50px -15px rgba(27, 54, 93, 0.08), 0 10px 20px -5px rgba(27, 54, 93, 0.05);
+    }
+
+    .animate-fade-in {
+        animation: fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    .animate-slide-up {
+        animation: slideUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+        }
+
+        to {
+            opacity: 1;
+        }
+    }
+
+    @keyframes slideUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    /* Professional Scrollbar */
+    .custom-scrollbar::-webkit-scrollbar {
+        width: 4px;
+        height: 4px;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-track {
+        background: rgba(197, 160, 101, 0.05);
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: #C5A065;
+        border-radius: 10px;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+        background: #9B7B4F;
+    }
+
+    .custom-scrollbar-thin::-webkit-scrollbar {
+        width: 3px;
+    }
+
+    .custom-scrollbar-thin::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .custom-scrollbar-thin::-webkit-scrollbar-thumb {
+        background: rgba(197, 160, 101, 0.2);
+        border-radius: 10px;
+    }
+
+    .custom-scrollbar-thin::-webkit-scrollbar-thumb:hover {
+        background: rgba(197, 160, 101, 0.5);
+    }
+
     /* Decorative Divider */
     .divider-cloud {
         display: flex;
@@ -49,5 +119,62 @@
         height: 1px;
         width: 60px;
         background-color: #C5A065;
+    }
+
+    /* Rich Text Editor Styles */
+    .ql-editor {
+        font-family: inherit !important;
+        font-size: 1.1rem !important;
+        min-height: 200px;
+        padding: 1.5rem !important;
+    }
+
+    .quill-view-styles h2 {
+        font-family: var(--font-display);
+        font-weight: bold;
+        font-size: 1.875rem;
+        color: #2C3D40;
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+    }
+
+    .quill-view-styles h3 {
+        font-family: var(--font-display);
+        font-weight: bold;
+        font-size: 1.5rem;
+        color: #2C3D40;
+        margin-top: 1.5rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .quill-view-styles p {
+        margin-bottom: 1.25rem;
+    }
+
+    .quill-view-styles ul {
+        list-style-type: disc;
+        padding-left: 2rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .quill-view-styles ol {
+        list-style-type: decimal;
+        padding-left: 2rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .quill-view-styles blockquote {
+        border-left: 4px solid #C5A065;
+        padding-left: 1.5rem;
+        font-style: italic;
+        margin: 2rem 0;
+        opacity: 0.8;
+    }
+
+    .quill-view-styles img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 2px;
+        margin: 2rem 0;
     }
 }

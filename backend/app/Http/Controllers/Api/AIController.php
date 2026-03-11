@@ -98,8 +98,9 @@ class AIController extends Controller
             ->make();
 
         $attrString = "";
-        if ($request->has('attributes')) {
-            foreach ($request->attributes as $key => $val) {
+        $inputAttributes = $request->input('attributes');
+        if (!empty($inputAttributes) && is_array($inputAttributes)) {
+            foreach ($inputAttributes as $key => $val) {
                 if ($val) $attrString .= "- {$key}: {$val}\n";
             }
         }

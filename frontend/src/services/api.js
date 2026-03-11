@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-    baseURL: 'http://localhost:8002/api',
+    baseURL: 'http://localhost:8003/api',
     withCredentials: true,
     headers: {
         'Content-Type': 'application/json',
@@ -35,6 +35,7 @@ export const productApi = {
     store: (data) => api.post('/products', data),
     update: (id, data) => api.post(`/products/${id}`, data), // POST for multipart support
     destroy: (id) => api.delete(`/products/${id}`),
+    duplicate: (id) => api.post(`/products/${id}/duplicate`),
 };
 
 export const productImageApi = {
@@ -43,6 +44,7 @@ export const productImageApi = {
     }),
     setPrimary: (id) => api.post(`/product-images/${id}/primary`),
     destroy: (id) => api.delete(`/product-images/${id}`),
+    reorder: (ids) => api.post('/product-images/reorder', { ids }),
 };
 
 export const categoryApi = {
@@ -55,7 +57,7 @@ export const categoryApi = {
 };
 
 export const attributeApi = {
-    getAll: () => api.get('/attributes'),
+    getAll: (params) => api.get('/attributes', { params }),
     getOne: (id) => api.get(`/attributes/${id}`),
     store: (data) => api.post('/attributes', data),
     update: (id, data) => api.put(`/attributes/${id}`, data),
@@ -83,10 +85,27 @@ export const warehouseApi = {
 };
 
 export const orderApi = {
-    getAll: (params) => api.get('/orders', { params }),
+    getAll: (params, signal) => api.get('/orders', { params, signal }),
     getOne: (id) => api.get(`/orders/${id}`),
     store: (data) => api.post('/orders', data),
+    update: (id, data) => api.put(`/orders/${id}`, data),
+    destroy: (id) => api.delete(`/orders/${id}`),
     updateStatus: (id, status) => api.put(`/orders/${id}/status`, { status }),
+    duplicate: (id) => api.post(`/orders/${id}/duplicate`),
+    restore: (id) => api.post(`/orders/${id}/restore`),
+    bulkDelete: (ids, force = false) => api.post('/orders/bulk-delete', { ids, force: force ? 1 : 0 }),
+    bulkRestore: (ids) => api.post('/orders/bulk-restore', { ids }),
+    bulkDuplicate: (ids) => api.post('/orders/bulk-duplicate', { ids }),
+    bulkUpdate: (data) => api.post('/orders/bulk-update', data),
+};
+
+export const orderStatusApi = {
+    getAll: (params) => api.get('/order-statuses', params ? { params } : {}),
+    getOne: (id) => api.get(`/order-statuses/${id}`),
+    store: (data) => api.post('/order-statuses', data),
+    update: (id, data) => api.put(`/order-statuses/${id}`, data),
+    reorder: (ids) => api.post('/order-statuses/reorder', { ids }),
+    destroy: (id) => api.delete(`/order-statuses/${id}`),
 };
 
 export const customerApi = {
@@ -145,10 +164,18 @@ export const invoiceApi = {
 };
 
 export const shipmentApi = {
-    getAll: (params) => api.get('/shipments', { params }),
+    getAll: (params, signal) => api.get('/shipments', { params, signal }),
     getOne: (id) => api.get(`/shipments/${id}`),
     store: (data) => api.post('/shipments', data),
-    updateStatus: (id, status) => api.put(`/shipments/${id}/status`, { status }),
+    update: (id, data) => api.put(`/shipments/${id}`, data),
+    updateStatus: (id, data) => api.put(`/shipments/${id}/status`, data),
+    destroy: (id) => api.delete(`/shipments/${id}`),
+    restore: (id) => api.post(`/shipments/${id}/restore`),
+    addNote: (id, data) => api.post(`/shipments/${id}/notes`, data),
+    markReconciled: (id, data) => api.post(`/shipments/${id}/reconcile`, data),
+    getStats: (params) => api.get('/shipments/stats', { params }),
+    getCarriers: () => api.get('/shipments/carriers'),
+    bulkUpdateStatus: (data) => api.post('/shipments/bulk-status', data),
 };
 
 export const authApi = {
@@ -194,6 +221,13 @@ export const menuApi = {
     update: (id, data) => api.put(`/menus/${id}`, data),
     destroy: (id) => api.delete(`/menus/${id}`),
     saveItems: (id, items) => api.post(`/menus/${id}/items`, { items }),
+};
+
+export const userApi = {
+    getAll: () => api.get('/users'),
+    store: (data) => api.post('/users', data),
+    update: (id, data) => api.put(`/users/${id}`, data),
+    destroy: (id) => api.delete(`/users/${id}`),
 };
 
 export default api;

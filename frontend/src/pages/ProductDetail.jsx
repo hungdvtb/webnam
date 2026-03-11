@@ -259,7 +259,7 @@ const ProductDetail = () => {
                             </div>
                             <div className="flex items-center gap-3 border-b border-gold/20 pb-4">
                                 <span className="material-symbols-outlined text-primary">collections_bookmark</span>
-                                <h4 className="font-display text-sm font-bold uppercase tracking-[0.2em] text-primary">Bộ Phẩm Vật Hội Tụ</h4>
+                                <h4 className="font-display text-sm font-bold uppercase tracking-[0.2em] text-primary">Bộ Sản Phẩm Hội Tụ</h4>
                             </div>
 
                             <div className="space-y-4">
@@ -507,14 +507,14 @@ const ProductDetail = () => {
                                         <span className="text-[10px] text-stone font-ui uppercase mt-2 block pl-13">{new Date(rev.created_at).toLocaleDateString()}</span>
                                     </div>
                                 ))}
-                                {reviews.length === 0 && <p className="text-center text-gold italic">Chưa có đánh giá nào cho phẩm vật này.</p>}
+                                {reviews.length === 0 && <p className="text-center text-gold italic">Chưa có đánh giá nào cho sản phẩm này.</p>}
                             </div>
 
                             <div className="bg-background-light p-8 border border-gold/20 shadow-inner">
                                 <h4 className="font-display text-xl text-primary font-bold mb-6 text-center">Gửi Đánh Giá Của Bạn</h4>
                                 <form onSubmit={handleReviewSubmit} className="space-y-6">
                                     <div className="flex flex-col items-center gap-3">
-                                        <label className="font-ui text-xs font-bold uppercase tracking-widest">Chất lượng phẩm vật</label>
+                                        <label className="font-ui text-xs font-bold uppercase tracking-widest">Chất lượng sản phẩm</label>
                                         <div className="flex gap-2">
                                             {[1, 2, 3, 4, 5].map(s => (
                                                 <button

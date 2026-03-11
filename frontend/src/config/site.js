@@ -9,7 +9,7 @@
 
 const siteConfig = {
     // The site_code from the Accounts management panel
-    SITE_CODE: import.meta.env.VITE_SITE_CODE || 'GOMDAITHANH_DEMO',
+    SITE_CODE: import.meta.env.VITE_SITE_CODE || 'GSDT',
 
     // Will be populated at runtime after resolving the site_code
     accountId: null,

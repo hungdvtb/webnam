@@ -142,12 +142,7 @@ const BlogForm = () => {
     return (
         <form onSubmit={handleSubmit} className="space-y-10 animate-fade-in pb-20">
             <div className="flex justify-between items-end gap-6 border-b border-gold/10 pb-8">
-                <div className="space-y-2">
-                    <h1 className="font-display text-4xl font-bold text-primary italic uppercase tracking-wider">
-                        {isEdit ? 'Biên Tập Bài Viết' : 'Soạn Thảo Cẩm Nang'}
-                    </h1>
-                    <p className="font-ui text-xs font-bold uppercase tracking-widest text-gold opacity-60">Ghi lại tinh hoa văn hóa truyền thống</p>
-                </div>
+
                 <div className="flex gap-4">
                     <button
                         type="button"

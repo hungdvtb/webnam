@@ -31,10 +31,7 @@ const ReportDashboard = () => {
     return (
         <div className="space-y-10 p-6 animate-fade-in">
             <div className="flex justify-between items-center">
-                <div>
-                    <h1 className="text-3xl font-display font-bold text-primary italic">Trung Tâm Báo Cáo</h1>
-                    <p className="text-[10px] text-gold uppercase tracking-[0.3em] font-ui font-bold mt-1">Phân tích hiệu suất kinh doanh & vận hành</p>
-                </div>
+
                 <button onClick={fetchReports} className="text-primary hover:text-gold transition-colors">
                     <span className="material-symbols-outlined">refresh</span>
                 </button>

@@ -4,7 +4,7 @@
 @layer base {
     body {
         @apply bg-background-light dark:bg-background-dark text-umber antialiased selection:bg-primary selection:text-white;
-        font-family: 'EB Garamond', serif;
+        font-family: 'Inter', sans-serif;
     }
 }
 
@@ -105,6 +105,27 @@
         background: rgba(197, 160, 101, 0.5);
     }
 
+    /* Table Scrollbar */
+    .table-scrollbar::-webkit-scrollbar {
+        width: 12px;
+        height: 12px;
+    }
+
+    .table-scrollbar::-webkit-scrollbar-track {
+        background: rgba(197, 160, 101, 0.05);
+        border-radius: 6px;
+    }
+
+    .table-scrollbar::-webkit-scrollbar-thumb {
+        background: #C5A065;
+        border: 2px solid #FFFFFF;
+        border-radius: 6px;
+    }
+
+    .table-scrollbar::-webkit-scrollbar-thumb:hover {
+        background: #9B7B4F;
+    }
+
     /* Decorative Divider */
     .divider-cloud {
         display: flex;
@@ -124,24 +145,22 @@
     /* Rich Text Editor Styles */
     .ql-editor {
         font-family: inherit !important;
-        font-size: 1.1rem !important;
+        font-size: 1rem !important;
         min-height: 200px;
         padding: 1.5rem !important;
     }
 
     .quill-view-styles h2 {
-        font-family: var(--font-display);
         font-weight: bold;
-        font-size: 1.875rem;
+        font-size: 1.5rem;
         color: #2C3D40;
         margin-top: 2rem;
         margin-bottom: 1rem;
     }
 
     .quill-view-styles h3 {
-        font-family: var(--font-display);
         font-weight: bold;
-        font-size: 1.5rem;
+        font-size: 1.25rem;
         color: #2C3D40;
         margin-top: 1.5rem;
         margin-bottom: 0.75rem;

@@ -39,17 +39,15 @@ trait BelongsToAccount
             // but let's make it scoped via session/header for everyone.
             $accountId = session()->get('active_account_id') ?? request()->header('X-Account-Id');
 
-            if (!$accountId && auth()->check() && !auth()->user()->is_admin) {
-                $accountId = auth()->user()->accounts()->first()?->id;
-            }
-
-            // Apply scope if account context is found. If no account context AND they are admin, maybe don't filter.
-            // If they are not admin and have no account context, but they own an account, we use that.
-            if ($accountId) {
+            if ($accountId && $accountId !== 'all') {
                 $builder->where($builder->getModel()->getTable() . '.account_id', $accountId);
-            } elseif(auth()->check() && !auth()->user()->is_admin) {
-                // Forced 0 to return nothing if user has no accounts
-                $builder->where($builder->getModel()->getTable() . '.account_id', 0);
+            } elseif (auth()->check() && !auth()->user()->is_admin) {
+                $userAccountIds = auth()->user()->accounts()->pluck('accounts.id')->toArray();
+                if (empty($userAccountIds)) {
+                    $builder->where($builder->getModel()->getTable() . '.account_id', 0);
+                } else {
+                    $builder->whereIn($builder->getModel()->getTable() . '.account_id', $userAccountIds);
+                }
             }
         });
     }

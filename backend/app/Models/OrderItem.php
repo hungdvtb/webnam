@@ -9,8 +9,8 @@ class OrderItem extends Model
     use \App\Traits\BelongsToAccount;
 
     protected $fillable = [
-        'order_id', 'product_id', 'product_group_id', 
-        'quantity', 'price', 'options', 'account_id'
+        'order_id', 'product_id', 'product_name_snapshot', 'product_sku_snapshot', 'product_group_id', 
+        'quantity', 'price', 'cost_price', 'options', 'account_id'
     ];
 
     protected $casts = [

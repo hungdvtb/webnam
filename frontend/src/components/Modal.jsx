@@ -4,11 +4,19 @@ const Modal = ({ show, onClose, title, children, type = 'info', actionText = 'Đ
     useEffect(() => {
         if (show) {
             document.body.style.overflow = 'hidden';
+            
+            const handleEsc = (e) => {
+                if (e.key === 'Escape') onClose();
+            };
+            window.addEventListener('keydown', handleEsc);
+            return () => {
+                document.body.style.overflow = 'unset';
+                window.removeEventListener('keydown', handleEsc);
+            };
         } else {
             document.body.style.overflow = 'unset';
         }
-        return () => { document.body.style.overflow = 'unset'; };
-    }, [show]);
+    }, [show, onClose]);
 
     if (!show) return null;
 

@@ -92,7 +92,10 @@ const Navbar = () => {
                     <div className="flex items-center gap-4 border-l border-gold/20 pl-6">
                         <div className="hidden lg:flex flex-col items-end">
                             <span className="text-xs font-ui font-bold text-primary uppercase">{user.name}</span>
-                            <button onClick={handleLogout} className="text-[10px] text-stone hover:text-brick transition-colors uppercase tracking-widest">Đăng xuất</button>
+                            <div className="flex gap-3">
+                                <Link to={user.is_admin ? "/admin" : "/dashboard"} className="text-[10px] text-primary hover:text-gold transition-colors uppercase tracking-widest font-bold">Bảng điều khiển</Link>
+                                <button onClick={handleLogout} className="text-[10px] text-stone hover:text-brick transition-colors uppercase tracking-widest">Đăng xuất</button>
+                            </div>
                         </div>
                         <div className="size-10 rounded-full border border-gold/30 bg-white flex items-center justify-center text-primary group cursor-pointer hover:border-primary transition-all">
                             <span className="material-symbols-outlined">person</span>

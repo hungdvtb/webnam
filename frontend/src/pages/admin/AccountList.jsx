@@ -40,6 +40,16 @@ const AccountList = () => {
         fetchAccounts();
     }, []);
 
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (e.key === 'Escape' && isFormOpen) {
+                setIsFormOpen(false);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isFormOpen]);
+
     const handleFormSubmit = async (e) => {
         e.preventDefault();
         try {
@@ -53,18 +63,6 @@ const AccountList = () => {
                     ai_api_key: formData.ai_api_key
                 };
                 await accountApi.update(formData.id, payload);
-            } else if (formMode === 'create_super') {
-                const payload = {
-                    account_name: formData.name,
-                    domain: formData.domain || null,
-                    subdomain: formData.subdomain || null,
-                    site_code: formData.site_code || null,
-                    ai_api_key: formData.ai_api_key,
-                    user_name: formData.user_name,
-                    user_email: formData.user_email,
-                    user_password: formData.user_password
-                };
-                await accountApi.storeWithUser(payload);
             } else {
                 const payload = {
                     name: formData.name,
@@ -100,15 +98,28 @@ const AccountList = () => {
         setIsFormOpen(true);
     };
 
-    const handleDelete = async (id) => {
-        if (window.confirm("Bạn có chắc chắn muốn xoá cửa hàng này?")) {
+    const handleToggleStatus = async (acc) => {
+        if (window.confirm(`Bạn có chắc chắn muốn ${acc.status ? 'ẩn' : 'hiện'} cửa hàng này?`)) {
             try {
-                await accountApi.destroy(id);
+                const payload = {
+                    name: acc.name,
+                    domain: acc.domain || null,
+                    subdomain: acc.subdomain || null,
+                    site_code: acc.site_code || null,
+                    status: !acc.status,
+                    ai_api_key: acc.ai_api_key
+                };
+                await accountApi.update(acc.id, payload);
                 fetchAccounts();
             } catch (error) {
-                alert("Không thể xoá cửa hàng này.");
+                alert("Không thể cập nhật trạng thái cửa hàng.");
             }
         }
+    };
+
+    const handleAccess = (id) => {
+        localStorage.setItem('activeAccountId', id);
+        window.location.href = '/admin';
     };
 
     const openNewForm = (isSuperAdminCreate = false) => {
@@ -128,185 +139,196 @@ const AccountList = () => {
     };
 
     return (
-        <div className="space-y-6 animate-fade-in">
-            <div className="flex justify-between items-center bg-white p-6 shadow-sm border border-gold/10">
-                <div>
-                    <h2 className="text-2xl font-display font-bold text-primary uppercase">Quản lý Cửa Hàng (Accounts)</h2>
-                    <p className="text-stone font-body text-sm italic mt-1">Giám sát các chi nhánh, cấu hình tên miền hệ thống.</p>
+        <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full overflow-hidden">
+            <style>
+                {`
+                    .custom-scrollbar::-webkit-scrollbar {
+                        width: 8px;
+                        height: 8px;
+                    }
+                    .custom-scrollbar::-webkit-scrollbar-track {
+                        background: rgba(182, 143, 84, 0.05);
+                    }
+                    .custom-scrollbar::-webkit-scrollbar-thumb {
+                        background: rgba(182, 143, 84, 0.2);
+                        border-radius: 4px;
+                        border: 2px solid transparent;
+                        background-clip: content-box;
+                    }
+                    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+                        background: rgba(182, 143, 84, 0.4);
+                    }
+                `}
+            </style>
+
+            {/* Header Area */}
+            <div className="flex-none bg-[#fcfcfa] pb-4">
+                <div className="flex justify-between items-center mb-4">
+                    <div className="flex flex-col">
+                        <h1 className="text-2xl font-display font-bold text-primary italic">Danh sách cửa hàng</h1>
+                        <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.2em] leading-none mt-1">Quản lý các chi nhánh và kênh bán hàng của bạn</p>
+                    </div>
                 </div>
-                <div className="flex gap-4">
-                    <button
-                        onClick={() => openNewForm(false)}
-                        className="bg-primary text-white px-6 py-2 uppercase font-ui font-bold text-xs tracking-widest hover:bg-umber transition-all flex items-center gap-2 shadow-md shadow-primary/20"
-                    >
-                        <span className="material-symbols-outlined text-sm">add</span> Cửa Hàng Của Mình
-                    </button>
-                    {user?.is_admin && (
+
+                {/* Toolbar */}
+                <div className="bg-white border border-gold/10 p-2 shadow-sm rounded-sm flex items-center justify-between">
+                    <div className="flex gap-1.5 items-center">
                         <button
-                            onClick={() => openNewForm(true)}
-                            className="bg-gold text-white px-6 py-2 uppercase font-ui font-bold text-xs tracking-widest hover:bg-gold/80 transition-all flex items-center gap-2 shadow-md shadow-gold/20"
+                            onClick={() => openNewForm(false)}
+                            className="bg-brick text-white p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 shadow-sm"
+                            title="Thêm cửa hàng mới"
                         >
-                            <span className="material-symbols-outlined text-sm">add_business</span> Tạo Account (Super Admin)
+                            <span className="material-symbols-outlined text-[18px]">add</span>
                         </button>
-                    )}
+                        <button
+                            onClick={fetchAccounts}
+                            className={`bg-primary text-white border border-primary p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 ${loading ? 'opacity-70' : ''}`}
+                            title="Làm mới"
+                            disabled={loading}
+                        >
+                            <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>refresh</span>
+                        </button>
+                    </div>
+                    <div className="text-[11px] font-bold text-stone/40 uppercase tracking-[0.1em]">
+                        {accounts.length} Cửa hàng đang quản lý
+                    </div>
                 </div>
             </div>
 
-            {isFormOpen && (
-                <div className="bg-white p-6 shadow-sm border border-gold/10 relative">
-                    <button onClick={() => setIsFormOpen(false)} className="absolute top-4 right-4 text-stone hover:text-brick">
-                        <span className="material-symbols-outlined">close</span>
-                    </button>
-                    <h3 className="font-ui font-bold text-primary uppercase tracking-widest border-b border-gold/20 pb-4 mb-6">
-                        {formMode === 'edit' ? 'Sửa thông tin cửa hàng' : (formMode === 'create_super' ? 'Tạo Cửa Hàng + Tài Khoản Admin Mới (Super Admin)' : 'Cấu hình cửa hàng của bạn')}
-                    </h3>
-
-                    <form onSubmit={handleFormSubmit} className="space-y-6">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div className="space-y-1">
-                                <label className="font-ui text-xs font-bold uppercase tracking-wider text-primary">Tên Cửa Hàng</label>
-                                <input required type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full bg-background-light border border-gold/30 p-2 text-sm focus:outline-none focus:border-primary font-body" placeholder="VD: Chi nhánh Hà Nội" />
+            {/* Content Area */}
+            <div className="flex-1 overflow-auto custom-scrollbar relative">
+                {isFormOpen && (
+                    <div className="absolute inset-0 z-50 bg-[#fcfcfa]/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                        <div className="bg-white border border-gold/20 shadow-[0_15px_50px_-12px_rgba(0,0,0,0.25)] w-full max-w-2xl mx-auto rounded-md overflow-hidden flex flex-col">
+                            <div className="flex-none px-6 py-4 bg-gold/5 border-b border-gold/10 flex justify-between items-center">
+                                <h2 className="font-display text-lg font-bold text-primary uppercase italic">
+                                    {formMode === 'edit' ? 'Cấu Hình Cửa Hàng' : 'Khởi Tạo Cửa Hàng'}
+                                </h2>
+                                <button
+                                    onClick={() => setIsFormOpen(false)}
+                                    className="w-8 h-8 flex items-center justify-center text-stone/40 hover:text-brick hover:bg-brick/5 transition-all rounded-full"
+                                >
+                                    <span className="material-symbols-outlined text-[20px]">close</span>
+                                </button>
                             </div>
 
-                            <div className="space-y-1">
-                                <label className="font-ui text-xs font-bold uppercase tracking-wider text-primary">Mã Nhận Diện (Site Code)</label>
-                                <input type="text" value={formData.site_code} onChange={e => setFormData({ ...formData, site_code: e.target.value })} className="w-full bg-background-light border border-gold/30 p-2 text-sm focus:outline-none focus:border-primary font-mono" placeholder="VD: GOM_DAI_THANH_01" />
+                            <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
+                                <form onSubmit={handleFormSubmit} id="account-form" className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Tên Cửa Hàng</label>
+                                        <input required type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm" />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Mã Nhận Diện (Site Code)</label>
+                                        <input type="text" value={formData.site_code} onChange={e => setFormData({ ...formData, site_code: e.target.value })} className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-mono text-xs rounded-sm" />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Tên Miền (Custom Domain)</label>
+                                        <input type="text" value={formData.domain} onChange={e => setFormData({ ...formData, domain: e.target.value })} className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm" />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Subdomain</label>
+                                        <input type="text" value={formData.subdomain} onChange={e => setFormData({ ...formData, subdomain: e.target.value })} className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm" />
+                                    </div>
+                                    <div className="md:col-span-2 space-y-1.5 bg- gold/5 p-4 border border-gold/10 rounded-sm">
+                                        <label className="text-[10px] font-black uppercase tracking-widest text-primary flex items-center gap-2">
+                                            <span className="material-symbols-outlined text-[16px]">key</span>
+                                            Gemini AI API Key
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={formData.ai_api_key}
+                                            onChange={e => setFormData({ ...formData, ai_api_key: e.target.value })}
+                                            className="w-full bg-white border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-mono text-xs rounded-sm"
+                                            placeholder="Paste Key here..."
+                                        />
+                                        <p className="text-[9px] text-stone/40 italic font-medium">Cấu hình riêng để sử dụng tính năng AI Advisor cho cửa hàng này.</p>
+                                    </div>
+                                </form>
                             </div>
 
-                            <div className="space-y-1">
-                                <label className="font-ui text-xs font-bold uppercase tracking-wider text-primary">Tên Miền (Custom Domain)</label>
-                                <input type="text" value={formData.domain} onChange={e => setFormData({ ...formData, domain: e.target.value })} className="w-full bg-background-light border border-gold/30 p-2 text-sm focus:outline-none focus:border-primary font-body" placeholder="VD: store.com" />
-                            </div>
-
-                            <div className="space-y-1">
-                                <label className="font-ui text-xs font-bold uppercase tracking-wider text-primary">Tên miền phụ (Subdomain)</label>
-                                <input type="text" value={formData.subdomain} onChange={e => setFormData({ ...formData, subdomain: e.target.value })} className="w-full bg-background-light border border-gold/30 p-2 text-sm focus:outline-none focus:border-primary font-body" placeholder="VD: shop-hanoi" />
-                            </div>
-
-                            <div className="space-y-1 md:col-span-2">
-                                <label className="font-ui text-xs font-bold uppercase tracking-wider text-gold flex items-center gap-2">
-                                    <span className="material-symbols-outlined text-sm">key</span>
-                                    Gemini AI API Key (Cho tính năng Chat Tư Vấn)
-                                </label>
-                                <input
-                                    type="text"
-                                    value={formData.ai_api_key}
-                                    onChange={e => setFormData({ ...formData, ai_api_key: e.target.value })}
-                                    className="w-full bg-gold/5 border border-gold/30 p-2 text-sm focus:outline-none focus:border-primary font-mono"
-                                    placeholder="Dán API Key từ Google AI Studio tại đây..."
-                                />
-                                <p className="text-[10px] text-stone mt-1 italic">Mỗi cửa hàng có thể dùng API Key riêng để quản lý chi phí & bảo mật.</p>
+                            <div className="flex-none px-6 py-4 bg-stone/5 border-t border-gold/10 flex justify-end gap-3">
+                                <button type="button" onClick={() => setIsFormOpen(false)} className="px-6 py-2 text-[11px] font-bold uppercase tracking-widest text-stone-500 hover:bg-stone/10 transition-all border border-stone/20 rounded-sm">Hủy</button>
+                                <button form="account-form" type="submit" className="px-8 py-2 bg-primary text-white text-[11px] font-bold uppercase tracking-widest hover:bg-umber transition-all shadow-sm rounded-sm">
+                                    {formMode === 'edit' ? 'Lưu cập nhật' : 'Khởi tạo ngay'}
+                                </button>
                             </div>
                         </div>
+                    </div>
+                )}
 
-                        {formMode === 'create_super' && (
-                            <div className="border border-gold/20 p-6 bg-background-light mt-6 space-y-4">
-                                <h4 className="font-ui font-bold text-gold uppercase text-sm border-b border-gold/20 pb-2 mb-4">Thông tin Tài Khoản Owner (Tạo Tự Động)</h4>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                    <div className="space-y-1">
-                                        <label className="font-ui text-xs font-bold uppercase tracking-wider text-primary">Họ Tên Đầu Mối</label>
-                                        <input required type="text" value={formData.user_name} onChange={e => setFormData({ ...formData, user_name: e.target.value })} className="w-full bg-white border border-gold/30 p-2 text-sm focus:outline-none focus:border-primary font-body" placeholder="VD: Nguyễn Văn A" />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <label className="font-ui text-xs font-bold uppercase tracking-wider text-primary">Email Đăng Nhập</label>
-                                        <input required type="email" value={formData.user_email} onChange={e => setFormData({ ...formData, user_email: e.target.value })} className="w-full bg-white border border-gold/30 p-2 text-sm focus:outline-none focus:border-primary font-body" placeholder="VD: abc@store.com" />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <label className="font-ui text-xs font-bold uppercase tracking-wider text-primary">Mật Khẩu Mặc Định</label>
-                                        <input required type="text" minLength="6" value={formData.user_password} onChange={e => setFormData({ ...formData, user_password: e.target.value })} className="w-full bg-white border border-gold/30 p-2 text-sm focus:outline-none focus:border-primary font-body" placeholder="Tối thiểu 6 ký tự" />
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        <div className="pt-4 border-t border-gold/10 flex justify-end gap-3">
-                            <button type="button" onClick={() => setIsFormOpen(false)} className="px-8 py-3 font-ui text-xs font-bold uppercase tracking-widest text-stone hover:text-primary transition-colors">Hủy</button>
-                            <button type="submit" className="bg-primary text-white px-8 py-3 font-ui text-xs font-bold uppercase tracking-widest hover:bg-umber transition-colors shadow-lg shadow-primary/20">
-                                {formMode === 'edit' ? 'Cập Nhật Cửa Hàng' : (formMode === 'create_super' ? 'Tạo Cửa Hàng & Account Admin' : 'Tạo Cửa Hàng Mới')}
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            )}
-
-            {loading ? (
-                <div className="text-center py-20">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-                </div>
-            ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {accounts.map(acc => (
-                        <div key={acc.id} className="bg-white border border-gold/20 shadow-sm p-6 hover:shadow-md hover:border-gold/40 transition-all relative group flex flex-col justify-between">
-                            <div>
-                                <div className="flex justify-between items-start mb-4">
-                                    <div className="size-12 bg-background-light border border-gold/20 rounded-full flex items-center justify-center text-primary shrink-0 shadow-inner">
-                                        <span className="material-symbols-outlined">store</span>
-                                    </div>
-                                    <span className={`px-2 py-1 text-[10px] uppercase font-bold tracking-wider ${acc.status ? 'bg-primary/10 text-primary' : 'bg-brick/10 text-brick'}`}>
-                                        {acc.status ? 'Hoạt động' : 'Tạm dừng'}
+                {loading ? (
+                    <div className="h-full flex flex-col items-center justify-center gap-4 opacity-30">
+                        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
+                        <span className="text-[11px] font-black text-stone/30 uppercase tracking-[0.2em]">Đang tải dữ liệu...</span>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 p-1">
+                        {accounts.map(acc => (
+                            <div key={acc.id} className="bg-white border border-gold/10 rounded-sm shadow-sm p-5 hover:border-gold/40 transition-all group flex flex-col justify-between relative">
+                                <div className="absolute top-4 right-4 bg-stone/5 border border-stone/10 px-2 py-0.5 rounded-full z-10">
+                                    <span className={`text-[8px] font-black uppercase tracking-widest ${acc.status ? 'text-green-600' : 'text-brick'}`}>
+                                        {acc.status ? 'Online' : 'Offline'}
                                     </span>
                                 </div>
 
-                                <h3 className="text-xl font-display font-bold text-primary mb-1">{acc.name}</h3>
-                                {acc.site_code && (
-                                    <div className="inline-block bg-gold/10 text-gold px-2 py-0.5 text-[9px] font-mono font-bold uppercase tracking-widest rounded mt-1">
-                                        CODE: {acc.site_code}
+                                <div>
+                                    <div className="size-10 bg-gold/5 border border-gold/10 rounded-sm flex items-center justify-center text-primary mb-4">
+                                        <span className="material-symbols-outlined text-[20px]">storefront</span>
                                     </div>
-                                )}
+                                    <h3 className="text-[15px] font-display font-bold text-primary group-hover:text-umber transition-colors uppercase tracking-tight leading-tight">{acc.name}</h3>
+                                    {acc.site_code && (
+                                        <div className="text-[9px] font-black text-stone/40 bg-stone/5 px-1.5 py-0.5 rounded border border-stone/10 tracking-[0.1em] uppercase italic mt-1.5 inline-block">
+                                            Site: {acc.site_code}
+                                        </div>
+                                    )}
 
-                                <div className="space-y-2 mt-4 font-body text-sm text-stone border-t border-gold/10 pt-4 cursor-text">
-                                    {acc.domain && (
-                                        <div className="flex items-center gap-2">
-                                            <span className="material-symbols-outlined text-sm text-gold">language</span>
-                                            <a href={`http://${acc.domain}`} target="_blank" rel="noreferrer" className="hover:text-primary transition-colors hover:underline" onClick={e => e.stopPropagation()}>
-                                                {acc.domain}
-                                            </a>
+                                    <div className="mt-5 space-y-2 pt-4 border-t border-gold/5">
+                                        <div className="flex items-center gap-2.5 text-[12px] text-stone-600">
+                                            <span className="material-symbols-outlined text-[16px] text-gold/60">link</span>
+                                            <span className="font-mono text-[11px] truncate w-full">{acc.subdomain}.webnam.com</span>
                                         </div>
-                                    )}
-                                    <div className="flex items-center gap-2">
-                                        <span className="material-symbols-outlined text-sm text-gold">link</span>
-                                        <span className="font-mono text-xs">{acc.subdomain}.webnam.com</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <span className="material-symbols-outlined text-sm text-gold">manage_accounts</span>
-                                        <span>User quản lý: <b>{acc.users?.length || 0}</b> người</span>
-                                    </div>
-                                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gold/5">
-                                        <span className={`material-symbols-outlined text-sm ${acc.ai_api_key ? 'text-green-600' : 'text-stone opacity-50'}`}>
-                                            {acc.ai_api_key ? 'verified_user' : 'no_encryption'}
-                                        </span>
-                                        <span className={`text-[10px] font-bold uppercase tracking-widest ${acc.ai_api_key ? 'text-green-600' : 'text-stone opacity-50'}`}>
-                                            AI Key: {acc.ai_api_key ? 'Đã thiết lập' : 'Chưa cấu hình'}
-                                        </span>
-                                    </div>
-                                    {user?.is_admin && acc.users?.length > 0 && (
-                                        <div className="flex flex-col gap-1 mt-2 text-xs border-t border-gold/5 pt-2">
-                                            {acc.users.map(u => (
-                                                <div key={u.id} className="text-stone">✦ {u.email} <span className="opacity-60 text-[9px]">({u.pivot?.role})</span></div>
-                                            ))}
+                                        {acc.domain && (
+                                            <div className="flex items-center gap-2.5 text-[12px] text-stone-600">
+                                                <span className="material-symbols-outlined text-[16px] text-gold/60">language</span>
+                                                <span className="truncate hover:text-primary cursor-pointer w-full italic" onClick={() => window.open(`http://${acc.domain}`, '_blank')}>
+                                                    {acc.domain}
+                                                </span>
+                                            </div>
+                                        )}
+                                        <div className="flex items-center gap-2.5 text-[12px] text-stone-600">
+                                            <span className="material-symbols-outlined text-[16px] text-gold/60">group</span>
+                                            <span className="font-body"><b>{acc.users?.length || 0}</b> quản trị viên</span>
                                         </div>
-                                    )}
+                                    </div>
+                                </div>
+
+                                <div className="mt-6 flex items-center justify-between gap-2 border-t border-stone/5 pt-4">
+                                    <button onClick={() => handleAccess(acc.id)} className="flex-1 h-8 bg-gold text-white hover:bg-primary transition-all flex items-center justify-center gap-1.5 rounded-sm shadow-sm text-[10px] font-black uppercase tracking-widest active:scale-95">
+                                        <span className="material-symbols-outlined text-[14px]">login</span>
+                                        Truy cập
+                                    </button>
+                                    <div className="flex gap-1.5">
+                                        <button onClick={() => handleEdit(acc)} className="size-8 border border-gold/30 text-gold hover:bg-gold hover:text-white transition-all flex items-center justify-center rounded-sm" title="Chỉnh sửa">
+                                            <span className="material-symbols-outlined text-[16px]">edit</span>
+                                        </button>
+                                        <button onClick={() => handleToggleStatus(acc)} className="size-8 border border-brick/30 text-brick hover:bg-brick hover:text-white transition-all flex items-center justify-center rounded-sm" title={acc.status ? "Tạm khóa" : "Kích hoạt"}>
+                                            <span className="material-symbols-outlined text-[16px]">{acc.status ? 'visibility_off' : 'visibility'}</span>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
+                        ))}
 
-                            <div className="flex justify-end gap-3 mt-6 border-t border-gold/10 pt-4 opacity-60 group-hover:opacity-100 transition-opacity">
-                                <button onClick={() => handleEdit(acc)} className="text-stone hover:text-primary flex items-center gap-1 text-[10px] font-bold uppercase transition-colors">
-                                    <span className="material-symbols-outlined text-xs">edit</span> Sửa
-                                </button>
-                                <button onClick={() => handleDelete(acc.id)} className="text-stone hover:text-brick flex items-center gap-1 text-[10px] font-bold uppercase transition-colors">
-                                    <span className="material-symbols-outlined text-xs">delete</span> Xóa
-                                </button>
+                        {accounts.length === 0 && (
+                            <div className="col-span-full py-20 flex flex-col items-center justify-center gap-3 opacity-20">
+                                <span className="material-symbols-outlined text-[64px]">store_slash</span>
+                                <span className="text-[14px] font-bold uppercase tracking-widest italic">Bạn chưa quản lý tài khoản nào</span>
                             </div>
-                        </div>
-                    ))}
-
-                    {accounts.length === 0 && (
-                        <div className="col-span-full py-20 text-center text-stone italic border-2 border-dashed border-gold/10 bg-white shadow-inner">
-                            Bạn chưa quản lý tài khoản/cửa hàng nào.
-                        </div>
-                    )}
-                </div>
-            )}
+                        )}
+                    </div>
+                )}
+            </div>
         </div>
     );
 };

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { orderApi } from '../../services/api';
+import { orderApi, orderStatusApi } from '../../services/api';
 
 const OrderDetail = () => {
     const { id } = useParams();
@@ -9,16 +9,22 @@ const OrderDetail = () => {
     const [loading, setLoading] = useState(true);
     const [updating, setUpdating] = useState(false);
 
+    const [orderStatuses, setOrderStatuses] = useState([]);
+
     useEffect(() => {
-        fetchOrder();
+        fetchInitialData();
     }, [id]);
 
-    const fetchOrder = async () => {
+    const fetchInitialData = async () => {
         try {
-            const response = await orderApi.getOne(id);
-            setOrder(response.data);
+            const [orderRes, statusRes] = await Promise.all([
+                orderApi.getOne(id),
+                orderStatusApi.getAll()
+            ]);
+            setOrder(orderRes.data);
+            setOrderStatuses(statusRes.data);
         } catch (error) {
-            console.error("Error fetching order", error);
+            console.error("Error fetching order detail data", error);
         } finally {
             setLoading(false);
         }
@@ -37,29 +43,20 @@ const OrderDetail = () => {
     };
 
     const getStatusLabel = (status) => {
-        const labels = {
-            'new': 'Mới',
-            'confirmed': 'Đã xác nhận',
-            'processing': 'Đang xử lý',
-            'shipping': 'Đang giao hàng',
-            'completed': 'Hoàn thành',
-            'cancelled': 'Đã hủy',
-            'returned': 'Trả hàng'
-        };
-        return labels[status] || status;
+        const found = orderStatuses.find(s => s.code === status);
+        return found ? found.name : status;
     };
 
-    const getStatusColor = (status) => {
-        switch (status) {
-            case 'new': return 'bg-blue-50 text-blue-700 border-blue-200';
-            case 'confirmed': return 'bg-gold/10 text-gold border-gold/20';
-            case 'processing': return 'bg-orange-50 text-orange-700 border-orange-200';
-            case 'shipping': return 'bg-umber/10 text-umber border-umber/20';
-            case 'completed': return 'bg-green-50 text-green-700 border-green-200';
-            case 'cancelled': return 'bg-red-50 text-red-700 border-red-200';
-            case 'returned': return 'bg-stone-100 text-stone-700 border-stone-300';
-            default: return 'bg-stone-50 text-stone-600 border-stone-200';
+    const getStatusColorStyle = (status) => {
+        const found = orderStatuses.find(s => s.code === status);
+        if (found) {
+            return {
+                backgroundColor: `${found.color}15`,
+                color: found.color,
+                borderColor: `${found.color}30`
+            };
         }
+        return {};
     };
 
     if (loading) return <div className="p-8 text-center italic text-primary">Đang tải chi tiết đơn hàng...</div>;
@@ -73,9 +70,7 @@ const OrderDetail = () => {
                         <button onClick={() => navigate('/admin/orders')} className="text-stone hover:text-primary transition-colors">
                             <span className="material-symbols-outlined">arrow_back</span>
                         </button>
-                        <h1 className="text-3xl font-display font-bold text-primary italic">Chi Tiết Đơn Hàng #{order.order_number}</h1>
                     </div>
-                    <p className="text-[10px] text-gold uppercase tracking-[0.3em] font-ui font-bold">Ngày đặt: {new Date(order.created_at).toLocaleString('vi-VN')}</p>
                 </div>
 
                 <div className="flex gap-2 print:hidden">
@@ -90,15 +85,12 @@ const OrderDetail = () => {
                         value={order.status}
                         onChange={(e) => handleUpdateStatus(e.target.value)}
                         disabled={updating}
-                        className={`px-4 py-2 border font-ui text-xs font-bold uppercase tracking-widest focus:outline-none ${getStatusColor(order.status)}`}
+                        style={getStatusColorStyle(order.status)}
+                        className="px-4 py-2 border font-ui text-xs font-bold uppercase tracking-widest focus:outline-none"
                     >
-                        <option value="new">Mới</option>
-                        <option value="confirmed">Đã xác nhận</option>
-                        <option value="processing">Đang xử lý</option>
-                        <option value="shipping">Đang giao hàng</option>
-                        <option value="completed">Hoàn thành</option>
-                        <option value="cancelled">Đã hủy</option>
-                        <option value="returned">Trả hàng</option>
+                        {orderStatuses.filter(s => s.is_active || s.code === order.status).map(s => (
+                            <option key={s.id} value={s.code}>{s.name}</option>
+                        ))}
                     </select>
                 </div>
 

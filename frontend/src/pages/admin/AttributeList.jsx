@@ -3,6 +3,7 @@ import { attributeApi, aiApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 
 const AttributeList = () => {
+    const [activeTab, setActiveTab] = useState('product'); // 'product' or 'order'
     const [attributes, setAttributes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isFormOpen, setIsFormOpen] = useState(false);
@@ -11,6 +12,7 @@ const AttributeList = () => {
     const [formData, setFormData] = useState({
         id: null,
         name: '',
+        entity_type: 'product',
         code: '',
         frontend_type: 'select',
         swatch_type: 'none',
@@ -21,11 +23,12 @@ const AttributeList = () => {
     });
 
     const [optionInput, setOptionInput] = useState({ value: '', swatch_value: '' });
+    const [searchTerm, setSearchTerm] = useState('');
 
     const fetchAttributes = async () => {
         setLoading(true);
         try {
-            const res = await attributeApi.getAll();
+            const res = await attributeApi.getAll({ entity_type: activeTab });
             setAttributes(res.data);
         } catch (error) {
             console.error('Lỗi khi tải thuộc tính:', error);
@@ -36,7 +39,17 @@ const AttributeList = () => {
 
     useEffect(() => {
         fetchAttributes();
-    }, []);
+    }, [activeTab]);
+
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (e.key === 'Escape' && isFormOpen) {
+                setIsFormOpen(false);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isFormOpen]);
 
     const handleFormSubmit = async (e) => {
         e.preventDefault();
@@ -60,6 +73,7 @@ const AttributeList = () => {
         setFormData({
             id: attr.id,
             name: attr.name,
+            entity_type: attr.entity_type || 'product',
             code: attr.code,
             frontend_type: attr.frontend_type,
             swatch_type: attr.swatch_type || 'none',
@@ -130,197 +144,403 @@ const AttributeList = () => {
         }
     };
 
-    return (
-        <div className="space-y-10 pb-20 animate-fade-in">
-            <div className="flex justify-between items-end border-b border-gold/10 pb-8">
-                <div className="space-y-2">
-                    <h1 className="font-display text-4xl font-bold text-primary italic uppercase tracking-wider">Cấu Hình Thuộc Tính</h1>
-                    <p className="font-ui text-xs font-bold uppercase tracking-widest text-gold opacity-60">Định nghĩa đặc tính cho các tuyệt tác gốm sứ</p>
-                </div>
-                <button
-                    onClick={() => {
-                        setFormData({ id: null, name: '', code: '', frontend_type: 'select', swatch_type: 'none', is_filterable: true, is_required: false, is_variant: true, options: [] });
-                        setIsFormOpen(true);
-                    }}
-                    className="bg-primary text-white font-ui font-bold uppercase tracking-widest px-8 py-3 hover:bg-umber transition-all shadow-premium flex items-center gap-3"
-                >
-                    <span className="material-symbols-outlined text-sm">add_circle</span>
-                    Thuộc Tính Mới
-                </button>
-            </div>
+    const filteredAttributes = attributes.filter(attr => 
+        attr.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+        attr.code.toLowerCase().includes(searchTerm.toLowerCase())
+    );
 
-            {isFormOpen && (
-                <div className="bg-white border border-gold/20 shadow-premium p-10 space-y-8 animate-slide-up">
-                    <div className="flex justify-between items-center border-b border-gold/10 pb-6">
-                        <h2 className="font-display text-2xl font-bold text-primary uppercase italic">{formData.id ? 'Biên Tập' : 'Khởi Tạo'} Thuộc Tính</h2>
-                        <button onClick={() => setIsFormOpen(false)} className="text-stone hover:text-brick transition-colors">
-                            <span className="material-symbols-outlined">close</span>
+    return (
+        <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full overflow-hidden">
+            <style>
+                {`
+                    @keyframes refresh-spin {
+                        from { transform: rotate(0deg); }
+                        to { transform: rotate(360deg); }
+                    }
+                    .animate-refresh-spin {
+                        animation: refresh-spin 0.8s linear infinite;
+                    }
+
+                    .custom-scrollbar::-webkit-scrollbar {
+                        width: 8px;
+                        height: 8px;
+                    }
+                    .custom-scrollbar::-webkit-scrollbar-track {
+                        background: rgba(182, 143, 84, 0.05);
+                    }
+                    .custom-scrollbar::-webkit-scrollbar-thumb {
+                        background: rgba(182, 143, 84, 0.2);
+                        border-radius: 4px;
+                        border: 2px solid transparent;
+                        background-clip: content-box;
+                    }
+                    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+                        background: rgba(182, 143, 84, 0.4);
+                    }
+
+                    .table-grid {
+                        border-collapse: collapse;
+                    }
+                    .table-grid th, .table-grid td {
+                        border: 1px solid rgba(182, 143, 84, 0.15);
+                    }
+                `}
+            </style>
+
+            {/* Header Area */}
+            <div className="flex-none bg-[#fcfcfa] pb-4">
+                <div className="flex justify-between items-center mb-4">
+                    <div className="flex flex-col">
+                        <h1 className="text-2xl font-display font-bold text-primary italic">Cấu hình thuộc tính</h1>
+                        <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.2em] leading-none mt-1">Định nghĩa đặc tính cho sản phẩm và đơn hàng</p>
+                    </div>
+                    <div className="flex items-center gap-4">
+                        <div className="flex bg-white border border-gold/10 p-0.5 rounded-sm shadow-sm h-10">
+                            <button 
+                                onClick={() => setActiveTab('product')}
+                                className={`px-4 flex items-center gap-2 font-ui text-[10px] font-black uppercase tracking-widest transition-all rounded-sm ${activeTab === 'product' ? 'bg-primary text-white shadow-sm' : 'text-stone/60 hover:text-primary hover:bg-gold/5'}`}
+                            >
+                                <span className="material-symbols-outlined text-[16px]">inventory_2</span>
+                                Sản phẩm
+                            </button>
+                            <button 
+                                onClick={() => setActiveTab('order')}
+                                className={`px-4 flex items-center gap-2 font-ui text-[10px] font-black uppercase tracking-widest transition-all rounded-sm ${activeTab === 'order' ? 'bg-primary text-white shadow-sm' : 'text-stone/60 hover:text-primary hover:bg-gold/5'}`}
+                            >
+                                <span className="material-symbols-outlined text-[16px]">receipt_long</span>
+                                Đơn hàng
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Toolbar like ProductList */}
+                <div className="bg-white border border-gold/10 p-2 shadow-sm rounded-sm flex items-center justify-between">
+                    <div className="flex gap-1.5 items-center">
+                        <button
+                            onClick={() => {
+                                setFormData({ 
+                                    id: null, 
+                                    name: '', 
+                                    entity_type: activeTab, 
+                                    code: '', 
+                                    frontend_type: 'select', 
+                                    swatch_type: 'none', 
+                                    is_filterable: activeTab === 'product', 
+                                    is_required: false, 
+                                    is_variant: activeTab === 'product', 
+                                    options: [] 
+                                });
+                                setIsFormOpen(true);
+                            }}
+                            className="bg-brick text-white p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 shadow-sm"
+                            title="Thêm thuộc tính mới"
+                        >
+                            <span className="material-symbols-outlined text-[18px]">add</span>
+                        </button>
+
+                        <button
+                            onClick={fetchAttributes}
+                            className={`bg-primary text-white border border-primary p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 ${loading ? 'opacity-70' : ''}`}
+                            title="Làm mới danh sách"
+                            disabled={loading}
+                        >
+                            <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span>
                         </button>
                     </div>
 
-                    <form onSubmit={handleFormSubmit} className="grid grid-cols-1 lg:grid-cols-12 gap-12">
-                        <div className="lg:col-span-7 space-y-8">
-                            <div className="grid grid-cols-2 gap-6">
-                                <div className="space-y-2">
-                                    <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Tên Gọi (VD: Màu sắc)</label>
-                                    <input required type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full bg-background-light border border-gold/20 p-4 focus:outline-none focus:border-primary font-body text-sm" />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Mã Code (Dùng cho API)</label>
-                                    <input type="text" value={formData.code} disabled={!!formData.id} onChange={e => setFormData({ ...formData, code: e.target.value })} className="w-full bg-background-light border border-gold/20 p-4 focus:outline-none focus:border-primary font-body text-sm disabled:opacity-40" placeholder="VD: color" />
-                                </div>
-                            </div>
+                    {/* Search Bar like ProductList */}
+                    <div className="flex-1 max-w-md relative ml-4">
+                        <span className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-gold text-[16px]">search</span>
+                        <input
+                            type="text"
+                            placeholder="Tìm tên hoặc mã thuộc tính..."
+                            className="w-full bg-stone/5 border border-gold/10 px-8 py-1.5 focus:outline-none focus:border-primary font-body text-[13px] rounded-sm"
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                        />
+                    </div>
 
-                            <div className="grid grid-cols-2 gap-6">
-                                <div className="space-y-2">
-                                    <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Kiểu Hiển Thị</label>
-                                    <select value={formData.frontend_type} onChange={e => setFormData({ ...formData, frontend_type: e.target.value })} className="w-full bg-background-light border border-gold/20 p-4 focus:outline-none focus:border-primary font-body text-sm appearance-none">
-                                        <option value="text">Văn bản ngắn (Text)</option>
-                                        <option value="select">Danh mục chọn (Select)</option>
-                                        <option value="multiselect">Chọn nhiều (Multiselect)</option>
-                                        <option value="boolean">Đúng / Sai (Boolean)</option>
-                                        <option value="price">Giá tiền (Price)</option>
-                                    </select>
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Kiểu Swatch (Trực quan)</label>
-                                    <select value={formData.swatch_type} onChange={e => setFormData({ ...formData, swatch_type: e.target.value })} className="w-full bg-background-light border border-gold/20 p-4 focus:outline-none focus:border-primary font-body text-sm appearance-none">
-                                        <option value="none">Không dùng Swatch</option>
-                                        <option value="color">Màu sắc (Color Hex)</option>
-                                        <option value="image">Hình ảnh (Thumbnail)</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div className="flex gap-8 items-center bg-gold/5 p-6 border border-gold/10">
-                                <label className="flex items-center gap-3 cursor-pointer group">
-                                    <input type="checkbox" checked={formData.is_variant} onChange={e => setFormData({ ...formData, is_variant: e.target.checked })} className="size-5 accent-primary" />
-                                    <span className="font-ui text-xs font-bold uppercase text-primary tracking-widest">Dùng làm biến thể sản phẩm</span>
-                                </label>
-                                <label className="flex items-center gap-3 cursor-pointer group">
-                                    <input type="checkbox" checked={formData.is_filterable} onChange={e => setFormData({ ...formData, is_filterable: e.target.checked })} className="size-5 accent-primary" />
-                                    <span className="font-ui text-xs font-bold uppercase text-stone tracking-widest">Hiển thị trong bộ lọc</span>
-                                </label>
-                            </div>
-                        </div>
-
-                        <div className="lg:col-span-5 bg-background-light/50 border border-gold/10 p-8 space-y-6">
-                            <div className="flex justify-between items-center border-b border-gold/20 pb-4">
-                                <h4 className="font-ui text-xs font-bold uppercase tracking-[0.2em] text-primary">Giá Trị Tùy Chọn</h4>
-                                <button type="button" onClick={handleAIGenerate} disabled={aiGenerating} className="flex items-center gap-2 text-gold hover:text-primary transition-colors text-[10px] font-bold uppercase">
-                                    <span className={`material-symbols-outlined text-sm ${aiGenerating ? 'animate-spin' : ''}`}>auto_awesome</span>
-                                    AI Suggest
-                                </button>
-                            </div>
-
-                            <div className="max-h-[300px] overflow-y-auto pr-2 space-y-3 custom-scrollbar">
-                                {formData.options.map((opt, idx) => (
-                                    <div key={idx} className="flex items-center gap-3 bg-white border border-gold/20 p-3 shadow-sm group">
-                                        {formData.swatch_type === 'color' && (
-                                            <div className="size-8 rounded-full border border-gold/30 shadow-inner" style={{ backgroundColor: opt.swatch_value || '#ccc' }}></div>
-                                        )}
-                                        <div className="flex-1 space-y-1">
-                                            <div className="font-body text-sm font-bold text-primary uppercase tracking-wider">{opt.value}</div>
-                                            {opt.swatch_value && <div className="text-[9px] text-stone font-ui uppercase">{opt.swatch_value}</div>}
-                                        </div>
-                                        <button type="button" onClick={() => removeOption(idx)} className="opacity-0 group-hover:opacity-100 p-2 text-stone hover:text-brick transition-all">
-                                            <span className="material-symbols-outlined text-sm">delete</span>
-                                        </button>
-                                    </div>
-                                ))}
-                                {formData.options.length === 0 && <div className="text-center py-10 text-stone font-body italic text-sm">Chưa có giá trị nào.</div>}
-                            </div>
-
-                            <div className="pt-6 border-t border-gold/20 space-y-4">
-                                <div className="grid grid-cols-2 gap-4">
-                                    <input value={optionInput.value} onChange={e => setOptionInput({ ...optionInput, value: e.target.value })} onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addOption())} type="text" placeholder="Tên giá trị..." className="bg-white border border-gold/20 p-3 text-xs font-body focus:outline-none focus:border-primary" />
-                                    {formData.swatch_type === 'color' ? (
-                                        <div className="flex gap-2">
-                                            <input type="color" value={optionInput.swatch_value || '#000000'} onChange={e => setOptionInput({ ...optionInput, swatch_value: e.target.value })} className="size-10 bg-transparent cursor-pointer" />
-                                            <input type="text" value={optionInput.swatch_value} onChange={e => setOptionInput({ ...optionInput, swatch_value: e.target.value })} placeholder="#Hex..." className="flex-1 bg-white border border-gold/20 px-2 text-[10px] font-ui uppercase" />
-                                        </div>
-                                    ) : (
-                                        <input value={optionInput.swatch_value} onChange={e => setOptionInput({ ...optionInput, swatch_value: e.target.value })} type="text" placeholder="Extra value/URL..." className="bg-white border border-gold/20 p-3 text-xs font-body focus:outline-none focus:border-primary" />
-                                    )}
-                                </div>
-                                <button type="button" onClick={addOption} className="w-full bg-gold/10 text-gold border border-gold/30 py-3 font-ui text-[10px] font-bold uppercase tracking-widest hover:bg-primary hover:text-white transition-all">
-                                    Thêm Giá Trị
-                                </button>
-                            </div>
-                        </div>
-
-                        <div className="lg:col-span-12 flex justify-end gap-6 pt-10 border-t border-gold/10 mt-6 font-ui">
-                            <button type="button" onClick={() => setIsFormOpen(false)} className="px-10 py-3 text-[10px] font-bold uppercase tracking-widest text-stone hover:text-primary transition-colors border border-stone/20">Hủy</button>
-                            <button type="submit" className="px-12 py-3 bg-primary text-white text-[10px] font-bold uppercase tracking-widest hover:bg-umber transition-all shadow-premium">
-                                {formData.id ? 'Cập Nhật Thuộc Tính' : 'Lưu Hệ Thống'}
-                            </button>
-                        </div>
-                    </form>
+                    <div className="text-[11px] font-bold text-stone/40 uppercase tracking-[0.1em] ml-4">
+                        {filteredAttributes.length} / {attributes.length} Thuộc tính
+                    </div>
                 </div>
-            )}
+            </div>
 
-            {/* Attributes Table */}
-            <div className="bg-white border border-gold/10 shadow-premium overflow-hidden animate-slide-up">
-                <table className="w-full text-left border-collapse">
-                    <thead>
-                        <tr className="bg-gold/5 border-b border-gold/10">
-                            <th className="p-6 font-ui text-[10px] font-bold uppercase tracking-widest text-primary">Tên & Mã</th>
-                            <th className="p-6 font-ui text-[10px] font-bold uppercase tracking-widest text-primary text-center">Kiểu Nhập</th>
-                            <th className="p-6 font-ui text-[10px] font-bold uppercase tracking-widest text-primary text-center">Biến Thể</th>
-                            <th className="p-6 font-ui text-[10px] font-bold uppercase tracking-widest text-primary">Giá Trị Mẫu</th>
-                            <th className="p-6 font-ui text-[10px] font-bold uppercase tracking-widest text-primary text-right">Thao Tác</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gold/10">
-                        {loading ? (
+            {/* Content Area */}
+            <div className="flex-1 overflow-hidden relative flex flex-col gap-4">
+                {isFormOpen && (
+                    <div className="absolute inset-0 z-50 bg-[#fcfcfa]/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                        <div className="bg-white border border-gold/20 shadow-[0_15px_50px_-12px_rgba(0,0,0,0.25)] w-full max-w-4xl mx-auto rounded-md overflow-hidden flex flex-col max-h-full">
+                            <div className="flex-none px-6 py-4 bg-gold/5 border-b border-gold/10 flex justify-between items-center">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded bg-primary/10 flex items-center justify-center">
+                                        <span className="material-symbols-outlined text-primary text-[18px]">{formData.id ? 'edit_note' : 'add_box'}</span>
+                                    </div>
+                                    <h2 className="font-display text-lg font-bold text-primary uppercase italic">{formData.id ? 'Biên Tập' : 'Khởi Tạo'} Thuộc Tính</h2>
+                                </div>
+                                <button onClick={() => setIsFormOpen(false)} className="w-8 h-8 flex items-center justify-center text-stone/40 hover:text-brick hover:bg-brick/5 transition-all rounded-full">
+                                    <span className="material-symbols-outlined text-[20px]">close</span>
+                                </button>
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
+                                <form onSubmit={handleFormSubmit} id="attribute-form" className="grid grid-cols-1 md:grid-cols-12 gap-8">
+                                    <div className="md:col-span-7 space-y-6">
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="space-y-1.5">
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Tên Gọi (VD: Màu sắc)</label>
+                                                <input 
+                                                    required type="text" 
+                                                    value={formData.name} 
+                                                    onChange={e => setFormData({ ...formData, name: e.target.value })} 
+                                                    className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm" 
+                                                />
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Mã Code (Dùng cho API)</label>
+                                                <input 
+                                                    type="text" 
+                                                    value={formData.code} 
+                                                    disabled={!!formData.id} 
+                                                    onChange={e => setFormData({ ...formData, code: e.target.value })} 
+                                                    className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm disabled:opacity-40" 
+                                                    placeholder="VD: color" 
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="space-y-1.5">
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Kiểu Hiển Thị</label>
+                                                <select 
+                                                    value={formData.frontend_type} 
+                                                    onChange={e => setFormData({ ...formData, frontend_type: e.target.value })} 
+                                                    className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm appearance-none"
+                                                >
+                                                    <option value="text">Văn bản ngắn (Text)</option>
+                                                    <option value="select">Danh mục chọn (Select)</option>
+                                                    <option value="multiselect">Chọn nhiều (Multiselect)</option>
+                                                    <option value="boolean">Đúng / Sai (Boolean)</option>
+                                                    <option value="price">Giá tiền (Price)</option>
+                                                </select>
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Kiểu Swatch (Trực quan)</label>
+                                                <select 
+                                                    value={formData.swatch_type} 
+                                                    onChange={e => setFormData({ ...formData, swatch_type: e.target.value })} 
+                                                    className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm appearance-none"
+                                                >
+                                                    <option value="none">Không dùng Swatch</option>
+                                                    <option value="color">Màu sắc (Color Hex)</option>
+                                                    <option value="image">Hình ảnh (Thumbnail)</option>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex flex-wrap gap-6 items-center bg-gold/5 p-4 border border-gold/10 rounded-sm">
+                                            {formData.entity_type === 'product' && (
+                                                <>
+                                                    <label className="flex items-center gap-2.5 cursor-pointer group">
+                                                        <div className="relative flex items-center">
+                                                            <input type="checkbox" checked={formData.is_variant} onChange={e => setFormData({ ...formData, is_variant: e.target.checked })} className="size-4 accent-primary rounded-sm" />
+                                                        </div>
+                                                        <span className="text-[11px] font-bold uppercase text-primary tracking-wider">Biến thể</span>
+                                                    </label>
+                                                    <label className="flex items-center gap-2.5 cursor-pointer group">
+                                                        <input type="checkbox" checked={formData.is_filterable} onChange={e => setFormData({ ...formData, is_filterable: e.target.checked })} className="size-4 accent-primary rounded-sm" />
+                                                        <span className="text-[11px] font-bold uppercase text-stone-600 tracking-wider">Bộ lọc</span>
+                                                    </label>
+                                                </>
+                                            )}
+                                            <label className="flex items-center gap-2.5 cursor-pointer group">
+                                                <input type="checkbox" checked={formData.is_required} onChange={e => setFormData({ ...formData, is_required: e.target.checked })} className="size-4 accent-primary rounded-sm" />
+                                                <span className="text-[11px] font-bold uppercase text-stone-600 tracking-wider">Bắt buộc</span>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <div className="md:col-span-5 bg-stone/5 border border-gold/10 p-5 space-y-4 rounded-sm">
+                                        <div className="flex justify-between items-center border-b border-stone/20 pb-3">
+                                            <h4 className="text-[11px] font-black uppercase tracking-[0.15em] text-primary">Giá Trị Tùy Chọn</h4>
+                                            <button 
+                                                type="button" 
+                                                onClick={handleAIGenerate} 
+                                                disabled={aiGenerating} 
+                                                className="flex items-center gap-1.5 text-gold hover:text-primary transition-colors text-[9px] font-black uppercase"
+                                            >
+                                                <span className={`material-symbols-outlined text-[16px] ${aiGenerating ? 'animate-spin' : ''}`}>auto_awesome</span>
+                                                AI Help
+                                            </button>
+                                        </div>
+
+                                        <div className="max-h-[220px] overflow-y-auto pr-1 space-y-2 custom-scrollbar">
+                                            {formData.options.map((opt, idx) => (
+                                                <div key={idx} className="flex items-center gap-2 bg-white border border-stone/10 p-2 rounded-sm group hover:border-gold/30 transition-colors">
+                                                    {formData.swatch_type === 'color' && (
+                                                        <div className="size-6 rounded-full border border-stone/20 shadow-sm shrink-0" style={{ backgroundColor: opt.swatch_value || '#ccc' }}></div>
+                                                    )}
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="text-[12px] font-bold text-stone-700 truncate">{opt.value}</div>
+                                                        {opt.swatch_value && <div className="text-[9px] text-stone/40 font-mono uppercase truncate">{opt.swatch_value}</div>}
+                                                    </div>
+                                                    <button type="button" onClick={() => removeOption(idx)} className="opacity-0 group-hover:opacity-100 p-1 text-stone/30 hover:text-brick transition-all">
+                                                        <span className="material-symbols-outlined text-[16px]">delete</span>
+                                                    </button>
+                                                </div>
+                                            ))}
+                                            {formData.options.length === 0 && <div className="text-center py-8 text-stone/30 font-body italic text-[12px]">Chưa có giá trị nào</div>}
+                                        </div>
+
+                                        <div className="pt-4 border-t border-stone/20 space-y-3">
+                                            <div className="flex gap-2">
+                                                <input 
+                                                    value={optionInput.value} 
+                                                    onChange={e => setOptionInput({ ...optionInput, value: e.target.value })} 
+                                                    onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addOption())} 
+                                                    type="text" placeholder="Tên..." 
+                                                    className="flex-1 bg-white border border-stone/20 px-3 py-2 text-[12px] font-body focus:outline-none focus:border-primary rounded-sm shadow-inner" 
+                                                />
+                                                {formData.swatch_type === 'color' && (
+                                                    <input 
+                                                        type="color" 
+                                                        value={optionInput.swatch_value || '#000000'} 
+                                                        onChange={e => setOptionInput({ ...optionInput, swatch_value: e.target.value })} 
+                                                        className="size-9 bg-transparent cursor-pointer shrink-0" 
+                                                    />
+                                                )}
+                                            </div>
+                                            <button type="button" onClick={addOption} className="w-full bg-gold/10 text-gold border border-gold/20 py-2 text-[10px] font-black uppercase tracking-widest hover:bg-primary hover:text-white transition-all rounded-sm">
+                                                Ghi nhận giá trị
+                                            </button>
+                                        </div>
+                                    </div>
+                                </form>
+                            </div>
+
+                            <div className="flex-none px-6 py-4 bg-stone/5 border-t border-gold/10 flex justify-end gap-3">
+                                <button 
+                                    type="button" 
+                                    onClick={() => setIsFormOpen(false)} 
+                                    className="px-6 py-2 text-[11px] font-bold uppercase tracking-widest text-stone-500 hover:bg-stone/10 transition-all border border-stone/20 rounded-sm"
+                                >
+                                    Đóng
+                                </button>
+                                <button 
+                                    form="attribute-form"
+                                    type="submit" 
+                                    className="px-8 py-2 bg-primary text-white text-[11px] font-bold uppercase tracking-widest hover:bg-umber transition-all shadow-sm rounded-sm"
+                                >
+                                    {formData.id ? 'Lưu cập nhật' : 'Khởi tạo ngay'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                <div className="flex-1 overflow-auto custom-scrollbar bg-white border border-gold/10 rounded-sm shadow-sm relative">
+                    <table className="w-full table-grid table-scrollbar text-left min-w-[800px]">
+                        <thead className="sticky top-0 z-20 bg-gold/5 backdrop-blur-sm">
                             <tr>
-                                <td colSpan="5" className="p-20 text-center">
-                                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold mx-auto"></div>
-                                </td>
+                                <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary w-1/4">Tên & Mã Thuộc Tính</th>
+                                <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary text-center w-40">Phân Loại</th>
+                                {activeTab === 'product' && <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary text-center w-32">Biến Thể</th>}
+                                <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary">Danh Sách Giá Trị</th>
+                                <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary text-right w-36">Thao Tác</th>
                             </tr>
-                        ) : attributes.map((attr) => (
-                            <tr key={attr.id} className="hover:bg-gold/5 transition-colors group">
-                                <td className="p-6">
-                                    <div className="flex flex-col">
-                                        <span className="font-display text-lg font-bold text-primary">{attr.name}</span>
-                                        <span className="text-[10px] text-stone font-ui uppercase tracking-tighter opacity-70">Code: {attr.code}</span>
-                                    </div>
-                                </td>
-                                <td className="p-6 text-center">
-                                    <span className="px-3 py-1 bg-gold/5 border border-gold/20 text-[10px] font-bold uppercase tracking-widest text-gold">
-                                        {attr.frontend_type}
-                                    </span>
-                                </td>
-                                <td className="p-6 text-center">
-                                    {attr.is_variant ? (
-                                        <span className="material-symbols-outlined text-green-600">check_circle</span>
-                                    ) : (
-                                        <span className="material-symbols-outlined text-stone/30">cancel</span>
+                        </thead>
+                        <tbody className="divide-y divide-gold/10">
+                            {loading ? (
+                                <tr>
+                                    <td colSpan={activeTab === 'product' ? 5 : 4} className="p-20 text-center">
+                                        <div className="flex flex-col items-center gap-4">
+                                            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
+                                            <span className="text-[11px] font-black text-stone/30 uppercase tracking-[0.2em]">Đang tải dữ liệu...</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ) : attributes.length === 0 ? (
+                                <tr>
+                                    <td colSpan={activeTab === 'product' ? 5 : 4} className="p-20 text-center">
+                                        <div className="flex flex-col items-center gap-3 opacity-30">
+                                            <span className="material-symbols-outlined text-[60px]">inventory_2</span>
+                                            <span className="text-[12px] font-bold italic uppercase tracking-widest">Không tìm thấy thuộc tính nào khớp với từ khóa</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ) : filteredAttributes.map((attr) => (
+                                <tr 
+                                    key={attr.id} 
+                                    onDoubleClick={() => handleEdit(attr)}
+                                    className="hover:bg-gold/5 transition-colors group cursor-pointer select-none"
+                                >
+                                    <td className="px-4 py-3.5">
+                                        <div className="flex flex-col gap-0.5">
+                                            <span className="font-display text-[15px] font-bold text-primary group-hover:text-umber transition-colors tracking-tight uppercase">{attr.name}</span>
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-[9px] font-black text-stone/40 bg-stone/5 px-1.5 py-0.5 rounded border border-stone/10 tracking-widest uppercase italic">CODE: {attr.code}</span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3.5 text-center">
+                                        <span className="px-2.5 py-1 bg-gold/5 border border-gold/20 text-[10px] font-black uppercase tracking-widest text-gold rounded-full shadow-sm">
+                                            {attr.frontend_type}
+                                        </span>
+                                    </td>
+                                    {activeTab === 'product' && (
+                                        <td className="px-4 py-3.5 text-center">
+                                            <div className="flex justify-center">
+                                                {attr.is_variant ? (
+                                                    <div className="w-10 h-6 bg-green-500/10 border border-green-500/20 rounded-full flex items-center justify-center text-green-600 shadow-inner">
+                                                        <span className="material-symbols-outlined text-[16px] font-bold">check</span>
+                                                    </div>
+                                                ) : (
+                                                    <div className="w-10 h-6 bg-stone/5 border border-stone/20 rounded-full flex items-center justify-center text-stone/20">
+                                                        <span className="material-symbols-outlined text-[14px]">horizontal_rule</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </td>
                                     )}
-                                </td>
-                                <td className="p-6">
-                                    <div className="flex flex-wrap gap-2 max-w-sm">
-                                        {attr.options?.slice(0, 4).map((o, i) => (
-                                            <span key={i} className="px-2 py-1 bg-white border border-gold/10 text-[9px] font-ui uppercase text-stone leading-none">
-                                                {o.value}
-                                            </span>
-                                        ))}
-                                        {attr.options?.length > 4 && <span className="text-[9px] text-gold font-bold italic">+{attr.options.length - 4} khác</span>}
-                                        {attr.options?.length === 0 && <span className="text-[10px] text-stone italic opacity-50">N/A</span>}
-                                    </div>
-                                </td>
-                                <td className="p-6 text-right space-x-3">
-                                    <button onClick={() => handleEdit(attr)} className="size-9 border border-gold/30 text-gold hover:bg-gold hover:text-white transition-all inline-flex items-center justify-center rounded-sm">
-                                        <span className="material-symbols-outlined text-sm">edit</span>
-                                    </button>
-                                    <button onClick={() => handleDelete(attr.id)} className="size-9 border border-brick/30 text-brick hover:bg-brick hover:text-white transition-all inline-flex items-center justify-center rounded-sm">
-                                        <span className="material-symbols-outlined text-sm">delete</span>
-                                    </button>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+                                    <td className="px-4 py-3.5">
+                                        <div className="flex flex-wrap gap-1.5 max-w-md">
+                                            {attr.options?.slice(0, 5).map((o, i) => (
+                                                <span key={i} className="px-2 py-1 bg-white border border-stone/15 text-[10px] font-bold uppercase text-stone-600 rounded-sm shadow-sm group-hover:border-gold/30 transition-colors">
+                                                    {o.value}
+                                                </span>
+                                            ))}
+                                            {attr.options?.length > 5 && (
+                                                <span className="px-2 py-1 bg-stone/5 border border-stone/10 text-[9px] font-black text-gold uppercase tracking-tighter rounded-full italic">
+                                                    +{attr.options.length - 5}
+                                                </span>
+                                            )}
+                                            {attr.options?.length === 0 && <span className="text-[11px] text-stone/30 italic">No values defined</span>}
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3.5 text-right">
+                                        <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-all translate-x-2 group-hover:translate-x-0">
+                                            <button 
+                                                onClick={() => handleEdit(attr)} 
+                                                className="w-9 h-9 border border-gold/30 text-gold hover:bg-gold hover:text-white transition-all flex items-center justify-center rounded-sm shadow-sm active:scale-90"
+                                                title="Sửa thuộc tính"
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]">edit</span>
+                                            </button>
+                                            <button 
+                                                onClick={() => handleDelete(attr.id)} 
+                                                className="w-9 h-9 border border-brick/30 text-brick hover:bg-brick hover:text-white transition-all flex items-center justify-center rounded-sm shadow-sm active:scale-90"
+                                                title="Xóa thuộc tính"
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]">delete</span>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     );

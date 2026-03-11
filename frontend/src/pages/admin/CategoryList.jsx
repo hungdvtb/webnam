@@ -61,6 +61,16 @@ const CategoryList = () => {
         fetchCategories();
     }, []);
 
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (e.key === 'Escape' && isFormOpen) {
+                setIsFormOpen(false);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isFormOpen]);
+
     const handleDrop = async (newTree, options) => {
         setTreeData(newTree); // Optimistic UI update
 
@@ -128,117 +138,199 @@ const CategoryList = () => {
 
     return (
         <DndProvider backend={HTML5Backend}>
-            <div className="space-y-6">
-                <div className="flex justify-between items-center bg-white p-6 shadow-sm border border-gold/10">
-                    <div>
-                        <h2 className="text-2xl font-display font-bold text-primary uppercase">Quản lý Danh Mục</h2>
-                        <p className="text-stone font-body text-sm italic mt-1">Kéo thả để sắp xếp phân cấp các danh mục sản phẩm.</p>
+    return (
+        <DndProvider backend={HTML5Backend}>
+            <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full overflow-hidden">
+                <style>
+                    {`
+                        .custom-scrollbar::-webkit-scrollbar {
+                            width: 8px;
+                            height: 8px;
+                        }
+                        .custom-scrollbar::-webkit-scrollbar-track {
+                            background: rgba(182, 143, 84, 0.05);
+                        }
+                        .custom-scrollbar::-webkit-scrollbar-thumb {
+                            background: rgba(182, 143, 84, 0.2);
+                            border-radius: 4px;
+                            border: 2px solid transparent;
+                            background-clip: content-box;
+                        }
+                        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+                            background: rgba(182, 143, 84, 0.4);
+                        }
+                    `}
+                </style>
+
+                {/* Header Area */}
+                <div className="flex-none bg-[#fcfcfa] pb-4">
+                    <div className="flex justify-between items-center mb-4">
+                        <div className="flex flex-col">
+                            <h1 className="text-2xl font-display font-bold text-primary italic">Phân loại sản phẩm</h1>
+                            <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.2em] leading-none mt-1">Quản lý cấu trúc danh mục và phân cấp</p>
+                        </div>
                     </div>
-                    <button
-                        onClick={() => { setFormData({ id: null, name: '', description: '', parent_id: '', status: 1 }); setIsFormOpen(true); }}
-                        className="bg-primary text-white px-6 py-2 uppercase font-ui font-bold text-xs tracking-widest hover:bg-umber transition-all flex items-center gap-2 shadow-md shadow-primary/20"
-                    >
-                        <span className="material-symbols-outlined text-sm">add</span> Thêm Danh Mục
-                    </button>
+
+                    {/* Toolbar */}
+                    <div className="bg-white border border-gold/10 p-2 shadow-sm rounded-sm flex items-center justify-between">
+                        <div className="flex gap-1.5 items-center">
+                            <button
+                                onClick={() => { setFormData({ id: null, name: '', description: '', parent_id: '', status: 1 }); setIsFormOpen(true); }}
+                                className="bg-brick text-white p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 shadow-sm"
+                                title="Thêm danh mục mới"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">add</span>
+                            </button>
+                            <button
+                                onClick={fetchCategories}
+                                className={`bg-primary text-white border border-primary p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 ${loading ? 'opacity-70' : ''}`}
+                                title="Làm mới"
+                                disabled={loading}
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>refresh</span>
+                            </button>
+                        </div>
+                        <div className="text-[11px] font-bold text-stone/40 uppercase tracking-[0.1em]">
+                            {treeData.length} danh mục đã khởi tạo
+                        </div>
+                    </div>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+                {/* Content Area */}
+                <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-12 gap-6 pt-2">
                     {/* Tree View Section */}
-                    <div className="lg:col-span-2 bg-white p-6 shadow-sm border border-gold/10 min-h-[400px]">
-                        <div className="font-ui text-sm font-bold uppercase tracking-widest mb-6 border-b border-gold/20 pb-2 text-primary">Cấu Trúc Cây Danh Mục</div>
-
-                        {treeData.length === 0 ? (
-                            <div className="text-stone text-center py-10 italic">Chưa có danh mục nào.</div>
-                        ) : (
-                            <Tree
-                                tree={treeData}
-                                rootId={0}
-                                render={(node, options) => (
-                                    <CustomNode
-                                        node={node}
-                                        {...options}
-                                        onEdit={handleEdit}
-                                        onDelete={handleDelete}
-                                    />
-                                )}
-                                dragPreviewRender={(monitorProps) => (
-                                    <div className="bg-primary text-white px-4 py-2 font-ui font-bold shadow-xl border border-gold/30">
-                                        {monitorProps.item.text}
-                                    </div>
-                                )}
-                                onDrop={handleDrop}
-                                classes={{
-                                    root: "w-full",
-                                    draggingSource: "opacity-30",
-                                    dropTarget: "bg-gold/10",
-                                }}
-                            />
-                        )}
+                    <div className="lg:col-span-8 bg-white border border-gold/10 rounded-sm shadow-sm flex flex-col overflow-hidden relative">
+                        <div className="flex-none px-4 py-3 bg-gold/5 border-b border-gold/10 flex justify-between items-center">
+                            <h2 className="text-[11px] font-black uppercase tracking-[0.15em] text-primary flex items-center gap-2">
+                                <span className="material-symbols-outlined text-[16px]">account_tree</span>
+                                Cấu Trúc Cây Danh Mục
+                            </h2>
+                            <span className="text-[9px] font-black text-stone/30 uppercase tracking-widest italic">Kéo thả để sắp xếp</span>
+                        </div>
+                        
+                        <div className="flex-1 overflow-auto custom-scrollbar p-4">
+                            {loading ? (
+                                <div className="h-full flex flex-col items-center justify-center gap-4 opacity-30">
+                                    <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
+                                    <span className="text-[11px] font-black text-stone/30 uppercase tracking-[0.2em]">Đang tải dữ liệu...</span>
+                                </div>
+                            ) : treeData.length === 0 ? (
+                                <div className="h-full flex flex-col items-center justify-center gap-3 opacity-30">
+                                    <span className="material-symbols-outlined text-[60px]">inventory_2</span>
+                                    <span className="text-[12px] font-bold italic uppercase tracking-widest">Chưa có danh mục nào</span>
+                                </div>
+                            ) : (
+                                <Tree
+                                    tree={treeData}
+                                    rootId={0}
+                                    render={(node, options) => (
+                                        <CustomNode
+                                            node={node}
+                                            {...options}
+                                            onEdit={handleEdit}
+                                            onDelete={handleDelete}
+                                        />
+                                    )}
+                                    dragPreviewRender={(monitorProps) => (
+                                        <div className="bg-primary text-white px-4 py-2 font-ui font-bold shadow-xl border border-gold/30 rounded-sm scale-110">
+                                            {monitorProps.item.text}
+                                        </div>
+                                    )}
+                                    onDrop={handleDrop}
+                                    classes={{
+                                        root: "w-full",
+                                        draggingSource: "opacity-30",
+                                        dropTarget: "bg-gold/10",
+                                    }}
+                                />
+                            )}
+                        </div>
                     </div>
 
-                    {/* Right side helper / Form space */}
-                    <div className="lg:col-span-1 space-y-6">
+                    {/* Right side Form Area */}
+                    <div className="lg:col-span-4 flex flex-col gap-6 overflow-hidden">
                         {isFormOpen ? (
-                            <div className="bg-white p-6 shadow-sm border border-gold/10 animate-fade-in relative">
-                                <button
-                                    onClick={() => setIsFormOpen(false)}
-                                    className="absolute top-4 right-4 text-stone hover:text-brick"
-                                >
-                                    <span className="material-symbols-outlined">close</span>
-                                </button>
-                                <h3 className="font-ui font-bold text-primary uppercase tracking-widest border-b border-gold/20 pb-4 mb-4">
-                                    {formData.id ? 'Sửa Danh Mục' : 'Tạo Mới'}
-                                </h3>
-                                <form onSubmit={handleFormSubmit} className="space-y-4">
-                                    <div className="space-y-1">
-                                        <label className="font-ui text-xs font-bold uppercase tracking-wider text-primary">Tên danh mục</label>
-                                        <input required type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full bg-background-light border border-gold/30 p-2 text-sm focus:outline-none focus:border-primary font-body" />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <label className="font-ui text-xs font-bold uppercase tracking-wider text-primary">Danh mục cha</label>
-                                        <select value={formData.parent_id} onChange={e => setFormData({ ...formData, parent_id: e.target.value })} className="w-full bg-background-light border border-gold/30 p-2 text-sm focus:outline-none focus:border-primary font-body">
-                                            <option value="">-- Là Danh mục gốc (Gốc) --</option>
-                                            {(() => {
-                                                const renderOptions = (parentId = 0, prefix = '') => {
-                                                    // Filter out the category being edited and its children (optimistically ignoring deep descendants in dropdown)
-                                                    return treeData
-                                                        .filter(node => node.parent === parentId && node.id !== formData.id)
-                                                        .map(node => (
-                                                            <React.Fragment key={node.id}>
-                                                                <option value={node.id}>
-                                                                    {prefix}{node.text}
-                                                                </option>
-                                                                {renderOptions(node.id, prefix + '— ')}
-                                                            </React.Fragment>
-                                                        ));
-                                                };
-                                                return renderOptions();
-                                            })()}
-                                        </select>
-                                    </div>
-                                    <div className="space-y-1">
-                                        <label className="font-ui text-xs font-bold uppercase tracking-wider text-primary">Mô tả (tuỳ chọn)</label>
-                                        <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} className="w-full bg-background-light border border-gold/30 p-2 text-sm focus:outline-none focus:border-primary font-body h-20 resize-none"></textarea>
-                                    </div>
-
-                                    <button type="submit" className="w-full bg-primary text-white font-ui text-xs font-bold uppercase tracking-widest py-3 mt-4 hover:bg-umber transition-colors">
+                            <div className="bg-white border border-gold/20 shadow-premium p-6 rounded-sm animate-in slide-in-from-right duration-300 flex flex-col overflow-hidden">
+                                <div className="flex-none flex justify-between items-center border-b border-gold/10 pb-4 mb-6">
+                                    <h3 className="font-display font-bold text-lg text-primary uppercase italic">
                                         {formData.id ? 'Cập Nhật' : 'Tạo Mới'}
+                                    </h3>
+                                    <button
+                                        onClick={() => setIsFormOpen(false)}
+                                        className="size-8 flex items-center justify-center text-stone/30 hover:text-brick hover:bg-brick/5 rounded-full transition-all"
+                                    >
+                                        <span className="material-symbols-outlined text-[20px]">close</span>
                                     </button>
-                                </form>
+                                </div>
+                                <div className="flex-1 overflow-auto custom-scrollbar">
+                                    <form onSubmit={handleFormSubmit} className="space-y-6">
+                                        <div className="space-y-1.5">
+                                            <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Tên danh mục</label>
+                                            <input required type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body rounded-sm" />
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Danh mục cha</label>
+                                            <select value={formData.parent_id} onChange={e => setFormData({ ...formData, parent_id: e.target.value })} className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body rounded-sm appearance-none">
+                                                <option value="">-- Là Danh mục gốc --</option>
+                                                {(() => {
+                                                    const renderOptions = (parentId = 0, prefix = '') => {
+                                                        return treeData
+                                                            .filter(node => node.parent === parentId && node.id !== formData.id)
+                                                            .map(node => (
+                                                                <React.Fragment key={node.id}>
+                                                                    <option value={node.id}>
+                                                                        {prefix}{node.text}
+                                                                    </option>
+                                                                    {renderOptions(node.id, prefix + '— ')}
+                                                                </React.Fragment>
+                                                            ));
+                                                    };
+                                                    return renderOptions();
+                                                })()}
+                                            </select>
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Mô tả chi tiết</label>
+                                            <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body h-32 resize-none rounded-sm"></textarea>
+                                        </div>
+
+                                        <button type="submit" className="w-full bg-primary text-white font-ui text-[11px] font-bold uppercase tracking-widest py-3.5 mt-4 hover:bg-umber transition-all shadow-sm rounded-sm">
+                                            {formData.id ? 'Lưu cập nhật' : 'Khởi tạo ngay'}
+                                        </button>
+                                    </form>
+                                </div>
                             </div>
                         ) : (
-                            <div className="bg-white p-6 shadow-sm border border-gold/10">
-                                <h3 className="font-ui font-bold text-primary uppercase tracking-widest border-b border-gold/20 pb-4 mb-4">Hướng Dẫn</h3>
-                                <ul className="text-stone font-body text-sm space-y-3 leading-relaxed list-disc list-inside">
-                                    <li>Kéo và thả mục bất kỳ để thay đổi vị trí.</li>
-                                    <li>Kéo thư mục và thả vào một thư mục khác để biến nó thành thư mục con.</li>
-                                    <li>Cảnh báo: Nếu bạn xóa danh mục cha, các danh mục con bên trong nó cũng bị xóa.</li>
-                                </ul>
+                            <div className="bg-white border border-gold/10 p-6 shadow-sm rounded-sm">
+                                <h3 className="text-[11px] font-black text-primary uppercase tracking-[0.2em] border-b border-gold/10 pb-4 mb-4 flex items-center gap-2 italic">
+                                    <span className="material-symbols-outlined text-[16px]">info</span>
+                                    Thao tác nhanh
+                                </h3>
+                                <div className="space-y-4">
+                                    <div className="flex gap-3 items-start group">
+                                        <div className="size-5 rounded flex items-center justify-center bg-gold/10 text-gold group-hover:bg-gold group-hover:text-white transition-all shrink-0">
+                                            <span className="material-symbols-outlined text-[14px]">drag_indicator</span>
+                                        </div>
+                                        <p className="text-[12px] text-stone-600 font-body leading-relaxed transition-colors">Kéo và thả mục bất kỳ để thay đổi vị trí hiển thị.</p>
+                                    </div>
+                                    <div className="flex gap-3 items-start group">
+                                        <div className="size-5 rounded flex items-center justify-center bg-gold/10 text-gold group-hover:bg-gold group-hover:text-white transition-all shrink-0">
+                                            <span className="material-symbols-outlined text-[14px]">folder_zip</span>
+                                        </div>
+                                        <p className="text-[12px] text-stone-600 font-body leading-relaxed transition-colors">Thả một thư mục vào thư mục khác để thiết lập cha-con.</p>
+                                    </div>
+                                    <div className="pt-4 border-t border-gold/5 flex gap-3 items-start opacity-60 italic">
+                                         <span className="material-symbols-outlined text-[16px] text-brick">warning</span>
+                                         <p className="text-[11px] text-brick font-body">Xóa danh mục cha sẽ xóa toàn bộ con bên trong.</p>
+                                    </div>
+                                </div>
                             </div>
                         )}
                     </div>
                 </div>
             </div>
+        </DndProvider>
+    );
         </DndProvider>
     );
 };

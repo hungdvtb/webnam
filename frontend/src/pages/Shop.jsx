@@ -93,7 +93,7 @@ const Shop = () => {
                     <div className="relative">
                         <input
                             className="w-full bg-transparent border-b border-gold py-2 pr-8 text-umber placeholder-stone/50 focus:outline-none focus:border-primary font-ui text-sm transition-colors"
-                            placeholder="Tìm kiếm phẩm vật..."
+                            placeholder="Tìm kiếm sản phẩm..."
                             type="text"
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}

@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class ProductImage extends Model
 {
-    protected $fillable = ['product_id', 'image_url', 'is_primary', 'sort_order'];
+    protected $fillable = ['product_id', 'image_url', 'is_primary', 'sort_order', 'file_name', 'file_size'];
 
     public function product()
     {

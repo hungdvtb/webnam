@@ -25,7 +25,7 @@ const Cart = () => {
                     </div>
                     <div className="space-y-4">
                         <h1 className="font-display text-4xl text-primary font-bold">Giỏ hàng trống</h1>
-                        <p className="font-body text-lg text-stone italic">Quý khách chưa chọn được phẩm vật ưng ý nào cho mình?</p>
+                        <p className="font-body text-lg text-stone italic">Quý khách chưa chọn được sản phẩm ưng ý nào cho mình?</p>
                     </div>
                     <Link to="/shop" className="inline-block bg-primary text-white font-ui font-bold uppercase tracking-widest py-4 px-12 hover:bg-umber transition-all shadow-lg shadow-primary/20">
                         Quay lại cửa hàng

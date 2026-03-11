@@ -11,6 +11,14 @@ import PostDetail from './pages/PostDetail';
 import Blog from './pages/Blog';
 import Cart from './pages/Cart';
 import Checkout from './pages/Checkout';
+import UserDashboard from './pages/UserDashboard';
+
+// Storefront (Website bán hàng)
+import StorefrontLayout from './layouts/StorefrontLayout';
+import StorefrontHome from './pages/storefront/StorefrontHome';
+import StorefrontProducts from './pages/storefront/StorefrontProducts';
+import StorefrontProductDetail from './pages/storefront/StorefrontProductDetail';
+import StorefrontCheckout from './pages/storefront/StorefrontCheckout';
 
 import AdminLayout from './layouts/AdminLayout';
 import AdminDashboard from './pages/admin/Dashboard';
@@ -23,7 +31,9 @@ import AccountList from './pages/admin/AccountList';
 import WarehouseList from './pages/admin/WarehouseList';
 import ShipmentList from './pages/admin/ShipmentList';
 import OrderList from './pages/admin/OrderList';
+import PendingOrderList from './pages/admin/PendingOrderList';
 import OrderDetail from './pages/admin/OrderDetail';
+import OrderForm from './pages/admin/OrderForm';
 import InventoryMovement from './pages/admin/InventoryMovement';
 import CustomerManagement from './pages/admin/CustomerManagement';
 import ReportDashboard from './pages/admin/ReportDashboard';
@@ -32,6 +42,10 @@ import BlogForm from './pages/admin/BlogForm';
 import BannerList from './pages/admin/BannerList';
 import BannerForm from './pages/admin/BannerForm';
 import SiteSettings from './pages/admin/SiteSettings';
+import UserList from './pages/admin/UserList';
+import OrderStatusSettings from './pages/admin/OrderStatusSettings';
+import CarrierMappingSettings from './pages/admin/CarrierMappingSettings';
+import LeadList from './pages/admin/LeadList';
 
 import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
@@ -48,7 +62,14 @@ function App() {
         const res = await accountApi.resolve(siteConfig.SITE_CODE);
         siteConfig.accountId = res.data.id;
         siteConfig.accountName = res.data.name;
-        localStorage.setItem('activeAccountId', res.data.id);
+        
+        // Don't overwrite activeAccountId if we are in admin panel
+        if (!window.location.pathname.startsWith('/admin')) {
+            localStorage.setItem('activeAccountId', res.data.id);
+        } else if (!localStorage.getItem('activeAccountId')) {
+            localStorage.setItem('activeAccountId', res.data.id);
+        }
+
         localStorage.setItem('activeSiteCode', siteConfig.SITE_CODE);
       } catch (err) {
         console.warn('Could not resolve site_code, using defaults:', err.message);
@@ -76,7 +97,20 @@ function App() {
         <CartProvider>
           <BrowserRouter>
             <Routes>
-              <Route path="/" element={<Layout />}>
+              {/* ─── Storefront (Website bán hàng - Public) ─── */}
+              <Route element={<StorefrontLayout />}>
+                <Route index element={<StorefrontHome />} />
+                <Route path="san-pham" element={<StorefrontProducts />} />
+                <Route path="san-pham/:slugOrId" element={<StorefrontProductDetail />} />
+                <Route path="danh-muc/:slug" element={<StorefrontProducts />} />
+                <Route path="dat-hang" element={<StorefrontCheckout />} />
+                <Route path="about" element={<About />} />
+                <Route path="blog" element={<Blog />} />
+                <Route path="blog/:slug" element={<PostDetail />} />
+              </Route>
+
+              {/* ─── Legacy Pages (Giữ lại) ─── */}
+              <Route path="/old" element={<Layout />}>
                 <Route index element={<Home />} />
                 <Route path="shop" element={<Shop />} />
                 <Route path="details" element={<ProductDetail />} />
@@ -88,6 +122,7 @@ function App() {
                 <Route path="blog/:slug" element={<PostDetail />} />
                 <Route path="login" element={<Login />} />
                 <Route path="register" element={<Register />} />
+                <Route path="dashboard" element={<UserDashboard />} />
               </Route>
 
               <Route path="/admin" element={<AdminLayout />}>
@@ -101,9 +136,13 @@ function App() {
                 <Route path="accounts" element={<AccountList />} />
                 <Route path="warehouses" element={<WarehouseList />} />
                 <Route path="shipments" element={<ShipmentList />} />
+                <Route path="pending-orders" element={<PendingOrderList />} />
                 <Route path="orders" element={<OrderList />} />
+                <Route path="orders/new" element={<OrderForm />} />
+                <Route path="orders/edit/:id" element={<OrderForm />} />
                 <Route path="inventory" element={<InventoryMovement />} />
                 <Route path="customers" element={<CustomerManagement />} />
+                <Route path="leads" element={<LeadList />} />
                 <Route path="blog" element={<BlogList />} />
                 <Route path="blog/new" element={<BlogForm />} />
                 <Route path="blog/edit/:id" element={<BlogForm />} />
@@ -111,7 +150,10 @@ function App() {
                 <Route path="banners/new" element={<BannerForm />} />
                 <Route path="banners/edit/:id" element={<BannerForm />} />
                 <Route path="settings" element={<SiteSettings />} />
+                <Route path="users" element={<UserList />} />
                 <Route path="reports" element={<ReportDashboard />} />
+                <Route path="order-status-settings" element={<OrderStatusSettings />} />
+                <Route path="carrier-mappings" element={<CarrierMappingSettings />} />
                 <Route path="orders/:id" element={<OrderDetail />} />
               </Route>
             </Routes>

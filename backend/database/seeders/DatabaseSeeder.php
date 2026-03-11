@@ -19,14 +19,12 @@ class DatabaseSeeder extends Seeder
 
         User::factory()->create([
             'name' => 'Admin User',
-            'email' => 'admin@webnam.com',
+            'email' => '',
             'password' => \Hash::make('password'),
         ]);
 
         $this->call([
-            CategorySeeder::class,
-            ProductSeeder::class,
-            AttributeSeeder::class,
+            DemoContentSeeder::class,
         ]);
     }
 }

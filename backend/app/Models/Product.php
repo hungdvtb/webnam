@@ -9,9 +9,9 @@ class Product extends Model
     use \App\Traits\BelongsToAccount;
 
     protected $fillable = [
-        'type', 'name', 'slug', 'description', 'price', 'special_price', 'special_price_from', 'special_price_to', 
+        'type', 'name', 'slug', 'description', 'price', 'cost_price', 'special_price', 'special_price_from', 'special_price_to', 
         'category_id', 'stock_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
-        'meta_title', 'meta_description', 'meta_keywords'
+        'meta_title', 'meta_description', 'meta_keywords', 'weight'
     ];
 
     protected $appends = ['average_rating', 'current_price', 'main_image'];

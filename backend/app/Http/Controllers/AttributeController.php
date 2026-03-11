@@ -8,19 +8,31 @@ use Illuminate\Support\Str;
 
 class AttributeController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        $attributes = Attribute::with('options')->get();
+        $query = Attribute::with('options');
+        if ($request->has('entity_type')) {
+            $query->byEntityType($request->entity_type);
+        }
+        $attributes = $query->get();
         return response()->json($attributes);
     }
 
     public function store(Request $request)
     {
+        $accountId = session()->get('active_account_id') ?? request()->header('X-Account-Id');
+
         $request->validate([
             'name' => 'required|string|max:255',
-            'code' => 'sometimes|string|max:255|unique:attributes,code',
+            'entity_type' => 'nullable|string|in:product,order',
+            'code' => [
+                'sometimes', 
+                'string', 
+                'max:255', 
+                \Illuminate\Validation\Rule::unique('attributes', 'code')->where('account_id', $accountId)
+            ],
             'frontend_type' => 'required|string',
-            'swatch_type' => 'nullable|string|in:color,image',
+            'swatch_type' => 'nullable|string|in:none,color,image',
             'options' => 'nullable|array',
             'is_filterable' => 'boolean',
             'is_required' => 'boolean',
@@ -35,9 +47,10 @@ class AttributeController extends Controller
 
         $attribute = Attribute::create([
             'name' => $request->name,
+            'entity_type' => $request->entity_type ?? 'product',
             'code' => $code,
             'frontend_type' => $request->frontend_type,
-            'swatch_type' => $request->swatch_type,
+            'swatch_type' => $request->swatch_type === 'none' ? null : $request->swatch_type,
             'is_filterable' => $request->is_filterable ?? false,
             'is_required' => $request->is_required ?? false,
             'is_variant' => $request->is_variant ?? false,
@@ -75,15 +88,20 @@ class AttributeController extends Controller
 
         $request->validate([
             'name' => 'sometimes|required|string|max:255',
+            'entity_type' => 'sometimes|required|string|in:product,order',
             'frontend_type' => 'sometimes|required|string',
-            'swatch_type' => 'nullable|string|in:color,image',
+            'swatch_type' => 'nullable|string|in:none,color,image',
             'options' => 'nullable|array',
             'is_filterable' => 'boolean',
             'is_required' => 'boolean',
             'is_variant' => 'boolean'
         ]);
 
-        $attribute->update($request->only('name', 'frontend_type', 'swatch_type', 'is_filterable', 'is_required', 'is_variant'));
+        $data = $request->only('name', 'entity_type', 'frontend_type', 'swatch_type', 'is_filterable', 'is_required', 'is_variant');
+        if (isset($data['swatch_type']) && $data['swatch_type'] === 'none') {
+            $data['swatch_type'] = null;
+        }
+        $attribute->update($data);
 
         if ($request->has('options')) {
             $attribute->options()->delete();

@@ -5,18 +5,27 @@ import { useState } from 'react';
 
 export default function Header({ menuItems = [] }) {
   const [searchQuery, setSearchQuery] = useState('');
+  const router = typeof window !== 'undefined' ? require('next/navigation').useRouter() : null;
+
+  const handleSearch = (e) => {
+    if ((e.type === 'keydown' && e.key === 'Enter') || e.type === 'click') {
+      if (searchQuery.trim()) {
+        router.push(`/products?search=${encodeURIComponent(searchQuery.trim())}`);
+      }
+    }
+  };
 
   return (
     <header className="site-header">
       <div className="container header-content">
         {/* Logo Section */}
-        <Link href="/" className="logo-section">
-          <div className="logo-img-box">
-             <img src="/logo-brand.jpg" alt="Logo Gốm Đại Thành" className="logo-img" />
+        <Link href="/" className="logo-section" style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: '15px', textDecoration: 'none', flexWrap: 'nowrap', paddingBottom: '4px' }}>
+          <div className="logo-img-box" style={{ width: '48px', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+             <img src="/logo-brand.jpg" alt="Logo Gốm Đại Thành" className="logo-img" style={{ height: '100%', width: 'auto', objectFit: 'contain' }} />
           </div>
-          <div className="logo-text">
-            <h1 className="logo-title">GÔM ĐẠI THÀNH</h1>
-            <span className="logo-subtitle">Tinh hoa Đất Việt</span>
+          <div className="logo-text" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', borderLeft: '1.5px solid rgba(197, 160, 89, 0.5)', paddingLeft: '15px', flexShrink: 0, marginBottom: '-2px' }}>
+            <h1 className="logo-title" style={{ fontFamily: 'var(--font-display)', fontSize: '24px', fontWeight: '700', color: 'var(--primary)', margin: '0', whiteSpace: 'nowrap', textTransform: 'uppercase', lineHeight: '1', letterSpacing: '0.02em' }}>GỐM ĐẠI THÀNH</h1>
+            <span className="logo-subtitle" style={{ fontFamily: 'var(--font-body)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.4em', color: 'var(--accent)', fontWeight: '600', marginTop: '4px', lineHeight: '1', whiteSpace: 'nowrap' }}>TINH HOA ĐẤT VIỆT</span>
           </div>
         </Link>
 
@@ -45,12 +54,19 @@ export default function Header({ menuItems = [] }) {
         {/* Right Section: Search & Cart */}
         <div className="actions-section">
           <div className="search-bar">
-            <span className="material-symbols-outlined search-icon">search</span>
+            <span 
+              className="material-symbols-outlined search-icon" 
+              onClick={handleSearch}
+              style={{ cursor: 'pointer' }}
+            >
+              search
+            </span>
             <input 
               type="text" 
               placeholder="Bạn cần tìm kiếm sản phẩm gì?" 
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={handleSearch}
               className="search-input"
             />
           </div>
@@ -81,57 +97,69 @@ export default function Header({ menuItems = [] }) {
         }
 
         .logo-section {
-          display: flex;
-          align-items: center;
-          gap: 1rem;
+          display: flex !important;
+          flex-direction: row !important;
+          flex-wrap: nowrap !important;
+          align-items: center !important;
+          gap: 1.5rem !important;
           text-decoration: none;
           color: inherit;
+          padding: 8px 0;
+          min-width: max-content;
         }
 
         .logo-img-box {
-          width: 50px;
-          height: 50px;
-          display: flex;
+          width: 65px;
+          height: 65px;
+          display: flex !important;
           align-items: center;
           justify-content: center;
           overflow: hidden;
+          transition: transform 0.3s ease;
+          flex-shrink: 0;
         }
 
         .logo-img {
           width: 100%;
           height: 100%;
           object-fit: contain;
-          transition: transform 0.3s ease;
         }
 
-        .logo-section:hover .logo-img {
-          transform: scale(1.05);
+        .logo-section:hover .logo-img-box {
+          transform: translateY(-2px);
+        }
+
+        .logo-text {
+          display: flex !important;
+          flex-direction: column !important;
+          justify-content: center;
+          border-left: 2px solid rgba(197, 160, 89, 0.4);
+          padding-left: 1.5rem;
+          flex-shrink: 0;
         }
 
         .logo-title {
           font-family: var(--font-display);
-          font-size: 22px;
+          font-size: 28px;
           font-weight: 700;
-          color: #1a2c4e;
+          color: var(--primary);
           margin: 0;
           white-space: nowrap;
           text-transform: uppercase;
-          line-height: 1;
-        }
-
-        .logo-text {
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
+          line-height: 1.1;
+          letter-spacing: 0.03em;
         }
 
         .logo-subtitle {
-          font-size: 8px;
+          font-family: var(--font-body);
+          font-size: 11px;
           text-transform: uppercase;
-          letter-spacing: 0.2em;
+          letter-spacing: 0.45em;
           color: var(--accent);
-          font-weight: 700;
-          margin-top: 2px;
+          font-weight: 600;
+          margin-top: 4px;
+          line-height: 1;
+          white-space: nowrap;
         }
 
         .main-nav {

@@ -75,9 +75,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Admin Category routes
     Route::post('/categories', [CategoryController::class , 'store']);
-    Route::put('/categories/{id}', [CategoryController::class , 'update']);
-    Route::delete('/categories/{id}', [CategoryController::class , 'destroy']);
     Route::post('/categories/reorder', [CategoryController::class , 'reorder']);
+    Route::post('/categories/{id}', [CategoryController::class , 'update']);
+    Route::delete('/categories/{id}', [CategoryController::class , 'destroy']);
 
     // Admin Attribute routes
     Route::get('/attributes', [\App\Http\Controllers\AttributeController::class , 'index']); // Move here or public? Admin is fine

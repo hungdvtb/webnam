@@ -15,15 +15,20 @@ class ProductController extends Controller
     protected function getAccountId(Request $request)
     {
         $siteCode = $request->header('X-Site-Code');
+        \Illuminate\Support\Facades\Log::info("X-Site-Code header: '{$siteCode}'");
         if (!$siteCode) return null;
         
         $account = \App\Models\Account::where('site_code', $siteCode)->first();
+        if (!$account) {
+            \Illuminate\Support\Facades\Log::warning("Account not found for site code: '{$siteCode}'");
+        }
         return $account ? $account->id : null;
     }
 
     public function index(Request $request)
     {
         $accountId = $this->getAccountId($request);
+        \Illuminate\Support\Facades\Log::info("Resolved Account ID: " . ($accountId ?? 'NULL'));
 
         $query = Product::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
@@ -46,9 +51,11 @@ class ProductController extends Controller
         // Search
         if ($request->filled('search')) {
             $s = $request->search;
+            \Illuminate\Support\Facades\Log::info("Product search keyword: '{$s}'");
             $query->where(function ($q) use ($s) {
-                $q->where('name', 'like', "%{$s}%")
-                  ->orWhere('sku', 'like', "%{$s}%");
+                $q->where('name', 'ilike', "%{$s}%")
+                  ->orWhere('sku', 'ilike', "%{$s}%")
+                  ->orWhere('description', 'ilike', "%{$s}%");
             });
         }
 

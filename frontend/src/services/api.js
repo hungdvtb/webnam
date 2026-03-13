@@ -56,7 +56,7 @@ export const categoryApi = {
     getAll: () => api.get('/categories'),
     getOne: (id) => api.get(`/categories/${id}`),
     store: (data) => api.post('/categories', data),
-    update: (id, data) => api.put(`/categories/${id}`, data),
+    update: (id, data) => api.post(`/categories/${id}`, data),
     destroy: (id) => api.delete(`/categories/${id}`),
     reorder: (items) => api.post('/categories/reorder', { items }),
 };

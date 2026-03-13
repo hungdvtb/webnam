@@ -27,16 +27,28 @@ class CategoryController extends Controller
             'name' => 'required|string|max:255',
             'parent_id' => 'nullable|exists:categories,id',
             'description' => 'nullable|string',
+            'banner' => 'nullable|image|max:5120', // Max 5MB
         ]);
 
-        $category = Category::create([
-            'name' => $request->name,
-            'slug' => Str::slug($request->name),
-            'parent_id' => $request->parent_id,
-            'description' => $request->description,
-            'status' => $request->status ?? 1,
-            'order' => Category::where('parent_id', $request->parent_id)->max('order') + 1,
-        ]);
+        $bannerPath = null;
+        if ($request->hasFile('banner')) {
+            $bannerPath = $request->file('banner')->store('category_banners', 'public');
+        }
+
+        try {
+            $category = Category::create([
+                'name' => $request->name,
+                'slug' => Str::slug($request->name),
+                'parent_id' => $request->filled('parent_id') ? $request->parent_id : null,
+                'description' => $request->description,
+                'banner_path' => $bannerPath,
+                'status' => $request->status ?? 1,
+                'order' => Category::where('parent_id', $request->parent_id)->max('order') + 1,
+            ]);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error("Error creating category: " . $e->getMessage());
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
 
         return response()->json($category, 201);
     }
@@ -55,22 +67,43 @@ class CategoryController extends Controller
      */
     public function update(Request $request, $id)
     {
+        \Illuminate\Support\Facades\Log::info("Category update request for ID: $id", ['data' => $request->all(), 'has_file' => $request->hasFile('banner')]);
         $category = Category::findOrFail($id);
 
-        $request->validate([
+        $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
             'name' => 'sometimes|required|string|max:255',
-            'parent_id' => 'nullable|exists:categories,id',
+            'parent_id' => 'sometimes|nullable|exists:categories,id',
+            'banner' => 'nullable|image|max:5120',
         ]);
+
+        if ($validator->fails()) {
+            \Illuminate\Support\Facades\Log::error("Category validation failed: " . json_encode($validator->errors()->toArray()));
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
 
         if ($request->has('name')) {
             $category->name = $request->name;
             $category->slug = Str::slug($request->name);
         }
         
-        $category->parent_id = $request->input('parent_id', $category->parent_id);
+        if ($request->hasFile('banner')) {
+            // Optional: Delete old banner if exists
+            // if ($category->banner_path) { \Illuminate\Support\Facades\Storage::disk('public')->delete($category->banner_path); }
+            $category->banner_path = $request->file('banner')->store('category_banners', 'public');
+        } elseif ($request->input('remove_banner') === 'true') {
+            $category->banner_path = null;
+        }
+
+        $category->parent_id = $request->filled('parent_id') ? $request->parent_id : null;
         $category->description = $request->input('description', $category->description);
         $category->status = $request->input('status', $category->status);
-        $category->save();
+        
+        try {
+            $category->save();
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error("Error saving category: " . $e->getMessage());
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
 
         return response()->json($category);
     }

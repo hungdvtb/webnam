@@ -42,7 +42,7 @@ export async function getWebProducts(params = {}) {
 }
 
 export async function getWebCategories() {
-    return fetchFromApi('/web-api/categories');
+    return fetchFromApi('/web-api/categories', { next: { revalidate: 0 } });
 }
 
 export async function getWebCategory(slug) {

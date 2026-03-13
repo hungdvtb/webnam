@@ -7,7 +7,11 @@ import { Tree } from '@minoru/react-dnd-treeview';
 const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete }) => {
     return (
         <div style={{ paddingLeft: depth * 24 }} className="flex items-center gap-2 w-full py-2 hover:bg-gold/5 pr-4 border-b border-gold/10 group">
-            <div className="flex-1 flex items-center gap-2 cursor-pointer" onClick={node.droppable ? onToggle : undefined}>
+            <div 
+                className="flex-1 flex items-center gap-2 cursor-pointer select-none" 
+                onClick={node.droppable ? onToggle : undefined}
+                onDoubleClick={() => onEdit(node)}
+            >
                 {node.droppable && (
                     <span className="material-symbols-outlined text-stone text-sm">
                         {isOpen ? 'expand_more' : 'chevron_right'}
@@ -35,7 +39,7 @@ const CategoryList = () => {
     const [treeData, setTreeData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isFormOpen, setIsFormOpen] = useState(false);
-    const [formData, setFormData] = useState({ id: null, name: '', description: '', parent_id: '', status: 1 });
+    const [formData, setFormData] = useState({ id: null, name: '', description: '', parent_id: '', status: 1, banner: null, banner_url: null });
 
     const fetchCategories = async () => {
         setLoading(true);
@@ -93,31 +97,68 @@ const CategoryList = () => {
     const handleFormSubmit = async (e) => {
         e.preventDefault();
         try {
-            const payload = { ...formData };
-            if (!payload.parent_id || payload.parent_id === '0') payload.parent_id = null;
+            const data = new FormData();
+            data.append('name', formData.name);
+            data.append('description', formData.description || '');
+            
+            // Only append parent_id if it's not root (0 or empty)
+            if (formData.parent_id && formData.parent_id !== '0' && formData.parent_id !== '') {
+                data.append('parent_id', formData.parent_id);
+            }
+            
+            data.append('status', formData.status);
+            
+            if (formData.banner instanceof File) {
+                data.append('banner', formData.banner);
+            } else if (formData.banner === null && formData.id) {
+                data.append('remove_banner', 'true');
+            }
 
             if (formData.id) {
-                await categoryApi.update(formData.id, payload);
+                await categoryApi.update(formData.id, data);
             } else {
-                await categoryApi.store(payload);
+                await categoryApi.store(data);
             }
             setIsFormOpen(false);
-            setFormData({ id: null, name: '', description: '', parent_id: '', status: 1 });
+            setFormData({ id: null, name: '', description: '', parent_id: '', status: 1, banner: null, banner_url: null });
             fetchCategories();
         } catch (error) {
             console.error("Lỗi khi lưu danh mục:", error);
-            alert("Đã xảy ra lỗi.");
+            const message = error.response?.data?.message || error.message;
+            const validationErrors = error.response?.data?.errors;
+            
+            if (validationErrors) {
+                const errorText = Object.values(validationErrors).flat().join('\n');
+                alert(`Lỗi xác thực:\n${errorText}`);
+            } else {
+                alert(`Đã xảy ra lỗi: ${message}`);
+            }
         }
     };
 
     const handleEdit = (node) => {
         const cat = node.data;
+        let bannerUrl = null;
+        if (cat.banner_path) {
+            const cleanPath = cat.banner_path.replace(/^\/+/, '');
+            // If it already contains http/https, use it as is
+            if (cleanPath.startsWith('http')) {
+                bannerUrl = cleanPath;
+            } else {
+                // Remove 'storage/' if it's already at the beginning to avoid duplication
+                const finalPath = cleanPath.startsWith('storage/') ? cleanPath.substring(8) : cleanPath;
+                bannerUrl = `http://localhost:8003/storage/${finalPath}`;
+            }
+        }
+
         setFormData({
             id: cat.id,
             name: cat.name,
             description: cat.description || '',
             parent_id: cat.parent_id || '',
-            status: cat.status
+            status: cat.status,
+            banner: cat.banner_path,
+            banner_url: bannerUrl
         });
         setIsFormOpen(true);
     };
@@ -136,8 +177,6 @@ const CategoryList = () => {
 
     if (loading) return <div className="p-8 text-center text-stone">Đang tải danh sách...</div>;
 
-    return (
-        <DndProvider backend={HTML5Backend}>
     return (
         <DndProvider backend={HTML5Backend}>
             <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full overflow-hidden">
@@ -294,6 +333,57 @@ const CategoryList = () => {
                                             <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body h-32 resize-none rounded-sm"></textarea>
                                         </div>
 
+                                        <div className="space-y-1.5">
+                                            <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Ảnh banner danh mục</label>
+                                            <div className="flex flex-col gap-3">
+                                                {formData.banner_url && (
+                                                    <div className="relative group/img w-full h-32 bg-stone/5 border border-gold/10 rounded-sm overflow-hidden">
+                                                        <img src={formData.banner_url} alt="Banner Preview" className="w-full h-full object-cover" />
+                                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                                                            <button 
+                                                                type="button"
+                                                                onClick={() => document.getElementById('banner-upload').click()}
+                                                                className="size-8 rounded-full bg-white text-primary hover:bg-gold transition-colors flex items-center justify-center"
+                                                                title="Thay ảnh"
+                                                            >
+                                                                <span className="material-symbols-outlined text-sm">edit</span>
+                                                            </button>
+                                                            <button 
+                                                                type="button"
+                                                                onClick={() => setFormData({ ...formData, banner: null, banner_url: null })}
+                                                                className="size-8 rounded-full bg-white text-brick hover:bg-brick hover:text-white transition-colors flex items-center justify-center"
+                                                                title="Gỡ ảnh"
+                                                            >
+                                                                <span className="material-symbols-outlined text-sm">delete</span>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                <input 
+                                                    id="banner-upload"
+                                                    type="file" 
+                                                    accept="image/*"
+                                                    className="hidden" 
+                                                    onChange={e => {
+                                                        const file = e.target.files[0];
+                                                        if (file) {
+                                                            setFormData({ ...formData, banner: file, banner_url: URL.createObjectURL(file) });
+                                                        }
+                                                    }}
+                                                />
+                                                {!formData.banner_url && (
+                                                    <button 
+                                                        type="button"
+                                                        onClick={() => document.getElementById('banner-upload').click()}
+                                                        className="w-full h-20 border-2 border-dashed border-gold/20 hover:border-gold/40 hover:bg-gold/5 transition-all flex flex-col items-center justify-center gap-1 rounded-sm text-stone/40"
+                                                    >
+                                                        <span className="material-symbols-outlined text-xl">upload_file</span>
+                                                        <span className="text-[10px] font-bold uppercase tracking-wider">Tải lên ảnh banner</span>
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+
                                         <button type="submit" className="w-full bg-primary text-white font-ui text-[11px] font-bold uppercase tracking-widest py-3.5 mt-4 hover:bg-umber transition-all shadow-sm rounded-sm">
                                             {formData.id ? 'Lưu cập nhật' : 'Khởi tạo ngay'}
                                         </button>
@@ -329,8 +419,6 @@ const CategoryList = () => {
                     </div>
                 </div>
             </div>
-        </DndProvider>
-    );
         </DndProvider>
     );
 };

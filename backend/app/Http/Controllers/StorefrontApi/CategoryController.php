@@ -24,10 +24,12 @@ class CategoryController extends Controller
         $categories = Category::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
+            ->whereNull('parent_id') // Only show top-level categories in sidebar
             ->withCount(['products' => function ($q) {
                 $q->where('status', true);
             }])
-            ->orderBy('order')
+            ->orderBy('order', 'asc')
+            ->orderBy('id', 'asc') // Stable sorting
             ->get();
 
         return response()->json($categories);

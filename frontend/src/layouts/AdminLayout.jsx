@@ -10,14 +10,14 @@ const AdminLayout = () => {
     const location = useLocation();
     const [isSettingsOpen, setIsSettingsOpen] = React.useState(location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users'));
     const [isOrdersOpen, setIsOrdersOpen] = React.useState(location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads'));
-    const [isDesignOpen, setIsDesignOpen] = React.useState(location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/banners') || location.pathname.startsWith('/admin/menus') || location.pathname.startsWith('/admin/blog'));
+    const [isDesignOpen, setIsDesignOpen] = React.useState(location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/banners') || location.pathname.startsWith('/admin/blog'));
 
     const isOrderForm = location.pathname.startsWith('/admin/orders/new') || location.pathname.startsWith('/admin/orders/edit');
 
     React.useEffect(() => {
         if (location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users')) setIsSettingsOpen(true);
         if (location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads')) setIsOrdersOpen(true);
-        if (location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/banners') || location.pathname.startsWith('/admin/menus') || location.pathname.startsWith('/admin/blog')) setIsDesignOpen(true);
+        if (location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/banners') || location.pathname.startsWith('/admin/blog')) setIsDesignOpen(true);
     }, [location.pathname]);
 
 
@@ -227,7 +227,7 @@ const AdminLayout = () => {
                     )}
 
                     {/* Collapsible Design & Content Menu */}
-                    {(canAccess('settings') || canAccess('categories') || canAccess('banners') || canAccess('menus') || canAccess('blog')) && (
+                    {(canAccess('categories') || canAccess('banners') || canAccess('blog')) && (
                         <div className="space-y-1">
                             <button 
                                 onClick={() => setIsDesignOpen(!isDesignOpen)}
@@ -244,15 +244,6 @@ const AdminLayout = () => {
                             
                             {isDesignOpen && (
                                 <div className="pl-4 space-y-1 animate-in slide-in-from-top-2 duration-200">
-                                    {canAccess('settings') && (
-                                        <Link 
-                                            to="/admin/settings" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/settings' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
-                                        >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/settings' ? 'text-gold' : 'group-hover:text-gold'}`}>language</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Cấu hình Website</span>
-                                        </Link>
-                                    )}
                                     {canAccess('categories') && (
                                         <Link 
                                             to="/admin/categories" 
@@ -269,15 +260,6 @@ const AdminLayout = () => {
                                         >
                                             <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/banners' ? 'text-gold' : 'group-hover:text-gold'}`}>gallery_thumbnail</span>
                                             <span className="font-sans text-xs font-medium tracking-wide">Quản lý Banners</span>
-                                        </Link>
-                                    )}
-                                    {canAccess('menus') && (
-                                        <Link 
-                                            to="/admin/menus" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/menus' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
-                                        >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/menus' ? 'text-gold' : 'group-hover:text-gold'}`}>account_tree</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Quản lý Menus</span>
                                         </Link>
                                     )}
                                     {canAccess('blog') && (

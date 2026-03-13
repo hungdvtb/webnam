@@ -468,19 +468,30 @@ class StorefrontController extends Controller
     private function buildCategoryTree($categories, $parentId = null)
     {
         $tree = [];
+        // Extract items for this parent
+        $items = [];
         foreach ($categories as $cat) {
             if ($cat->parent_id == $parentId) {
-                $children = $this->buildCategoryTree($categories, $cat->id);
-                $node = [
-                    'id' => $cat->id,
-                    'name' => $cat->name,
-                    'slug' => $cat->slug,
-                    'description' => $cat->description,
-                    'products_count' => $cat->products_count,
-                    'children' => $children,
-                ];
-                $tree[] = $node;
+                $items[] = $cat;
             }
+        }
+
+        // Sort by order 
+        usort($items, function($a, $b) {
+            return ($a->order ?? 0) <=> ($b->order ?? 0);
+        });
+
+        foreach ($items as $cat) {
+            $children = $this->buildCategoryTree($categories, $cat->id);
+            $node = [
+                'id' => $cat->id,
+                'name' => $cat->name,
+                'slug' => $cat->slug,
+                'description' => $cat->description,
+                'products_count' => $cat->products_count,
+                'children' => $children,
+            ];
+            $tree[] = $node;
         }
         return $tree;
     }

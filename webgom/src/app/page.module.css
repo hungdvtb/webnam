@@ -15,6 +15,18 @@
   }
 }
 
+.mainImage {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  background-color: white;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(27, 54, 93, 0.1);
+  overflow: hidden;
+  position: relative;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
 .sidebar {
   background: white;
   border: 1px solid rgba(27, 54, 93, 0.1);
@@ -303,8 +315,18 @@
 }
 
 .productImage {
+  display: block;
+  width: 100%;
   aspect-ratio: 1;
   background-color: #f1f5f9;
+  position: relative;
+}
+
+.relImage {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
   position: relative;
 }
 

@@ -269,8 +269,10 @@
 }
 
 .imageWrapper {
+  display: block;
+  width: 100%;
   position: relative;
-  aspect-ratio: 1;
+  padding-top: 100%; /* Robust aspect ratio 1:1 */
   background: #f0f0f0;
   overflow: hidden;
 }

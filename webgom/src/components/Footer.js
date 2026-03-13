@@ -7,11 +7,11 @@ export default function Footer() {
         <div className="footer-grid">
           <div className="footer-col about-col">
             <div className="footer-logo">
-              <span className="material-symbols-outlined">temp_preferences_custom</span>
-              <h2>DI SẢN GỐM VIỆT</h2>
+              <img src="/logo-brand.jpg" alt="Logo Gôm Đại Thành" className="footer-logo-img" />
+              <h2>GÔM ĐẠI THÀNH</h2>
             </div>
             <p className="footer-desc">
-              Tự hào gìn giữ và phát triển tinh hoa gốm sứ Bát Tràng, mang những tác phẩm nghệ thuật độc bản đến với mọi không gian sống.
+              Tự hào gìn giữ và phát triển tinh hoa gốm sứ Bát Tràng, mang những tác phẩm nghệ thuật độc bản từ Gôm Đại Thành đến với mọi không gian sống.
             </p>
             <div className="social-links">
               <span className="material-symbols-outlined">share</span>
@@ -53,7 +53,7 @@ export default function Footer() {
         </div>
 
         <div className="footer-bottom">
-          <p>© 2024 DI SẢN GỐM VIỆT. TẤT CẢ QUYỀN ĐƯỢC BẢO LƯU.</p>
+          <p>© 2024 GÔM ĐẠI THÀNH. TẤT CẢ QUYỀN ĐƯỢC BẢO LƯU.</p>
           <div className="footer-legal">
             <a href="#">Điều khoản sử dụng</a>
             <a href="#">Chính sách bảo mật</a>
@@ -89,13 +89,15 @@ export default function Footer() {
           gap: 0.75rem;
           margin-bottom: 1.5rem;
         }
-        .footer-logo span {
-          font-size: 2rem;
-          color: var(--accent);
+        .footer-logo-img {
+          width: 40px;
+          height: 40px;
+          object-fit: contain;
         }
         .footer-logo h2 {
           font-size: 1.25rem;
           letter-spacing: 0.05em;
+          font-weight: 800;
         }
         .footer-desc {
           font-size: 0.875rem;

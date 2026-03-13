@@ -46,8 +46,9 @@ export default async function Home() {
           <div className={styles.heroBanner}>
             <Image 
               src="/hero.png" 
-              alt="Di Sản Gốm Việt Hero" 
+              alt="GÔM ĐẠI THÀNH Hero" 
               fill 
+              sizes="100vw"
               style={{ objectFit: 'cover' }}
               priority
             />
@@ -120,13 +121,16 @@ export default async function Home() {
                 <div className={styles.productImage}>
                   {product.primary_image ? (
                      <Image 
-                        src={`${config.storageUrl}/${product.primary_image.path}`} 
+                        src={product.primary_image.url.startsWith('http') ? product.primary_image.url : `${config.storageUrl}/${product.primary_image.path}`} 
                         alt={product.name} 
                         fill 
+                        sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 25vw"
                         style={{ objectFit: 'cover' }}
                       />
                   ) : (
-                    <div className={styles.imagePlaceholder}></div>
+                    <div className={styles.imagePlaceholder}>
+                      <span className="material-symbols-outlined" style={{ fontSize: '48px', color: '#ccc' }}>image</span>
+                    </div>
                   )}
                   {product.is_featured && <span className={`${styles.badge} ${styles.badgeHot}`}>HOT</span>}
                 </div>

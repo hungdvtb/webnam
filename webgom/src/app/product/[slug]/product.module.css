@@ -53,6 +53,8 @@
 }
 
 .mainImage {
+  display: block;
+  width: 100%;
   aspect-ratio: 4 / 5;
   background-color: white;
   border-radius: 0.75rem;
@@ -69,6 +71,8 @@
 }
 
 .thumbBtn {
+  display: block;
+  width: 100%;
   aspect-ratio: 1 / 1;
   border-radius: 0.5rem;
   overflow: hidden;
@@ -478,6 +482,8 @@
 }
 
 .relImage {
+  display: block;
+  width: 100%;
   aspect-ratio: 1 / 1;
   overflow: hidden;
   position: relative;

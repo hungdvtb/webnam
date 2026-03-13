@@ -15,7 +15,7 @@ class Product extends Model
         'meta_title', 'meta_description', 'meta_keywords', 'weight'
     ];
 
-    protected $appends = ['average_rating', 'current_price', 'main_image'];
+    protected $appends = ['average_rating', 'current_price', 'main_image', 'primary_image'];
 
     public function reviews()
     {
@@ -45,11 +45,27 @@ class Product extends Model
 
     public function getMainImageAttribute()
     {
-        $primary = $this->images()->where('is_primary', true)->first();
-        if ($primary) return $primary->image_url;
+        // Try eager loaded primary image first
+        $image = $this->images->where('is_primary', true)->first() ?: $this->images->sortBy('sort_order')->first();
         
-        $first = $this->images()->first();
-        return $first ? $first->image_url : null;
+        if (!$image) return null;
+        
+        $url = $image->image_url;
+        // If it's a relative path, we might need a full URL, but better to let frontend handle it or provide a consistent field
+        return $url;
+    }
+
+    public function getPrimaryImageAttribute()
+    {
+        $image = $this->images->where('is_primary', true)->first() ?: $this->images->sortBy('sort_order')->first();
+        if (!$image) return null;
+        
+        return [
+            'id' => $image->id,
+            'url' => $image->image_url,
+            'path' => $image->image_url, // For compatibility with frontend expecting .path
+            'is_primary' => $image->is_primary
+        ];
     }
 
     public function category()

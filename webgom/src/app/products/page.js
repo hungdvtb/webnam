@@ -9,19 +9,21 @@ export const metadata = {
   description: "Khám phá bộ sưu tập gốm sứ nghệ thuật độc bản, từ gốm men lam truyền thống đến những tác phẩm hiện đại.",
 };
 
+import InfiniteProductList from '@/components/InfiniteProductList';
+
 export default async function ProductsPage({ searchParams }) {
   const resolvedSearchParams = await searchParams;
   const currentCategorySlug = resolvedSearchParams?.category || '';
   const currentSort = resolvedSearchParams?.sort || 'newest';
 
-  // Fetch data
-  let productsData = { data: [] };
+  // Fetch initial data
+  let productsData = { data: [], current_page: 1, next_page_url: null };
   let categories = [];
   let categoryInfo = null;
 
   try {
     const promises = [
-      getWebProducts({ category: currentCategorySlug, sort: currentSort }),
+      getWebProducts({ category: currentCategorySlug, sort: currentSort, per_page: 20 }),
       getWebCategories()
     ];
 
@@ -38,8 +40,6 @@ export default async function ProductsPage({ searchParams }) {
   } catch (error) {
     console.error("Failed to fetch products/categories:", error);
   }
-
-  const products = productsData.data || [];
   
   // Default values if categoryInfo is missing fields
   const bannerUrl = categoryInfo?.banner_path 
@@ -72,6 +72,7 @@ export default async function ProductsPage({ searchParams }) {
             src={bannerUrl}
             alt={categoryTitle}
             fill
+            sizes="100vw"
             style={{ objectFit: 'cover' }}
           />
           <div className={styles.bannerContent}>
@@ -151,58 +152,14 @@ export default async function ProductsPage({ searchParams }) {
             </div>
           </aside>
 
-          {/* Product Grid */}
-          <div className={styles.productGrid}>
-            {products.length > 0 ? (
-              products.map((product) => (
-                <div key={product.id} className={styles.productCard}>
-                  <Link href={`/product/${product.slug}`} className={styles.imageWrapper}>
-                    {product.images?.[0] ? (
-                      <Image 
-                        src={`${config.storageUrl}/${product.images[0].path}`}
-                        alt={product.name}
-                        fill
-                      />
-                    ) : (
-                      <div className="image-placeholder"></div>
-                    )}
-                    {product.is_new && <span className={styles.badge}>MỚI</span>}
-                  </Link>
-                  <div className={styles.productInfo}>
-                    <p className={styles.productCategory}>{product.category?.name || 'Bát Tràng Premium'}</p>
-                    <Link href={`/product/${product.slug}`} style={{ textDecoration: 'none', color: 'inherit' }}>
-                      <h3 className={styles.productName}>{product.name}</h3>
-                    </Link>
-                    <div className={styles.rating}>
-                      {[...Array(5)].map((_, i) => (
-                        <span key={i} className="material-symbols-outlined">star</span>
-                      ))}
-                      <span className={styles.reviewCount}>(24)</span>
-                    </div>
-                    <div className={styles.cardFooter}>
-                      <span className={styles.price}>
-                        {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(product.price)}
-                      </span>
-                      <button className={styles.cartBtn}>
-                        <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>add_shopping_cart</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p>Chưa có sản phẩm nào trong mục này.</p>
-            )}
+          {/* Product Grid Container */}
+          <div style={{ flex: 1 }}>
+            <InfiniteProductList 
+              initialData={productsData} 
+              category={currentCategorySlug} 
+              sort={currentSort} 
+            />
           </div>
-        </div>
-
-        {/* Pagination / Load More */}
-        <div className={styles.pagination}>
-          <div className={styles.loader}>
-            <div className={styles.spinner}></div>
-            <div className={styles.spinnerActive}></div>
-          </div>
-          <p className={styles.paginationText}>Khám phá thêm nhiều báu vật khác khi bạn cuộn xuống...</p>
         </div>
       </main>
     </div>

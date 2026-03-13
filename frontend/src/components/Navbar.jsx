@@ -52,12 +52,12 @@ const Navbar = () => {
         <header className="sticky top-0 z-50 flex items-center justify-between whitespace-nowrap border-b border-gold/20 bg-background-light/95 backdrop-blur-sm px-6 py-4 lg:px-12 transition-all">
             <div className="flex items-center gap-8">
                 <Link className="flex items-center gap-3 text-primary group" to="/">
-                    <div className="h-12">
-                        <img src="/logo.png" alt="Gốm Sứ Đại Thành" className="h-full object-contain" />
+                    <div className="h-14 overflow-hidden flex items-center">
+                        <img src="/logo-brand.jpg" alt="GÔM ĐẠI THÀNH" className="h-full object-contain" />
                     </div>
                     <div className="flex flex-col">
                         <h2 className="text-primary text-xl font-display font-bold leading-none tracking-wide group-hover:opacity-80 transition-opacity">
-                            Gốm Sứ Đại Thành
+                            GÔM ĐẠI THÀNH
                         </h2>
                         <span className="text-[10px] text-gold uppercase tracking-[0.3em] font-ui font-bold">Tinh Hoa Đất Việt</span>
                     </div>

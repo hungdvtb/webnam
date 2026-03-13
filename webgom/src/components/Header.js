@@ -11,11 +11,11 @@ export default function Header({ menuItems = [] }) {
       <div className="container header-content">
         {/* Logo Section */}
         <Link href="/" className="logo-section">
-          <div className="logo-icon-box">
-             <span className="material-symbols-outlined logo-pot-icon">glass_cup</span>
+          <div className="logo-img-box">
+             <img src="/logo-brand.jpg" alt="Logo Gốm Đại Thành" className="logo-img" />
           </div>
           <div className="logo-text">
-            <h1 className="logo-title">Di Sản Gốm Việt</h1>
+            <h1 className="logo-title">GÔM ĐẠI THÀNH</h1>
             <span className="logo-subtitle">Tinh hoa Đất Việt</span>
           </div>
         </Link>
@@ -48,7 +48,7 @@ export default function Header({ menuItems = [] }) {
             <span className="material-symbols-outlined search-icon">search</span>
             <input 
               type="text" 
-              placeholder="Tìm kiếm bảo vật..." 
+              placeholder="Bạn cần tìm kiếm sản phẩm gì?" 
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="search-input"
@@ -88,19 +88,24 @@ export default function Header({ menuItems = [] }) {
           color: inherit;
         }
 
-        .logo-icon-box {
-          background-color: #1a2c4e; /* Dark blue from logo icon */
-          width: 44px;
-          height: 44px;
-          border-radius: 8px;
+        .logo-img-box {
+          width: 50px;
+          height: 50px;
           display: flex;
           align-items: center;
           justify-content: center;
+          overflow: hidden;
         }
 
-        .logo-pot-icon {
-          color: #c5a059; /* Gold color */
-          font-size: 28px !important;
+        .logo-img {
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          transition: transform 0.3s ease;
+        }
+
+        .logo-section:hover .logo-img {
+          transform: scale(1.05);
         }
 
         .logo-title {

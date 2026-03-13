@@ -29,7 +29,7 @@ class ProductController extends Controller
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
             ->with(['images' => function ($q) {
-                $q->orderBy('is_primary', 'desc')->orderBy('sort_order')->limit(1);
+                $q->orderBy('is_primary', 'desc')->orderBy('sort_order');
             }, 'category:id,name,slug']);
 
         // Filter by category slug

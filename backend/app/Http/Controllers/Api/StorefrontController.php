@@ -51,7 +51,7 @@ class StorefrontController extends Controller
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
             ->with(['images' => function ($q) {
-                $q->orderBy('is_primary', 'desc')->orderBy('sort_order')->limit(2);
+                $q->orderBy('is_primary', 'desc')->orderBy('sort_order');
             }, 'category:id,name,slug']);
 
         // Filter by category slug
@@ -129,6 +129,7 @@ class StorefrontController extends Controller
                 'is_new' => $p->is_new,
                 'stock_quantity' => $p->stock_quantity,
                 'average_rating' => round($p->average_rating, 1),
+                'primary_image' => $p->primary_image,
             ];
         });
 
@@ -184,6 +185,7 @@ class StorefrontController extends Controller
             'images' => $product->images->map(fn($img) => [
                 'id' => $img->id,
                 'url' => $img->image_url,
+                'path' => $img->image_url,
                 'is_primary' => $img->is_primary,
             ]),
             'attributes' => $product->attributeValues->map(fn($av) => [
@@ -208,6 +210,7 @@ class StorefrontController extends Controller
                 'current_price' => $v->current_price,
                 'stock_quantity' => $v->stock_quantity,
                 'main_image' => $v->main_image,
+                'primary_image' => $v->primary_image,
                 'attributes' => $v->attributeValues->map(fn($av) => ['id' => $av->attribute_id, 'value' => $av->value]),
             ]),
             'reviews' => $product->approvedReviews->map(fn($r) => [
@@ -234,7 +237,7 @@ class StorefrontController extends Controller
             ->where('status', true)
             ->where('id', '!=', $id)
             ->where('category_id', $product->category_id)
-            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->limit(1)])
+            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')])
             ->inRandomOrder()
             ->limit(8)
             ->get()
@@ -246,6 +249,7 @@ class StorefrontController extends Controller
                 'current_price' => $p->current_price,
                 'main_image' => $p->main_image,
                 'average_rating' => round($p->average_rating, 1),
+                'primary_image' => $p->primary_image,
             ]);
 
         return response()->json($related);
@@ -266,12 +270,11 @@ class StorefrontController extends Controller
             ->orderBy('sort_order')
             ->get();
 
-        // Featured products
         $featured = Product::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
             ->where('is_featured', true)
-            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->limit(1)])
+            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')])
             ->latest()
             ->limit(12)
             ->get()
@@ -279,13 +282,13 @@ class StorefrontController extends Controller
                 'id' => $p->id, 'name' => $p->name, 'slug' => $p->slug,
                 'price' => $p->price, 'current_price' => $p->current_price,
                 'main_image' => $p->main_image, 'is_new' => $p->is_new,
+                'primary_image' => $p->primary_image,
             ]);
 
-        // New arrivals
         $newArrivals = Product::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
-            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->limit(1)])
+            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')])
             ->latest()
             ->limit(12)
             ->get()
@@ -293,6 +296,7 @@ class StorefrontController extends Controller
                 'id' => $p->id, 'name' => $p->name, 'slug' => $p->slug,
                 'price' => $p->price, 'current_price' => $p->current_price,
                 'main_image' => $p->main_image, 'is_new' => $p->is_new,
+                'primary_image' => $p->primary_image,
             ]);
 
         // Top categories

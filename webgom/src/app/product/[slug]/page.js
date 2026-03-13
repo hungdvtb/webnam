@@ -60,23 +60,27 @@ export default async function ProductDetailPage({ params }) {
               <div className={styles.mainImage}>
                 {mainImage ? (
                   <Image 
-                    src={`${config.storageUrl}/${mainImage.path}`}
+                    src={mainImage.url.startsWith('http') ? mainImage.url : `${config.storageUrl}/${mainImage.path}`}
                     alt={product.name}
                     fill
+                    sizes="(max-width: 768px) 100vw, 50vw"
                     style={{ objectFit: 'cover' }}
                     priority
                   />
                 ) : (
-                  <div className="image-placeholder"></div>
+                  <div className={styles.imagePlaceholder}>
+                    <span className="material-symbols-outlined" style={{ fontSize: '64px', color: '#ccc' }}>image</span>
+                  </div>
                 )}
               </div>
               <div className={styles.thumbnails}>
                 {product.images?.slice(0, 4).map((img, idx) => (
                   <button key={img.id} className={`${styles.thumbBtn} ${img.id === mainImage?.id ? styles.thumbActive : ''}`}>
                     <Image 
-                      src={`${config.storageUrl}/${img.path}`}
+                      src={img.url.startsWith('http') ? img.url : `${config.storageUrl}/${img.path}`}
                       alt={`${product.name} thumb ${idx}`}
                       fill
+                      sizes="100px"
                       style={{ objectFit: 'cover' }}
                     />
                   </button>
@@ -208,9 +212,10 @@ export default async function ProductDetailPage({ params }) {
             {mainImage && (
               <div className={styles.descImage}>
                 <Image 
-                  src={`${config.storageUrl}/${mainImage.path}`}
+                  src={mainImage.url.startsWith('http') ? mainImage.url : `${config.storageUrl}/${mainImage.path}`}
                   alt="Mô tả sản phẩm"
                   fill
+                  sizes="(max-width: 768px) 100vw, 80vw"
                   style={{ objectFit: 'cover' }}
                 />
               </div>
@@ -232,19 +237,22 @@ export default async function ProductDetailPage({ params }) {
             </div>
             <div className={styles.relatedGrid}>
               {relatedProducts.map((rel) => {
-                const relImage = rel.images?.[0];
+                const displayImage = rel.primary_image;
                 return (
                   <Link key={rel.id} href={`/product/${rel.slug}`} className={styles.relatedCard}>
                     <div className={styles.relImage}>
-                      {relImage ? (
+                      {displayImage ? (
                         <Image 
-                          src={`${config.storageUrl}/${relImage.path}`}
+                          src={displayImage.url.startsWith('http') ? displayImage.url : `${config.storageUrl}/${displayImage.path}`}
                           alt={rel.name}
                           fill
+                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 25vw"
                           style={{ objectFit: 'cover' }}
                         />
                       ) : (
-                        <div className="image-placeholder"></div>
+                        <div className={styles.imagePlaceholder}>
+                          <span className="material-symbols-outlined" style={{ fontSize: '32px', color: '#ccc' }}>image</span>
+                        </div>
                       )}
                     </div>
                     <div className={styles.relInfo}>

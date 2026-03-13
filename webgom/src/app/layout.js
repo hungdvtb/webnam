@@ -4,12 +4,12 @@ import Footer from "@/components/Footer";
 import { getActiveMenu } from "@/lib/api";
 
 export const metadata = {
-  title: "Di Sản Gốm Việt - Tinh Hoa Đất Việt | Gốm Sứ Bát Tràng Cao Cấp",
+  title: "GÔM ĐẠI THÀNH - Tinh Hoa Đất Việt | Gốm Sứ Bát Tràng Cao Cấp",
   description: "Chuyên cung cấp các tác phẩm gốm sứ nghệ thuật, bình hút lộc, ấm chén trà đạo cao cấp từ làng gốm Bát Tràng. Di sản văn hóa trong từng tác phẩm.",
   keywords: ["gốm sứ bát tràng", "bình hút lộc", "ấm chén cao cấp", "quà tặng gốm sứ", "gốm nghệ thuật"],
-  authors: [{ name: "Di Sản Gốm Việt" }],
+  authors: [{ name: "GÔM ĐẠI THÀNH" }],
   openGraph: {
-    title: "Di Sản Gốm Việt - Tinh Hoa Đất Việt",
+    title: "GÔM ĐẠI THÀNH - Tinh Hoa Đất Việt",
     description: "Khám phá bộ sưu tập gốm sứ nghệ thuật độc bản.",
     type: "website",
     locale: "vi_VN",
@@ -33,7 +33,7 @@ export default async function RootLayout({ children }) {
       </head>
       <body>
         <div className="top-promotion-bar">
-          MIỄN PHÍ VẬN CHUYỂN TOÀN QUỐC CHO ĐƠN HÀNG TỪ 1.000.000Đ
+          MIỄN PHÍ VẬN CHUYỂN TOÀN QUỐC CHO ĐƠN HÀNG TỪ 500.000Đ
         </div>
         <Header menuItems={menuItems} />
         {children}

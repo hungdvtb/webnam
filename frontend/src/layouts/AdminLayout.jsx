@@ -71,12 +71,12 @@ const AdminLayout = () => {
             {/* Sidebar */}
             {!isOrderForm && (
                 <aside className="w-64 bg-primary text-white flex flex-col shadow-2xl z-20 shrink-0">
-                <div className="p-8 border-b border-white/10 flex items-center gap-4 justify-start">
-                    <div className="size-10 bg-gold/10 rounded-sm flex items-center justify-center border border-gold/20 shrink-0">
-                        <span className="material-symbols-outlined text-gold">grid_view</span>
+                <div className="p-8 border-b border-white/10 flex items-center gap-4 justify-start overflow-hidden">
+                    <div className="size-11 bg-white rounded-sm flex items-center justify-center shrink-0">
+                        <img src="/logo-brand.jpg" alt="Logo" className="w-full h-full object-contain" />
                     </div>
                     <div className="flex flex-col text-left">
-                        <h1 className="font-sans text-xl font-bold tracking-tight text-white leading-none">Quản Trị Viên</h1>
+                        <h1 className="font-sans text-lg font-bold tracking-tight text-white leading-tight uppercase">GÔM <br/> ĐẠI THÀNH</h1>
                     </div>
                 </div>
 

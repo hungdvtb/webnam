@@ -15,9 +15,18 @@ use Illuminate\Support\Str;
 
 class OrderController extends Controller
 {
-    private function generateOrderNumber()
+    private function generateOrderNumber($accountId = null)
     {
-        $lastOrder = Order::where('order_number', 'LIKE', 'OR%A0')->withTrashed()->orderBy('id', 'desc')->first();
+        $query = Order::withTrashed();
+        if ($accountId) {
+            $query->where('account_id', $accountId);
+        }
+        
+        $lastOrder = $query->where('order_number', 'LIKE', 'OR%A0')
+            ->orderBy('id', 'desc')
+            ->select('order_number')
+            ->first();
+
         $nextNumber = 10000;
         if ($lastOrder && preg_match('/OR(\d+)A0/', $lastOrder->order_number, $matches)) {
             $nextNumber = intval($matches[1]) + 1;
@@ -134,31 +143,32 @@ class OrderController extends Controller
     {
         $accountId = $request->header('X-Account-Id');
         
-        \Illuminate\Support\Facades\Log::info('Order Store Reached', [
-            'account_id' => $accountId,
-            'data' => $request->all()
-        ]);
+        // Use shorter log or skip if heavy
+        \Illuminate\Support\Facades\Log::info('Order Store Attempt', ['account_id' => $accountId, 'customer' => $request->customer_phone]);
 
         return DB::transaction(function () use ($request, $accountId) {
             $items = [];
             $totalPrice = 0;
 
             if ($request->has('items')) {
+                $productIds = collect($request->items)->pluck('product_id')->filter()->unique()->toArray();
+                $products = \App\Models\Product::whereIn('id', $productIds)->get()->keyBy('id');
+
                 foreach ($request->items as $item) {
                     $productId = data_get($item, 'product_id');
                     if (!$productId) continue;
 
-                    $product = \App\Models\Product::find($productId);
-                    $price = data_get($item, 'price');
-                    $qty = data_get($item, 'quantity');
+                    $product = $products->get($productId);
+                    $price = (float) data_get($item, 'price', 0);
+                    $qty = (int) data_get($item, 'quantity', 0);
 
                     $items[] = [
                         'product_id' => $productId,
-                        'product_name_snapshot' => $product ? $product->name : null,
-                        'product_sku_snapshot' => $product ? $product->sku : null,
+                        'product_name_snapshot' => $product?->name,
+                        'product_sku_snapshot' => $product?->sku,
                         'quantity' => $qty,
                         'price' => $price,
-                        'cost_price' => data_get($item, 'cost_price', 0),
+                        'cost_price' => (float) data_get($item, 'cost_price', 0),
                     ];
                     $totalPrice += ($price * $qty);
                 }
@@ -168,30 +178,31 @@ class OrderController extends Controller
                     return response()->json(['message' => 'Cart is empty'], 400);
                 }
                 foreach ($cart->items as $item) {
+                    $price = $item->product ? ($item->product->current_price ?? $item->price) : $item->price;
                     $items[] = [
                         'product_id' => $item->product_id,
-                        'product_name_snapshot' => $item->product ? $item->product->name : null,
-                        'product_sku_snapshot' => $item->product ? $item->product->sku : null,
+                        'product_name_snapshot' => $item->product?->name,
+                        'product_sku_snapshot' => $item->product?->sku,
                         'quantity' => $item->quantity,
-                        'price' => $item->product ? ($item->product->current_price ?? $item->price) : $item->price,
-                        'cost_price' => $item->product ? ($item->product->cost_price ?? 0) : 0,
+                        'price' => $price,
+                        'cost_price' => $item->product?->cost_price ?? 0,
                     ];
-                    $totalPrice += ($item->product ? ($item->product->current_price ?? $item->price) : $item->price) * $item->quantity;
+                    $totalPrice += ($price * $item->quantity);
                 }
             }
 
-            $costTotal = array_sum(array_map(fn($item) => $item['cost_price'] * $item['quantity'], $items));
-
+            // Customer creation/lookup optimized with index
             $customer = Customer::firstOrCreate(
                 ['account_id' => $accountId, 'phone' => $request->customer_phone],
                 ['name' => $request->customer_name, 'email' => $request->customer_email, 'address' => $request->shipping_address]
             );
 
+            // Create Order
             $order = Order::create([
                 'user_id' => Auth::id(),
                 'account_id' => $accountId,
                 'customer_id' => $customer->id,
-                'order_number' => $this->generateOrderNumber(),
+                'order_number' => $this->generateOrderNumber($accountId),
                 'total_price' => $totalPrice,
                 'status' => $request->status ?? (\App\Models\OrderStatus::where('account_id', $accountId)->where('is_default', true)->value('code') ?: 'new'),
                 'customer_name' => $request->customer_name,
@@ -206,29 +217,49 @@ class OrderController extends Controller
                 'shipment_status' => $request->shipment_status,
                 'shipping_fee' => $request->shipping_fee ?? 0,
                 'discount' => $request->discount ?? 0,
-                'cost_total' => $request->cost_total ?? 0,
+                'cost_total' => array_sum(array_map(fn($item) => $item['cost_price'] * $item['quantity'], $items)),
             ]);
 
-            foreach ($items as $item) {
-                OrderItem::create([
-                    'order_id' => $order->id,
-                    'account_id' => $accountId,
-                    'product_id' => $item['product_id'],
-                    'product_name_snapshot' => $item['product_name_snapshot'] ?? null,
-                    'product_sku_snapshot' => $item['product_sku_snapshot'] ?? null,
-                    'quantity' => $item['quantity'],
-                    'price' => $item['price'],
-                    'cost_price' => $item['cost_price'],
-                ]);
+            // Bulk Insert Order Items (much faster for multi-item orders)
+            if (!empty($items)) {
+                $now = now();
+                $orderItemData = array_map(function($item) use ($order, $accountId, $now) {
+                    return [
+                        'order_id' => $order->id,
+                        'account_id' => $accountId,
+                        'product_id' => $item['product_id'],
+                        'product_name_snapshot' => $item['product_name_snapshot'],
+                        'product_sku_snapshot' => $item['product_sku_snapshot'],
+                        'quantity' => $item['quantity'],
+                        'price' => $item['price'],
+                        'cost_price' => $item['cost_price'],
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ];
+                }, $items);
+                OrderItem::insert($orderItemData);
+
+                // Efficient Inventory Update
+                foreach ($items as $item) {
+                    \App\Models\Product::where('id', $item['product_id'])->decrement('stock_quantity', $item['quantity']);
+                }
             }
 
-            // Sync Order EAV custom attributes
-            if ($request->has('custom_attributes')) {
+            // Sync Order Attributes - optimized lookup
+            if ($request->has('custom_attributes') && !empty($request->custom_attributes)) {
+                $attrCodes = array_keys($request->custom_attributes);
+                $existingAttrs = \App\Models\Attribute::where('account_id', $accountId)->whereIn('code', $attrCodes)->get()->keyBy('code');
+
                 foreach ($request->custom_attributes as $attrCode => $val) {
-                    $attribute = \App\Models\Attribute::firstOrCreate(
-                        ['account_id' => $accountId, 'code' => $attrCode],
-                        ['name' => ucwords(str_replace('_', ' ', $attrCode)), 'frontend_type' => 'text']
-                    );
+                    $attribute = $existingAttrs->get($attrCode);
+                    if (!$attribute) {
+                        $attribute = \App\Models\Attribute::create([
+                            'account_id' => $accountId,
+                            'code' => $attrCode,
+                            'name' => ucwords(str_replace('_', ' ', $attrCode)),
+                            'frontend_type' => 'text'
+                        ]);
+                    }
 
                     \App\Models\OrderAttributeValue::create([
                         'order_id' => $order->id,
@@ -238,9 +269,11 @@ class OrderController extends Controller
                 }
             }
 
+            // Customer stats update
             $customer->increment('total_orders');
             $customer->increment('total_spent', $totalPrice);
 
+            // One-off invoice creation
             Invoice::create([
                 'order_id' => $order->id,
                 'invoice_number' => 'INV-' . strtoupper(Str::random(10)),
@@ -250,12 +283,13 @@ class OrderController extends Controller
             ]);
 
             if (!$request->has('items')) {
-                Cart::where('user_id', Auth::id())->first()->items()->delete();
+                Cart::where('user_id', Auth::id())->first()?->items()->delete();
             }
 
             return response()->json($order->load(['items', 'customer', 'attributeValues']), 201);
         });
     }
+
 
     public function show($id)
     {
@@ -357,7 +391,7 @@ class OrderController extends Controller
         
         return DB::transaction(function () use ($original) {
             $new = $original->replicate();
-            $new->order_number = $this->generateOrderNumber();
+            $new->order_number = $this->generateOrderNumber($original->account_id);
             $new->status = \App\Models\OrderStatus::where('account_id', $original->account_id)->where('is_default', true)->value('code') ?: 'new';
             $new->save();
 
@@ -482,7 +516,7 @@ class OrderController extends Controller
                 if (!$original) continue;
 
                 $new = $original->replicate();
-                $new->order_number = $this->generateOrderNumber();
+                $new->order_number = $this->generateOrderNumber($original->account_id);
                 $new->status = \App\Models\OrderStatus::where('account_id', $original->account_id)->where('is_default', true)->value('code') ?: 'new';
                 $new->save();
 

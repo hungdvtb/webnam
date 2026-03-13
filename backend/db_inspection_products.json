@@ -1,0 +1,32 @@
+{
+    "products": [
+        {
+            "indexname": "products_pkey",
+            "indexdef": "CREATE UNIQUE INDEX products_pkey ON public.products USING btree (id)"
+        },
+        {
+            "indexname": "products_sku_unique",
+            "indexdef": "CREATE UNIQUE INDEX products_sku_unique ON public.products USING btree (sku)"
+        },
+        {
+            "indexname": "products_slug_unique",
+            "indexdef": "CREATE UNIQUE INDEX products_slug_unique ON public.products USING btree (slug)"
+        }
+    ],
+    "product_attribute_values": [
+        {
+            "indexname": "product_attribute_values_pkey",
+            "indexdef": "CREATE UNIQUE INDEX product_attribute_values_pkey ON public.product_attribute_values USING btree (id)"
+        },
+        {
+            "indexname": "product_attribute_values_product_id_attribute_id_unique",
+            "indexdef": "CREATE UNIQUE INDEX product_attribute_values_product_id_attribute_id_unique ON public.product_attribute_values USING btree (product_id, attribute_id)"
+        }
+    ],
+    "product_images": [
+        {
+            "indexname": "product_images_pkey",
+            "indexdef": "CREATE UNIQUE INDEX product_images_pkey ON public.product_images USING btree (id)"
+        }
+    ]
+}

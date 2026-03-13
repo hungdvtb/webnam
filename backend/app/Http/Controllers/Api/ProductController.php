@@ -15,7 +15,18 @@ class ProductController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Product::with(['category', 'images', 'attributeValues.attribute']);
+        // Start with optimized column selection for products list to reduce memory & payload
+        $query = Product::query()
+            ->select([
+                'id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 
+                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status'
+            ])
+            ->with([
+                'category:id,name', 
+                'images:id,product_id,image_url,is_primary',
+                'attributeValues:id,product_id,attribute_id,value',
+                'attributeValues.attribute:id,name,code,is_filterable'
+            ]);
 
         // Handle Trash View
         if ($request->boolean('is_trash')) {
@@ -30,7 +41,7 @@ class ProductController extends Controller
         // Search by name & SKU & more (Advanced Fuzzy & Token Matching)
         if ($request->filled('search')) {
             $search = trim($request->search);
-            // Split into tokens, ignoring extra spaces
+            // Split into tokens
             $tokens = preg_split('/\s+/', $search, -1, PREG_SPLIT_NO_EMPTY);
 
             if (!empty($tokens)) {
@@ -38,108 +49,71 @@ class ProductController extends Controller
                     foreach ($tokens as $token) {
                         $q->where(function ($sub) use ($token) {
                             $escapedToken = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $token) . '%';
-                            // Use preg_split with //u to correctly split UTF-8 characters without breaking multibyte sequences.
-                            // mb_str_split can sometimes fail depending on internal encoding configuration.
                             $fuzzyToken = '%' . implode('%', preg_split('//u', str_replace(['%', '_'], '', $token), -1, PREG_SPLIT_NO_EMPTY)) . '%';
 
-                            // Name match (substring)
-                            $sub->whereRaw('unaccent(name) ILIKE unaccent(?)', [$escapedToken])
+                            // Name match
+                            $sub->whereRaw('immutable_unaccent(name) ILIKE immutable_unaccent(?)', [$escapedToken])
                                 // SKU match (substring or compacted substring)
-                                ->orWhereRaw('unaccent(sku) ILIKE unaccent(?)', [$escapedToken])
-                                ->orWhereRaw("unaccent(REGEXP_REPLACE(sku, '[^a-zA-Z0-9]', '', 'g')) ILIKE unaccent(?)", [$escapedToken])
-                                // SKU fuzzy/subsequence match (e.g., bh18 matches bhkemde-18)
-                                ->orWhereRaw("unaccent(REGEXP_REPLACE(sku, '[^a-zA-Z0-9]', '', 'g')) ILIKE unaccent(?)", [$fuzzyToken])
-                                // Slug & Description
-                                ->orWhereRaw('unaccent(slug) ILIKE unaccent(?)', [$escapedToken])
-                                ->orWhereRaw('unaccent(description) ILIKE unaccent(?)', [$escapedToken]);
+                                ->orWhereRaw('immutable_unaccent(sku) ILIKE immutable_unaccent(?)', [$escapedToken])
+                                ->orWhereRaw("immutable_unaccent(REGEXP_REPLACE(sku, '[^a-zA-Z0-9]', '', 'g')) ILIKE immutable_unaccent(?)", [$escapedToken])
+                                // SKU fuzzy/subsequence match
+                                ->orWhereRaw("immutable_unaccent(REGEXP_REPLACE(sku, '[^a-zA-Z0-9]', '', 'g')) ILIKE immutable_unaccent(?)", [$fuzzyToken]);
+
                         });
                     }
                 });
             }
         }
 
-        // Filter by price range
-        if ($request->filled('min_price')) {
-            $query->where('price', '>=', $request->min_price);
-        }
-        if ($request->filled('max_price')) {
-            $query->where('price', '<=', $request->max_price);
-        }
+        // Numberic Filters
+        if ($request->filled('min_price')) $query->where('price', '>=', $request->min_price);
+        if ($request->filled('max_price')) $query->where('price', '<=', $request->max_price);
+        if ($request->filled('min_stock')) $query->where('stock_quantity', '>=', $request->min_stock);
+        if ($request->filled('max_stock')) $query->where('stock_quantity', '<=', $request->max_stock);
 
-        // Filter by stock range
-        if ($request->filled('min_stock')) {
-            $query->where('stock_quantity', '>=', $request->min_stock);
-        }
-        if ($request->filled('max_stock')) {
-            $query->where('stock_quantity', '<=', $request->max_stock);
-        }
+        // Filter by date range
+        if ($request->filled('start_date')) $query->whereDate('created_at', '>=', $request->start_date);
+        if ($request->filled('end_date')) $query->whereDate('created_at', '<=', $request->end_date);
 
-        // Filter by date range (created_at)
-        if ($request->filled('start_date')) {
-            $query->whereDate('created_at', '>=', $request->start_date);
-        }
-        if ($request->filled('end_date')) {
-            $query->whereDate('created_at', '<=', $request->end_date);
-        }
+        // Flags
+        if ($request->filled('is_featured')) $query->where('is_featured', $request->boolean('is_featured'));
+        if ($request->filled('is_new')) $query->where('is_new', $request->boolean('is_new'));
+        if ($request->filled('type')) $query->where('type', $request->type);
 
-        // Filter by featured
-        if ($request->filled('is_featured')) {
-            $query->where('is_featured', $request->boolean('is_featured'));
-        }
-
-        // Filter by is_new
-        if ($request->filled('is_new')) {
-            $query->where('is_new', $request->boolean('is_new'));
-        }
-
-        // Filter by type
-        if ($request->filled('type')) {
-            $query->where('type', $request->type);
-        }
-
-        // Filter by EAV Attributes (Professional Filter)
-        // Format: ?attributes[attribute_id]=value1,value2
+        // Filter by EAV Attributes
         $inputAttributes = $request->input('attributes');
         if (!empty($inputAttributes) && is_array($inputAttributes)) {
             foreach ($inputAttributes as $attrId => $values) {
-                if (empty($values))
-                    continue;
+                if (empty($values)) continue;
                 $valueArray = is_array($values) ? $values : explode(',', $values);
 
                 $query->whereHas('attributeValues', function ($q) use ($attrId, $valueArray) {
                     $q->where('attribute_id', $attrId)
-                        ->whereIn('value', $valueArray);
+                      ->whereIn('value', $valueArray);
                 });
             }
         }
 
-        // Sorting mapping
+        // Sorting
         $sortBy = $request->input('sort_by', 'created_at');
         $sortOrder = $request->input('sort_order', 'desc');
 
-        $sortMapping = [
-            'stock' => 'stock_quantity',
-            'category' => 'category_id'
-        ];
-
-        $validSortFields = [
-            'id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 
-            'created_at', 'type', 'category_id', 'is_featured', 'is_new'
-        ];
+        $sortMapping = ['stock' => 'stock_quantity', 'category' => 'category_id'];
+        $validSortFields = ['id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'created_at', 'type', 'category_id'];
 
         $field = $sortMapping[$sortBy] ?? $sortBy;
-        if (!in_array($field, $validSortFields)) {
-            $field = 'created_at';
-        }
+        if (!in_array($field, $validSortFields)) $field = 'created_at';
         
         $order = (strtolower($sortOrder) === 'asc') ? 'asc' : 'desc';
         $query->orderBy($field, $order);
 
-        $perPage = $request->get('per_page', 9);
-        $products = $query->paginate($perPage);
+        $perPage = (int) $request->get('per_page', 20);
+        // Ensure perPage is reasonable
+        $perPage = min(max($perPage, 1), 100);
 
-        return response()->json($products);
+        return response()->json($query->paginate($perPage));
     }
+
 
     /**
      * Store a newly created resource in storage.

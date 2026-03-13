@@ -1,0 +1,131 @@
+{
+    "orders": {
+        "count": 222,
+        "indexes": [
+            {
+                "indexname": "orders_pkey",
+                "indexdef": "CREATE UNIQUE INDEX orders_pkey ON public.orders USING btree (id)"
+            },
+            {
+                "indexname": "orders_order_number_unique",
+                "indexdef": "CREATE UNIQUE INDEX orders_order_number_unique ON public.orders USING btree (order_number)"
+            },
+            {
+                "indexname": "idx_ord_acc_status_date",
+                "indexdef": "CREATE INDEX idx_ord_acc_status_date ON public.orders USING btree (account_id, status, created_at)"
+            },
+            {
+                "indexname": "idx_ord_acc_phone",
+                "indexdef": "CREATE INDEX idx_ord_acc_phone ON public.orders USING btree (account_id, customer_phone)"
+            },
+            {
+                "indexname": "idx_ord_acc_name",
+                "indexdef": "CREATE INDEX idx_ord_acc_name ON public.orders USING btree (account_id, customer_name)"
+            },
+            {
+                "indexname": "idx_ord_acc_number",
+                "indexdef": "CREATE INDEX idx_ord_acc_number ON public.orders USING btree (account_id, order_number)"
+            },
+            {
+                "indexname": "idx_ord_acc_date",
+                "indexdef": "CREATE INDEX idx_ord_acc_date ON public.orders USING btree (account_id, created_at)"
+            }
+        ]
+    },
+    "order_items": {
+        "count": 396,
+        "indexes": [
+            {
+                "indexname": "order_items_pkey",
+                "indexdef": "CREATE UNIQUE INDEX order_items_pkey ON public.order_items USING btree (id)"
+            },
+            {
+                "indexname": "idx_ord_items_order_id",
+                "indexdef": "CREATE INDEX idx_ord_items_order_id ON public.order_items USING btree (order_id)"
+            },
+            {
+                "indexname": "idx_ord_items_product_id",
+                "indexdef": "CREATE INDEX idx_ord_items_product_id ON public.order_items USING btree (product_id)"
+            }
+        ]
+    },
+    "customers": {
+        "count": 101,
+        "indexes": [
+            {
+                "indexname": "customers_pkey",
+                "indexdef": "CREATE UNIQUE INDEX customers_pkey ON public.customers USING btree (id)"
+            },
+            {
+                "indexname": "customers_account_id_email_unique",
+                "indexdef": "CREATE UNIQUE INDEX customers_account_id_email_unique ON public.customers USING btree (account_id, email)"
+            },
+            {
+                "indexname": "customers_account_id_phone_unique",
+                "indexdef": "CREATE UNIQUE INDEX customers_account_id_phone_unique ON public.customers USING btree (account_id, phone)"
+            }
+        ]
+    },
+    "products": {
+        "count": 122,
+        "indexes": [
+            {
+                "indexname": "products_pkey",
+                "indexdef": "CREATE UNIQUE INDEX products_pkey ON public.products USING btree (id)"
+            },
+            {
+                "indexname": "products_sku_unique",
+                "indexdef": "CREATE UNIQUE INDEX products_sku_unique ON public.products USING btree (sku)"
+            },
+            {
+                "indexname": "products_slug_unique",
+                "indexdef": "CREATE UNIQUE INDEX products_slug_unique ON public.products USING btree (slug)"
+            },
+            {
+                "indexname": "idx_prod_category_id",
+                "indexdef": "CREATE INDEX idx_prod_category_id ON public.products USING btree (category_id)"
+            },
+            {
+                "indexname": "idx_prod_account_id",
+                "indexdef": "CREATE INDEX idx_prod_account_id ON public.products USING btree (account_id)"
+            },
+            {
+                "indexname": "idx_prod_created_at",
+                "indexdef": "CREATE INDEX idx_prod_created_at ON public.products USING btree (created_at)"
+            },
+            {
+                "indexname": "idx_prod_price",
+                "indexdef": "CREATE INDEX idx_prod_price ON public.products USING btree (price)"
+            },
+            {
+                "indexname": "idx_prod_flags",
+                "indexdef": "CREATE INDEX idx_prod_flags ON public.products USING btree (account_id, is_featured, is_new)"
+            },
+            {
+                "indexname": "idx_prod_acc_date",
+                "indexdef": "CREATE INDEX idx_prod_acc_date ON public.products USING btree (account_id, created_at, id)"
+            },
+            {
+                "indexname": "idx_products_name_trgm",
+                "indexdef": "CREATE INDEX idx_products_name_trgm ON public.products USING gin (immutable_unaccent((name)::text) gin_trgm_ops)"
+            },
+            {
+                "indexname": "idx_products_sku_trgm",
+                "indexdef": "CREATE INDEX idx_products_sku_trgm ON public.products USING gin (immutable_unaccent((sku)::text) gin_trgm_ops)"
+            }
+        ]
+    },
+    "order_attribute_values": {
+        "count": 433,
+        "indexes": [
+            {
+                "indexname": "order_attribute_values_pkey",
+                "indexdef": "CREATE UNIQUE INDEX order_attribute_values_pkey ON public.order_attribute_values USING btree (id)"
+            },
+            {
+                "indexname": "idx_ord_attr_val_lookup",
+                "indexdef": "CREATE INDEX idx_ord_attr_val_lookup ON public.order_attribute_values USING btree (order_id, attribute_id)"
+            }
+        ]
+    }
+}

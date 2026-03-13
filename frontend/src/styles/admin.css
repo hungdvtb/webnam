@@ -1,0 +1,107 @@
+/* Admin Design System */
+
+:root {
+    --admin-font-size-base: 13px;
+    --admin-font-size-title: 15px;
+    --admin-color-text-main: #111111; /* Deep Black for readability */
+    --admin-color-text-sub: #444444; /* Dark gray for secondary info */
+    --admin-color-border: #D1CEC9; /* Slightly darker border for better definition */
+    --admin-color-bg-light: #F9F5F0; /* Rice Paper */
+    --admin-color-primary: #1B365D; /* Cobalt Blue */
+    --admin-color-gold: #C5A065; /* Antique Gold */
+}
+
+.admin-text-base {
+    font-size: var(--admin-font-size-base);
+    color: var(--admin-color-text-main);
+    line-height: 1.5;
+}
+
+.admin-text-sub {
+    font-size: var(--admin-font-size-base);
+    color: var(--admin-color-text-sub);
+}
+
+.admin-title {
+    font-size: var(--admin-font-size-title);
+    font-weight: 700;
+    color: var(--admin-color-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.admin-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--admin-font-size-base);
+}
+
+.admin-table thead th {
+    background-color: var(--admin-color-bg-light);
+    color: var(--admin-color-text-sub);
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 11px;
+    padding: 12px 12px;
+    border: 1px solid var(--admin-color-border);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.admin-table tbody td {
+    padding: 10px 12px;
+    border: 1px solid var(--admin-color-border);
+    color: var(--admin-color-text-main);
+    vertical-align: middle;
+}
+
+.admin-table tbody tr:hover {
+    background-color: rgba(197, 160, 101, 0.05); /* Very light gold */
+}
+
+.admin-btn {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 8px 16px;
+    border-radius: 2px;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.admin-btn-primary {
+    background-color: var(--admin-color-primary);
+    color: white;
+}
+
+.admin-btn-primary:hover {
+    background-color: #122541;
+}
+
+.admin-pagination-btn {
+    size: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--admin-color-border);
+    font-size: 12px;
+    font-weight: 700;
+    transition: all 0.2s;
+}
+
+.admin-pagination-btn:hover:not(:disabled) {
+    border-color: var(--admin-color-gold);
+    color: var(--admin-color-gold);
+    background-color: rgba(197, 160, 101, 0.05);
+}
+
+.admin-pagination-btn.active {
+    background-color: var(--admin-color-primary);
+    color: white;
+    border-color: var(--admin-color-primary);
+}

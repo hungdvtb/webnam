@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { productApi, categoryApi, attributeApi, productImageApi, aiApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 import ReactQuill from 'react-quill-new';
@@ -191,6 +191,10 @@ const ProductForm = () => {
     const { id } = useParams();
     const isEdit = !!id;
     const navigate = useNavigate();
+    const location = useLocation();
+    const queryParams = new URLSearchParams(location.search);
+    const isDuplicate = queryParams.get('mode') === 'duplicate';
+    
     const { showModal } = useUI();
     const [loading, setLoading] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
@@ -739,7 +743,7 @@ const ProductForm = () => {
                         </button>
                         <div className="flex flex-col">
                             <h1 className="text-2xl font-display font-bold text-primary italic uppercase tracking-wider leading-none mb-1">
-                                {isEdit ? 'Biên Tập Tác Phẩm' : 'Khởi Tạo Tác Phẩm Mới'}
+                                {isDuplicate ? 'Nhân Bản Tác Phẩm' : (isEdit ? 'Biên Tập Tác Phẩm' : 'Khởi Tạo Tác Phẩm Mới')}
                             </h1>
                             <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.2em] leading-none mt-1">
                                 {formData.sku ? `SKU: ${formData.sku}` : 'Cấu hình thông tin di sản và thương mại'}
@@ -762,7 +766,7 @@ const ProductForm = () => {
                             className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-primary text-white px-10 py-2.5 rounded-sm font-bold text-[11px] uppercase tracking-widest hover:bg-umber transition-all disabled:opacity-50 shadow-premium-sm"
                         >
                             {loading && <span className="material-symbols-outlined text-sm animate-spin">refresh</span>}
-                            {isEdit ? 'Lưu cập nhật' : 'Khởi tạo ngay'}
+                            {isDuplicate ? 'Lưu nhân bản' : (isEdit ? 'Lưu cập nhật' : 'Khởi tạo ngay')}
                         </button>
                     </div>
                 </div>

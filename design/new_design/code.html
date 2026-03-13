@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+
+<html lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Gốm Sứ Đại Thành - Quản Lý Sản Phẩm</title>
+<!-- Tailwind CSS v3 CDN -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Lucide Icons (Commonly used for modern dashboards) -->
+<script src="https://unpkg.com/lucide@latest"></script>
+<style data-purpose="custom-scrollbar">
+    /* Custom scrollbar for a cleaner look */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f1f1;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 10px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+  </style>
+<style data-purpose="typography-and-colors">
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #f8fafc;
+    }
+    .sidebar-active {
+      background-color: rgba(255, 255, 255, 0.1);
+      border-left: 4px solid #3b82f6;
+    }
+  </style>
+</head>
+<body class="flex h-screen overflow-hidden text-slate-700">
+<!-- BEGIN: Sidebar -->
+<aside class="w-64 bg-[#1e293b] text-slate-300 flex flex-col shrink-0 h-full overflow-y-auto">
+<!-- Branding -->
+<div class="p-6 flex items-center space-x-3 border-b border-slate-700">
+<div class="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center">
+<i class="text-white w-5 h-5" data-lucide="box"></i>
+</div>
+<span class="text-lg font-bold text-white tracking-tight">Quản Trị Viên</span>
+</div>
+<!-- Navigation Groups -->
+<nav class="flex-1 py-4 space-y-1">
+<!-- Main Links -->
+<a class="flex items-center px-6 py-3 hover:bg-slate-800 transition-colors" href="#">
+<i class="w-5 h-5 mr-3" data-lucide="layout-grid"></i>
+<span class="text-sm font-medium">Danh sách cửa hàng</span>
+</a>
+<a class="flex items-center px-6 py-3 hover:bg-slate-800 transition-colors" href="#">
+<i class="w-5 h-5 mr-3" data-lucide="bar-chart-3"></i>
+<span class="text-sm font-medium">Tổng quan</span>
+</a>
+<a class="flex items-center px-6 py-3 hover:bg-slate-800 transition-colors justify-between" href="#">
+<div class="flex items-center">
+<i class="w-5 h-5 mr-3" data-lucide="settings"></i>
+<span class="text-sm font-medium">Cài đặt</span>
+</div>
+<i class="w-4 h-4" data-lucide="chevron-down"></i>
+</a>
+<!-- Active Item: Product Management -->
+<a class="flex items-center px-6 py-3 sidebar-active text-white bg-slate-800 transition-colors" href="#">
+<i class="w-5 h-5 mr-3" data-lucide="package"></i>
+<span class="text-sm font-medium">Quản lý sản phẩm</span>
+</a>
+<a class="flex items-center px-6 py-3 hover:bg-slate-800 transition-colors justify-between" href="#">
+<div class="flex items-center">
+<i class="w-5 h-5 mr-3" data-lucide="shopping-cart"></i>
+<span class="text-sm font-medium">Quản lý bán hàng</span>
+</div>
+<i class="w-4 h-4" data-lucide="chevron-down"></i>
+</a>
+<a class="flex items-center px-6 py-3 hover:bg-slate-800 transition-colors" href="#">
+<i class="w-5 h-5 mr-3" data-lucide="layers"></i>
+<span class="text-sm font-medium">Danh mục</span>
+</a>
+<!-- Sub-section Header -->
+<div class="px-6 pt-6 pb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+        Kho &amp; Vận Chuyển
+      </div>
+<a class="flex items-center px-6 py-2 hover:bg-slate-800 transition-colors" href="#">
+<i class="w-4 h-4 mr-3" data-lucide="database"></i>
+<span class="text-sm font-medium">Danh mục kho</span>
+</a>
+<a class="flex items-center px-6 py-2 hover:bg-slate-800 transition-colors" href="#">
+<i class="w-4 h-4 mr-3" data-lucide="clipboard-check"></i>
+<span class="text-sm font-medium">Nhập xuất &amp; Kiểm kê</span>
+</a>
+<!-- Sub-section Header -->
+<div class="px-6 pt-6 pb-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+        Marketing &amp; Nội dung
+      </div>
+<a class="flex items-center px-6 py-2 hover:bg-slate-800 transition-colors" href="#">
+<i class="w-4 h-4 mr-3" data-lucide="file-text"></i>
+<span class="text-sm font-medium">Bài viết cẩm nang</span>
+</a>
+<a class="flex items-center px-6 py-2 hover:bg-slate-800 transition-colors" href="#">
+<i class="w-4 h-4 mr-3" data-lucide="image"></i>
+<span class="text-sm font-medium">Quản lý Banners</span>
+</a>
+<a class="flex items-center px-6 py-2 hover:bg-slate-800 transition-colors" href="#">
+<i class="w-4 h-4 mr-3" data-lucide="menu"></i>
+<span class="text-sm font-medium">Quản lý Menu</span>
+</a>
+</nav>
+<!-- User Profile Footer -->
+<div class="p-4 bg-slate-900 border-t border-slate-700">
+<div class="flex items-center space-x-3">
+<div class="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center overflow-hidden">
+<i class="text-slate-400 w-6 h-6" data-lucide="user"></i>
+</div>
+<div class="flex flex-col">
+<span class="text-sm font-semibold text-white">System Admin</span>
+<span class="text-xs text-slate-500">Quản trị viên</span>
+</div>
+</div>
+</div>
+</aside>
+<!-- END: Sidebar -->
+<!-- BEGIN: Main Content -->
+<main class="flex-1 flex flex-col h-full overflow-hidden">
+<!-- BEGIN: Header -->
+<header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shrink-0">
+<h1 class="text-xl font-bold text-slate-800">Quản lý sản phẩm</h1>
+<div class="flex items-center space-x-4">
+<!-- Store Selector -->
+<div class="relative">
+<button class="flex items-center space-x-2 border border-slate-200 px-4 py-2 rounded-lg bg-white hover:bg-slate-50 transition-colors">
+<i class="w-4 h-4 text-slate-500" data-lucide="store"></i>
+<span class="text-sm font-medium">Gốm Sứ Đại Thành</span>
+<i class="w-4 h-4 text-slate-400" data-lucide="chevron-down"></i>
+</button>
+</div>
+<!-- Notifications -->
+<button class="p-2 text-slate-500 hover:text-blue-600 transition-colors relative">
+<i class="w-6 h-6" data-lucide="bell"></i>
+<span class="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
+</button>
+</div>
+</header>
+<!-- END: Header -->
+<!-- BEGIN: Toolbar -->
+<section class="p-6 bg-slate-50 border-b border-slate-200 space-y-4">
+<div class="flex flex-wrap items-center justify-between gap-4">
+<!-- Actions Group -->
+<div class="flex items-center space-x-2">
+<button class="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm transition-all" title="Thêm mới">
+<i class="w-4 h-4 mr-2" data-lucide="plus"></i>
+<span class="text-sm font-semibold">Thêm sản phẩm</span>
+</button>
+<div class="h-8 w-[1px] bg-slate-300 mx-2"></div>
+<button class="p-2 text-slate-600 hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-200 rounded-md transition-all" title="Lọc">
+<i class="w-5 h-5" data-lucide="filter"></i>
+</button>
+<button class="p-2 text-slate-600 hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-200 rounded-md transition-all" title="Sao chép">
+<i class="w-5 h-5" data-lucide="copy"></i>
+</button>
+<button class="p-2 text-slate-600 hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-200 rounded-md transition-all" title="Làm mới">
+<i class="w-5 h-5" data-lucide="rotate-cw"></i>
+</button>
+<button class="p-2 text-slate-600 hover:bg-white hover:shadow-sm border border-transparent hover:border-slate-200 rounded-md transition-all" title="Cài đặt bảng">
+<i class="w-5 h-5" data-lucide="settings-2"></i>
+</button>
+<button class="p-2 text-red-500 hover:bg-red-50 hover:shadow-sm border border-transparent hover:border-red-200 rounded-md transition-all" title="Xóa">
+<i class="w-5 h-5" data-lucide="trash-2"></i>
+</button>
+</div>
+<!-- Search & View Group -->
+<div class="flex items-center space-x-3 flex-1 max-w-md">
+<div class="relative w-full">
+<i class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" data-lucide="search"></i>
+<input class="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm" placeholder="Tìm kiếm theo mã hoặc tên sản phẩm..." type="text"/>
+</div>
+</div>
+</div>
+</section>
+<!-- END: Toolbar -->
+<!-- BEGIN: Data Table Container -->
+<section class="flex-1 overflow-auto p-6">
+<div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-slate-50 border-b border-slate-200">
+<th class="px-4 py-3 w-10">
+<input class="rounded text-blue-600 focus:ring-blue-500" type="checkbox"/>
+</th>
+<th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Ảnh</th>
+<th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Mã SP</th>
+<th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Tên sản phẩm</th>
+<th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Giá nhập</th>
+<th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Giá bán</th>
+<th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Danh mục</th>
+<th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">Tồn kho</th>
+<th class="px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider text-center">Trạng thái</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-slate-100">
+<!-- Row 1 -->
+<tr class="hover:bg-blue-50/30 transition-colors">
+<td class="px-4 py-4">
+<input class="rounded text-blue-600" type="checkbox"/>
+</td>
+<td class="px-4 py-4">
+<img alt="Product" class="w-12 h-12 rounded object-cover border border-slate-200 shadow-sm" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA5c2VIHLF7VjZaebzhLc3fIEQN0RaKtFWFcjS-20bP5UgdcCZJOo-hndM6I-VPk1WPucGGuWyPRR6y6w78ZQoQfEp5cI74njMWBBWEzTCAr-3-1-0SLLfHngxHkKvXHfHD5ksfM2wdnjvx8UAt4okOVqOsVLs1oKfUHgX4NkeqR80K4N-Eonjil-c5fN4kViBjjNMdyqPOzgtM5D3YtHu2AlRNQIYsKNNS_zOUObINql9YWRh5z1KoPo4Z_WDihacmhGaZSFzDNllr"/>
+</td>
+<td class="px-4 py-4 font-mono text-xs text-slate-500">DEMO-GOM-0100</td>
+<td class="px-4 py-4">
+<div class="text-sm font-semibold text-slate-800">Khay trà gốm #100</div>
+<div class="text-[11px] text-slate-400">Sản phẩm đơn</div>
+</td>
+<td class="px-4 py-4 text-right text-sm">225.000đ</td>
+<td class="px-4 py-4 text-right text-sm font-bold text-blue-600">500.000đ</td>
+<td class="px-4 py-4">
+<span class="px-2 py-1 bg-slate-100 text-slate-600 text-[11px] rounded-full">Đĩa Trang Trí</span>
+</td>
+<td class="px-4 py-4 text-center font-bold text-sm">47</td>
+<td class="px-4 py-4 text-center">
+<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+<span class="w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5"></span>Đang bán
+                </span>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="hover:bg-blue-50/30 transition-colors">
+<td class="px-4 py-4">
+<input class="rounded text-blue-600" type="checkbox"/>
+</td>
+<td class="px-4 py-4">
+<img alt="Product" class="w-12 h-12 rounded object-cover border border-slate-200 shadow-sm" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCYcNsPNWUeGGjMfvEfVxbtUX3IDofZeSz6GteDA6NYl4PB_xOE7H636W-GTa4PEFYGp-k6S6nMirCYZkI_eLQk5HcBL7tEaXdEQJnkjNx36Wu7frcevUOdkNkuM1BrNnSrishiSDs72H_PpAF21ViZWO_FBFe5cut4oSwcRC5H6oHDt2HqpVdBgNU7a-jx7fCvp4Vi9PSz19J7kPVALcEKKqPnDx-4hWQqtI6BKz2ohLf9_vpGxn33e_0sGS1_EiLJ8Z49g3vv80yc"/>
+</td>
+<td class="px-4 py-4 font-mono text-xs text-slate-500">DEMO-GOM-0099</td>
+<td class="px-4 py-4">
+<div class="text-sm font-semibold text-slate-800">Tượng Di Lặc #099</div>
+<div class="text-[11px] text-slate-400">Sản phẩm đơn</div>
+</td>
+<td class="px-4 py-4 text-right text-sm">3.825.000đ</td>
+<td class="px-4 py-4 text-right text-sm font-bold text-blue-600">8.500.000đ</td>
+<td class="px-4 py-4">
+<span class="px-2 py-1 bg-slate-100 text-slate-600 text-[11px] rounded-full">Bình Gốm Chu...</span>
+</td>
+<td class="px-4 py-4 text-center font-bold text-sm">17</td>
+<td class="px-4 py-4 text-center">
+<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800">
+<span class="w-1.5 h-1.5 rounded-full bg-slate-400 mr-1.5"></span>Ẩn
+                </span>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="hover:bg-blue-50/30 transition-colors">
+<td class="px-4 py-4">
+<input class="rounded text-blue-600" type="checkbox"/>
+</td>
+<td class="px-4 py-4">
+<img alt="Product" class="w-12 h-12 rounded object-cover border border-slate-200 shadow-sm" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB3jwYBuYc6F2yLZJEm4dVXN2Ifu1GFoCInma1kw9VOHl0jh2yugDTvanzvj-U0g8uRhGKAxaDx8O80yvZAbArIdEJuhbTXXxDvl4V02tMPZzBHQ7VQL1iuihZXdtr9OKbvoV2wV8uOaasa8raIDCxjamMIzgU6Qjtk2LQfA-fOaEWmo9U8eNJC_vcgMHN3cLkrbHQrZ9CgGozI3518MkwPODeMsSINExTgE8g8Q3CPpufzzgHTXeszZ48yuQU83x1bvfP1jEn2W7NN"/>
+</td>
+<td class="px-4 py-4 font-mono text-xs text-slate-500">DEMO-GOM-0098</td>
+<td class="px-4 py-4">
+<div class="text-sm font-semibold text-slate-800">Bộ bát đĩa hoa sen #098</div>
+<div class="text-[11px] text-slate-400">Sản phẩm đơn</div>
+</td>
+<td class="px-4 py-4 text-right text-sm">540.000đ</td>
+<td class="px-4 py-4 text-right text-sm font-bold text-blue-600">1.200.000đ</td>
+<td class="px-4 py-4">
+<span class="px-2 py-1 bg-slate-100 text-slate-600 text-[11px] rounded-full">Bộ Chén Bát Gi...</span>
+</td>
+<td class="px-4 py-4 text-center font-bold text-sm">11</td>
+<td class="px-4 py-4 text-center">
+<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+<span class="w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5"></span>Đang bán
+                </span>
+</td>
+</tr>
+<!-- Row 4 -->
+<tr class="hover:bg-blue-50/30 transition-colors">
+<td class="px-4 py-4">
+<input class="rounded text-blue-600" type="checkbox"/>
+</td>
+<td class="px-4 py-4">
+<img alt="Product" class="w-12 h-12 rounded object-cover border border-slate-200 shadow-sm" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCEGzBsVFoHYCryJl-srMeoZWtNM1OKF9GF67dv5URnKS35str6T_eizws0ecqBbq3lirAIp9mnBSlyGW5H7LdcC0JCGg9hIs52IG4tDlT9i5HPc3F0s5MAudGNTwYiIaqBRxH0hE97lrZ5vWfZOCoXIwy35r-s2971dxjtQ9u9ABDeqB8EzgNeAzpzH7fYDehBQ_Fc3-mGV-yo58RRDVUhHKLMy9YaLXxjwR8Jawl0Xq_cAEwsQ7p0pa1sKJAVKnGaM5p_SzmovyoV"/>
+</td>
+<td class="px-4 py-4 font-mono text-xs text-slate-500">DEMO-GOM-0097</td>
+<td class="px-4 py-4">
+<div class="text-sm font-semibold text-slate-800">Bình hút tài lộc #097</div>
+<div class="text-[11px] text-slate-400">Sản phẩm đơn</div>
+</td>
+<td class="px-4 py-4 text-right text-sm">11.250.000đ</td>
+<td class="px-4 py-4 text-right text-sm font-bold text-blue-600">25.000.000đ</td>
+<td class="px-4 py-4">
+<span class="px-2 py-1 bg-slate-100 text-slate-600 text-[11px] rounded-full">Đồ thờ cúng Bát...</span>
+</td>
+<td class="px-4 py-4 text-center font-bold text-sm text-red-600">33</td>
+<td class="px-4 py-4 text-center">
+<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+<span class="w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5"></span>Đang bán
+                </span>
+</td>
+</tr>
+</tbody>
+</table>
+<!-- Table Pagination/Footer -->
+<div class="bg-slate-50 px-4 py-3 border-t border-slate-200 flex items-center justify-between">
+<span class="text-xs text-slate-500">Hiển thị 1 - 10 trên tổng số 100 sản phẩm</span>
+<div class="flex space-x-1">
+<button class="px-3 py-1 text-xs border border-slate-300 rounded hover:bg-white disabled:opacity-50" disabled="">Trước</button>
+<button class="px-3 py-1 text-xs border border-blue-500 bg-blue-50 text-blue-600 font-bold rounded">1</button>
+<button class="px-3 py-1 text-xs border border-slate-300 rounded hover:bg-white">2</button>
+<button class="px-3 py-1 text-xs border border-slate-300 rounded hover:bg-white">3</button>
+<button class="px-3 py-1 text-xs border border-slate-300 rounded hover:bg-white">Sau</button>
+</div>
+</div>
+</div>
+</section>
+<!-- END: Data Table Container -->
+</main>
+<!-- END: Main Content -->
+<!-- BEGIN: Scripts -->
+<script data-purpose="icon-initialization">
+    // Initialize Lucide icons
+    lucide.createIcons();
+  </script>
+<!-- END: Scripts -->
+</body></html>

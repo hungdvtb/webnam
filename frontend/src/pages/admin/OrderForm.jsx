@@ -6,11 +6,11 @@ import { motion, Reorder, AnimatePresence } from 'framer-motion';
 import { toPng, toBlob } from 'html-to-image';
 
 const Field = ({ label, children, className = "" }) => (
-    <div className={`relative border border-stone/50 rounded-sm px-3.5 mb-6 focus-within:border-primary/30 transition-colors flex items-center min-h-[46px] ${className}`}>
-        <label className="absolute -top-3 left-2 bg-white px-1.5 font-sans text-[14px] font-black text-orange-700 tracking-wide leading-none">
+    <div className={`relative border border-primary/5 rounded-sm px-4 py-2.5 mb-4 focus-within:border-primary/20 focus-within:bg-white shadow-sm transition-all flex flex-col justify-center min-h-[56px] bg-primary/[0.03] group ${className}`}>
+        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none mb-2 pointer-events-none group-focus-within:text-primary transition-colors">
             {label}
-        </label>
-        <div className="w-full flex items-center pt-1">
+        </span>
+        <div className="w-full flex items-center">
             {children}
         </div>
     </div>
@@ -24,13 +24,13 @@ const OrderForm = () => {
     const isEdit = !!id;
     const navigate = useNavigate();
     const { user } = useAuth();
-    
+
     const [loading, setLoading] = useState(isEdit || !!duplicateFromId);
     const [saving, setSaving] = useState(false);
     const [products, setProducts] = useState([]);
     const [attributes, setAttributes] = useState([]);
     const [orderStatuses, setOrderStatuses] = useState([]);
-    
+
     const [searchTerm, setSearchTerm] = useState('');
     const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
     const [showSearchDropdown, setShowSearchDropdown] = useState(false);
@@ -118,12 +118,12 @@ const OrderForm = () => {
 
                 const active = document.activeElement;
                 const isWriting = active && (
-                    active.tagName === 'INPUT' || 
-                    active.tagName === 'TEXTAREA' || 
+                    active.tagName === 'INPUT' ||
+                    active.tagName === 'TEXTAREA' ||
                     active.classList.contains('ql-editor') ||
                     active.getAttribute('contenteditable') === 'true'
                 );
-                
+
                 if (isWriting && !showColumnConfig && !showSearchDropdown) return;
 
                 if (showColumnConfig) {
@@ -153,17 +153,17 @@ const OrderForm = () => {
         e.preventDefault();
         const startX = e.clientX;
         const startWidth = columnWidths[id] || (e.currentTarget.parentElement.offsetWidth);
-        
+
         const onMouseMove = (moveEvent) => {
             const newWidth = Math.max(50, startWidth + (moveEvent.clientX - startX));
             setColumnWidths(prev => ({ ...prev, [id]: newWidth }));
         };
-        
+
         const onMouseUp = () => {
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
         };
-        
+
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
     };
@@ -224,7 +224,7 @@ const OrderForm = () => {
             setLoading(true);
             const response = await orderApi.getOne(targetId);
             const order = response.data;
-            
+
             const customAttrValues = {};
             order.attribute_values?.forEach(av => {
                 const code = av.attribute?.code;
@@ -277,14 +277,14 @@ const OrderForm = () => {
         if (!productId) return;
         const product = products.find(p => p.id === parseInt(productId));
         if (!product) return;
-        
+
         if (formData.items.some(item => item.product_id === product.id)) return;
 
-        const newItems = [...formData.items, { 
-            product_id: product.id, 
-            name: product.name, 
+        const newItems = [...formData.items, {
+            product_id: product.id,
+            name: product.name,
             sku: product.sku,
-            quantity: 1, 
+            quantity: 1,
             price: product.price,
             cost_price: product.cost_price || 0
         }];
@@ -335,55 +335,89 @@ const OrderForm = () => {
     const handleScreenshot = async () => {
         if (!captureRef.current) return;
         setIsCapturing(true);
+
+        const element = captureRef.current;
         
-        // Small delay to ensure any hover states are settled
-        setTimeout(async () => {
-            try {
-                const options = {
-                    backgroundColor: '#ffffff',
-                    cacheBust: true,
-                    style: {
-                        padding: '40px',
-                        borderRadius: '8px',
-                    },
-                    filter: (node) => {
-                        const isNode = node instanceof HTMLElement;
-                        if (!isNode) return true;
-                        if (node.tagName === 'BUTTON' && node.querySelector('.material-symbols-outlined')?.innerText === 'delete_outline') return false;
-                        if (node.tagName === 'BUTTON' && node.getAttribute('title') === 'Cấu hình cột') return false;
-                        if (node.getAttribute('data-screenshot-hide') === 'true') return false;
-                        return true;
-                    }
-                };
+        // Save original states to restore later
+        const originalStyle = element.style.cssText;
+        const stickyElements = element.querySelectorAll('.sticky');
+        const stickyStyles = Array.from(stickyElements).map(el => el.style.cssText);
+        const inputs = element.querySelectorAll('input, textarea');
+        
+        try {
+            // Prepare element for "Perfect Capture"
+            // 1. Remove height/scroll constraints
+            element.style.height = 'auto';
+            element.style.maxHeight = 'none';
+            element.style.overflow = 'visible';
+            element.style.width = `${element.offsetWidth}px`;
+            
+            // 2. Fix sticky elements (library often fails with sticky)
+            stickyElements.forEach(el => {
+                el.style.position = 'static';
+                el.style.backgroundColor = '#f8fafc'; // Matches blue-50
+            });
 
-                // Generate blob for clipboard
-                const blob = await toBlob(captureRef.current, options);
-                
-                if (blob) {
-                    try {
-                        // Copy to clipboard
-                        const data = [new ClipboardItem({ 'image/png': blob })];
-                        await navigator.clipboard.write(data);
-                    } catch (clipErr) {
-                        console.error('Clipboard copy failed:', clipErr);
-                    }
+            // 3. Ensure background is white
+            element.style.backgroundColor = '#ffffff';
 
-                    // Also download as backup/file
-                    const link = document.createElement('a');
-                    link.download = `bao-gia-${formData.customer_name || 'khach-le'}-${new Date().getTime()}.png`;
-                    link.href = URL.createObjectURL(blob);
-                    link.click();
+            // Wait a bit for layout to settle
+            await new Promise(resolve => setTimeout(resolve, 200));
+
+            const options = {
+                backgroundColor: '#ffffff',
+                cacheBust: true,
+                pixelRatio: 2,
+                style: {
+                    margin: '0',
+                    padding: '40px',
+                    borderRadius: '0'
+                },
+                filter: (node) => {
+                    const isNode = node instanceof HTMLElement;
+                    if (!isNode) return true;
                     
-                    // Small visual feedback could be added here if needed
-                    // For now, the successful copy is the main goal
+                    // Hide interactive elements
+                    const text = node.innerText || '';
+                    if (node.tagName === 'BUTTON') return false;
+                    if (node.classList.contains('material-symbols-outlined') && 
+                        (text.includes('delete') || text.includes('settings') || text.includes('refresh') || text.includes('drag'))) {
+                        return false;
+                    }
+                    if (node.getAttribute('data-screenshot-hide') === 'true') return false;
+                    
+                    return true;
                 }
-            } catch (err) {
-                console.error('Screenshot failed', err);
-                alert('Không thể chụp ảnh mặt hàng. Hãy thử lại.');
-            } finally {
-                setIsCapturing(false);
+            };
+
+            const blob = await toBlob(element, options);
+
+            if (blob) {
+                // Clipboard copy
+                try {
+                    const data = [new ClipboardItem({ 'image/png': blob })];
+                    await navigator.clipboard.write(data);
+                } catch (clipErr) {
+                    console.error('Clipboard copy failed:', clipErr);
+                }
+
+                // Download
+                const link = document.createElement('a');
+                link.download = `bao-gia-${formData.customer_name || 'khach-le'}-${new Date().getTime()}.png`;
+                link.href = URL.createObjectURL(blob);
+                link.click();
             }
-        }, 100);
+        } catch (err) {
+            console.error('Screenshot failed', err);
+            alert('Không thể tạo phối cảnh ảnh. Hãy thử lại.');
+        } finally {
+            // RESTORE ORIGINALS
+            element.style.cssText = originalStyle;
+            stickyElements.forEach((el, i) => {
+                el.style.cssText = stickyStyles[i];
+            });
+            setIsCapturing(false);
+        }
     };
 
     const handleSubmit = async (e) => {
@@ -424,46 +458,75 @@ const OrderForm = () => {
     if (loading) return <div className="p-8 text-center italic text-primary">Đang tải dữ liệu...</div>;
 
     return (
-        <div className="bg-[#fcfcfa] min-h-screen p-6 animate-fade-in pb-24 relative">
-            {/* Close Button at Top Right */}
-            <button 
-                type="button" 
-                onClick={handleCancel}
-                className="fixed top-6 right-6 z-50 size-10 flex items-center justify-center bg-white border border-stone/10 text-stone hover:text-brick hover:border-brick/20 rounded shadow-md transition-all group lg:right-10"
-                title="Hủy & Thoát (Esc)"
-            >
-                <span className="material-symbols-outlined text-2xl">close</span>
-                <span className="absolute top-full mt-2 right-0 bg-stone/80 text-white text-[8px] font-bold px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">ESC ĐỂ THOÁT</span>
-            </button>
+        <div className="bg-[#F8FAFC] min-h-screen p-6 animate-fade-in pb-24 relative">
+            {/* Header Section synchronized with OrderList */}
+            <div className="flex justify-between items-center mb-8 pb-4 border-b-2 border-primary/10">
+                <div className="flex items-center gap-4">
+                    <button
+                        onClick={handleCancel}
+                        className="size-10 flex items-center justify-center bg-white border border-primary/10 text-primary/40 hover:text-brick hover:border-brick/20 rounded-sm shadow-sm transition-all group"
+                        title="Quay lại"
+                    >
+                        <span className="material-symbols-outlined text-lg">arrow_back</span>
+                    </button>
+                    <div>
+                        <h1 className="font-display text-[16px] font-bold text-primary leading-none mb-1">
+                            {isEdit ? "Chỉnh sửa đơn hàng" : "Tạo đơn hàng mới"}
+                        </h1>
+                        <p className="font-display text-[11px] font-medium text-primary/40">Trang quản trị / Đơn hàng / {isEdit ? `Chi tiết #${id}` : "Thêm mới"}</p>
+                    </div>
+                </div>
 
-            <form onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-12 gap-8 max-w-[1800px] mx-auto">
-                
+                {/* Close/Action buttons like OrderList */}
+                <div className="flex items-center gap-2">
+                     <button
+                        type="button"
+                        onClick={handleCancel}
+                        className="px-4 py-2 bg-white border border-primary/10 text-primary/60 hover:text-brick text-[12px] font-semibold rounded-sm transition-all"
+                    >
+                        Hủy thoát
+                    </button>
+                    <button
+                        type="submit"
+                        form="order-form"
+                        disabled={saving}
+                        className="bg-primary text-white px-6 py-2 rounded-sm text-[12px] font-semibold hover:bg-brick transition-all shadow-lg flex items-center gap-2"
+                    >
+                        <span className={`material-symbols-outlined text-base ${saving ? 'animate-spin' : ''}`}>
+                            {saving ? 'progress_activity' : 'save'}
+                        </span>
+                        {saving ? 'Đang lưu' : 'Lưu dữ liệu'}
+                    </button>
+                </div>
+            </div>
+
+            <form id="order-form" onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-12 gap-8 max-w-[1800px] mx-auto">
                 {/* Left Section: Product Management & Custom Attributes */}
                 <div className="lg:col-span-8 space-y-8">
-                    <div className="bg-white border border-stone/10 px-8 pb-8 pt-1 shadow-sm rounded-sm">
+                    <div className="bg-white border border-primary/10 px-8 pb-8 pt-1 shadow-xl rounded-md">
                         {/* Title & Product Selector Tags */}
-                        <div className="flex items-center gap-4 mb-6">
+                        <div className="flex items-center gap-4 mb-6 pt-4 border-b border-primary/5 pb-4">
                             <div className="relative group">
-                                <span className="material-symbols-outlined text-stone/40 p-3 bg-stone/5 rounded-full">shopping_bag</span>
-                                <button 
+                                <span className="material-symbols-outlined text-primary/30 p-3 bg-primary/5 rounded-full">shopping_bag</span>
+                                <button
                                     type="button"
                                     onClick={handleScreenshot}
                                     disabled={formData.items.length === 0 || isCapturing}
-                                    className={`absolute -bottom-1 -right-1 size-6 flex items-center justify-center rounded-full shadow-lg transition-all ${isCapturing ? 'bg-primary animate-pulse' : 'bg-gold hover:bg-primary text-white'} ${formData.items.length === 0 ? 'opacity-0 scale-0' : 'opacity-100 scale-100'}`}
+                                    className={`absolute -bottom-1 -right-1 size-6 flex items-center justify-center rounded-full shadow-lg transition-all ${isCapturing ? 'bg-primary animate-pulse' : 'bg-primary hover:bg-primary/90 text-white'} ${formData.items.length === 0 ? 'opacity-0 scale-0' : 'opacity-100 scale-100'}`}
                                     title="Chụp ảnh báo giá cho khách"
                                 >
                                     <span className="material-symbols-outlined text-[14px]">{isCapturing ? 'progress_activity' : 'photo_camera'}</span>
                                 </button>
                             </div>
-                            <div className="flex-1 flex gap-3 items-start relative z-[100]">
-                                {/* Fixed Search Input at the start */}
-                                <div className="relative w-72 shrink-0">
-                                    <div className="flex items-center bg-stone/5 border border-dashed border-stone/30 rounded px-3 py-1.5 focus-within:border-primary transition-all group">
-                                        <span className="material-symbols-outlined text-xs text-stone/40 mr-2">search</span>
-                                        <input 
+                            <div className="flex-1 flex gap-6 items-center relative z-[100] min-w-0">
+                                {/* Flexible Search Input */}
+                                <div className="relative min-w-[340px] flex-1">
+                                    <div className="flex items-center bg-blue-50/50 border border-dashed border-blue-200 rounded-sm px-4 py-2 focus-within:border-blue-400 focus-within:bg-white transition-all group shadow-sm">
+                                        <span className="material-symbols-outlined text-sm text-slate-900/40 mr-2">search</span>
+                                        <input
                                             type="text"
-                                            placeholder="Gõ để tìm hoặc chọn nhanh..."
-                                            className="bg-transparent text-xs placeholder:text-stone/30 focus:outline-none flex-1"
+                                            placeholder="Gõ mã hoặc tên sản phẩm..."
+                                            className="bg-transparent text-[13px] placeholder:text-slate-900/20 focus:outline-none flex-1 font-bold text-slate-900 tracking-tight"
                                             value={searchTerm}
                                             onChange={(e) => {
                                                 setSearchTerm(e.target.value);
@@ -473,17 +536,17 @@ const OrderForm = () => {
                                             onClick={() => setShowSearchDropdown(true)}
                                         />
                                         {searchTerm && (
-                                            <button type="button" onClick={() => setSearchTerm('')} className="text-stone/30 hover:text-stone ml-2">
-                                                <span className="material-symbols-outlined text-xs">close</span>
+                                            <button type="button" onClick={() => setSearchTerm('')} className="text-slate-900/30 hover:text-brick ml-2">
+                                                <span className="material-symbols-outlined text-[14px]">close</span>
                                             </button>
                                         )}
-                                        <button 
-                                            type="button" 
+                                        <button
+                                            type="button"
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 fetchProducts();
-                                            }} 
-                                            className="text-primary/20 hover:text-primary ml-3 border-l border-stone/10 pl-3 transition-all"
+                                            }}
+                                            className="text-slate-900/10 hover:text-slate-900 ml-3 border-l border-slate-900/10 pl-3 transition-all"
                                             title="Làm mới danh sách sản phẩm"
                                         >
                                             <span className="material-symbols-outlined text-xs">refresh</span>
@@ -491,31 +554,31 @@ const OrderForm = () => {
                                     </div>
 
                                     {showSearchDropdown && (
-                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-stone/10 shadow-xl rounded-sm z-[100] max-h-[400px] overflow-auto custom-scrollbar">
+                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/10 shadow-2xl rounded-sm z-[100] max-h-[400px] overflow-auto custom-scrollbar">
                                             {products
-                                            .filter(p => !formData.items.some(item => item.product_id === p.id))
-                                            .slice(0, 50)
-                                            .map(p => (
-                                                <button
-                                                    key={p.id}
-                                                    type="button"
-                                                    onClick={() => addProductById(p.id)}
-                                                    className="w-full p-3 text-left hover:bg-stone/5 border-b border-stone/5 flex items-center gap-3"
-                                                >
-                                                    <div className="size-8 bg-stone/5 rounded flex items-center justify-center text-stone/20 overflow-hidden shrink-0">
-                                                        {p.main_image ? <img src={p.main_image} alt="" className="size-full object-cover" /> : <span className="material-symbols-outlined text-sm">image</span>}
-                                                    </div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="flex justify-between items-center mb-0.5">
-                                                            <span className="text-sm font-bold text-primary uppercase truncate">{p.sku || 'N/A'}</span>
-                                                            <span className="text-sm font-bold text-brick shrink-0 ml-2">{new Intl.NumberFormat('vi-VN').format(p.price)}₫</span>
+                                                .filter(p => !formData.items.some(item => item.product_id === p.id))
+                                                .slice(0, 50)
+                                                .map(p => (
+                                                    <button
+                                                        key={p.id}
+                                                        type="button"
+                                                        onClick={() => addProductById(p.id)}
+                                                        className="w-full p-3 text-left hover:bg-primary/5 border-b border-primary/5 flex items-center gap-3 transition-colors"
+                                                    >
+                                                        <div className="size-8 bg-primary/5 rounded-sm flex items-center justify-center text-primary/10 overflow-hidden shrink-0">
+                                                            {p.main_image ? <img src={p.main_image} alt="" className="size-full object-cover" /> : <span className="material-symbols-outlined text-sm">image</span>}
                                                         </div>
-                                                        <p className="text-xs text-stone uppercase tracking-wider truncate">{p.name}</p>
-                                                    </div>
-                                                </button>
-                                            ))}
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex justify-between items-center mb-0.5">
+                                                                <span className="text-[13px] font-bold text-primary truncate tracking-wider">{p.sku || '---'}</span>
+                                                                 <span className="text-[14px] font-extrabold text-blue-600 shrink-0 ml-4">{new Intl.NumberFormat('vi-VN').format(p.price)}₫</span>
+                                                            </div>
+                                                            <p className="text-[12px] text-primary/50 truncate font-medium">{p.name}</p>
+                                                        </div>
+                                                    </button>
+                                                ))}
                                             {searchTerm.trim() !== '' && products.filter(p => !formData.items.some(item => item.product_id === p.id)).length === 0 && (
-                                                <div className="p-4 text-center italic text-stone/40 text-sm uppercase">Không tìm thấy sản phẩm mới...</div>
+                                                <div className="p-4 text-center italic text-primary/20 text-[11px] uppercase font-black tracking-widest">Không có kết quả khả dụng...</div>
                                             )}
                                         </div>
                                     )}
@@ -524,39 +587,41 @@ const OrderForm = () => {
                                     )}
                                 </div>
 
-                                {/* Compact Product Chips */}
-                                <div className="flex-1 flex flex-wrap gap-2 items-start max-h-[72px] overflow-y-auto custom-scrollbar content-start pr-1 pb-1">
+                                {/* Scrollable Product Chips - Strictly Single Row */}
+                                <div className="flex-[3] flex flex-nowrap gap-2 items-center overflow-x-auto overflow-y-hidden custom-scrollbar-horizontal pb-1 border-l border-blue-100/50 pl-4 h-[52px] min-w-0 mask-fade-right">
                                     {formData.items.map((item, index) => (
-                                    <div key={item.product_id} className="bg-stone/5 hover:bg-stone/10 px-1.5 py-0.5 rounded border border-stone/10 flex items-center gap-1 transition-all group/chip relative">
-                                        <div className="flex items-center gap-1 overflow-hidden">
-                                            <span className="text-[9px] text-stone/40 leading-none">{index + 1}.</span>
-                                            <span className="text-[10px] text-primary/70 leading-none whitespace-nowrap">{item.sku || 'N/A'}</span>
-                                        </div>
-                                        <button type="button" onClick={() => removeItem(item.product_id)} className="text-stone/20 hover:text-brick transition-colors leading-none">
-                                            <span className="material-symbols-outlined text-[9px]">close</span>
-                                        </button>
+                                        <div key={item.product_id} className="bg-orange-50 hover:bg-orange-100/50 px-3 py-1.5 rounded-sm border border-orange-200 flex items-center gap-2 transition-all group/chip relative shadow-sm shrink-0">
+                                            <div className="flex items-center gap-2 overflow-hidden">
+                                                <span className="text-[10px] text-orange-600/40 font-bold leading-none">{index + 1}.</span>
+                                                <span className="text-[11px] text-orange-600 font-bold leading-none whitespace-nowrap tracking-tight">{item.sku || 'N/A'}</span>
+                                            </div>
+                                            <button type="button" onClick={() => removeItem(item.product_id)} className="text-orange-400 hover:text-brick transition-all leading-none transform hover:scale-125">
+                                                <span className="material-symbols-outlined text-[12px]">close</span>
+                                            </button>
 
-                                        {/* Name Tooltip on Hover */}
-                                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-primary text-white text-xs font-bold uppercase tracking-widest rounded shadow-xl opacity-0 group-hover/chip:opacity-100 pointer-events-none transition-all whitespace-nowrap z-[150] border border-white/10 scale-90 group-hover/chip:scale-100 origin-bottom">
-                                            {item.name}
-                                            <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-primary"></div>
+                                            {/* Name Tooltip on Hover */}
+                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-slate-800 text-white text-[11px] font-bold rounded shadow-xl opacity-0 group-hover/chip:opacity-100 pointer-events-none transition-all whitespace-nowrap z-[150] border border-white/10 scale-90 group-hover/chip:scale-100 origin-bottom">
+                                                {item.name}
+                                                <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-slate-800"></div>
+                                            </div>
                                         </div>
-                                    </div>
                                     ))}
+                                    {/* Small spacer to ensure last item is visible */}
+                                    <div className="w-4 shrink-0 h-full"></div>
                                 </div>
                             </div>
                         </div>
-                        
+
                         {/* Captured Area for Screenshot */}
                         <div ref={captureRef} className="bg-white px-12 pb-4 pt-4 -mx-12">
                             <div className="relative min-h-[400px]">
                                 <table className="w-full text-left border-collapse table-fixed lg:table-auto">
-                                    <thead className="font-sans text-sm font-black text-primary uppercase tracking-widest bg-stone/10 sticky top-0 z-30 shadow-sm shadow-stone/5">
+                                    <thead className="font-display text-[11px] font-extrabold text-blue-600 bg-blue-50 sticky top-0 z-30 shadow-sm border-b border-blue-100">
                                         <tr>
                                             {/* Column Config Header */}
-                                            <th className="w-10 border border-stone/35 bg-stone/10 shrink-0 relative text-center sticky top-0 z-30">
+                                            <th className="w-12 border border-blue-100 bg-blue-50 shrink-0 relative text-center sticky top-0 z-30">
                                                 <div className="flex items-center justify-center">
-                                                    <button 
+                                                    <button
                                                         type="button"
                                                         onClick={() => setShowColumnConfig(!showColumnConfig)}
                                                         className="size-7 flex items-center justify-center hover:bg-primary/10 rounded-full transition-colors group z-50"
@@ -569,22 +634,22 @@ const OrderForm = () => {
                                                         {showColumnConfig && (
                                                             <>
                                                                 <div className="fixed inset-0 z-[190]" onClick={() => setShowColumnConfig(false)} />
-                                                                <motion.div 
+                                                                <motion.div
                                                                     initial={{ opacity: 0, x: -10 }}
                                                                     animate={{ opacity: 1, x: 0 }}
                                                                     exit={{ opacity: 0, x: -10 }}
-                                                                    className="absolute top-10 left-0 bg-white border border-stone/10 shadow-2xl rounded p-4 z-[200] w-64 normal-case text-left"
+                                                                    className="absolute top-10 left-0 bg-white border border-primary/10 shadow-2xl rounded-sm p-4 z-[200] w-64 normal-case text-left"
                                                                 >
-                                                                    <h4 className="font-sans text-sm font-black uppercase tracking-widest text-stone/40 mb-3">Cấu hình cột</h4>
+                                                                    <h4 className="font-display text-sm font-bold text-primary/50 mb-4">Cấu hình cột hiển thị</h4>
                                                                     <div className="space-y-1">
                                                                         <Reorder.Group axis="y" values={columnOrder} onReorder={setColumnOrder} className="space-y-1">
                                                                             {columnOrder.map(colId => (
-                                                                                <Reorder.Item key={colId} value={colId} className="flex items-center justify-between p-2 hover:bg-stone/5 rounded cursor-grab active:cursor-grabbing border border-transparent hover:border-stone/10 group">
-                                                                                    <div className="flex items-center gap-2">
-                                                                                        <span className="material-symbols-outlined text-xs text-stone/30">drag_indicator</span>
-                                                                                        <span className="text-sm font-black text-stone tracking-wider">{COLUMN_DEFS[colId].label}</span>
+                                                                                 <Reorder.Item key={colId} value={colId} className="flex items-center justify-between p-2 hover:bg-blue-50 rounded-sm cursor-grab active:cursor-grabbing border border-transparent hover:border-blue-100 group transition-all">
+                                                                                    <div className="flex items-center gap-3">
+                                                                                        <span className="material-symbols-outlined text-[16px] text-primary/20 group-hover:text-primary/40">drag_indicator</span>
+                                                                                         <span className="text-[12px] font-bold text-primary">{COLUMN_DEFS[colId].label}</span>
                                                                                     </div>
-                                                                                    <button 
+                                                                                    <button
                                                                                         type="button"
                                                                                         onClick={(e) => {
                                                                                             e.stopPropagation();
@@ -596,16 +661,14 @@ const OrderForm = () => {
                                                                                                 localStorage.setItem('order_form_visible_columns', JSON.stringify([...visibleColumns, colId]));
                                                                                             }
                                                                                         }}
-                                                                                        className={`material-symbols-outlined text-lg ${visibleColumns.includes(colId) ? 'text-primary' : 'text-stone/20'}`}
+                                                                                        className={`material-symbols-outlined text-lg ${visibleColumns.includes(colId) ? 'text-primary' : 'text-primary/10'}`}
                                                                                     >
                                                                                         {visibleColumns.includes(colId) ? 'visibility' : 'visibility_off'}
                                                                                     </button>
                                                                                 </Reorder.Item>
                                                                             ))}
                                                                         </Reorder.Group>
-                                                                    </div>
-                                                                    <div className="grid grid-cols-2 gap-2 mt-4 pt-4 border-t border-stone/10">
-                                                                        <button 
+                                                                                                            <button
                                                                             type="button"
                                                                             onClick={() => {
                                                                                 const defOrder = ['stt', 'sku', 'name', 'quantity', 'price', 'cost_price', 'total', 'actions'];
@@ -615,16 +678,9 @@ const OrderForm = () => {
                                                                                 setVisibleColumns(defVisible);
                                                                                 setColumnWidths(defWidths);
                                                                             }}
-                                                                            className="py-2 text-sm font-black uppercase tracking-widest text-stone hover:bg-stone/5 rounded transition-all"
+                                                                            className="py-2 text-[12px] font-bold text-primary/40 hover:bg-primary/5 rounded-sm transition-all"
                                                                         >
-                                                                            Hoàn tác
-                                                                        </button>
-                                                                        <button 
-                                                                            type="button"
-                                                                            onClick={saveColumnSettings}
-                                                                            className="py-2 text-sm font-black uppercase tracking-widest text-primary hover:bg-primary/5 rounded border border-primary/20 transition-all font-bold"
-                                                                        >
-                                                                            Lưu mặc định
+                                                                            Mặc định
                                                                         </button>
                                                                     </div>
                                                                 </motion.div>
@@ -637,14 +693,14 @@ const OrderForm = () => {
                                                 const def = COLUMN_DEFS[colId];
                                                 const width = columnWidths[colId];
                                                 return (
-                                                    <th 
-                                                        key={colId} 
-                                                        className={`py-3 px-4 border border-stone/35 text-${def.align} relative group/header sticky top-0 z-30 bg-stone/10 shadow-sm shadow-stone/5`}
+                                                    <th
+                                                        key={colId}
+                                                        className={`py-4 px-4 border border-blue-100 text-${def.align} relative group/header sticky top-0 z-30 bg-blue-50`}
                                                         style={width ? { width: `${width}px` } : { width: 'auto' }}
                                                     >
-                                                        <span className="block whitespace-nowrap">{def.label}</span>
+                                                          <span className="block whitespace-nowrap font-display text-[10px] font-black text-blue-600/60 uppercase tracking-[0.15em]">{def.label}</span>
                                                         {/* Resize Handle */}
-                                                        <div 
+                                                        <div
                                                             className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/30 z-20 transition-colors opacity-0 group-hover/header:opacity-100"
                                                             onMouseDown={(e) => handleColumnResize(colId, e)}
                                                         />
@@ -655,88 +711,88 @@ const OrderForm = () => {
                                     </thead>
                                     <Reorder.Group axis="y" values={formData.items} onReorder={handleReorder} as="tbody" className="font-sans text-sm font-medium">
                                         {formData.items.map((item, index) => (
-                                            <Reorder.Item 
-                                                key={item.product_id} 
-                                                value={item} 
-                                                as="tr" 
+                                            <Reorder.Item
+                                                key={item.product_id}
+                                                value={item}
+                                                as="tr"
                                                 className="hover:bg-primary/[0.01] transition-colors group cursor-grab active:cursor-grabbing active:border-primary/20 bg-white"
                                             >
-                                                <td className="border border-stone/35 bg-stone/[0.05] text-center">
-                                                    <span className="material-symbols-outlined text-[16px] text-stone/20 group-hover:text-stone/40">drag_indicator</span>
+                                                <td className="border border-primary/10 bg-primary/5 text-center">
+                                                    <span className="material-symbols-outlined text-[16px] text-primary/10 group-hover:text-primary/30 font-bold">drag_indicator</span>
                                                 </td>
                                                 {columnOrder.filter(id => visibleColumns.includes(id)).map(colId => {
                                                     switch (colId) {
                                                         case 'stt':
-                                                            return <td key={colId} className="py-2.5 text-center text-stone/60 font-sans text-sm border border-stone/35">{index + 1}</td>;
+                                                            return <td key={colId} className="py-2.5 text-center text-primary/30 font-display text-[12px] font-bold border border-primary/10">{index + 1}</td>;
                                                         case 'sku':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-4 border border-stone/35">
-                                                                    <p className="font-sans text-sm text-gold tracking-wider leading-none">{item.sku || '---'}</p>
+                                                                <td key={colId} className="py-2.5 px-4 border border-primary/10">
+                                                                    <p className="font-display text-[13px] text-primary font-bold leading-none">{item.sku || '---'}</p>
                                                                 </td>
                                                             );
                                                         case 'name':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-4 border border-stone/35">
-                                                                    <p className="text-primary text-sm leading-tight">{item.name}</p>
+                                                                <td key={colId} className="py-2.5 px-4 border border-primary/10">
+                                                                    <p className="text-primary font-bold text-[13px] leading-tight">{item.name}</p>
                                                                 </td>
                                                             );
                                                         case 'quantity':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-3 border border-stone/35 text-center">
-                                                                    <input 
-                                                                        type="number" 
+                                                                <td key={colId} className="py-2.5 px-3 border border-primary/10 text-center">
+                                                                    <input
+                                                                        type="number"
                                                                         value={item.quantity}
                                                                         onChange={(e) => updateItem(index, 'quantity', parseInt(e.target.value) || 0)}
-                                                                        className="w-16 text-center bg-stone/5 border-none focus:bg-white focus:ring-1 focus:ring-primary/20 focus:outline-none text-base py-1.5 rounded"
+                                                                         className="w-16 h-8 text-center bg-blue-50/50 border-none focus:bg-white focus:ring-1 focus:ring-blue-200 focus:outline-none text-[13px] font-bold rounded-sm shadow-inner text-slate-900"
                                                                     />
                                                                 </td>
                                                             );
                                                         case 'price':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-4 border border-stone/35 bg-stone/[0.01]">
+                                                                <td key={colId} className="py-2.5 px-4 border border-primary/10">
                                                                     <div className="flex items-center justify-end">
-                                                                        <input 
-                                                                            type="text" 
+                                                                        <input
+                                                                            type="text"
                                                                             value={new Intl.NumberFormat('vi-VN').format(item.price)}
                                                                             onChange={(e) => {
                                                                                 const val = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
                                                                                 updateItem(index, 'price', parseInt(val) || 0);
                                                                             }}
-                                                                            className="w-full bg-transparent border-none text-right font-sans text-sm text-primary focus:outline-none focus:ring-1 focus:ring-primary/20 rounded px-1 transition-all"
+                                                                             className="w-full h-8 bg-transparent border-none text-right font-display text-[13px] font-bold text-slate-900 border-b border-blue-100 focus:border-blue-300 transition-all rounded-none px-1"
                                                                         />
-                                                                        <span className="font-bold text-primary text-sm ml-1 opacity-30">₫</span>
+                                                                        <span className="font-bold text-slate-900/30 text-[11px] ml-1">₫</span>
                                                                     </div>
                                                                 </td>
                                                             );
                                                         case 'cost_price':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-4 border border-stone/35">
+                                                                <td key={colId} className="py-2.5 px-4 border border-primary/10">
                                                                     <div className="flex items-center justify-end">
-                                                                        <input 
-                                                                            type="text" 
+                                                                        <input
+                                                                            type="text"
                                                                             value={new Intl.NumberFormat('vi-VN').format(item.cost_price)}
                                                                             onChange={(e) => {
                                                                                 const val = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
                                                                                 updateItem(index, 'cost_price', parseInt(val) || 0);
                                                                             }}
-                                                                            className="w-full bg-transparent border-none text-right font-sans text-sm text-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/20 rounded px-1 transition-all"
+                                                                            className="w-full bg-transparent border-none text-right font-display text-[13px] font-bold text-primary/30 border-b border-primary/5 focus:border-primary/10 transition-all rounded-none px-1"
                                                                         />
-                                                                        <span className="font-bold text-primary text-sm ml-1 opacity-20">₫</span>
+                                                                        <span className="font-bold text-primary text-[10px] ml-1 opacity-10">₫</span>
                                                                     </div>
                                                                 </td>
                                                             );
                                                         case 'total':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-6 border border-stone/35 text-right bg-primary/[0.02]">
-                                                                    <p className="font-sans text-sm text-primary tracking-tight">
-                                                                        {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(item.price * item.quantity)}<span className="text-sm ml-0.5 opacity-30">₫</span>
+                                                                <td key={colId} className="py-2.5 px-6 border border-primary/10 text-right bg-blue-50/30">
+                                                                    <p className="font-display text-[13px] font-extrabold text-slate-900 tracking-tight">
+                                                                        {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(item.price * item.quantity)}<span className="text-[11px] ml-0.5 opacity-40">₫</span>
                                                                     </p>
                                                                 </td>
                                                             );
                                                         case 'actions':
                                                             return (
-                                                                <td key={colId} className="py-2.5 text-center border border-stone/35">
-                                                                    <button type="button" onClick={() => removeItem(item.product_id)} className="text-stone/20 hover:text-brick transition-all">
+                                                                <td key={colId} className="py-2.5 text-center border border-primary/10">
+                                                                    <button type="button" onClick={() => removeItem(item.product_id)} className="text-primary/10 hover:text-brick transition-all transform hover:scale-125">
                                                                         <span className="material-symbols-outlined text-[20px]">delete_outline</span>
                                                                     </button>
                                                                 </td>
@@ -749,7 +805,7 @@ const OrderForm = () => {
                                         ))}
                                         {formData.items.length === 0 && (
                                             <tr>
-                                                <td colSpan={visibleColumns.length + 1} className="py-16 text-center italic text-stone/30 text-xs tracking-widest uppercase border border-stone/35">Phần này để hiển thị sản phẩm đã chọn...</td>
+                                                <td colSpan={visibleColumns.length + 1} className="py-16 text-center italic text-primary/30 text-[12px] font-bold border border-primary/10 bg-primary/5">Phần này để hiển thị sản phẩm đã chọn...</td>
                                             </tr>
                                         )}
                                     </Reorder.Group>
@@ -758,62 +814,60 @@ const OrderForm = () => {
 
                             <div className="flex justify-end pt-8 border-t-2 border-primary/10 mt-2">
                                 <div className="flex items-baseline gap-4">
-                                    <span className="font-sans font-black text-primary uppercase tracking-[0.2em] text-xs opacity-60">Tổng thanh toán:</span>
-                                    <span className="font-sans font-black text-brick text-[17px] tracking-tight leading-none">
-                                        {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(calculateTotal())}<span className="text-sm ml-0.5">₫</span>
+                                    <span className="font-display font-bold text-brick/60 text-[12px]">Tổng thanh toán:</span>
+                                    <span className="font-display font-black text-brick text-[32px] leading-none tracking-tighter">
+                                        {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(calculateTotal())}<span className="text-[16px] ml-1 opacity-40 font-bold">₫</span>
                                     </span>
                                 </div>
                             </div>
                         </div>
 
-                        {/* Summary Area */}
-                        <div className="flex justify-end pt-4 border-t border-stone/10 section-summary">
-
+                        <div className="flex justify-end pt-4 border-t border-primary/10 section-summary bg-primary/5 -mx-12 px-12 pb-8 rounded-b-md">
                             {/* Right: Totals */}
-                            <div className="space-y-3.5 font-sans min-w-[320px]">
+                            <div className="space-y-4 font-display min-w-[340px]">
                                 <div className="flex justify-between items-center" data-screenshot-hide="true">
-                                    <span className="font-black text-primary uppercase tracking-[0.15em] text-sm">Tổng tiền hàng:</span>
-                                    <span className="font-black text-primary text-base tracking-tight leading-none">
+                                    <span className="font-bold text-blue-600/40 text-[12px]">Tổng tiền sản phẩm:</span>
+                                    <span className="font-bold text-blue-600 text-[16px] leading-none">
                                         {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(calculateSubtotal())}₫
                                     </span>
                                 </div>
-                                
+
                                 <div className="flex justify-between items-center" data-screenshot-hide="true">
-                                    <span className="font-black text-primary uppercase tracking-[0.15em] text-sm">Tiền ship:</span>
-                                    <div className="flex items-center gap-1 border-b border-stone/20 focus-within:border-primary transition-colors">
-                                        <input 
-                                            type="text" 
+                                    <span className="font-bold text-blue-600/40 text-[12px]">Phí vận chuyển:</span>
+                                    <div className="flex items-center gap-1 border-b border-blue-600/10 focus-within:border-blue-600/40 transition-colors">
+                                        <input
+                                            type="text"
                                             value={new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(formData.shipping_fee)}
                                             onChange={(e) => {
                                                 const val = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
                                                 setFormData(prev => ({ ...prev, shipping_fee: parseInt(val) || 0 }));
                                             }}
-                                            className="w-24 text-right bg-transparent py-0.5 font-black text-primary text-base focus:outline-none placeholder:text-stone/20"
-                                        />
-                                        <span className="font-black text-primary text-base">₫</span>
+                                             className="w-24 text-right bg-transparent py-1 font-bold text-blue-600 text-[15px] focus:outline-none placeholder:text-blue-600/10"
+                                         />
+                                         <span className="font-bold text-blue-600 text-[15px]">₫</span>
                                     </div>
                                 </div>
 
                                 <div className="flex justify-between items-center" data-screenshot-hide="true">
-                                    <span className="font-black text-primary uppercase tracking-[0.15em] text-sm">Giảm giá:</span>
-                                    <div className="flex items-center gap-1 border-b border-stone/20 focus-within:border-primary transition-colors">
-                                        <input 
-                                            type="text" 
+                                    <span className="font-bold text-blue-600/40 text-[12px]">Chiết khấu/Giảm:</span>
+                                    <div className="flex items-center gap-1 border-b border-blue-600/10 focus-within:border-blue-600/40 transition-colors">
+                                        <input
+                                            type="text"
                                             value={new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(formData.discount)}
                                             onChange={(e) => {
                                                 const val = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
                                                 setFormData(prev => ({ ...prev, discount: parseInt(val) || 0 }));
                                             }}
-                                            className="w-24 text-right bg-transparent py-0.5 font-black text-primary text-base focus:outline-none placeholder:text-stone/20"
-                                        />
-                                        <span className="font-black text-primary text-base">₫</span>
+                                             className="w-24 text-right bg-transparent py-1 font-bold text-brick text-[15px] focus:outline-none placeholder:text-blue-600/10"
+                                         />
+                                         <span className="font-bold text-brick text-[15px]">₫</span>
                                     </div>
                                 </div>
 
-                                <div className="flex justify-between items-center pt-2 mt-2 border-t border-dashed border-stone/20" data-screenshot-hide="true">
-                                    <span className="font-black text-primary uppercase tracking-[0.15em] text-xs opacity-60">TỔNG TIỀN NHẬP:</span>
-                                    <div className="flex items-center gap-1 font-black text-primary text-sm opacity-80">
-                                        <span>{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(formData.cost_total)}₫</span>
+                                <div className="flex justify-between items-center pt-4 mt-4 border-t-2 border-blue-600/10" data-screenshot-hide="true">
+                                    <span className="font-bold text-blue-600/30 text-[12px]">Tổng giá vốn nhập:</span>
+                                    <div className="flex items-center gap-1 font-bold text-blue-600/50 text-sm">
+                                        <span className="bg-blue-600/5 px-2 py-0.5 rounded-sm">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(formData.cost_total)}₫</span>
                                     </div>
                                 </div>
                             </div>
@@ -823,22 +877,20 @@ const OrderForm = () => {
 
                 {/* Right Section: Sidebar Metadata */}
                 <div className="lg:col-span-4">
-                    <div className="bg-white border border-stone/10 p-8 shadow-sm rounded-sm sticky top-6">
-                        <div className="flex items-center justify-between mb-10">
-                            <h3 className="font-sans text-sm font-black text-primary uppercase tracking-widest">Thông tin đơn hàng</h3>
-                            <button type="submit" disabled={saving} className="size-10 flex items-center justify-center bg-primary text-white rounded shadow-lg hover:bg-brick hover:-translate-y-0.5 transition-all">
-                                <span className={`material-symbols-outlined text-lg ${saving ? 'animate-spin' : ''}`}>
-                                    {saving ? 'progress_activity' : isEdit ? 'save' : 'check'}
-                                </span>
-                            </button>
+                    <div className="bg-white border border-primary/10 p-6 shadow-22xl rounded-sm sticky top-6">
+                        <div className="flex items-center gap-3 mb-8 pb-4 border-b border-primary/5">
+                            <div className="size-8 bg-primary/5 rounded-sm flex items-center justify-center">
+                                <span className="material-symbols-outlined text-primary text-[20px]">assignment</span>
+                            </div>
+                            <h3 className="font-display text-[15px] font-bold text-primary">Thông tin đơn hàng</h3>
                         </div>
 
                         <Field label="Trạng thái">
-                            <select 
+                            <select
                                 name="status"
                                 value={formData.status}
                                 onChange={handleInputChange}
-                                className="w-full bg-transparent py-1 focus:outline-none font-sans text-sm font-bold text-primary appearance-none cursor-pointer"
+                                className="w-full bg-transparent focus:outline-none font-display text-[13px] font-bold text-primary appearance-none cursor-pointer"
                             >
                                 {orderStatuses.filter(s => s.is_active || (formData.status && s.code.toLowerCase() === formData.status.toLowerCase())).map(s => (
                                     <option key={s.id} value={s.code}>{s.name || s.code}</option>
@@ -850,77 +902,79 @@ const OrderForm = () => {
                         </Field>
 
                         <Field label="Nhân viên xử lý">
-                            <p className="p-1 font-sans text-sm text-primary tracking-wide">{user?.name || "Super Admin"}</p>
+                            <p className="font-display text-[13px] font-bold text-primary/60 leading-none">{user?.name || "Super Admin"}</p>
                         </Field>
 
                         <Field label="Tên khách hàng">
-                            <input 
+                            <input
                                 type="text"
                                 name="customer_name"
                                 value={formData.customer_name}
                                 onChange={handleInputChange}
-                                className="w-full bg-transparent p-1 focus:outline-none font-sans text-sm text-primary"
+                                className="w-full bg-transparent focus:outline-none font-display font-bold text-[13px] text-primary"
                                 placeholder="..."
                             />
                         </Field>
 
                         <Field label="Số điện thoại">
-                            <input 
+                            <input
                                 type="text"
                                 name="customer_phone"
                                 value={formData.customer_phone}
                                 onChange={handleInputChange}
-                                className="w-full bg-transparent p-1 focus:outline-none font-sans text-sm text-primary tracking-widest"
+                                className="w-full bg-transparent focus:outline-none font-display font-bold text-[13px] text-primary"
                                 placeholder="..."
                             />
                         </Field>
 
-                        <Field label="Địa chỉ giao hàng" className="min-h-[100px] items-start pt-4">
-                            <textarea 
+                        <Field label="Địa chỉ giao hàng" className="min-h-[100px] items-start pt-3">
+                            <textarea
                                 name="shipping_address"
                                 value={formData.shipping_address}
                                 onChange={handleInputChange}
                                 rows="3"
-                                className="w-full bg-transparent p-1 focus:outline-none font-sans text-sm resize-none leading-relaxed text-primary"
+                                className="w-full bg-transparent focus:outline-none font-display font-bold text-[13px] resize-none leading-relaxed text-primary/80"
                                 placeholder="..."
                             />
                         </Field>
 
-                        <Field label="Ghi chú đơn hàng" className="min-h-[100px] items-start pt-4">
-                            <textarea 
+                        <Field label="Ghi chú đơn hàng" className="min-h-[100px] items-start pt-3">
+                            <textarea
                                 name="notes"
                                 value={formData.notes}
                                 onChange={handleInputChange}
                                 rows="3"
-                                className="w-full bg-transparent p-1 focus:outline-none font-sans text-[13px] resize-none leading-relaxed text-primary/60"
+                                    className="w-full bg-transparent focus:outline-none font-display font-bold text-[13px] leading-relaxed text-primary"
                                 placeholder="..."
                             />
                         </Field>
 
                         <div className="pt-2 pb-2">
-                             <h4 className="font-sans text-[10px] font-black text-primary/70 uppercase tracking-[0.25em] mb-4 flex items-center gap-2">
-                                 <span className="material-symbols-outlined text-xs">tune</span> Thuộc tính mở rộng
-                             </h4>
-                             <div className="grid grid-cols-1 gap-1">
-                                 {attributes.map(attr => (
-                                     <Field key={attr.id} label={attr.name}>
-                                         <input 
-                                             type="text"
-                                             value={formData.custom_attributes[attr.code] || ''}
-                                             onChange={(e) => handleAttributeChange(attr.code, e.target.value)}
-                                             className="w-full bg-transparent p-1 focus:outline-none font-sans text-sm text-primary"
-                                             placeholder={`Nhập ${attr.name.toLowerCase()}...`}
-                                         />
-                                     </Field>
-                                 ))}
-                             </div>
+                            <h4 className="font-display text-[15px] font-bold text-primary mb-6 flex items-center justify-center gap-2 uppercase tracking-[0.1em]">
+                                <span className="h-px bg-primary/10 flex-1"></span>
+                                Thông tin bổ sung
+                                <span className="h-px bg-primary/10 flex-1"></span>
+                            </h4>
+                            <div className="grid grid-cols-1 gap-1">
+                                {attributes.map(attr => (
+                                    <Field key={attr.id} label={attr.name}>
+                                        <input
+                                            type="text"
+                                            value={formData.custom_attributes[attr.code] || ''}
+                                            onChange={(e) => handleAttributeChange(attr.code, e.target.value)}
+                                            className="w-full bg-transparent focus:outline-none font-display font-bold text-[13px] text-primary"
+                                            placeholder={`...`}
+                                        />
+                                    </Field>
+                                ))}
+                            </div>
                         </div>
 
                         <div className="pt-6">
-                            <button 
+                            <button
                                 type="button"
                                 onClick={() => navigate('/admin/orders')}
-                                className="w-full bg-stone/5 text-stone font-ui font-bold uppercase tracking-[0.25em] text-[10px] py-4 hover:bg-stone/10 transition-all border border-stone/10 rounded-sm"
+                                className="w-full bg-primary/5 text-primary/40 font-display font-bold text-[12px] py-4 hover:bg-primary/10 transition-all border border-primary/10 rounded-sm"
                             >
                                 Quay về danh sách
                             </button>

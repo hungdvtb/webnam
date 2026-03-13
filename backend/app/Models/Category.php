@@ -8,7 +8,7 @@ class Category extends Model
 {
     use \App\Traits\BelongsToAccount;
 
-    protected $fillable = ['name', 'slug', 'parent_id', 'description', 'status', 'order', 'account_id'];
+    protected $fillable = ['name', 'slug', 'parent_id', 'description', 'banner_path', 'status', 'order', 'account_id'];
     
     public function parent()
     {

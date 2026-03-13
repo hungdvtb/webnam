@@ -17,7 +17,7 @@ const DEFAULT_COLUMNS = [
     { id: 'total_price', label: 'Tổng Tiền', minWidth: '130px' },
     { id: 'created_at', label: 'Ngày Đặt', minWidth: '120px' },
     { id: 'notes', label: 'Ghi Chú Đơn', minWidth: '180px' },
-    { id: 'status', label: 'Trạng Thái', minWidth: '120px', align: 'center' },
+    { id: 'status', label: 'Trạng Thái', minWidth: '120px', align: 'left' },
     { id: 'actions', label: 'Thao Tác', minWidth: '100px', align: 'right', fixed: true },
 ];
 
@@ -39,7 +39,7 @@ const OrderProductsPortal = ({
 
     const updatePosition = useCallback(() => {
         if (!anchorRef.current) return;
-        
+
         const viewportHeight = window.innerHeight;
         const viewportWidth = window.innerWidth;
         const cardWidth = 600;
@@ -47,7 +47,7 @@ const OrderProductsPortal = ({
         // Start below the main header area (approx 120px from top)
         let top = 120;
         let left = viewportWidth / 2 - cardWidth / 2;
-        
+
         // Ensure it doesn't overflow bottom
         const maxHeight = viewportHeight - 160;
 
@@ -71,11 +71,11 @@ const OrderProductsPortal = ({
     return createPortal(
         <div className="fixed inset-0 z-[99998] flex items-start justify-start pointer-events-none">
             {/* Backdrop for focus */}
-            <div 
-                className="absolute inset-0 bg-primary/5 backdrop-blur-[2px] pointer-events-auto animate-in fade-in duration-300" 
+            <div
+                className="absolute inset-0 bg-primary/5 backdrop-blur-[2px] pointer-events-auto animate-in fade-in duration-300"
                 onClick={onClose}
             />
-            
+
             <div
                 ref={portalRef}
                 style={{
@@ -119,7 +119,7 @@ const OrderProductsPortal = ({
                         const name = item.product?.name || item.product_name_snapshot || `Sản phẩm #${item.product_id}`;
                         const sku = item.product?.sku || item.product_sku_snapshot || null;
                         const price = item.price ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(item.price) : null;
-                        
+
                         return (
                             <div key={idx} className="flex items-center gap-4 px-4 py-3 rounded-sm hover:bg-primary/5 border border-transparent hover:border-primary/10 transition-all group/item">
                                 <div className="w-12 shrink-0 flex justify-center">
@@ -127,12 +127,12 @@ const OrderProductsPortal = ({
                                         {item.quantity}x
                                     </div>
                                 </div>
-                                
+
                                 <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-2 group/name_p">
                                         <span className="text-[14px] font-bold text-primary truncate block" title={name}>{name}</span>
-                                        <button 
-                                            onClick={(e) => { e.stopPropagation(); onCopy(name, e); }} 
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); onCopy(name, e); }}
                                             className={`p-1 rounded-sm hover:bg-primary/10 opacity-0 group-hover/name_p:opacity-100 transition-all ${copiedText === name ? 'text-green-500 opacity-100' : 'text-primary/30'}`}
                                             title="Sao chép tên"
                                         >
@@ -142,8 +142,8 @@ const OrderProductsPortal = ({
                                     {sku && (
                                         <div className="flex items-center gap-2 group/sku_p mt-0.5">
                                             <span className="text-[12px] font-mono font-black text-orange-600/70 tracking-tight">#{sku}</span>
-                                            <button 
-                                                onClick={(e) => { e.stopPropagation(); onCopy(sku, e); }} 
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); onCopy(sku, e); }}
                                                 className={`p-0.5 rounded-sm hover:bg-primary/10 opacity-0 group-hover/sku_p:opacity-100 transition-all ${copiedText === sku ? 'text-green-500 opacity-100' : 'text-primary/30'}`}
                                                 title="Sao chép mã"
                                             >
@@ -238,8 +238,8 @@ const OrderList = () => {
     const [statusMenuOrderId, setStatusMenuOrderId] = useState(null);
     const [productPopupOrderId, setProductPopupOrderId] = useState(null);
     const productPopupAnchorRef = useRef(null);
+    const statusMenuAnchorRef = useRef(null);
     const statusMenuRef = useRef(null);
-    const bulkAttrUpdateRef = useRef(null);
 
     const [notification, setNotification] = useState(null);
     const [searchHistory, setSearchHistory] = useState(() => {
@@ -251,14 +251,14 @@ const OrderList = () => {
     const searchContainerRef = useRef(null);
 
     const [pagination, setPagination] = useState({ current_page: 1, last_page: 1, total: 0, per_page: 20 });
-    const [filters, setFilters] = useState({ 
-        search: '', 
-        status: [], 
-        customer_name: '', 
-        order_number: '', 
-        created_at_from: '', 
-        created_at_to: '', 
-        customer_phone: '', 
+    const [filters, setFilters] = useState({
+        search: '',
+        status: [],
+        customer_name: '',
+        order_number: '',
+        created_at_from: '',
+        created_at_to: '',
+        customer_phone: '',
         shipping_address: '',
         attributes: {}
     });
@@ -287,8 +287,8 @@ const OrderList = () => {
     const fetchInitialData = async () => {
         try {
             const [statusRes, orderAttrRes, prodAttrRes] = await Promise.all([
-                orderStatusApi.getAll(), 
-                attributeApi.getAll({ entity_type: 'order' }), 
+                orderStatusApi.getAll(),
+                attributeApi.getAll({ entity_type: 'order' }),
                 attributeApi.getAll({ entity_type: 'product' })
             ]);
             setOrderStatuses(statusRes.data || []);
@@ -346,7 +346,7 @@ const OrderList = () => {
                 sort_by: currentSort.direction === 'none' ? 'created_at' : currentSort.key,
                 sort_order: currentSort.direction === 'none' ? 'desc' : currentSort.direction
             };
-            
+
             if (currentFilters.search?.trim()) params.search = currentFilters.search.trim();
             if (currentFilters.status?.length) params.status = currentFilters.status.join(',');
             if (currentFilters.customer_name?.trim()) params.customer_name = currentFilters.customer_name.trim();
@@ -355,7 +355,7 @@ const OrderList = () => {
             if (currentFilters.shipping_address) params.shipping_address = currentFilters.shipping_address;
             if (currentFilters.created_at_from) params.created_at_from = currentFilters.created_at_from;
             if (currentFilters.created_at_to) params.created_at_to = currentFilters.created_at_to;
-            
+
             if (currentFilters.attributes) {
                 Object.entries(currentFilters.attributes).forEach(([id, val]) => {
                     if (val) params[`attr_order_${id}`] = val;
@@ -365,14 +365,14 @@ const OrderList = () => {
             const response = await orderApi.getAll(params);
             setOrders(response.data.data);
             setPagination({ current_page: response.data.current_page, last_page: response.data.last_page, total: response.data.total, per_page: response.data.per_page });
-        } catch (error) { 
-            console.error("Error fetching orders", error); 
+        } catch (error) {
+            console.error("Error fetching orders", error);
             setNotification({ type: 'error', message: 'Không thể tải danh sách đơn hàng' });
         } finally { setLoading(false); }
     }, [isTrashView, pagination.per_page, sortConfig, filters]);
 
     useEffect(() => { fetchInitialData(); }, []);
-    
+
     useEffect(() => {
         const timer = setTimeout(() => {
             if (filters.search !== localStorage.getItem('order_list_search_current')) {
@@ -456,11 +456,16 @@ const OrderList = () => {
 
     const handleQuickStatusUpdate = async (id, s) => {
         try {
-            await api.put(`/orders/${id}/status`, { status: s });
-            setOrders(prev => prev.map(o => o.id === id ? { ...o, status: s } : o));
+            const response = await orderApi.updateStatus(id, s);
+            // Updating the exact order in the list with the new data from backend
+            setOrders(prev => prev.map(o => o.id === id ? { ...o, ...response.data } : o));
             setStatusMenuOrderId(null);
-            setNotification({ type: 'success', message: 'Đã cập nhật trạng thái' });
-        } catch (e) { setNotification({ type: 'error', message: 'Lỗi cập nhật' }); }
+            setNotification({ type: 'success', message: 'Đã cập nhật trạng thái đơn hàng' });
+        } catch (e) {
+            console.error("Status update error", e);
+            const errorMsg = e.response?.data?.message || 'Lỗi cập nhật trạng thái';
+            setNotification({ type: 'error', message: errorMsg });
+        }
     };
 
     const handleBulkDuplicate = async () => {
@@ -567,7 +572,7 @@ const OrderList = () => {
 
             <div className="flex-none bg-[#F8FAFC] pb-4 space-y-2">
                 <div className="flex justify-between items-center"><h1 className="admin-header-title italic">Quản lý đơn hàng</h1><AccountSelector user={user} /></div>
-                
+
                 <div className="bg-white border border-primary/10 p-2 shadow-sm rounded-sm flex items-center gap-2">
                     <div className="flex gap-1 items-center">
                         {!isTrashView ? (
@@ -588,7 +593,7 @@ const OrderList = () => {
                         <button onClick={handleRefresh} disabled={loading} title="Làm mới" className="bg-white text-primary border border-primary/20 p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center hover:bg-primary/5"><span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span></button>
                         <button data-column-settings-btn onClick={() => setShowColumnSettings(!showColumnSettings)} className={`p-1.5 border rounded-sm w-9 h-9 flex items-center justify-center transition-all ${showColumnSettings ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/30 hover:bg-primary/5'}`} title="Cấu hình hiển thị cột"><span className="material-symbols-outlined text-[18px]">settings_suggest</span></button>
                         {!isTrashView && <button onClick={() => setIsTrashView(true)} title="Thùng rác" className="bg-white text-primary/60 border border-primary/20 p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center hover:text-primary hover:border-primary"><span className="material-symbols-outlined text-[18px]">inventory_2</span></button>}
-                        
+
                         {selectedIds.length > 0 && (
                             <div className="flex items-center gap-1 ml-1 pl-2 border-l border-primary/10">
                                 <span className="text-[11px] font-bold text-primary/40 whitespace-nowrap">{selectedIds.length} chọn</span>
@@ -599,7 +604,7 @@ const OrderList = () => {
 
                     <div className="flex-1 relative" ref={searchContainerRef}>
                         <span className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-primary/40 text-[16px] pointer-events-none z-10">search</span>
-                        <input type="text" autoComplete="off" placeholder="Tìm tên, mã, SĐT khách..." className="w-full bg-primary/5 border border-primary/10 px-8 py-1.5 rounded-sm text-[14px] focus:outline-none focus:border-primary/30 transition-all relative z-0" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} onFocus={() => setShowSearchHistory(true)} onKeyDown={(e) => { if (e.key === 'Enter') { setShowSearchHistory(false); addToSearchHistory(filters.search); }}} />
+                        <input type="text" autoComplete="off" placeholder="Tìm tên, mã, SĐT khách..." className="w-full bg-primary/5 border border-primary/10 px-8 py-1.5 rounded-sm text-[14px] focus:outline-none focus:border-primary/30 transition-all relative z-0" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} onFocus={() => setShowSearchHistory(true)} onKeyDown={(e) => { if (e.key === 'Enter') { setShowSearchHistory(false); addToSearchHistory(filters.search); } }} />
                         {filters.search && (
                             <button onClick={() => { setFilters(prev => ({ ...prev, search: '' })); setShowSearchHistory(false); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors">
                                 <span className="material-symbols-outlined text-[16px]">cancel</span>
@@ -746,7 +751,7 @@ const OrderList = () => {
                                         if (c.id === 'items') {
                                             const rawItems = o.items || [];
                                             const hasMany = rawItems.length > 2;
-                                            
+
                                             // Smart re-ordering based on search query
                                             let itemsToShow = [...rawItems];
                                             if (filters.search && filters.search.trim()) {
@@ -771,10 +776,10 @@ const OrderList = () => {
                                                             {itemsToShow.map((item, idx) => {
                                                                 const itemName = item.product?.name || item.product_name_snapshot || '...';
                                                                 const itemSku = item.product?.sku || item.product_sku_snapshot || '';
-                                                                
+
                                                                 // Check if this item is a match to highlight
                                                                 const isMatch = filters.search && (
-                                                                    itemName.toLowerCase().includes(filters.search.toLowerCase().trim()) || 
+                                                                    itemName.toLowerCase().includes(filters.search.toLowerCase().trim()) ||
                                                                     itemSku.toLowerCase().includes(filters.search.toLowerCase().trim())
                                                                 );
 
@@ -802,11 +807,11 @@ const OrderList = () => {
                                                             })}
                                                         </div>
                                                         {hasMany && (
-                                                            <button 
-                                                                onClick={(e) => { 
-                                                                    e.stopPropagation(); 
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
                                                                     productPopupAnchorRef.current = e.currentTarget;
-                                                                    setProductPopupOrderId(o.id); 
+                                                                    setProductPopupOrderId(o.id);
                                                                 }}
                                                                 className="absolute right-1 bottom-1 w-7 h-7 bg-primary text-white rounded-sm flex items-center justify-center hover:bg-primary-700 transition-all shadow-md z-10 opacity-0 group-hover/item_cell:opacity-100"
                                                                 title="Xem đầy đủ danh sách"
@@ -834,9 +839,21 @@ const OrderList = () => {
                                         if (c.id === 'status') {
                                             const statusName = orderStatuses.find(s => s.code === o.status)?.name || o.status;
                                             return (
-                                                <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-center group/status relative">
-                                                    <div className="flex items-center justify-center gap-1">
-                                                        <button onClick={(e) => { e.stopPropagation(); setStatusMenuOrderId(o.id); }} data-status-edit-btn className="px-3 py-1 rounded-sm text-[11px] font-black border transition-all" style={getStatusStyle(o.status)}>{statusName}</button>
+                                                <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-left group/status relative">
+                                                    <div className="flex items-center justify-start gap-1">
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                statusMenuAnchorRef.current = e.currentTarget;
+                                                                setStatusMenuOrderId(o.id);
+                                                            }}
+                                                            data-status-edit-btn
+                                                            className="px-2 py-1 rounded-sm text-[11px] font-black border transition-all hover:scale-105 active:scale-95 shadow-sm group/status-btn flex items-center gap-1.5"
+                                                            style={getStatusStyle(o.status)}
+                                                        >
+                                                            <span className="truncate">{statusName}</span>
+                                                            <span className="material-symbols-outlined text-[16px] leading-none opacity-40 group-hover/status-btn:opacity-100 transition-opacity">expand_more</span>
+                                                        </button>
                                                         <button onClick={(e) => { e.stopPropagation(); handleCopy(statusName, e); }} className={`opacity-0 group-hover/status:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === statusName ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
                                                             <span className="material-symbols-outlined text-[13px]">content_copy</span>
                                                         </button>
@@ -864,7 +881,7 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'created_at') {
-                                            const dateText = `${new Date(o.created_at).toLocaleDateString('vi-VN')} ${new Date(o.created_at).toLocaleTimeString('vi-VN', { hour:'2-digit', minute:'2-digit' })}`;
+                                            const dateText = `${new Date(o.created_at).toLocaleDateString('vi-VN')} ${new Date(o.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`;
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary font-black italic group/date relative">
                                                     <div className="flex items-center justify-between">
@@ -901,7 +918,15 @@ const OrderList = () => {
                 <Pagination pagination={pagination} onPageChange={(page) => fetchOrders(page)} />
             </div>
 
-            <StatusDropdownPortal order={orders.find(o => o.id === statusMenuOrderId)} orderStatuses={orderStatuses} onUpdate={handleQuickStatusUpdate} anchorRef={{ current: document.querySelector(`[data-status-edit-btn]`) }} visible={!!statusMenuOrderId} onClose={() => setStatusMenuOrderId(null)} statusMenuRef={statusMenuRef} />
+            <StatusDropdownPortal
+                order={orders.find(o => String(o.id) === String(statusMenuOrderId))}
+                orderStatuses={orderStatuses}
+                onUpdate={handleQuickStatusUpdate}
+                anchorRef={statusMenuAnchorRef}
+                visible={!!statusMenuOrderId}
+                onClose={() => setStatusMenuOrderId(null)}
+                statusMenuRef={statusMenuRef}
+            />
             <OrderProductsPortal items={orders.find(o => o.id === productPopupOrderId)?.items || []} copiedText={copiedText} onCopy={handleCopy} anchorRef={productPopupAnchorRef} visible={!!productPopupOrderId} onClose={() => setProductPopupOrderId(null)} />
         </div>
     );

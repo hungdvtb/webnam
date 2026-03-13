@@ -36,6 +36,11 @@ export const productApi = {
     update: (id, data) => api.post(`/products/${id}`, data), // POST for multipart support
     destroy: (id) => api.delete(`/products/${id}`),
     duplicate: (id) => api.post(`/products/${id}/duplicate`),
+    restore: (id) => api.post(`/products/${id}/restore`),
+    forceDelete: (id) => api.delete(`/products/${id}/force`),
+    bulkDelete: (ids) => api.delete('/products/bulk-delete', { data: { ids } }),
+    bulkRestore: (ids) => api.post('/products/bulk-restore', { ids }),
+    bulkForceDelete: (ids) => api.delete('/products/bulk-force-delete', { data: { ids } }),
 };
 
 export const productImageApi = {

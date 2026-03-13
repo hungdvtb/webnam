@@ -3,10 +3,11 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Product extends Model
 {
-    use \App\Traits\BelongsToAccount;
+    use \App\Traits\BelongsToAccount, SoftDeletes;
 
     protected $fillable = [
         'type', 'name', 'slug', 'description', 'price', 'cost_price', 'special_price', 'special_price_from', 'special_price_to', 

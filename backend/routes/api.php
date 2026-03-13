@@ -60,7 +60,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/products', [ProductController::class , 'store']);
     Route::post('/products/{id}/duplicate', [ProductController::class , 'duplicate']);
     Route::post('/products/{id}', [ProductController::class , 'update']); // Use POST for update to handle file uploads
+    Route::delete('/products/bulk-delete', [ProductController::class , 'bulkDelete']);
+    Route::post('/products/bulk-restore', [ProductController::class , 'bulkRestore']);
+    Route::delete('/products/bulk-force-delete', [ProductController::class , 'bulkForceDelete']);
     Route::delete('/products/{id}', [ProductController::class , 'destroy']);
+    Route::post('/products/{id}/restore', [ProductController::class , 'restore']);
+    Route::delete('/products/{id}/force', [ProductController::class , 'forceDelete']);
 
     // Admin Product Image routes
     Route::post('/products/{id}/images', [ProductImageController::class , 'store']);
@@ -245,4 +250,13 @@ Route::prefix('storefront')->group(function () {
     Route::get('/products/{id}/related', [\App\Http\Controllers\Api\StorefrontController::class , 'relatedProducts']);
     Route::post('/order', [\App\Http\Controllers\Api\StorefrontController::class , 'placeOrder']);
     Route::post('/lead', [\App\Http\Controllers\Api\StorefrontController::class , 'submitLead']);
+});
+
+// ─── Separate Storefront API (Web API) ───
+Route::prefix('web-api')->group(function () {
+    Route::get('/products', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'index']);
+    Route::get('/products/{slug}', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'show']);
+    Route::get('/products/{slug}/related', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'related']);
+    Route::get('/categories', [\App\Http\Controllers\StorefrontApi\CategoryController::class, 'index']);
+    Route::get('/categories/{slug}', [\App\Http\Controllers\StorefrontApi\CategoryController::class, 'show']);
 });

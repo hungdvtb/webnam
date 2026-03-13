@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+
+<html class="light" lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&amp;family=EB+Garamond:wght@400;500;600&amp;family=Noto+Serif:wght@400;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#1B365D", // Cobalt Blue
+                        "accent": "#C5A065",  // Antique Gold
+                        "background-light": "#F9F5F0", // Rice Paper
+                        "background-dark": "#111821",
+                    },
+                    fontFamily: {
+                        "display": ["Playfair Display", "serif"],
+                        "body": ["EB Garamond", "serif"],
+                        "sans": ["EB Garamond", "serif"]
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            font-family: 'EB Garamond', serif;
+            background-color: #F9F5F0;
+        }
+        h1, h2, h3, h4 {
+            font-family: 'Playfair Display', serif;
+        }
+    </style>
+</head>
+<body class="bg-background-light text-primary">
+<!-- Top Navigation Bar -->
+<header class="sticky top-0 z-50 w-full bg-background-light border-b border-primary/10 shadow-sm">
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+<div class="flex items-center justify-between h-20">
+<!-- Logo -->
+<div class="flex items-center gap-3">
+<div class="text-primary">
+<span class="material-symbols-outlined text-4xl">glass_cup</span>
+</div>
+<div class="flex flex-col">
+<h1 class="text-2xl font-bold tracking-tight text-primary leading-none uppercase">Di Sản Gốm Việt</h1>
+<span class="text-[10px] uppercase tracking-widest text-accent font-semibold">Tinh hoa Đất Việt</span>
+</div>
+</div>
+<!-- Main Nav -->
+<nav class="hidden md:flex items-center gap-8">
+<a class="text-primary font-medium hover:text-accent transition-colors" href="#">Trang chủ</a>
+<a class="text-accent font-bold border-b-2 border-accent transition-colors" href="#">Sản phẩm</a>
+<a class="text-primary font-medium hover:text-accent transition-colors" href="#">Nghệ nhân</a>
+<a class="text-primary font-medium hover:text-accent transition-colors" href="#">Câu chuyện</a>
+</nav>
+<!-- Search & Icons -->
+<div class="flex items-center gap-6">
+<div class="hidden lg:flex items-center bg-white border border-primary/20 rounded-lg px-3 py-1.5 w-64 focus-within:border-accent transition-all">
+<span class="material-symbols-outlined text-primary/50 text-xl">search</span>
+<input class="bg-transparent border-none focus:ring-0 text-sm w-full font-body" placeholder="Tìm kiếm gốm sứ..." type="text"/>
+</div>
+<div class="flex items-center gap-4">
+<button class="relative p-2 text-primary hover:text-accent transition-colors">
+<span class="material-symbols-outlined">shopping_cart</span>
+<span class="absolute top-0 right-0 bg-accent text-white text-[10px] rounded-full h-4 w-4 flex items-center justify-center font-bold">3</span>
+</button>
+<button class="p-2 text-primary hover:text-accent transition-colors">
+<span class="material-symbols-outlined">account_circle</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</header>
+<main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+<!-- Breadcrumbs -->
+<nav class="flex text-sm font-medium mb-6 text-primary/60 items-center gap-2">
+<a class="hover:text-accent" href="#">Trang chủ</a>
+<span class="material-symbols-outlined text-xs">chevron_right</span>
+<a class="hover:text-accent" href="#">Cửa hàng</a>
+<span class="material-symbols-outlined text-xs">chevron_right</span>
+<span class="text-primary font-bold">Gốm Men Lam</span>
+</nav>
+<!-- Category Banner -->
+<div class="relative w-full h-[300px] mb-8 rounded-xl overflow-hidden shadow-xl group">
+<div class="absolute inset-0 bg-gradient-to-r from-primary/80 to-transparent z-10"></div>
+<img alt="Ceramic Category Banner" class="w-full h-full object-cover" data-alt="Exquisite blue and white ceramic vases on wooden shelf" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCDQ8Ea-asj4MqNWt__DC14rBckeakuNrV4NeBMt1KCPfXxhonNyKfLtopIUEa12ifSxvcDQ-OEHDokx9XbrB7xiT-_NMl1FKsLS31TQ5_6z2h-aLmO9---42ndOxzkrLzmER9niH4HEfehfwXIKcc_iuqxmlVq_OQzJOBc0GaheBG3YvVDB3l5GW0cfWi7mqLT1i6jzAv34yXKiaYA7oQXSVDCIENfxJdYyMqoykTo7LaaJVqNu-zp9nvIPb7qeebK3bjAb7CtNG4"/>
+<div class="absolute inset-0 z-20 flex flex-col justify-center px-12">
+<h2 class="text-4xl md:text-5xl font-bold text-white mb-4">Gốm Men Lam</h2>
+<p class="text-white/90 max-w-md text-lg italic leading-relaxed">Sắc xanh huyền bí của đại dương hội tụ trong từng đường nét vẽ tay tinh xảo từ các nghệ nhân làng gốm Bát Tràng.</p>
+<div class="mt-6">
+<button class="bg-accent hover:bg-accent/90 text-white px-8 py-3 rounded-lg font-bold tracking-wide transition-all uppercase text-sm">Khám phá bộ sưu tập</button>
+</div>
+</div>
+</div>
+<!-- Filter Bar (FPT Shop Style) -->
+<div class="bg-white p-4 rounded-xl shadow-sm mb-8 border border-primary/5 flex flex-wrap items-center gap-4">
+<span class="text-primary font-bold flex items-center gap-2">
+<span class="material-symbols-outlined text-accent">filter_list</span> Bộ lọc:
+            </span>
+<!-- Price Filter -->
+<div class="relative group">
+<button class="flex items-center gap-2 px-4 py-2 bg-background-light rounded-lg text-sm hover:bg-primary/5 transition-colors">
+                    Giá tiền <span class="material-symbols-outlined text-sm">expand_more</span>
+</button>
+</div>
+<!-- Glaze Filter -->
+<div class="relative group">
+<button class="flex items-center gap-2 px-4 py-2 bg-background-light rounded-lg text-sm hover:bg-primary/5 transition-colors border border-accent/20">
+                    Loại Men: <b>Men Lam</b> <span class="material-symbols-outlined text-sm">expand_more</span>
+</button>
+</div>
+<!-- Artisan Filter -->
+<div class="relative group">
+<button class="flex items-center gap-2 px-4 py-2 bg-background-light rounded-lg text-sm hover:bg-primary/5 transition-colors">
+                    Nghệ nhân <span class="material-symbols-outlined text-sm">expand_more</span>
+</button>
+</div>
+<!-- Size Filter -->
+<div class="relative group">
+<button class="flex items-center gap-2 px-4 py-2 bg-background-light rounded-lg text-sm hover:bg-primary/5 transition-colors">
+                    Kích thước <span class="material-symbols-outlined text-sm">expand_more</span>
+</button>
+</div>
+<div class="ml-auto flex items-center gap-4">
+<span class="text-sm text-primary/60">Sắp xếp theo:</span>
+<select class="bg-transparent border-none text-sm font-bold text-primary focus:ring-0 p-0 cursor-pointer">
+<option>Phổ biến nhất</option>
+<option>Giá: Thấp đến Cao</option>
+<option>Giá: Cao đến Thấp</option>
+<option>Mới nhất</option>
+</select>
+</div>
+</div>
+<div class="flex flex-col lg:flex-row gap-8">
+<!-- Sidebar Filter (Mobile hidden, shown on Desktop) -->
+<aside class="hidden lg:block w-64 flex-shrink-0">
+<div class="space-y-8">
+<div>
+<h3 class="text-lg font-bold border-b border-accent/30 pb-2 mb-4">Danh mục</h3>
+<ul class="space-y-2 text-sm">
+<li><a class="flex justify-between items-center hover:text-accent" href="#"><span>Bình hoa decor</span> <span class="text-primary/40">(124)</span></a></li>
+<li><a class="flex justify-between items-center text-accent font-bold" href="#"><span>Gốm Men Lam</span> <span class="text-accent/60">(86)</span></a></li>
+<li><a class="flex justify-between items-center hover:text-accent" href="#"><span>Bộ ấm trà đạo</span> <span class="text-primary/40">(52)</span></a></li>
+<li><a class="flex justify-between items-center hover:text-accent" href="#"><span>Tượng phong thủy</span> <span class="text-primary/40">(31)</span></a></li>
+</ul>
+</div>
+<div>
+<h3 class="text-lg font-bold border-b border-accent/30 pb-2 mb-4">Nghệ nhân tiêu biểu</h3>
+<div class="space-y-3">
+<label class="flex items-center gap-2 text-sm cursor-pointer group">
+<input class="rounded text-primary focus:ring-accent border-primary/20" type="checkbox"/>
+<span class="group-hover:text-accent">NSND Trần Độ</span>
+</label>
+<label class="flex items-center gap-2 text-sm cursor-pointer group">
+<input class="rounded text-primary focus:ring-accent border-primary/20" type="checkbox"/>
+<span class="group-hover:text-accent">Nghệ nhân Tô Thanh Sơn</span>
+</label>
+<label class="flex items-center gap-2 text-sm cursor-pointer group">
+<input class="rounded text-primary focus:ring-accent border-primary/20" type="checkbox"/>
+<span class="group-hover:text-accent">Nghệ nhân Phạm Anh Đạo</span>
+</label>
+</div>
+</div>
+<div class="bg-primary p-6 rounded-xl text-white">
+<h4 class="text-accent font-bold mb-2">Ưu đãi Nghệ nhân</h4>
+<p class="text-xs text-white/80 mb-4">Giảm ngay 10% cho đơn hàng đầu tiên thuộc dòng Men Lam Cổ.</p>
+<button class="w-full py-2 border border-accent text-accent text-xs font-bold hover:bg-accent hover:text-white transition-all rounded">NHẬN MÃ NGAY</button>
+</div>
+</div>
+</aside>
+<!-- Product Grid -->
+<div class="flex-1">
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+<!-- Product Card 1 -->
+<div class="bg-white group rounded-xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-primary/5">
+<div class="relative aspect-square overflow-hidden bg-[#f0f0f0]">
+<img alt="Bình tỏi Men Lam" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="Traditional blue and white ceramic vase with dragon pattern" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDui6imjnaymcSBhm9IoADe5-0EgCCuXgW6wMXY2HNV25AdGfxB5bDbrZq0Z4MD0TIfpBbLxtkHnDze5b4iHsrHg2TU9uh14q2c0O87FxoWX6Raj8ur_21KEmFsmva292WDhIINWvf1Bc9ARjCjKYMB2YEZpweURNAYCAQmouKB_DW9yOyIAtkD7NNbtu7NZbfZRpDwlnAM3B1-_MQ5_FF4IO3hb-MyhGtnEAV00Xw3S89VWvR5nOPyRyqGQGpxoniMnY0rwcZB19c"/>
+<div class="absolute top-2 right-2">
+<span class="bg-accent text-white text-[10px] font-bold px-2 py-1 rounded">MỚI</span>
+</div>
+</div>
+<div class="p-4">
+<p class="text-[10px] uppercase tracking-widest text-primary/40 font-bold mb-1">Bát Tràng Premium</p>
+<h3 class="text-base font-bold text-primary mb-2 line-clamp-1 group-hover:text-accent transition-colors">Bình tỏi Vẽ Rồng Men Lam Cổ</h3>
+<div class="flex items-center gap-1 mb-3">
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="text-[10px] text-primary/40 ml-1">(24)</span>
+</div>
+<div class="flex items-end justify-between">
+<span class="text-lg font-bold text-primary">2.450.000đ</span>
+<button class="p-2 bg-primary/5 text-primary rounded-lg hover:bg-primary hover:text-white transition-all">
+<span class="material-symbols-outlined text-sm">add_shopping_cart</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Product Card 2 -->
+<div class="bg-white group rounded-xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-primary/5">
+<div class="relative aspect-square overflow-hidden bg-[#f0f0f0]">
+<img alt="Bộ trà Men Lam" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="Elegant blue patterned ceramic teapot and cups set" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCZPiA5JXaRfSqcez04kCHoNPeJ-qmBo6n_oogmozNoWwVln2ebUhqoz8M_tFCiKXnJo3zWGXhBp47oTla3hbqMxfsDuFbhY4iupEa2UcDiklfcBro2Cwi2b8p8Daq7h1rWvJ50Zp_sPYnBIQjpRBZPL5co_1P1RVEoVGZo_eDToCOyL0HlB0BAuGu8NQGK-6M6eJPJvmLkdhMTImPUjEppLe5YCfJxuaxxZFAC70T-Qe-ESzO93oeIkGOzxuCV4f32PYTH8R0k0Xk"/>
+</div>
+<div class="p-4">
+<p class="text-[10px] uppercase tracking-widest text-primary/40 font-bold mb-1">Trà Đạo Việt</p>
+<h3 class="text-base font-bold text-primary mb-2 line-clamp-1 group-hover:text-accent transition-colors">Bộ Ấm Trà Trúc Lâm Thất Hiền</h3>
+<div class="flex items-center gap-1 mb-3">
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-primary/20">star</span>
+<span class="text-[10px] text-primary/40 ml-1">(18)</span>
+</div>
+<div class="flex items-end justify-between">
+<span class="text-lg font-bold text-primary">1.800.000đ</span>
+<button class="p-2 bg-primary/5 text-primary rounded-lg hover:bg-primary hover:text-white transition-all">
+<span class="material-symbols-outlined text-sm">add_shopping_cart</span>
+</button>
+</div>
+</div>
+</div>
+<!-- In-Grid Promotion Card -->
+<div class="col-span-1 sm:col-span-2 bg-primary rounded-xl overflow-hidden relative flex items-center p-8">
+<div class="relative z-10 w-1/2">
+<span class="text-accent font-bold text-xs tracking-widest uppercase mb-2 block">Dành cho bạn</span>
+<h4 class="text-2xl text-white font-bold mb-4 leading-tight">Bộ sưu tập "Hồn Quê" - Nghệ nhân Tô Thanh Sơn</h4>
+<p class="text-white/70 text-sm mb-6 line-clamp-2">Sản phẩm độc bản dành cho những người sành gốm sứ truyền thống.</p>
+<button class="px-6 py-2 bg-accent text-white rounded text-sm font-bold hover:bg-accent/80 transition-all">XEM NGAY</button>
+</div>
+<div class="absolute right-0 top-0 bottom-0 w-1/2 overflow-hidden">
+<img alt="Featured Artisan Product" class="w-full h-full object-cover opacity-60" data-alt="Close up of detailed ceramic brush strokes" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCIU8NMz9FGOVlY9LyaHLTHqhnMA8trO3lPbVRxg-PoKrsEyXezHTdDjdggFs0OgWyDSPHlohu6y9djscJPpUmJJDx-cdU4Sj_mTRISGDVf3KrFGlGndar8Ig3G65GOR9ABj7KO-rkaO5OkWfRu7sQxhvNuQ1uYrCXj-_C-6DHFMnQRZN-LlST6iZkJW185wn8hgZBNiA7WyzZUKCePxYz_jcA_xrmORJ9Y5G1gJ_NdzFlkqzQeZZXhRKEJKeJwHsZmyabApTSNOPs"/>
+</div>
+</div>
+<!-- Product Card 3 -->
+<div class="bg-white group rounded-xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-primary/5">
+<div class="relative aspect-square overflow-hidden bg-[#f0f0f0]">
+<img alt="Chóe Men Lam" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="Traditional blue patterned large ceramic storage jar" src="https://lh3.googleusercontent.com/aida-public/AB6AXuASJDJwrL6f1I_9wwRkLE7vKgi-MvneDnuEw4JwUfG9ANfM29R_Gyc5IEkbGUy_m9wUjyORVY1KabyybYXzeJg-LmiX9B9wI7yfqe6x7V1oAAeMhcMHQIux1jSLLJ89UzpgfW_F_xhoXRUs63JNp5mENKcYyFlNCuQCv5xVZ52OWVlrknknCXQuojGUbEAD4fGoj2KxrR1HiQnVbnFU5yJbswsuQG5G13n7ukZFtb7S_uBy7h9BlfUYsvLiUPnKbUJrvqHI45iOO0s"/>
+</div>
+<div class="p-4">
+<p class="text-[10px] uppercase tracking-widest text-primary/40 font-bold mb-1">Phong Thủy Gia</p>
+<h3 class="text-base font-bold text-primary mb-2 line-clamp-1 group-hover:text-accent transition-colors">Chóe Đại Vẽ Sơn Thủy Hữu Tình</h3>
+<div class="flex items-center gap-1 mb-3">
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="text-[10px] text-primary/40 ml-1">(42)</span>
+</div>
+<div class="flex items-end justify-between">
+<span class="text-lg font-bold text-primary">5.200.000đ</span>
+<button class="p-2 bg-primary/5 text-primary rounded-lg hover:bg-primary hover:text-white transition-all">
+<span class="material-symbols-outlined text-sm">add_shopping_cart</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Product Card 4 -->
+<div class="bg-white group rounded-xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-primary/5">
+<div class="relative aspect-square overflow-hidden bg-[#f0f0f0]">
+<img alt="Đĩa decor Men Lam" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="Decorative ceramic plate with intricate blue drawings" src="https://lh3.googleusercontent.com/aida-public/AB6AXuALFnnefVGovA6975HVjnddxemuUPvc3esuIrdl_NNFmQTTYXNLWB2sOAVYWDsTkhr5jWCYsFT1dQYHTizf0x6x8KGOuMVQWQ-I1cYyEMuzWOmmkcA1f1fCINVqdBE5sNK2X3J0XLCNVREybXirD02kESn3AZdWU5dfjpUWKDDQ2GKvepSBZqcNldM9n_-k8NZ3I-H81Jyn7zTwK-Ivsq-8-XppJmwvJLoAgrDe6DAh5v7vF62i1zORuEclG6TE_I0hZ59LEMkNcCs"/>
+</div>
+<div class="p-4">
+<p class="text-[10px] uppercase tracking-widest text-primary/40 font-bold mb-1">Phòng Khách</p>
+<h3 class="text-base font-bold text-primary mb-2 line-clamp-1 group-hover:text-accent transition-colors">Đĩa Cảnh Vẽ Cá Chép Hóa Rồng</h3>
+<div class="flex items-center gap-1 mb-3">
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-primary/20">star</span>
+<span class="text-[10px] text-primary/40 ml-1">(12)</span>
+</div>
+<div class="flex items-end justify-between">
+<span class="text-lg font-bold text-primary">950.000đ</span>
+<button class="p-2 bg-primary/5 text-primary rounded-lg hover:bg-primary hover:text-white transition-all">
+<span class="material-symbols-outlined text-sm">add_shopping_cart</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Product Card 5 -->
+<div class="bg-white group rounded-xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-primary/5">
+<div class="relative aspect-square overflow-hidden bg-[#f0f0f0]">
+<img alt="Bình hoa nghệ thuật" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="Minimalist ceramic vase with elegant blue lines" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBG4VsRgddRH2Iq_rtRJNwjFuv6xtLTJE-NjxyPb_sXxZa__d_XI-ueB5dyfWzLA0yhrSXiq-o0OdzpT0IxhaACjjfsDJYGhAiuJQqg54WPibqtVgvEH93DbzTGTLWgIZ2LGO05ibYK9j5ZMhxRI_VUWG8ZsloK7hcowW3I9ehU-GG5fb5nQP2hB5rUXEgK0-h5fx96L6SCxhI7fk1mlpi9Oc11sa0-h7fF3AaQ0gQujU7bzV0RNlhfCr_wlN_0LLmOxptUGBnCfNQ"/>
+</div>
+<div class="p-4">
+<p class="text-[10px] uppercase tracking-widest text-primary/40 font-bold mb-1">Nghệ Thuật Hiện Đại</p>
+<h3 class="text-base font-bold text-primary mb-2 line-clamp-1 group-hover:text-accent transition-colors">Bình Hoa Men Lam Dáng Tỳ Bà</h3>
+<div class="flex items-center gap-1 mb-3">
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="text-[10px] text-primary/40 ml-1">(31)</span>
+</div>
+<div class="flex items-end justify-between">
+<span class="text-lg font-bold text-primary">1.550.000đ</span>
+<button class="p-2 bg-primary/5 text-primary rounded-lg hover:bg-primary hover:text-white transition-all">
+<span class="material-symbols-outlined text-sm">add_shopping_cart</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Product Card 6 -->
+<div class="bg-white group rounded-xl overflow-hidden shadow-sm hover:shadow-xl transition-all border border-primary/5">
+<div class="relative aspect-square overflow-hidden bg-[#f0f0f0]">
+<img alt="Lư hương Men Lam" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="Ceramic incense burner with blue dragon motifs" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBRcKV295pCg4dCjx8aazW8qEZwYZfAEJonYVMQep7oJJ0tLlK0evfEjniYUVeAkM2wAdyT0LG6plbCTnCtRJ_bZprqct3cdRjzQY9TFp5K8I1a_ziC2AE9_evl5xw_iAZaS9Upd1IoPLWo_f_RfJWMsKmXga0glUzVIEI15Qm7WfdYVjuFiRmUN1taeN3-hAicwDnBjrOp1wYuDHmBG47DfMFW0NkZKriVVdJA2n2K6KHQ3X9N1ABoT44k-mo-1cnZusILCNGptXk"/>
+</div>
+<div class="p-4">
+<p class="text-[10px] uppercase tracking-widest text-primary/40 font-bold mb-1">Đồ Thờ Cúng</p>
+<h3 class="text-base font-bold text-primary mb-2 line-clamp-1 group-hover:text-accent transition-colors">Lư Hương Vẽ Song Long Chầu Nguyệt</h3>
+<div class="flex items-center gap-1 mb-3">
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="material-symbols-outlined text-xs text-accent fill-1">star</span>
+<span class="text-[10px] text-primary/40 ml-1">(56)</span>
+</div>
+<div class="flex items-end justify-between">
+<span class="text-lg font-bold text-primary">3.100.000đ</span>
+<button class="p-2 bg-primary/5 text-primary rounded-lg hover:bg-primary hover:text-white transition-all">
+<span class="material-symbols-outlined text-sm">add_shopping_cart</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Pagination -->
+<div class="mt-16 flex flex-col items-center gap-6">
+<div class="flex flex-col items-center gap-4 text-primary/60">
+<div class="relative flex items-center justify-center w-12 h-12">
+<div class="absolute w-full h-full border-2 border-accent/20 rounded-full"></div>
+<div class="absolute w-full h-full border-t-2 border-accent rounded-full animate-spin"></div>
+</div>
+<p class="font-body italic text-lg">Khám phá thêm nhiều báu vật khác khi bạn cuộn xuống...</p>
+</div>
+<div class="w-32 h-px bg-gradient-to-r from-transparent via-accent/30 to-transparent mt-2"></div>
+</div>
+</div>
+</div>
+</main>
+<!-- Footer -->
+<footer class="bg-primary text-white mt-20 py-16">
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-4 gap-12">
+<div class="space-y-4">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-accent text-3xl">glass_cup</span>
+<h2 class="text-xl font-bold uppercase tracking-tight">Di Sản Gốm Việt</h2>
+</div>
+<p class="text-white/60 text-sm leading-relaxed">Chúng tôi mang đến những tác phẩm gốm sứ tinh xảo nhất từ các làng nghề truyền thống Việt Nam, gìn giữ và phát huy giá trị văn hóa dân tộc.</p>
+<div class="flex gap-4">
+<a class="text-accent hover:text-white transition-colors" href="#"><span class="material-symbols-outlined">social_leaderboard</span></a>
+<a class="text-accent hover:text-white transition-colors" href="#"><span class="material-symbols-outlined">language</span></a>
+</div>
+</div>
+<div>
+<h3 class="text-accent font-bold mb-6 text-lg">Thông tin</h3>
+<ul class="space-y-3 text-sm text-white/70">
+<li><a class="hover:text-white transition-colors" href="#">Về chúng tôi</a></li>
+<li><a class="hover:text-white transition-colors" href="#">Chính sách nghệ nhân</a></li>
+<li><a class="hover:text-white transition-colors" href="#">Vận chuyển &amp; Giao hàng</a></li>
+<li><a class="hover:text-white transition-colors" href="#">Điều khoản dịch vụ</a></li>
+</ul>
+</div>
+<div>
+<h3 class="text-accent font-bold mb-6 text-lg">Cửa hàng</h3>
+<ul class="space-y-3 text-sm text-white/70">
+<li><a class="hover:text-white transition-colors" href="#">Gốm Men Lam</a></li>
+<li><a class="hover:text-white transition-colors" href="#">Gốm Rạn Cổ</a></li>
+<li><a class="hover:text-white transition-colors" href="#">Gốm Men Ngọc</a></li>
+<li><a class="hover:text-white transition-colors" href="#">Sản phẩm độc bản</a></li>
+</ul>
+</div>
+<div>
+<h3 class="text-accent font-bold mb-6 text-lg">Đăng ký bản tin</h3>
+<p class="text-sm text-white/70 mb-4">Nhận thông báo về các bộ sưu tập giới hạn mới nhất.</p>
+<div class="flex">
+<input class="bg-white/10 border-none focus:ring-1 focus:ring-accent text-sm px-4 py-2 w-full rounded-l" placeholder="Email của bạn" type="email"/>
+<button class="bg-accent text-white px-4 py-2 font-bold text-sm rounded-r hover:bg-accent/80 transition-all">GỬI</button>
+</div>
+</div>
+</div>
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-16 pt-8 border-t border-white/10 text-center text-white/40 text-xs">
+<p>© 2024 Di Sản Gốm Việt. All rights reserved. Designed with Heritage in Mind.</p>
+</div>
+</footer>
+</body></html>

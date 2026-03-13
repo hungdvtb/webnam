@@ -379,46 +379,62 @@ class OrderController extends Controller
 
     public function updateStatus(Request $request, $id)
     {
-        $request->validate(['status' => 'required|string']);
-        $order = Order::findOrFail($id);
-        
-        // Validate that the status exists in order_statuses for this account
-        $exists = \App\Models\OrderStatus::where('account_id', $order->account_id)->where('code', $request->status)->exists();
-        if (!$exists) {
-            return response()->json(['message' => 'Trạng thái không hợp lệ cho tài khoản này.'], 422);
-        }
-
-        // Check if shipping-related statuses are locked by active shipment
-        $shippingLockedStatuses = ['shipping', 'completed', 'pending_return', 'returned'];
-        $newStatus = $request->status;
-        
-        if (in_array($newStatus, $shippingLockedStatuses) && $order->hasActiveShipment()) {
-            $syncService = app(\App\Services\Shipping\ShipmentStatusSyncService::class);
-            $canEdit = $syncService->canManuallyEditOrderShipping($order);
+        try {
+            $request->validate(['status' => 'required|string']);
             
-            if (!$canEdit['allowed']) {
-                return response()->json([
-                    'message' => $canEdit['reason'],
-                    'shipping_locked' => true,
-                    'shipment_number' => $canEdit['shipment_number'] ?? null,
-                ], 422);
-            }
+            return DB::transaction(function () use ($request, $id) {
+                $order = Order::findOrFail($id);
+                $newStatus = $request->status;
+                $oldStatus = $order->status;
+
+                if ($newStatus === $oldStatus) {
+                    return response()->json($order->load(['items', 'customer', 'attributeValues.attribute', 'shipments']));
+                }
+
+                // Validate that the status exists in order_statuses for this account
+                $exists = \App\Models\OrderStatus::where('account_id', $order->account_id)
+                    ->where('code', $newStatus)
+                    ->exists();
+                
+                if (!$exists) {
+                    return response()->json(['message' => "Trạng thái '{$newStatus}' không hợp lệ cho hệ thống của bạn."], 422);
+                }
+
+                // Check if shipping-related statuses are locked by active shipment
+                $shippingLockedStatuses = ['shipping', 'completed', 'pending_return', 'returned'];
+                if (in_array($newStatus, $shippingLockedStatuses) && $order->hasActiveShipment()) {
+                    $syncService = app(\App\Services\Shipping\ShipmentStatusSyncService::class);
+                    $canEdit = $syncService->canManuallyEditOrderShipping($order);
+                    
+                    if (!$canEdit['allowed']) {
+                        return response()->json([
+                            'message' => $canEdit['reason'],
+                            'shipping_locked' => true,
+                            'shipment_number' => $canEdit['shipment_number'] ?? null,
+                        ], 422);
+                    }
+                }
+
+                // Log order status change
+                \App\Models\OrderStatusLog::create([
+                    'order_id'    => $order->id,
+                    'from_status' => $oldStatus,
+                    'to_status'   => $newStatus,
+                    'source'      => 'manual',
+                    'changed_by'  => auth()->id(),
+                    'reason'      => $request->reason ?? 'Cập nhật nhanh từ danh sách',
+                ]);
+
+                $order->update(['status' => $newStatus]);
+                
+                return response()->json($order->load(['items', 'customer', 'attributeValues.attribute', 'shipments']));
+            });
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json(['errors' => $e->errors(), 'message' => 'Dữ liệu không hợp lệ'], 422);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error("Order Status Update Error for ID {$id}: " . $e->getMessage());
+            return response()->json(['message' => 'Có lỗi xảy ra: ' . $e->getMessage()], 500);
         }
-
-        $oldStatus = $order->status;
-
-        // Log order status change
-        \App\Models\OrderStatusLog::create([
-            'order_id'    => $order->id,
-            'from_status' => $oldStatus,
-            'to_status'   => $newStatus,
-            'source'      => 'manual',
-            'changed_by'  => auth()->id(),
-            'reason'      => $request->reason ?? 'Cập nhật thủ công',
-        ]);
-
-        $order->update(['status' => $newStatus]);
-        return response()->json($order->load(['items', 'customer', 'attributeValues.attribute', 'shipments']));
     }
 
     public function restore($id)

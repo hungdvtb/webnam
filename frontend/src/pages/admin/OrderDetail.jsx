@@ -67,7 +67,7 @@ const OrderDetail = () => {
             <div className="flex justify-between items-start">
                 <div>
                     <div className="flex items-center gap-4 mb-2">
-                        <button onClick={() => navigate('/admin/orders')} className="text-stone hover:text-primary transition-colors">
+                        <button onClick={() => navigate('/admin/orders')} className="text-primary/60 hover:text-primary transition-colors">
                             <span className="material-symbols-outlined">arrow_back</span>
                         </button>
                     </div>
@@ -76,7 +76,7 @@ const OrderDetail = () => {
                 <div className="flex gap-2 print:hidden">
                     <button
                         onClick={() => window.print()}
-                        className="px-6 py-2 bg-stone-100 text-stone-700 border border-stone-200 font-ui text-[10px] font-bold uppercase tracking-widest hover:bg-stone-200 transition-all flex items-center gap-2 shadow-sm"
+                        className="px-6 py-2 bg-primary/5 text-primary border border-primary/20 font-ui text-[10px] font-bold uppercase tracking-widest hover:bg-primary/10 transition-all flex items-center gap-2 shadow-sm"
                     >
                         <span className="material-symbols-outlined text-sm">print</span>
                         In Hóa Đơn
@@ -119,12 +119,12 @@ const OrderDetail = () => {
                 {/* Main Content */}
                 <div className="md:col-span-2 space-y-8">
                     {/* Items Table */}
-                    <div className="bg-white border border-gold/10 shadow-xl overflow-hidden">
-                        <div className="p-4 border-b border-gold/10 bg-background-light">
+                    <div className="bg-white border border-primary/10 shadow-xl overflow-hidden">
+                        <div className="p-4 border-b border-primary/10 bg-primary/5">
                             <h3 className="font-display font-bold text-lg text-primary">Danh sách sản phẩm</h3>
                         </div>
                         <table className="w-full text-left border-collapse">
-                            <thead className="bg-stone/5 font-ui text-[10px] font-bold text-stone uppercase tracking-widest border-b border-gold/10">
+                            <thead className="bg-primary/5 font-ui text-[10px] font-bold text-primary/60 uppercase tracking-widest border-b border-primary/10">
                                 <tr>
                                     <th className="p-4">Sản Phẩm</th>
                                     <th className="p-4 text-center">Đơn Giá</th>
@@ -134,15 +134,15 @@ const OrderDetail = () => {
                             </thead>
                             <tbody className="font-body">
                                 {order.items?.map(item => (
-                                    <tr key={item.id} className="border-b border-gold/5">
+                                    <tr key={item.id} className="border-b border-primary/5">
                                         <td className="p-4">
                                             <div className="flex items-center gap-4">
-                                                <div className="size-12 bg-stone/5 flex-shrink-0">
+                                                <div className="size-12 bg-primary/5 flex-shrink-0">
                                                     {item.product?.image_url && <img src={item.product.image_url} alt={item.product.name} className="size-full object-cover" />}
                                                 </div>
                                                 <div className="flex flex-col">
                                                     <span className="font-bold text-primary">{item.product?.name}</span>
-                                                    <span className="text-[10px] text-stone uppercase font-ui">SKU: {item.product?.sku}</span>
+                                                    <span className="text-[10px] text-primary/40 uppercase font-ui font-black">SKU: {item.product?.sku}</span>
                                                 </div>
                                             </div>
                                         </td>
@@ -152,9 +152,9 @@ const OrderDetail = () => {
                                     </tr>
                                 ))}
                             </tbody>
-                            <tfoot className="bg-background-light font-ui">
+                            <tfoot className="bg-primary/5 font-ui">
                                 <tr>
-                                    <td colSpan="3" className="p-4 text-right font-bold text-stone uppercase text-[10px] tracking-widest">Tổng tiền hàng</td>
+                                    <td colSpan="3" className="p-4 text-right font-bold text-primary/40 uppercase text-[10px] tracking-widest">Tổng tiền hàng</td>
                                     <td className="p-4 text-right font-display font-bold text-xl text-primary">{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(order.total_price)}</td>
                                 </tr>
                             </tfoot>
@@ -163,15 +163,15 @@ const OrderDetail = () => {
 
                     {/* Custom Attributes (EAV) */}
                     {order.attribute_values?.length > 0 && (
-                        <div className="bg-white border border-gold/10 shadow-xl">
-                            <div className="p-4 border-b border-gold/10 bg-background-light">
-                                <h3 className="font-display font-bold text-lg text-primary">Thông tin bổ sung (EAV)</h3>
+                        <div className="bg-white border border-primary/10 shadow-xl overflow-hidden rounded-sm">
+                            <div className="p-4 border-b border-primary/10 bg-primary/5">
+                                <h3 className="font-display font-bold text-lg text-primary">Thông tin bổ sung</h3>
                             </div>
                             <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
                                 {order.attribute_values.map(av => (
-                                    <div key={av.id} className="flex flex-col border-b border-gold/5 pb-2">
-                                        <span className="text-[10px] font-bold text-stone uppercase tracking-widest mb-1">{av.attribute?.name}</span>
-                                        <span className="font-body text-primary">{av.value}</span>
+                                    <div key={av.id} className="flex flex-col border-b border-primary/5 pb-2">
+                                        <span className="text-[10px] font-bold text-primary/40 uppercase tracking-widest mb-1">{av.attribute?.name}</span>
+                                        <span className="font-body text-[#0F172A] font-medium">{av.value}</span>
                                     </div>
                                 ))}
                             </div>
@@ -179,11 +179,11 @@ const OrderDetail = () => {
                     )}
 
                     {/* Notes */}
-                    <div className="bg-white border border-gold/10 shadow-xl">
-                        <div className="p-4 border-b border-gold/10 bg-background-light">
+                    <div className="bg-white border border-primary/10 shadow-xl overflow-hidden rounded-sm">
+                        <div className="p-4 border-b border-primary/10 bg-primary/5">
                             <h3 className="font-display font-bold text-lg text-primary">Ghi chú đơn hàng</h3>
                         </div>
-                        <div className="p-6 font-body text-stone italic">
+                        <div className="p-6 font-body text-primary/60 italic text-sm">
                             {order.notes || "Không có ghi chú nào từ khách hàng."}
                         </div>
                     </div>
@@ -192,48 +192,48 @@ const OrderDetail = () => {
                 {/* Sidebar Info */}
                 <div className="space-y-8">
                     {/* Customer Info */}
-                    <div className="bg-primary text-white p-6 shadow-xl relative overflow-hidden group customer-info-box">
-                        <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-125 transition-transform">
+                    <div className="bg-primary text-white p-6 shadow-xl relative overflow-hidden group customer-info-box border border-primary/20">
+                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:scale-125 transition-transform">
                             <span className="material-symbols-outlined text-6xl">person</span>
                         </div>
-                        <h3 className="font-ui font-bold text-[10px] uppercase tracking-[0.2em] text-gold mb-6 relative">Thông tin khách hàng</h3>
+                        <h3 className="font-ui font-black text-[10px] uppercase tracking-[0.2em] text-white/40 mb-6 relative">Thông tin khách hàng</h3>
                         <div className="space-y-4 relative">
                             <div className="flex flex-col">
-                                <span className="text-xs text-stone/60">Tên khách hàng</span>
+                                <span className="text-[11px] text-white/30 uppercase font-black tracking-widest mb-0.5">Khách hàng</span>
                                 <span className="font-display font-bold text-xl">{order.customer_name}</span>
                             </div>
                             <div className="flex flex-col">
-                                <span className="text-xs text-stone/60">Số điện thoại</span>
-                                <span className="font-body font-bold">{order.customer_phone}</span>
+                                <span className="text-[11px] text-white/30 uppercase font-black tracking-widest mb-0.5">Số điện thoại</span>
+                                <span className="font-body font-bold text-lg">{order.customer_phone}</span>
                             </div>
                             <div className="flex flex-col">
-                                <span className="text-xs text-stone/60">Email</span>
-                                <span className="font-body">{order.customer_email || "N/A"}</span>
+                                <span className="text-[11px] text-white/30 uppercase font-black tracking-widest mb-0.5">Email liên hệ</span>
+                                <span className="font-body text-sm text-white/70">{order.customer_email || "N/A"}</span>
                             </div>
                         </div>
                     </div>
 
                     {/* Shipping Address */}
-                    <div className="bg-white border border-gold/10 p-6 shadow-xl">
-                        <h3 className="font-ui font-bold text-[10px] uppercase tracking-[0.2em] text-gold mb-6">Địa chỉ giao hàng</h3>
+                    <div className="bg-white border border-primary/10 p-6 shadow-xl">
+                        <h3 className="font-ui font-black text-[10px] uppercase tracking-[0.2em] text-primary/30 mb-6">Địa chỉ giao hàng</h3>
                         <div className="flex gap-4">
-                            <span className="material-symbols-outlined text-primary">location_on</span>
-                            <p className="font-body text-sm leading-loose text-primary">
+                            <span className="material-symbols-outlined text-primary/40">location_on</span>
+                            <p className="font-body text-sm leading-loose text-[#0F172A] font-medium">
                                 {order.shipping_address}
                             </p>
                         </div>
                     </div>
 
                     {/* Internal Info */}
-                    <div className="bg-background-light border border-gold/10 p-6">
-                        <h3 className="font-ui font-bold text-[10px] uppercase tracking-[0.2em] text-gold mb-4 text-center">Thông tin hệ thống</h3>
+                    <div className="bg-primary/5 border border-primary/10 p-6">
+                        <h3 className="font-ui font-black text-[10px] uppercase tracking-[0.2em] text-primary/30 mb-4 text-center">Thông tin hệ thống</h3>
                         <div className="space-y-3 text-xs">
-                            <div className="flex justify-between border-b border-gold/5 pb-2">
-                                <span className="text-stone">Tài khoản đặt:</span>
+                            <div className="flex justify-between border-b border-primary/5 pb-2">
+                                <span className="text-primary/40">Tài khoản đặt:</span>
                                 <span className="font-bold text-primary">{order.user?.name || "Khách vãng lai"}</span>
                             </div>
-                            <div className="flex justify-between border-b border-gold/5 pb-2">
-                                <span className="text-stone">Lần cập nhật cuối:</span>
+                            <div className="flex justify-between border-b border-primary/5 pb-2">
+                                <span className="text-primary/40">Lần cập nhật cuối:</span>
                                 <span className="font-bold text-primary">{new Date(order.updated_at).toLocaleDateString('vi-VN')}</span>
                             </div>
                         </div>

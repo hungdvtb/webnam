@@ -27,6 +27,13 @@ class MenuController extends Controller
     {
         $accountId = $request->header('X-Account-Id') ?: session()->get('active_account_id');
 
+        if (!$accountId && $siteCode = $request->header('X-Site-Code')) {
+            $account = \App\Models\Account::where('site_code', $siteCode)->first();
+            if ($account) {
+                $accountId = $account->id;
+            }
+        }
+
         $menu = Menu::where('account_id', $accountId)
             ->where('is_active', true)
             ->with(['rootItems.children.children'])

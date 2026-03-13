@@ -17,18 +17,45 @@ class ProductController extends Controller
     {
         $query = Product::with(['category', 'images', 'attributeValues.attribute']);
 
+        // Handle Trash View
+        if ($request->boolean('is_trash')) {
+            $query->onlyTrashed();
+        }
+
         // Filter by category
         if ($request->filled('category_id')) {
             $query->where('category_id', $request->category_id);
         }
 
-        // Search by name & SKU
+        // Search by name & SKU & more (Advanced Fuzzy & Token Matching)
         if ($request->filled('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', '%' . $search . '%')
-                    ->orWhere('sku', 'like', '%' . $search . '%');
-            });
+            $search = trim($request->search);
+            // Split into tokens, ignoring extra spaces
+            $tokens = preg_split('/\s+/', $search, -1, PREG_SPLIT_NO_EMPTY);
+
+            if (!empty($tokens)) {
+                $query->where(function ($q) use ($tokens) {
+                    foreach ($tokens as $token) {
+                        $q->where(function ($sub) use ($token) {
+                            $escapedToken = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $token) . '%';
+                            // Use preg_split with //u to correctly split UTF-8 characters without breaking multibyte sequences.
+                            // mb_str_split can sometimes fail depending on internal encoding configuration.
+                            $fuzzyToken = '%' . implode('%', preg_split('//u', str_replace(['%', '_'], '', $token), -1, PREG_SPLIT_NO_EMPTY)) . '%';
+
+                            // Name match (substring)
+                            $sub->whereRaw('unaccent(name) ILIKE unaccent(?)', [$escapedToken])
+                                // SKU match (substring or compacted substring)
+                                ->orWhereRaw('unaccent(sku) ILIKE unaccent(?)', [$escapedToken])
+                                ->orWhereRaw("unaccent(REGEXP_REPLACE(sku, '[^a-zA-Z0-9]', '', 'g')) ILIKE unaccent(?)", [$escapedToken])
+                                // SKU fuzzy/subsequence match (e.g., bh18 matches bhkemde-18)
+                                ->orWhereRaw("unaccent(REGEXP_REPLACE(sku, '[^a-zA-Z0-9]', '', 'g')) ILIKE unaccent(?)", [$fuzzyToken])
+                                // Slug & Description
+                                ->orWhereRaw('unaccent(slug) ILIKE unaccent(?)', [$escapedToken])
+                                ->orWhereRaw('unaccent(description) ILIKE unaccent(?)', [$escapedToken]);
+                        });
+                    }
+                });
+            }
         }
 
         // Filter by price range
@@ -321,7 +348,10 @@ class ProductController extends Controller
         // Clone attributes
         $clone = $original->replicate();
         $clone->name = $original->name . ' (Copy)';
-        $clone->sku = $original->sku ? $original->sku . '-COPY-' . time() : null;
+        $clone->sku = $original->sku ? $original->sku . '-COPY-' . strtoupper(\Illuminate\Support\Str::random(4)) : null;
+        $clone->slug = \Illuminate\Support\Str::slug($clone->name) . '-' . strtolower(\Illuminate\Support\Str::random(6));
+        $clone->status = false; // Set to inactive by default for clone
+        $clone->is_new = true;
         $clone->save();
 
         // Copy images
@@ -330,7 +360,7 @@ class ProductController extends Controller
                 'product_id' => $clone->id,
                 'image_url' => $img->image_url,
                 'is_primary' => $img->is_primary,
-                'position' => $img->position
+                'sort_order' => $img->sort_order
             ]);
         }
 
@@ -371,6 +401,58 @@ class ProductController extends Controller
         $product = Product::findOrFail($id);
         $product->delete();
 
-        return response()->json(['message' => 'Product deleted successfully']);
+        return response()->json(['message' => 'Sản phẩm đã được chuyển vào thùng rác']);
+    }
+
+    /**
+     * Restore the specified resource from trash.
+     */
+    public function restore($id)
+    {
+        $product = Product::onlyTrashed()->findOrFail($id);
+        $product->restore();
+
+        return response()->json(['message' => 'Sản phẩm đã được khôi phục thành công']);
+    }
+
+    /**
+     * Permanently remove the specified resource from storage.
+     */
+    public function forceDelete($id)
+    {
+        $product = Product::onlyTrashed()->findOrFail($id);
+        $product->forceDelete();
+
+        return response()->json(['message' => 'Sản phẩm đã được xóa vĩnh viễn']);
+    }
+
+    /**
+     * Bulk restore resources from trash.
+     */
+    public function bulkRestore(Request $request)
+    {
+        $ids = $request->input('ids', []);
+        Product::onlyTrashed()->whereIn('id', $ids)->restore();
+        return response()->json(['message' => 'Đã khôi phục các sản phẩm đã chọn']);
+    }
+
+    /**
+     * Bulk permanently remove resources.
+     */
+    public function bulkForceDelete(Request $request)
+    {
+        $ids = $request->input('ids', []);
+        Product::onlyTrashed()->whereIn('id', $ids)->forceDelete();
+        return response()->json(['message' => 'Đã xóa vĩnh viễn các sản phẩm đã chọn']);
+    }
+
+    /**
+     * Bulk move resources to trash.
+     */
+    public function bulkDelete(Request $request)
+    {
+        $ids = $request->input('ids', []);
+        Product::whereIn('id', $ids)->delete();
+        return response()->json(['message' => 'Đã chuyển các sản phẩm đã chọn vào thùng rác']);
     }
 }

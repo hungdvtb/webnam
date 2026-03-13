@@ -338,46 +338,52 @@ const OrderForm = () => {
 
         const element = captureRef.current;
         
-        // Save original states to restore later
+        // --- STAGE 1: Force UI Stability ---
+        // Save original states
         const originalStyle = element.style.cssText;
         const stickyElements = element.querySelectorAll('.sticky');
         const stickyStyles = Array.from(stickyElements).map(el => el.style.cssText);
-        const inputs = element.querySelectorAll('input, textarea');
         
         try {
-            // Prepare element for "Perfect Capture"
-            // 1. Remove height/scroll constraints
+            // --- STAGE 2: Force Natural Dimensions ---
+            // Set styles that force the element to its full content height
+            element.style.position = 'relative';
             element.style.height = 'auto';
             element.style.maxHeight = 'none';
             element.style.overflow = 'visible';
             element.style.width = `${element.offsetWidth}px`;
-            
-            // 2. Fix sticky elements (library often fails with sticky)
+            element.style.backgroundColor = '#ffffff';
+            element.style.zIndex = '9999';
+
+            // Fix sticky elements which mess up the bounding box in most libraries
             stickyElements.forEach(el => {
                 el.style.position = 'static';
-                el.style.backgroundColor = '#f8fafc'; // Matches blue-50
+                el.style.backgroundColor = '#f8fafc'; 
             });
 
-            // 3. Ensure background is white
-            element.style.backgroundColor = '#ffffff';
+            // Wait for layout to reflow and settle
+            await new Promise(resolve => setTimeout(resolve, 300));
 
-            // Wait a bit for layout to settle
-            await new Promise(resolve => setTimeout(resolve, 200));
+            // CRITICAL: Calculate the REAL height including all hidden content and paddings
+            const realHeight = element.scrollHeight;
+            const realWidth = element.scrollWidth;
 
             const options = {
                 backgroundColor: '#ffffff',
                 cacheBust: true,
-                pixelRatio: 2,
+                pixelRatio: 2, // High resolution
+                width: realWidth,
+                height: realHeight,
                 style: {
                     margin: '0',
-                    padding: '40px',
+                    padding: '0', // We already have padding in the DOM
                     borderRadius: '0'
                 },
                 filter: (node) => {
                     const isNode = node instanceof HTMLElement;
                     if (!isNode) return true;
                     
-                    // Hide interactive elements
+                    // Remove UI buttons and interactive icons
                     const text = node.innerText || '';
                     if (node.tagName === 'BUTTON') return false;
                     if (node.classList.contains('material-symbols-outlined') && 
@@ -390,10 +396,11 @@ const OrderForm = () => {
                 }
             };
 
+            // Capture the full content
             const blob = await toBlob(element, options);
 
             if (blob) {
-                // Clipboard copy
+                // Clipboard integration
                 try {
                     const data = [new ClipboardItem({ 'image/png': blob })];
                     await navigator.clipboard.write(data);
@@ -401,7 +408,7 @@ const OrderForm = () => {
                     console.error('Clipboard copy failed:', clipErr);
                 }
 
-                // Download
+                // Automatic Download
                 const link = document.createElement('a');
                 link.download = `bao-gia-${formData.customer_name || 'khach-le'}-${new Date().getTime()}.png`;
                 link.href = URL.createObjectURL(blob);
@@ -409,9 +416,9 @@ const OrderForm = () => {
             }
         } catch (err) {
             console.error('Screenshot failed', err);
-            alert('Không thể tạo phối cảnh ảnh. Hãy thử lại.');
+            alert('Lỗi tạo ảnh báo giá. Hãy thử lại.');
         } finally {
-            // RESTORE ORIGINALS
+            // --- STAGE 3: Restore Original UI ---
             element.style.cssText = originalStyle;
             stickyElements.forEach((el, i) => {
                 el.style.cssText = stickyStyles[i];
@@ -612,8 +619,8 @@ const OrderForm = () => {
                             </div>
                         </div>
 
-                        {/* Captured Area for Screenshot */}
-                        <div ref={captureRef} className="bg-white px-12 pb-4 pt-4 -mx-12">
+                             {/* Captured Area for Screenshot */}
+                        <div ref={captureRef} className="bg-white px-12 pb-12 pt-6 -mx-12 rounded-sm shadow-sm border border-primary/5">
                             <div className="relative min-h-[400px]">
                                 <table className="w-full text-left border-collapse table-fixed lg:table-auto">
                                     <thead className="font-display text-[11px] font-extrabold text-blue-600 bg-blue-50 sticky top-0 z-30 shadow-sm border-b border-blue-100">

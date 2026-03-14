@@ -208,6 +208,14 @@ const ProductForm = () => {
     const [selectedImages, setSelectedImages] = useState([]);
     const [isDragSelecting, setIsDragSelecting] = useState(false);
 
+    const [searchHistory, setSearchHistory] = useState(() => {
+        const saved = localStorage.getItem('product_search_history');
+        return saved ? JSON.parse(saved) : [];
+    });
+    const [showSearchHistory, setShowSearchHistory] = useState(false);
+    const searchContainerRef = useRef(null);
+    const relatedSearchContainerRef = useRef(null); // For the other search bar
+
     const [formData, setFormData] = useState({
         type: 'simple',
         name: '',
@@ -299,6 +307,25 @@ const ProductForm = () => {
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [handleCancel]);
+
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (searchContainerRef.current && !searchContainerRef.current.contains(event.target)) setShowSearchHistory(false);
+            if (relatedSearchContainerRef.current && !relatedSearchContainerRef.current.contains(event.target)) setShowSearchHistory(false);
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    const addToSearchHistory = (term) => {
+        if (!term || term.trim() === '' || term.length < 2) return;
+        setSearchHistory(prev => {
+            const filtered = prev.filter(item => item !== term);
+            const updated = [term, ...filtered].slice(0, 10);
+            localStorage.setItem('product_search_history', JSON.stringify(updated));
+            return updated;
+        });
+    };
 
     useEffect(() => {
         fetchCategories();
@@ -1682,26 +1709,83 @@ const ProductForm = () => {
                                     <p className="text-[12px] text-stone/60 mb-4 italic">Tìm kiếm và chọn các sản phẩm đơn hoặc biến thể cụ thể để thêm vào bộ sưu tập này.</p>
                                     
                                     <div className="relative">
-                                        <div className="flex gap-2 mb-4">
-                                            <div className="relative flex-1">
-                                                <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-stone/40">search</span>
-                                                <input
-                                                    type="text"
-                                                    placeholder="Tìm theo tên hoặc SKU..."
-                                                    value={relatedQuery}
-                                                    onChange={(e) => setRelatedQuery(e.target.value)}
-                                                    className="w-full pl-10 pr-4 py-2.5 bg-stone/5 border border-stone/10 rounded-sm focus:outline-none focus:border-gold/30 text-[14px]"
-                                                />
-                                            </div>
-                                            <select
-                                                value={relatedCategory}
-                                                onChange={(e) => setRelatedCategory(e.target.value)}
-                                                className="px-4 py-2.5 bg-stone/5 border border-stone/10 rounded-sm focus:outline-none focus:border-gold/30 text-[14px] text-stone/60"
-                                            >
-                                                <option value="all">Tất cả danh mục</option>
-                                                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                            </select>
+                                    <div className="flex gap-2 mb-4">
+                                        <div className="relative flex-1" ref={searchContainerRef}>
+                                            <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-stone/40 text-[20px] z-10">search</span>
+                                            <input
+                                                type="text"
+                                                autoComplete="off"
+                                                placeholder="Tìm theo tên hoặc SKU..."
+                                                value={relatedQuery}
+                                                onChange={(e) => setRelatedQuery(e.target.value)}
+                                                onFocus={() => setShowSearchHistory(true)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                        setShowSearchHistory(false);
+                                                        addToSearchHistory(relatedQuery);
+                                                    }
+                                                }}
+                                                className="w-full pl-10 pr-10 py-2.5 bg-primary/5 border border-primary/10 rounded-sm focus:outline-none focus:border-gold/30 text-[14px] transition-all relative z-0 font-bold"
+                                            />
+                                            {relatedQuery && (
+                                                <button 
+                                                    onClick={() => { setRelatedQuery(''); setShowSearchHistory(false); }} 
+                                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors z-10"
+                                                >
+                                                    <span className="material-symbols-outlined text-[18px]">cancel</span>
+                                                </button>
+                                            )}
+
+                                            {showSearchHistory && searchHistory.length > 0 && (
+                                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[70] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                                    <div className="flex justify-between items-center px-3 mb-2 border-b border-primary/10 pb-1">
+                                                        <span className="text-[10px] font-bold text-primary/40 uppercase tracking-widest">Tìm kiếm gần đây</span>
+                                                        <button 
+                                                            onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('product_search_history'); }} 
+                                                            className="text-[10px] text-brick hover:underline font-bold"
+                                                        >Xóa tất cả</button>
+                                                    </div>
+                                                    <div className="max-h-56 overflow-y-auto custom-scrollbar">
+                                                        {searchHistory.map((item, idx) => (
+                                                            <div
+                                                                key={idx}
+                                                                className="group flex items-center justify-between px-3 py-2 hover:bg-primary/5 cursor-pointer transition-colors"
+                                                                onClick={() => {
+                                                                    setRelatedQuery(item);
+                                                                    setShowSearchHistory(false);
+                                                                    addToSearchHistory(item);
+                                                                }}
+                                                            >
+                                                                <div className="flex items-center gap-2 overflow-hidden">
+                                                                    <span className="material-symbols-outlined text-[18px] text-primary/30">history</span>
+                                                                    <span className="text-[13px] text-primary truncate font-bold">{item}</span>
+                                                                </div>
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        const updated = searchHistory.filter(h => h !== item);
+                                                                        setSearchHistory(updated);
+                                                                        localStorage.setItem('product_search_history', JSON.stringify(updated));
+                                                                    }}
+                                                                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-brick transition-all rounded-full hover:bg-primary/5 text-stone/40"
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[16px]">close</span>
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
+                                        <select
+                                            value={relatedCategory}
+                                            onChange={(e) => setRelatedCategory(e.target.value)}
+                                            className="px-4 py-2.5 bg-primary/5 border border-primary/10 rounded-sm focus:outline-none focus:border-gold/30 text-[14px] font-bold text-primary"
+                                        >
+                                            <option value="all">Tất cả danh mục</option>
+                                            {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                        </select>
+                                    </div>
 
                                         {relatedQuery.length > 1 && (
                                             <div className="absolute top-[calc(100%-8px)] left-0 right-0 max-h-[300px] overflow-y-auto bg-white border border-gold/10 shadow-xl rounded-sm z-[60] custom-scrollbar">
@@ -1714,6 +1798,7 @@ const ProductForm = () => {
                                                             onClick={() => {
                                                                 handleAddGroupItem(p);
                                                                 setRelatedQuery('');
+                                                                addToSearchHistory(relatedQuery);
                                                             }}
                                                             className="flex items-center gap-3 p-3 hover:bg-gold/5 cursor-pointer border-b border-stone/5 transition-colors"
                                                         >
@@ -1954,16 +2039,72 @@ const ProductForm = () => {
                             <div className="space-y-4">
                                 {/* Search & Filters Area */}
                                 <div className="space-y-3 p-3 bg-stone/5 border border-stone/10 rounded-sm">
-                                    {/* Name & SKU Search */}
-                                    <div className="relative">
-                                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-[18px] text-stone/40">search</span>
+                                    <div className="relative" ref={relatedSearchContainerRef}>
+                                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-[18px] text-stone/40 z-10">search</span>
                                         <input
                                             type="text"
+                                            autoComplete="off"
                                             placeholder="Tìm theo tên hoặc mã SKU..."
                                             value={relatedQuery}
                                             onChange={(e) => setRelatedQuery(e.target.value)}
-                                            className="w-full bg-white border border-stone/20 rounded-sm pl-9 pr-3 py-2 text-[12px] font-bold text-primary focus:outline-none focus:ring-1 focus:ring-primary/20 transition-all shadow-sm"
+                                            onFocus={() => setShowSearchHistory(true)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    setShowSearchHistory(false);
+                                                    addToSearchHistory(relatedQuery);
+                                                }
+                                            }}
+                                            className="w-full bg-white border border-stone/20 rounded-sm pl-9 pr-9 py-2 text-[12px] font-bold text-primary focus:outline-none focus:border-gold/30 transition-all shadow-sm relative z-0"
                                         />
+                                        {relatedQuery && (
+                                            <button 
+                                                onClick={() => { setRelatedQuery(''); setShowSearchHistory(false); }} 
+                                                className="absolute right-2 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors z-10"
+                                            >
+                                                <span className="material-symbols-outlined text-[16px]">cancel</span>
+                                            </button>
+                                        )}
+
+                                        {showSearchHistory && searchHistory.length > 0 && (
+                                            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[70] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                                <div className="flex justify-between items-center px-3 mb-1 border-b border-primary/10 pb-1">
+                                                    <span className="text-[9px] font-bold text-primary/40 uppercase tracking-widest">Gần đây</span>
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('product_search_history'); }} 
+                                                        className="text-[9px] text-brick hover:underline font-bold"
+                                                    >Xóa</button>
+                                                </div>
+                                                <div className="max-h-48 overflow-y-auto custom-scrollbar">
+                                                    {searchHistory.map((item, idx) => (
+                                                        <div
+                                                            key={idx}
+                                                            className="group flex items-center justify-between px-3 py-1.5 hover:bg-primary/5 cursor-pointer transition-colors"
+                                                            onClick={() => {
+                                                                setRelatedQuery(item);
+                                                                setShowSearchHistory(false);
+                                                                addToSearchHistory(item);
+                                                            }}
+                                                        >
+                                                            <div className="flex items-center gap-2 overflow-hidden">
+                                                                <span className="material-symbols-outlined text-[16px] text-primary/30">history</span>
+                                                                <span className="text-[11px] text-primary truncate font-bold">{item}</span>
+                                                            </div>
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    const updated = searchHistory.filter(h => h !== item);
+                                                                    setSearchHistory(updated);
+                                                                    localStorage.setItem('product_search_history', JSON.stringify(updated));
+                                                                }}
+                                                                className="opacity-0 group-hover:opacity-100 p-1 hover:text-brick transition-all rounded-full hover:bg-primary/5 text-stone/40"
+                                                            >
+                                                                <span className="material-symbols-outlined text-[14px]">close</span>
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
 
                                     <div className="grid grid-cols-2 gap-3">

@@ -175,4 +175,21 @@ class Product extends Model
         }
         return $total;
     }
+
+    /**
+     * Calculate cost price for grouped product (Sum of components)
+     */
+    public function calculateGroupCostPrice()
+    {
+        if ($this->type !== 'grouped') {
+            return $this->cost_price;
+        }
+
+        $items = $this->groupedItems;
+        $total = 0;
+        foreach ($items as $item) {
+            $total += ($item->cost_price ?? 0) * $item->pivot->quantity;
+        }
+        return $total;
+    }
 }

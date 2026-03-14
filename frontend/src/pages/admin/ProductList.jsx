@@ -1098,14 +1098,24 @@ const ProductList = () => {
                                     const pVariants = p.variations || [];
                                     
                                     if (pIsParent && !isSubRow) {
-                                        if (pVariants.length > 0) {
-                                            // Check if all variants have the same cost price
+                                        if (p.type === 'grouped') {
+                                            const components = p.grouped_items || [];
+                                            if (components.length > 0) {
+                                                // Calculate sum of cost prices for Grouped Product
+                                                displayCostPrice = components.reduce((sum, item) => sum + (Number(item.cost_price || 0) * (item.pivot?.quantity || 1)), 0);
+                                                
+                                                // Calculate sum of selling prices (if price_type is 'sum')
+                                                if (p.price_type === 'sum') {
+                                                    displayPrice = components.reduce((sum, item) => sum + (Number(item.price || 0) * (item.pivot?.quantity || 1)), 0);
+                                                }
+                                            }
+                                        } else if (pVariants.length > 0) {
+                                            // Existing logic for Configurable products
                                             const vCostPrices = pVariants.map(v => v.cost_price);
                                             const firstCost = vCostPrices[0];
                                             const allCostSame = vCostPrices.every(cp => cp !== null && cp !== undefined && Number(cp) === Number(firstCost));
                                             displayCostPrice = allCostSame ? firstCost : null;
 
-                                            // Check if all variants have the same selling price
                                             const vPrices = pVariants.map(v => v.price);
                                             const firstPrice = vPrices[0];
                                             const allPriceSame = vPrices.every(pr => pr !== null && pr !== undefined && Number(pr) === Number(firstPrice));

@@ -59,6 +59,17 @@ const ProductList = () => {
     const [isTrashView, setIsTrashView] = useState(false);
     const [copiedText, setCopiedText] = useState(null);
     const [previewImage, setPreviewImage] = useState(null);
+    const [expandedRows, setExpandedRows] = useState([]);
+
+    const toggleExpandRow = (productId, e) => {
+        if (e) e.stopPropagation();
+        setExpandedRows(prev => 
+            prev.includes(productId) 
+                ? prev.filter(id => id !== productId) 
+                : [...prev, productId]
+        );
+    };
+
 
     const [showBulkUpdateModal, setShowBulkUpdateModal] = useState(false);
     const [bulkUpdateData, setBulkUpdateData] = useState({});
@@ -947,97 +958,135 @@ const ProductList = () => {
                             products.map(product => {
                                 const isParent = product.type === 'configurable';
                                 const isChild = product.parent_products?.length > 0;
-                                return (
-                                    <tr
-                                        key={product.id}
-                                        onClick={() => toggleSelectProduct(product.id)}
-                                        onDoubleClick={() => navigate(`/admin/products/edit/${product.id}`)}
-                                        className={`transition-all group cursor-pointer ${
-                                            selectedIds.includes(product.id) ? 'bg-gold/10' : 
-                                            isParent ? 'row-parent' : 
-                                            isChild ? 'row-child' : 'hover:bg-gold/5'
-                                        }`}
-                                    >
-                                        <td className="p-3 border border-primary/20 sticky-col-0" onDoubleClick={(e) => e.stopPropagation()}>
-                                            <input type="checkbox" checked={selectedIds.includes(product.id)} readOnly className="size-4 accent-primary" />
-                                        </td>
-                                        {renderedColumns.map(col => {
-                                            const cellStyle = { width: columnWidths[col.id] || col.minWidth };
-                                            
-                                            // Standard Cell Content Rendering
-                                            if (col.id === 'images') return <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 ${isChild ? 'bg-primary/[0.02]' : ''}`}><div className="size-10 bg-primary/5 border rounded overflow-hidden" onClick={(e) => { e.stopPropagation(); const url = getPrimaryImage(product); if (url) setPreviewImage({ url, name: product.name }); }}><img src={getPrimaryImage(product) || ''} className="w-full h-full object-cover" /></div></td>;
-                                            
-                                            if (col.id === 'sku') return (
-                                                <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-1 font-mono font-bold text-primary group ${isChild ? 'text-primary/60' : ''}`}>
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="truncate">{product.sku}</span>
-                                                        <button onClick={(e) => handleCopy(product.sku, e)} className={`${copiedText === product.sku ? 'text-green-600' : 'text-primary/40 opacity-0 group-hover:opacity-100'} hover:text-primary p-0.5 rounded transition-all`}>
-                                                            <span className="material-symbols-outlined text-[14px]">{copiedText === product.sku ? 'check' : 'content_copy'}</span>
+                                const isExpanded = expandedRows.includes(product.id);
+                                const children = product.linked_products || [];
+                                
+                                // Render row function to reuse for children
+                                const renderRow = (p, isSubRow = false) => {
+                                    const pIsParent = p.type === 'configurable';
+                                    const pIsChild = isSubRow || p.parent_products?.length > 0;
+                                    
+                                    return (
+                                        <tr
+                                            key={p.id}
+                                            onClick={() => toggleSelectProduct(p.id)}
+                                            onDoubleClick={() => navigate(`/admin/products/edit/${p.id}`)}
+                                            className={`transition-all group cursor-pointer ${
+                                                selectedIds.includes(p.id) ? 'bg-gold/10' : 
+                                                pIsParent ? 'row-parent' : 
+                                                pIsChild ? 'row-child' : 'hover:bg-gold/5'
+                                            } ${isSubRow ? 'animate-in slide-in-from-top-1 duration-200' : ''}`}
+                                        >
+                                            <td className="p-3 border border-primary/20 sticky-col-0" onDoubleClick={(e) => e.stopPropagation()}>
+                                                <div className="flex items-center gap-2">
+                                                    {!isSubRow && pIsParent && (
+                                                        <button 
+                                                            onClick={(e) => toggleExpandRow(p.id, e)} 
+                                                            className={`size-6 flex items-center justify-center rounded hover:bg-gold/20 text-gold transition-all ${isExpanded ? 'bg-gold/10' : ''}`}
+                                                            title={isExpanded ? 'Thu gọn' : 'Xem biến thể'}
+                                                        >
+                                                            <span className={`material-symbols-outlined text-[20px] transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}>chevron_right</span>
                                                         </button>
-                                                    </div>
-                                                </td>
-                                            );
-                                            
-                                            if (col.id === 'name') return (
-                                                <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-2 font-bold group ${isParent ? 'text-primary' : 'text-[#111]'} ${isChild ? 'child-indent' : ''}`}>
-                                                    <div className="flex items-center gap-2 overflow-hidden">
-                                                        {isChild && <span className="material-symbols-outlined child-icon">subdirectory_arrow_right</span>}
-                                                        <div className="flex flex-col gap-1 flex-1 overflow-hidden">
-                                                            <div className="flex items-center gap-2">
-                                                                <span className={`truncate ${isParent ? 'text-[14px] font-black uppercase' : ''}`}>{product.name}</span>
-                                                                {isParent && <span className="badge-parent"><span className="material-symbols-outlined text-[10px]">account_tree</span>Cha</span>}
-                                                                {isChild && <span className="badge-child"><span className="material-symbols-outlined text-[10px]">link</span>Con</span>}
-                                                            </div>
-                                                            {isParent && <span className="text-[10px] text-primary/40 font-bold uppercase tracking-tighter">Sản phẩm có biến thể</span>}
-                                                        </div>
-                                                        <button onClick={(e) => handleCopy(product.name, e)} className={`${copiedText === product.name ? 'text-green-600' : 'text-primary/40 opacity-0 group-hover:opacity-100'} hover:text-primary p-0.5 rounded transition-all`}>
-                                                            <span className="material-symbols-outlined text-[14px]">{copiedText === product.name ? 'check' : 'content_copy'}</span>
-                                                        </button>
-                                                    </div>
-                                                </td>
-                                            );
-                                            if (col.id === 'cost_price') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#111] font-bold tracking-tight">{product.cost_price ? new Intl.NumberFormat('vi-VN').format(Math.floor(product.cost_price)) + '₫' : '--'}</td>;
-                                            if (col.id === 'price') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-brick font-bold tracking-tight">{product.price ? new Intl.NumberFormat('vi-VN').format(Math.floor(product.price)) + '₫' : '--'}</td>;
-                                            if (col.id === 'stock') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 font-black text-primary">{product.stock_quantity || 0}</td>;
-                                            if (col.id === 'category') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#111] font-medium truncate">{product.category?.name || '-'}</td>;
-                                            if (col.id === 'type') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20"><span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold border ${TYPE_LABELS[product.type]?.cls || ''}`}>{TYPE_LABELS[product.type]?.label || product.type}</span></td>;
-                                            if (col.id === 'specifications') return (
-                                                <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-primary/70 italic group">
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="truncate max-w-[150px]" title={product.specifications}>{product.specifications || '-'}</span>
-                                                        {product.specifications && (
-                                                            <button onClick={(e) => handleCopy(product.specifications, e)} className={`${copiedText === product.specifications ? 'text-green-600' : 'text-primary/40 opacity-0 group-hover:opacity-100'} hover:text-primary p-0.5 rounded transition-all`}>
-                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === product.specifications ? 'check' : 'content_copy'}</span>
+                                                    )}
+                                                    <input type="checkbox" checked={selectedIds.includes(p.id)} readOnly className="size-4 accent-primary" />
+                                                </div>
+                                            </td>
+                                            {renderedColumns.map(col => {
+                                                const cellStyle = { width: columnWidths[col.id] || col.minWidth };
+                                                
+                                                if (col.id === 'images') return <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 ${pIsChild ? 'bg-primary/[0.02]' : ''}`}><div className="size-10 bg-primary/5 border rounded overflow-hidden" onClick={(e) => { e.stopPropagation(); const url = getPrimaryImage(p); if (url) setPreviewImage({ url, name: p.name }); }}><img src={getPrimaryImage(p) || ''} className="w-full h-full object-cover" /></div></td>;
+                                                
+                                                if (col.id === 'sku') return (
+                                                    <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-1 font-mono font-bold text-primary group ${pIsChild ? 'text-primary/60' : ''}`}>
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="truncate">{p.sku}</span>
+                                                            <button onClick={(e) => handleCopy(p.sku, e)} className={`${copiedText === p.sku ? 'text-green-600' : 'text-primary/40 opacity-0 group-hover:opacity-100'} hover:text-primary p-0.5 rounded transition-all`}>
+                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === p.sku ? 'check' : 'content_copy'}</span>
                                                             </button>
-                                                        )}
-                                                    </div>
+                                                        </div>
+                                                    </td>
+                                                );
+                                                
+                                                if (col.id === 'name') return (
+                                                    <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-2 font-bold group ${pIsParent ? 'text-primary' : 'text-[#111]'} ${pIsChild ? 'child-indent' : ''}`}>
+                                                        <div className="flex items-center gap-2 overflow-hidden">
+                                                            {pIsChild && <span className="material-symbols-outlined child-icon">subdirectory_arrow_right</span>}
+                                                            <div className="flex flex-col gap-1 flex-1 overflow-hidden">
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className={`truncate ${pIsParent ? 'text-[14px] font-black uppercase' : ''}`}>{p.name}</span>
+                                                                    {pIsParent && <span className="badge-parent"><span className="material-symbols-outlined text-[10px]">account_tree</span>Cha</span>}
+                                                                    {pIsChild && <span className="badge-child"><span className="material-symbols-outlined text-[10px]">link</span>Con</span>}
+                                                                </div>
+                                                                {pIsParent && <span className="text-[10px] text-primary/40 font-bold uppercase tracking-tighter">Sản phẩm có biến thể ({children.length})</span>}
+                                                            </div>
+                                                            <button onClick={(e) => handleCopy(p.name, e)} className={`${copiedText === p.name ? 'text-green-600' : 'text-primary/40 opacity-0 group-hover:opacity-100'} hover:text-primary p-0.5 rounded transition-all`}>
+                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === p.name ? 'check' : 'content_copy'}</span>
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                );
+                                                
+                                                if (col.id === 'cost_price') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#111] font-bold tracking-tight">{p.cost_price ? new Intl.NumberFormat('vi-VN').format(Math.floor(p.cost_price)) + '₫' : '--'}</td>;
+                                                if (col.id === 'price') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-brick font-bold tracking-tight">{p.price ? new Intl.NumberFormat('vi-VN').format(Math.floor(p.price)) + '₫' : '--'}</td>;
+                                                if (col.id === 'stock') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 font-black text-primary">{p.stock_quantity || 0}</td>;
+                                                if (col.id === 'category') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#111] font-medium truncate">{p.category?.name || '-'}</td>;
+                                                if (col.id === 'type') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20"><span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold border ${TYPE_LABELS[p.type]?.cls || ''}`}>{TYPE_LABELS[p.type]?.label || p.type}</span></td>;
+                                                if (col.id === 'specifications') return (
+                                                    <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-primary/70 italic group">
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="truncate max-w-[150px]" title={p.specifications}>{p.specifications || '-'}</span>
+                                                            {p.specifications && (
+                                                                <button onClick={(e) => handleCopy(p.specifications, e)} className={`${copiedText === p.specifications ? 'text-green-600' : 'text-primary/40 opacity-0 group-hover:opacity-100'} hover:text-primary p-0.5 rounded transition-all`}>
+                                                                    <span className="material-symbols-outlined text-[14px]">{copiedText === p.specifications ? 'check' : 'content_copy'}</span>
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                );
+                                                if (col.id === 'is_featured' || col.id === 'is_new') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-center">{p[col.id] ? <span className="material-symbols-outlined text-gold">check_circle</span> : <span className="material-symbols-outlined text-primary/30">circle</span>}</td>;
+                                                if (col.id === 'actions') return (
+                                                    <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-right">
+                                                        <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                            {isTrashView ? (
+                                                                <React.Fragment>
+                                                                    <button onClick={(e) => { e.stopPropagation(); handleRestore(p.id); }} className="p-1 hover:text-green-600" title="Khôi phục"><span className="material-symbols-outlined text-[18px]">restore</span></button>
+                                                                    <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }} className="p-1 hover:text-brick" title="Xóa vĩnh viễn"><span className="material-symbols-outlined text-[18px]">delete_forever</span></button>
+                                                                </React.Fragment>
+                                                            ) : (
+                                                                <React.Fragment>
+                                                                    <button onClick={(e) => { e.stopPropagation(); handleDuplicate(p.id); }} className="p-1 hover:text-gold" title="Nhân bản"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
+                                                                    <button onClick={(e) => { e.stopPropagation(); navigate(`/admin/products/edit/${p.id}`); }} className="p-1 hover:text-primary" title="Sửa"><span className="material-symbols-outlined text-[18px]">edit</span></button>
+                                                                    <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }} className="p-1 hover:text-brick" title="Xóa"><span className="material-symbols-outlined text-[18px]">delete</span></button>
+                                                                </React.Fragment>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                );
+                                                if (col.isAttribute) return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#111] truncate">{getAttributeValue(p, col.attrId)}</td>;
+                                                return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#111] truncate">{String(p[col.id] ?? '-')}</td>;
+                                            })}
+                                        </tr>
+                                    );
+                                };
+
+                                return (
+                                    <React.Fragment key={product.id}>
+                                        {renderRow(product)}
+                                        {isExpanded && children.length > 0 && (
+                                            children.map(child => renderRow(child, true))
+                                        )}
+                                        {isExpanded && children.length === 0 && (
+                                            <tr className="row-child bg-red-50/10">
+                                                <td className="p-3 border border-primary/20 sticky-col-0" />
+                                                <td colSpan={renderedColumns.length} className="px-6 py-4 border border-primary/20 text-primary/40 italic text-[11px] font-bold">
+                                                    Không có sản phẩm con nào được liên kết
                                                 </td>
-                                            );
-                                            if (col.id === 'is_featured' || col.id === 'is_new') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-center">{product[col.id] ? <span className="material-symbols-outlined text-gold">check_circle</span> : <span className="material-symbols-outlined text-primary/30">circle</span>}</td>;
-                                            if (col.id === 'actions') return (
-                                                <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-right">
-                                                    <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                        {isTrashView ? (
-                                                            <React.Fragment>
-                                                                <button onClick={(e) => { e.stopPropagation(); handleRestore(product.id); }} className="p-1 hover:text-green-600" title="Khôi phục"><span className="material-symbols-outlined text-[18px]">restore</span></button>
-                                                                <button onClick={(e) => { e.stopPropagation(); handleDelete(product.id); }} className="p-1 hover:text-brick" title="Xóa vĩnh viễn"><span className="material-symbols-outlined text-[18px]">delete_forever</span></button>
-                                                            </React.Fragment>
-                                                        ) : (
-                                                            <React.Fragment>
-                                                                <button onClick={(e) => { e.stopPropagation(); handleDuplicate(product.id); }} className="p-1 hover:text-gold" title="Nhân bản"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
-                                                                <button onClick={(e) => { e.stopPropagation(); navigate(`/admin/products/edit/${product.id}`); }} className="p-1 hover:text-primary" title="Sửa"><span className="material-symbols-outlined text-[18px]">edit</span></button>
-                                                                <button onClick={(e) => { e.stopPropagation(); handleDelete(product.id); }} className="p-1 hover:text-brick" title="Xóa"><span className="material-symbols-outlined text-[18px]">delete</span></button>
-                                                            </React.Fragment>
-                                                        )}
-                                                    </div>
-                                                </td>
-                                            );
-                                            if (col.isAttribute) return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#111] truncate">{getAttributeValue(product, col.attrId)}</td>;
-                                            return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#111] truncate">{String(product[col.id] ?? '-')}</td>;
-                                        })}
-                                    </tr>
+                                            </tr>
+                                        )}
+                                    </React.Fragment>
                                 );
                             })
+
                         )}
                     </tbody>
                 </table>

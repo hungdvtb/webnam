@@ -29,7 +29,8 @@ class ProductController extends Controller
                 'category:id,name',                'images:id,product_id,image_url,is_primary',
                 'attributeValues:id,product_id,attribute_id,value',
                 'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
-                'parentProducts:id,name'
+                'parentProducts:id,name',
+                'linkedProducts:id,sku,name,price,cost_price,stock_quantity,type'
             ]);
 
         // Handle Trash View

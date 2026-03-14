@@ -86,7 +86,7 @@ const DraggableImage = ({ img, index, moveImage, handleSetPrimary, handleDeleteI
 
             {/* Image Thumbnail Area - Fixed small ratio */}
             <div className="relative aspect-[4/3] w-full bg-stone/5 overflow-hidden shrink-0">
-                <img src={img.image_url} alt={fileName} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+                <img src={img.image_url || null} alt={fileName} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
 
                 {/* Optimizing Overlay */}
                 {img.optimizing && (

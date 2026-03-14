@@ -35,15 +35,15 @@ const DEFAULT_COLUMNS = [
 ];
 
 function getPrimaryImage(product) {
-    const primary = product.images?.find(img => img.is_primary);
-    let url = primary?.image_url || product.images?.[0]?.image_url || null;
+    if (!product || !product.images || product.images.length === 0) return null;
+    const primary = product.images.find(img => img.is_primary);
+    let url = primary?.image_url || product.images[0]?.image_url;
     
     if (url && !url.startsWith('http') && !url.startsWith('data:')) {
-        // Chèn base URL cho ảnh từ Laravel storage
         const baseUrl = 'http://localhost:8003';
         url = `${baseUrl}/storage/${url.replace(/^\/storage\//, '').replace(/^\//, '')}`;
     }
-    return url;
+    return url || null;
 }
 
 const ProductList = () => {
@@ -1146,7 +1146,7 @@ const ProductList = () => {
                                             {renderedColumns.map(col => {
                                                 const cellStyle = { width: columnWidths[col.id] || col.minWidth };
                                                 
-                                                if (col.id === 'images') return <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 ${pIsChild ? 'bg-primary/[0.01]' : ''}`}><div className="size-10 bg-primary/5 border rounded overflow-hidden" onClick={(e) => { e.stopPropagation(); const url = getPrimaryImage(p); if (url) setPreviewImage({ url, name: p.name }); }}><img src={getPrimaryImage(p) || ''} className="w-full h-full object-cover" /></div></td>;
+                                                if (col.id === 'images') return <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 ${pIsChild ? 'bg-primary/[0.01]' : ''}`}><div className="size-10 bg-primary/5 border rounded overflow-hidden" onClick={(e) => { e.stopPropagation(); const url = getPrimaryImage(p); if (url) setPreviewImage({ url, name: p.name }); }}><img src={getPrimaryImage(p) || null} className="w-full h-full object-cover" alt="" /></div></td>;
                                                 
                                                 if (col.id === 'sku') return (
                                                     <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-1 font-mono font-bold text-primary group ${pIsChild ? 'text-primary/60' : ''}`}>

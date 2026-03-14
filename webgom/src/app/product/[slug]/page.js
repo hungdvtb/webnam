@@ -29,6 +29,9 @@ export default async function ProductDetailPage({ params }) {
       </div>
     );
   }
+  const formatPrice = (price) => {
+    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
+  };
 
   // Determine main image for the description section
   const images = product.images || [];

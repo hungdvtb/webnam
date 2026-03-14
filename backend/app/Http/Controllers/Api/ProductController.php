@@ -8,6 +8,7 @@ use App\Models\ProductImage;
 use App\Models\BulkUpdateLog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 use Illuminate\Database\Eloquent\Builder;
 
@@ -322,7 +323,7 @@ class ProductController extends Controller
             }
         }
 
-        return response()->json($product->load(['category', 'categories', 'images', 'variations.images', 'variations.attributeValues', 'superAttributes', 'attributeValues.attribute']), 201);
+        return response()->json($product->load(['category', 'categories', 'images', 'linkedProducts.images', 'linkedProducts.attributeValues', 'superAttributes', 'attributeValues.attribute']), 201);
     }
 
     /**
@@ -331,13 +332,10 @@ class ProductController extends Controller
     public function show($id)
     {
         $product = Product::with([
-            'category',
-            'categories',
-            'images',
-            'variations.images',
-            'variations.attributeValues',
-            'superAttributes.options',
-            'attributeValues.attribute',
+            'category', 'categories', 'images', 'superAttributes.options', 'attributeValues.attribute',
+            'linkedProducts' => function($q) {
+                $q->withPivot(['link_type', 'position'])->with(['images', 'attributeValues']);
+            },
             'approvedReviews.user'
         ])->findOrFail($id);
         return response()->json($product);
@@ -529,13 +527,18 @@ class ProductController extends Controller
                 }
             }
 
-            // Optional: Remove variants that are no longer in the list
-            // $existingVariantIds = $product->linkedProducts()->wherePivot('link_type', 'super_link')->pluck('products.id')->toArray();
-            // $toDelete = array_diff($existingVariantIds, $incomingVariantIds);
-            // Product::whereIn('id', $toDelete)->delete();
+            // Remove variants that are no longer in the list (Clean up orphans)
+            $existingVariantIds = $product->linkedProducts()->wherePivot('link_type', 'super_link')->pluck('products.id')->toArray();
+            $toDelete = array_diff($existingVariantIds, $incomingVariantIds);
+            if (!empty($toDelete)) {
+                // Detach from parent first
+                $product->linkedProducts()->detach($toDelete);
+                // Then delete the variant products themselves
+                Product::whereIn('id', $toDelete)->delete();
+            }
         }
 
-        return response()->json($product->load(['category', 'categories', 'images', 'variations.images', 'variations.attributeValues', 'superAttributes', 'attributeValues.attribute']));
+        return response()->json($product->load(['category', 'categories', 'images', 'linkedProducts.images', 'linkedProducts.attributeValues', 'superAttributes', 'attributeValues.attribute']));
     }
 
     /**
@@ -543,7 +546,7 @@ class ProductController extends Controller
      */
     public function duplicate($id)
     {
-        $original = Product::with(['attributeValues', 'images', 'superAttributes', 'variations'])->where('id', $id)->firstOrFail();
+        $original = Product::with(['attributeValues', 'images', 'superAttributes', 'linkedProducts.images', 'linkedProducts.attributeValues'])->where('id', $id)->firstOrFail();
 
         // Clone attributes
         $clone = $original->replicate();
@@ -580,20 +583,64 @@ class ProductController extends Controller
             }
         }
 
-        // Copy linked products (for grouped/bundle)
+        // Copy linked products (for grouped/bundle/configurable)
         if (in_array($original->type, ['grouped', 'bundle', 'configurable'])) {
             foreach ($original->linkedProducts as $lp) {
-                $clone->linkedProducts()->attach($lp->id, [
-                    'link_type' => $lp->pivot->link_type,
-                    'position' => $lp->pivot->position
-                ]);
+                if ($lp->pivot->link_type === 'super_link') {
+                    // For variations, we MUST clone the child product itself
+                    $newVariant = $lp->replicate();
+                    // Generate a new SKU for the variant based on the new parent SKU or original suffix
+                    $vSuffix = \Illuminate\Support\Str::afterLast($lp->sku, '-');
+                    if (is_numeric($vSuffix)) {
+                        $newVariant->sku = $clone->sku . '-' . $vSuffix;
+                    } else {
+                        $newVariant->sku = $clone->sku . '-' . \Illuminate\Support\Str::random(4);
+                    }
+                    
+                    $newVariant->name = $lp->name; // Keep name or update? Keep is usually better for variants
+                    $newVariant->slug = \Illuminate\Support\Str::slug($newVariant->name) . '-' . strtolower(\Illuminate\Support\Str::random(6));
+                    $newVariant->save();
+
+                    // Copy variant images
+                    foreach ($lp->images as $img) {
+                        \App\Models\ProductImage::create([
+                            'product_id' => $newVariant->id,
+                            'image_url' => $img->image_url,
+                            'is_primary' => $img->is_primary,
+                            'sort_order' => $img->sort_order
+                        ]);
+                    }
+
+                    // Copy variant EAV attributes
+                    foreach ($lp->attributeValues as $av) {
+                        \App\Models\ProductAttributeValue::create([
+                            'product_id' => $newVariant->id,
+                            'attribute_id' => $av->attribute_id,
+                            'value' => $av->value
+                        ]);
+                    }
+
+                    $clone->linkedProducts()->attach($newVariant->id, [
+                        'link_type' => 'super_link',
+                        'position' => $lp->pivot->position
+                    ]);
+                } else {
+                    // For regular links (related, cross-sell), just attach the same ID
+                    $clone->linkedProducts()->attach($lp->id, [
+                        'link_type' => $lp->pivot->link_type,
+                        'position' => $lp->pivot->position
+                    ]);
+                }
             }
         }
 
         // Copy categories
         $clone->categories()->sync($original->categories->pluck('id')->toArray());
 
-        return response()->json($clone->load(['category', 'categories', 'images', 'attributeValues.attribute']));
+        return response()->json([
+            'message' => 'Sản phẩm đã được nhân bản thành công',
+            'data' => $clone->load(['category', 'categories', 'images', 'attributeValues.attribute', 'linkedProducts.images', 'linkedProducts.attributeValues', 'superAttributes'])
+        ]);
     }
 
     /**

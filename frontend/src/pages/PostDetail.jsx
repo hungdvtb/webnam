@@ -45,7 +45,7 @@ const PostDetail = () => {
         <article className="w-full bg-background-light min-h-screen">
             {/* Featured Image Banner */}
             <div className="relative h-[60vh] overflow-hidden border-b-4 border-gold group">
-                <img src={post.image || 'https://via.placeholder.com/1920x1080'} alt={post.title} className="w-full h-full object-cover transition-transform duration-[2s] group-hover:scale-105" />
+                <img src={post.image || 'https://placehold.co/1920x1080'} alt={post.title} className="w-full h-full object-cover transition-transform duration-[2s] group-hover:scale-105" />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent"></div>
                 <div className="absolute inset-x-6 bottom-16 lg:px-24">
                     <div className="max-w-4xl mx-auto space-y-6">

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { attributeApi, aiApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
+import { motion, Reorder, AnimatePresence } from 'framer-motion';
 
 const AttributeList = () => {
     const [activeTab, setActiveTab] = useState('product'); // 'product' or 'order'
@@ -17,6 +18,8 @@ const AttributeList = () => {
         frontend_type: 'select',
         swatch_type: 'none',
         is_filterable: false,
+        is_filterable_frontend: true,
+        is_filterable_backend: true,
         is_required: false,
         is_variant: true,
         options: [] // Each option: { value: '', swatch_value: '' }
@@ -78,9 +81,15 @@ const AttributeList = () => {
             frontend_type: attr.frontend_type,
             swatch_type: attr.swatch_type || 'none',
             is_filterable: attr.is_filterable,
+            is_filterable_frontend: attr.id ? attr.is_filterable_frontend : true,
+            is_filterable_backend: attr.id ? attr.is_filterable_backend : true,
             is_required: attr.is_required,
             is_variant: attr.is_variant,
-            options: attr.options ? attr.options.map(o => ({ value: o.value, swatch_value: o.swatch_value || '' })) : []
+            options: attr.options ? attr.options.map(o => ({ 
+                id: o.id || Math.random().toString(36).substr(2, 9),
+                value: o.value, 
+                swatch_value: o.swatch_value || '' 
+            })) : []
         });
         setIsFormOpen(true);
     };
@@ -105,13 +114,19 @@ const AttributeList = () => {
 
     const addOption = () => {
         if (optionInput.value.trim()) {
-            setFormData({ ...formData, options: [...formData.options, { ...optionInput }] });
+            setFormData({ 
+                ...formData, 
+                options: [...formData.options, { 
+                    ...optionInput, 
+                    id: Math.random().toString(36).substr(2, 9) 
+                }] 
+            });
             setOptionInput({ value: '', swatch_value: '' });
         }
     };
 
-    const removeOption = (index) => {
-        setFormData({ ...formData, options: formData.options.filter((_, i) => i !== index) });
+    const removeOption = (id) => {
+        setFormData({ ...formData, options: formData.options.filter(o => o.id !== id) });
     };
 
     const handleAIGenerate = async () => {
@@ -227,6 +242,8 @@ const AttributeList = () => {
                                     frontend_type: 'select', 
                                     swatch_type: 'none', 
                                     is_filterable: activeTab === 'product', 
+                                    is_filterable_frontend: true, 
+                                    is_filterable_backend: true, 
                                     is_required: false, 
                                     is_variant: activeTab === 'product', 
                                     options: [] 
@@ -326,15 +343,15 @@ const AttributeList = () => {
                                                 </select>
                                             </div>
                                             <div className="space-y-1.5">
-                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Kiểu Swatch (Trực quan)</label>
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Nút Bấm Trực Quan</label>
                                                 <select 
                                                     value={formData.swatch_type} 
                                                     onChange={e => setFormData({ ...formData, swatch_type: e.target.value })} 
                                                     className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm appearance-none"
                                                 >
-                                                    <option value="none">Không dùng Swatch</option>
-                                                    <option value="color">Màu sắc (Color Hex)</option>
-                                                    <option value="image">Hình ảnh (Thumbnail)</option>
+                                                    <option value="none">Không dùng hiệu ứng</option>
+                                                    <option value="color">Hiển thị Ô màu</option>
+                                                    <option value="image">Hiển thị Hình ảnh</option>
                                                 </select>
                                             </div>
                                         </div>
@@ -348,10 +365,18 @@ const AttributeList = () => {
                                                         </div>
                                                         <span className="text-[11px] font-bold uppercase text-primary tracking-wider">Biến thể</span>
                                                     </label>
-                                                    <label className="flex items-center gap-2.5 cursor-pointer group">
-                                                        <input type="checkbox" checked={formData.is_filterable} onChange={e => setFormData({ ...formData, is_filterable: e.target.checked })} className="size-4 accent-primary rounded-sm" />
-                                                        <span className="text-[11px] font-bold uppercase text-stone-600 tracking-wider">Bộ lọc</span>
-                                                    </label>
+                                                    {['select', 'multiselect', 'price'].includes(formData.frontend_type) && (
+                                                        <>
+                                                            <label className="flex items-center gap-2.5 cursor-pointer group">
+                                                                <input type="checkbox" checked={formData.is_filterable_frontend} onChange={e => setFormData({ ...formData, is_filterable_frontend: e.target.checked })} className="size-4 accent-primary rounded-sm" />
+                                                                <span className="text-[11px] font-bold uppercase text-stone-600 tracking-wider">Lọc trên Web</span>
+                                                            </label>
+                                                            <label className="flex items-center gap-2.5 cursor-pointer group">
+                                                                <input type="checkbox" checked={formData.is_filterable_backend} onChange={e => setFormData({ ...formData, is_filterable_backend: e.target.checked })} className="size-4 accent-primary rounded-sm" />
+                                                                <span className="text-[11px] font-bold uppercase text-stone-600 tracking-wider">Lọc Nội Bộ</span>
+                                                            </label>
+                                                        </>
+                                                    )}
                                                 </>
                                             )}
                                             <label className="flex items-center gap-2.5 cursor-pointer group">
@@ -371,27 +396,46 @@ const AttributeList = () => {
                                                 className="flex items-center gap-1.5 text-gold hover:text-primary transition-colors text-[9px] font-black uppercase"
                                             >
                                                 <span className={`material-symbols-outlined text-[16px] ${aiGenerating ? 'animate-spin' : ''}`}>auto_awesome</span>
-                                                AI Help
+                                                Gợi ý AI
                                             </button>
                                         </div>
 
-                                        <div className="max-h-[220px] overflow-y-auto pr-1 space-y-2 custom-scrollbar">
-                                            {formData.options.map((opt, idx) => (
-                                                <div key={idx} className="flex items-center gap-2 bg-white border border-stone/10 p-2 rounded-sm group hover:border-gold/30 transition-colors">
-                                                    {formData.swatch_type === 'color' && (
-                                                        <div className="size-6 rounded-full border border-stone/20 shadow-sm shrink-0" style={{ backgroundColor: opt.swatch_value || '#ccc' }}></div>
-                                                    )}
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="text-[12px] font-bold text-stone-700 truncate">{opt.value}</div>
-                                                        {opt.swatch_value && <div className="text-[9px] text-stone/40 font-mono uppercase truncate">{opt.swatch_value}</div>}
-                                                    </div>
-                                                    <button type="button" onClick={() => removeOption(idx)} className="opacity-0 group-hover:opacity-100 p-1 text-stone/30 hover:text-brick transition-all">
-                                                        <span className="material-symbols-outlined text-[16px]">delete</span>
-                                                    </button>
-                                                </div>
-                                            ))}
+                                        <Reorder.Group 
+                                            axis="y" 
+                                            values={formData.options} 
+                                            onReorder={(newOrder) => setFormData({ ...formData, options: newOrder })}
+                                            className="max-h-[220px] overflow-y-auto pr-1 space-y-2 custom-scrollbar"
+                                        >
+                                            <AnimatePresence initial={false}>
+                                                {formData.options.map((opt) => (
+                                                    <Reorder.Item 
+                                                        key={opt.id} 
+                                                        value={opt}
+                                                        initial={{ opacity: 0, y: 10 }}
+                                                        animate={{ opacity: 1, y: 0 }}
+                                                        exit={{ opacity: 0, scale: 0.9 }}
+                                                        className="flex items-center gap-2 bg-white border border-stone/10 p-2 rounded-sm group hover:border-gold/30 transition-colors cursor-grab active:cursor-grabbing"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[16px] text-stone/20 group-hover:text-gold transition-colors">drag_indicator</span>
+                                                        {formData.swatch_type === 'color' && (
+                                                            <div className="size-6 rounded-full border border-stone/20 shadow-sm shrink-0" style={{ backgroundColor: opt.swatch_value || '#ccc' }}></div>
+                                                        )}
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="text-[12px] font-bold text-stone-700 truncate">{opt.value}</div>
+                                                            {opt.swatch_value && <div className="text-[9px] text-stone/40 font-mono uppercase truncate">{opt.swatch_value}</div>}
+                                                        </div>
+                                                        <button 
+                                                            type="button" 
+                                                            onClick={() => removeOption(opt.id)} 
+                                                            className="opacity-0 group-hover:opacity-100 p-1 text-stone/30 hover:text-brick transition-all"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[16px]">delete</span>
+                                                        </button>
+                                                    </Reorder.Item>
+                                                ))}
+                                            </AnimatePresence>
                                             {formData.options.length === 0 && <div className="text-center py-8 text-stone/30 font-body italic text-[12px]">Chưa có giá trị nào</div>}
-                                        </div>
+                                        </Reorder.Group>
 
                                         <div className="pt-4 border-t border-stone/20 space-y-3">
                                             <div className="flex gap-2">

@@ -8,7 +8,7 @@ import { trackAddToCart } from '../../components/TrackingScripts';
 const ImageGallery = ({ images }) => {
     const [active, setActive] = useState(0);
     const [zoomed, setZoomed] = useState(false);
-    const imgs = images?.length ? images : [{ url: 'https://via.placeholder.com/600', id: 0 }];
+    const imgs = images?.length ? images : [{ url: 'https://placehold.co/600', id: 0 }];
 
     return (
         <div className="space-y-3">
@@ -300,7 +300,7 @@ const StorefrontProductDetail = () => {
                                 <Link key={p.id} to={`/san-pham/${p.slug || p.id}`}
                                       className="group bg-white rounded-2xl border border-stone-100 overflow-hidden hover:shadow-lg transition-all">
                                     <div className="aspect-square bg-stone-100 overflow-hidden">
-                                        <img src={p.main_image || 'https://via.placeholder.com/400'} alt={p.name} loading="lazy"
+                                        <img src={p.main_image || 'https://placehold.co/400'} alt={p.name} loading="lazy"
                                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
                                     </div>
                                     <div className="p-3">

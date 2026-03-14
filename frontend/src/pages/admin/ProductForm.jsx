@@ -22,11 +22,11 @@ const DraggableImage = ({ img, index, moveImage, handleSetPrimary, handleDeleteI
             const hoverIndex = index;
             if (dragIndex === hoverIndex) return;
             const hoverBoundingRect = ref.current?.getBoundingClientRect();
-            const hoverMiddleY = (hoverBoundingRect.bottom - hoverBoundingRect.top) / 2;
+            const hoverMiddleX = (hoverBoundingRect.right - hoverBoundingRect.left) / 2;
             const clientOffset = monitor.getClientOffset();
-            const hoverClientY = clientOffset.y - hoverBoundingRect.top;
-            if (dragIndex < hoverIndex && hoverClientY < hoverMiddleY) return;
-            if (dragIndex > hoverIndex && hoverClientY > hoverMiddleY) return;
+            const hoverClientX = clientOffset.x - hoverBoundingRect.left;
+            if (dragIndex < hoverIndex && hoverClientX < hoverMiddleX) return;
+            if (dragIndex > hoverIndex && hoverClientX > hoverMiddleX) return;
             moveImage(dragIndex, hoverIndex);
             item.index = hoverIndex;
         },
@@ -65,7 +65,7 @@ const DraggableImage = ({ img, index, moveImage, handleSetPrimary, handleDeleteI
     return (
         <div 
             ref={ref}
-            className={`group bg-white border rounded shadow-sm overflow-hidden flex flex-col transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md image-item-card cursor-pointer select-none relative ${isSelected ? 'ring-2 ring-gold border-gold bg-gold/5' : img.is_primary ? 'border-primary ring-1 ring-primary/20 bg-primary/[0.02]' : 'border-stone/15 hover:border-primary/40'} ${isDragging ? 'opacity-30 scale-95' : 'opacity-100'}`}
+            className={`group bg-white border rounded shadow-sm overflow-hidden flex flex-col transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md image-item-card cursor-pointer select-none relative shrink-0 w-[calc(100%/8-12px)] min-w-[120px] ${isSelected ? 'ring-2 ring-gold border-gold bg-gold/5' : img.is_primary ? 'border-primary ring-1 ring-primary/20 bg-primary/[0.02]' : 'border-stone/15 hover:border-primary/40'} ${isDragging ? 'opacity-30 scale-95' : 'opacity-100'}`}
             data-id={img.id}
             onMouseDown={(e) => {
                 if (e.target.closest('button')) return;
@@ -132,15 +132,15 @@ const DraggableImage = ({ img, index, moveImage, handleSetPrimary, handleDeleteI
             </div>
 
             {/* Info Footer */}
-            <div className="flex-1 flex flex-col justify-center px-3 py-2.5 border-t border-stone/10 bg-white text-center cursor-move">
-                <p className="text-[12px] font-bold text-primary truncate w-full mb-1" title={fileName}>
+            <div className="flex-1 flex flex-col justify-center px-2 py-1.5 border-t border-stone/10 bg-white text-center cursor-move">
+                <p className="text-[10px] font-bold text-primary truncate w-full mb-0.5" title={fileName}>
                     {fileName}
                 </p>
                 <div className="flex items-center justify-center">
                     {img.optimizing ? (
-                        <span className="text-[11px] italic text-gold animate-pulse">Đang nén...</span>
+                        <span className="text-[9px] italic text-gold animate-pulse">Đang nén...</span>
                     ) : (
-                        <span className="text-[11px] font-bold text-stone/50 bg-stone/5 px-2 py-0.5 rounded border border-stone/10 font-mono tracking-tight">
+                        <span className="text-[9px] font-bold text-stone/40 bg-stone/5 px-1.5 py-0.5 rounded border border-stone/10 font-mono tracking-tight">
                             {fileSize ? formatBytes(fileSize) : '-- KB'}
                         </span>
                     )}
@@ -170,20 +170,20 @@ const generateSKUFromName = (name) => {
 };
 
 const Field = ({ label, children, className = "", labelClassName = "" }) => (
-    <div className={`relative border border-stone/30 rounded-sm px-3.5 mb-5 focus-within:border-primary/30 transition-colors flex items-center min-h-[48px] bg-white ${className}`}>
-        <label className={`absolute -top-3 left-2 bg-white px-1.5 font-sans text-[14px] font-bold text-orange-700 tracking-tight leading-none ${labelClassName}`}>
+    <div className={`relative border border-stone/30 rounded-sm px-3 focus-within:border-primary/30 transition-colors flex items-center min-h-[40px] bg-white ${className}`}>
+        <label className={`absolute -top-3 left-2 bg-white px-1.5 font-sans text-[13px] font-bold text-orange-700 tracking-tight leading-none ${labelClassName}`}>
             {label}
         </label>
-        <div className="w-full flex items-center pt-1 text-[14px]">
+        <div className="w-full flex items-center pt-0.5 text-[14px]">
             {children}
         </div>
     </div>
 );
 
 const SectionTitle = ({ icon, title }) => (
-    <div className="flex items-center gap-3 mb-5 border-b border-stone/10 pb-3">
-        <span className="material-symbols-outlined text-primary/40 p-2 bg-stone/5 rounded-full text-lg">{icon}</span>
-        <h3 className="font-sans text-[16px] font-bold text-primary">{title}</h3>
+    <div className="flex items-center gap-2.5 mb-6 border-b border-stone/10 pb-2">
+        <span className="material-symbols-outlined text-primary/40 p-1.5 bg-stone/5 rounded-full text-base">{icon}</span>
+        <h3 className="font-sans text-[15px] font-bold text-primary uppercase tracking-tight">{title}</h3>
     </div>
 );
 
@@ -196,9 +196,10 @@ const ProductForm = () => {
     const isDuplicate = queryParams.get('mode') === 'duplicate';
     
     const { showModal } = useUI();
-    const [loading, setLoading] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
-    const [typeConfirmed, setTypeConfirmed] = useState(isEdit);
+    const [aiRewriting, setAiRewriting] = useState(false);
+    const [typeConfirmed, setTypeConfirmed] = useState(true);
     const [categories, setCategories] = useState([]);
     const [allProducts, setAllProducts] = useState([]);
     const [allAttributes, setAllAttributes] = useState([]);
@@ -210,10 +211,12 @@ const ProductForm = () => {
         type: 'simple',
         name: '',
         category_id: '',
+        category_ids: [],
         price: '',
         cost_price: '',
         weight: '',
         description: '',
+        specifications: '',
         is_featured: false,
         is_new: true,
         stock_quantity: 10,
@@ -225,6 +228,11 @@ const ProductForm = () => {
         super_attribute_ids: [],
         custom_attributes: {}
     });
+
+    const [variants, setVariants] = useState([]);
+    const [selectedSuperAttributes, setSelectedSuperAttributes] = useState([]);
+    const [showVariantConfig, setShowVariantConfig] = useState(false);
+    const [refreshingAttributes, setRefreshingAttributes] = useState(false);
 
     const handleCancel = useCallback(() => {
         navigate('/admin/products');
@@ -316,10 +324,53 @@ const ProductForm = () => {
                 attributeApi.getAll()
             ]);
             setAllProducts(prodRes.data.data);
-            setAllAttributes(attrRes.data);
+            setAllAttributes(attrRes.data || []);
         } catch (error) {
             console.error("Error fetching related data", error);
         }
+    };
+
+    const handleRefreshAttributes = async () => {
+        setRefreshingAttributes(true);
+        try {
+            const response = await attributeApi.getAll();
+            setAllAttributes(response.data || []);
+            
+            // Sync current selection if attributes were updated
+            if (selectedSuperAttributes.length > 0) {
+                setSelectedSuperAttributes(prev => {
+                    return prev.map(selected => {
+                        const updated = (response.data || []).find(a => a.id === selected.id);
+                        return updated ? { ...updated, selected_values: selected.selected_values } : selected;
+                    });
+                });
+            }
+            showModal({ title: 'Thành công', content: 'Đã cập nhật danh sách thuộc tính mới nhất.', type: 'success', autoClose: 2000 });
+        } catch (error) {
+            showModal({ title: 'Lỗi', content: 'Không thể làm mới danh sách thuộc tính.', type: 'error' });
+        } finally {
+            setRefreshingAttributes(false);
+        }
+    };
+
+    const handleResetVariants = () => {
+        setVariants([]);
+        setSelectedSuperAttributes([]);
+        setShowVariantConfig(true);
+    };
+
+    const handleAddManualVariant = () => {
+        const newV = {
+            id: `manual_${Date.now()}`,
+            sku: `${formData.sku}-${variants.length + 1}`,
+            price: formData.price,
+            cost_price: formData.cost_price,
+            weight: formData.weight,
+            stock: 10,
+            attributes: {},
+            label: 'Biến thể tùy chỉnh'
+        };
+        setVariants(prev => [...prev, newV]);
     };
 
     const fetchProduct = async () => {
@@ -329,11 +380,13 @@ const ProductForm = () => {
             setFormData({
                 type: data.type || 'simple',
                 name: data.name,
-                category_id: data.category_id,
+                category_id: data.category_id || '',
+                category_ids: data.categories ? data.categories.map(c => c.id) : [],
                 price: data.price ? Math.floor(data.price) : '',
                 cost_price: data.cost_price ? Math.floor(data.cost_price) : '',
                 weight: data.weight || '',
                 description: data.description || '',
+                specifications: data.specifications || '',
                 is_featured: !!data.is_featured,
                 is_new: !!data.is_new,
                 stock_quantity: data.stock_quantity || 0,
@@ -355,6 +408,52 @@ const ProductForm = () => {
                 }, {})
             });
             setImages(data.images || []);
+            
+            // Handle variants from linked_products with 'super_link' type
+            const variantsData = (data.linked_products || []).filter(p => p.pivot?.link_type === 'super_link');
+            const regularLinks = (data.linked_products || []).filter(p => p.pivot?.link_type !== 'super_link');
+
+            setFormData(prev => ({
+                ...prev,
+                linked_product_ids: regularLinks.map(p => p.id)
+            }));
+
+            if (variantsData.length > 0) {
+                const loadedVariants = variantsData.map(v => {
+                    const attrs = (v.attribute_values || []).reduce((acc, av) => {
+                        acc[av.attribute_id] = av.value;
+                        return acc;
+                    }, {});
+                    return {
+                        ...v,
+                        price: Math.floor(v.price),
+                        cost_price: Math.floor(v.cost_price || 0),
+                        weight: v.weight || 0,
+                        stock: v.stock_quantity,
+                        attributes: attrs,
+                        label: (v.attribute_values || []).map(av => av.value).join(' / ')
+                    };
+                });
+                
+                setVariants(loadedVariants);
+                
+                // Reconstruct selected values from variants
+                const superAttrs = (data.super_attributes || []).map(sa => {
+                    const uniqueVals = new Set();
+                    loadedVariants.forEach(variant => {
+                        if (variant.attributes[sa.id]) {
+                            uniqueVals.add(variant.attributes[sa.id]);
+                        }
+                    });
+                    return {
+                        ...sa,
+                        selected_values: Array.from(uniqueVals)
+                    };
+                });
+                
+                setSelectedSuperAttributes(superAttrs);
+                setShowVariantConfig(true); // Tự động hiển thị danh sách biến thể / bảng cấu hình
+            }
         } catch (error) {
             alert('Không thể tải thông tin sản phẩm.');
             navigate('/admin/products');
@@ -524,6 +623,46 @@ const ProductForm = () => {
         }
     };
 
+    const handleAIRewrite = async () => {
+        if (!formData.description || formData.description.trim() === '' || formData.description === '<p><br></p>') {
+            showModal({ title: 'Lưu ý', content: 'Vui lòng nhập định dạng thô hoặc copy nội dung vào khung mô tả trước khi yêu cầu AI viết lại.', type: 'warning' });
+            return;
+        }
+
+        // Bóc tách hình ảnh (nhất là base64) ra thành placeholder để giảm siêu nhẹ payload gửi lên AI
+        const extractedImages = [];
+        let modifiedHtml = formData.description.replace(/<img[^>]*>/gi, (match) => {
+            const placeholder = `__IMG_PLACEHOLDER_${extractedImages.length}__`;
+            extractedImages.push({ placeholder, originalTag: match });
+            return `<img src="${placeholder}" />`;
+        });
+
+        setAiRewriting(true);
+        try {
+            const response = await aiApi.rewriteProductDescription({
+                content: modifiedHtml
+            });
+            
+            let finalHtml = response.data.description;
+            
+            // Phục hồi lại toàn bộ thẻ hình ảnh gốc
+            extractedImages.forEach(({ placeholder, originalTag }) => {
+                // Thay thế thẻ hình ảnh placeholder mà AI có thể đã chỉnh sửa lại các thuộc tính khác (nếu có)
+                finalHtml = finalHtml.replace(new RegExp(`<img[^>]+src="${placeholder}"[^>]*>`, 'gi'), originalTag);
+                // Fallback: nếu bằng cách nào đó chỉ còn sót lại đoạn text placeholder
+                finalHtml = finalHtml.replace(placeholder, originalTag);
+            });
+
+            setFormData(prev => ({ ...prev, description: finalHtml }));
+        } catch (error) {
+            console.error("Rewrite Error:", error.response?.data || error);
+            const errMessage = error.response?.data?.message || 'Không thể kết nối AI (Có thể nội dung quá dài/quá tải). Vui lòng thử lại sau.';
+            showModal({ title: 'Lỗi AI', content: errMessage, type: 'error' });
+        } finally {
+            setAiRewriting(false);
+        }
+    };
+
     const renderAttributeField = (attr) => {
         const value = formData.custom_attributes[attr.id] || (attr.frontend_type === 'multiselect' ? [] : '');
         const commonClass = "w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary text-[14px] font-bold min-h-[32px]";
@@ -590,11 +729,74 @@ const ProductForm = () => {
     const handleChange = (e) => {
         const { name, value, type, checked } = e.target;
         setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
+        
+        if (name === 'type' && value === 'configurable' && variants.length === 0) {
+            setShowVariantConfig(true);
+        }
     };
 
     const handlePriceInputChange = (e, field) => {
         const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
         setFormData(prev => ({ ...prev, [field]: raw }));
+    };
+
+    const generateVariants = () => {
+        if (selectedSuperAttributes.length === 0) {
+            showModal({ title: 'Lưu ý', content: 'Vui lòng chọn ít nhất một thuộc tính để tạo biến thể.', type: 'warning' });
+            return;
+        }
+
+        // Check if all selected attributes have values
+        const invalidAttr = selectedSuperAttributes.find(attr => !attr.selected_values || attr.selected_values.length === 0);
+        if (invalidAttr) {
+            showModal({ title: 'Lưu ý', content: `Vui lòng chọn giá trị cho thuộc tính "${invalidAttr.name}".`, type: 'warning' });
+            return;
+        }
+
+        // Cartesian product engine
+        const combinations = selectedSuperAttributes.reduce((acc, attr) => {
+            const results = [];
+            attr.selected_values.forEach(val => {
+                if (acc.length === 0) {
+                    results.push({ [attr.id]: val });
+                } else {
+                    acc.forEach(prev => {
+                        results.push({ ...prev, [attr.id]: val });
+                    });
+                }
+            });
+            return results;
+        }, []);
+
+        const newVariants = combinations.map((combo, index) => {
+            const attrLabel = selectedSuperAttributes.map(attr => combo[attr.id]).join(' / ');
+            return {
+                id: `new_${Date.now()}_${index}`,
+                sku: `${formData.sku}-${index + 1}`,
+                price: formData.price,
+                cost_price: formData.cost_price,
+                weight: formData.weight,
+                stock: 10,
+                attributes: combo,
+                label: attrLabel
+            };
+        });
+
+        setVariants(newVariants);
+        setShowVariantConfig(false);
+    };
+
+    const handleVariantChange = (index, field, value) => {
+        const updated = [...variants];
+        if (field === 'price' || field === 'stock' || field === 'cost_price' || field === 'weight') {
+            value = value.replace(/[^0-9]/g, '');
+        }
+        updated[index][field] = value;
+        setVariants(updated);
+    };
+
+    const removeVariant = (index) => {
+        setVariants(variants.filter((_, i) => i !== index));
     };
 
     const handleWeightInputChange = (e) => {
@@ -604,38 +806,69 @@ const ProductForm = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        setLoading(true);
+        setIsSaving(true);
         try {
-            let productId = id;
-            if (isEdit) {
-                await productApi.update(id, formData);
-            } else {
-                // For new product, send file objects if any
-                const storeData = new FormData();
-                Object.entries(formData).forEach(([key, val]) => {
-                    if (key === 'custom_attributes') {
-                        Object.entries(val).forEach(([attrId, attrVal]) => {
-                            if (Array.isArray(attrVal)) {
-                                attrVal.forEach(av => storeData.append(`custom_attributes[${attrId}][]`, av));
-                            } else {
-                                storeData.append(`custom_attributes[${attrId}]`, attrVal);
-                            }
-                        });
-                    } else if (Array.isArray(val)) {
-                        val.forEach(v => storeData.append(`${key}[]`, v));
-                    } else {
-                        storeData.append(key, val);
-                    }
-                });
-                
-                // Add pending images
-                images.forEach(img => {
-                    if (img.file) storeData.append('images[]', img.file);
-                });
+            const submitData = new FormData();
+            
+            // Build FormData from state
+            Object.entries(formData).forEach(([key, val]) => {
+                if (key === 'custom_attributes') {
+                    Object.entries(val).forEach(([attrId, attrVal]) => {
+                        if (Array.isArray(attrVal)) {
+                            attrVal.forEach(av => submitData.append(`custom_attributes[${attrId}][]`, av));
+                        } else {
+                            submitData.append(`custom_attributes[${attrId}]`, attrVal);
+                        }
+                    });
+                } else if (key === 'super_attribute_ids') {
+                    selectedSuperAttributes.forEach(attr => submitData.append('super_attribute_ids[]', attr.id));
+                } else if (key === 'linked_product_ids') {
+                    val.forEach(v => submitData.append('linked_product_ids[]', v));
+                } else if (Array.isArray(val)) {
+                    val.forEach(v => submitData.append(`${key}[]`, v));
+                } else {
+                    submitData.append(key, val);
+                }
+            });
 
-                const response = await productApi.store(storeData);
-                productId = response.data.id;
+            // Add variants if configurable
+            if (formData.type === 'configurable') {
+                variants.forEach((v, idx) => {
+                    // If variant already has an ID, send it for update
+                    if (!v.id.toString().startsWith('new_')) {
+                        submitData.append(`variants[${idx}][id]`, v.id);
+                    }
+                    submitData.append(`variants[${idx}][sku]`, v.sku);
+                    submitData.append(`variants[${idx}][price]`, v.price);
+                    submitData.append(`variants[${idx}][cost_price]`, v.cost_price || '');
+                    submitData.append(`variants[${idx}][weight]`, v.weight || '');
+                    submitData.append(`variants[${idx}][stock_quantity]`, v.stock);
+                    Object.entries(v.attributes).forEach(([attrId, attrVal]) => {
+                        submitData.append(`variants[${idx}][attributes][${attrId}]`, attrVal);
+                    });
+                });
             }
+
+            // Add images
+            // 1. Existing image IDs to keep
+            const existingImageIds = images.filter(img => !img.file).map(img => img.id);
+            existingImageIds.forEach(id => submitData.append('existing_image_ids[]', id));
+            
+            // 2. New files to upload
+            images.forEach(img => {
+                if (img.file) submitData.append('images[]', img.file);
+            });
+
+            let response;
+            if (isEdit) {
+                // For updates, we use POST but can add method override if needed
+                // productApi.update is already POST /api/products/:id
+                response = await productApi.update(id, submitData);
+            } else {
+                response = await productApi.store(submitData);
+            }
+
+            const productId = response.data.id;
 
             // Sync image order if edited or newly created with multiple images
             const realImageIds = images.filter(img => !img.id.toString().startsWith('temp_')).map(img => img.id);
@@ -647,7 +880,7 @@ const ProductForm = () => {
         } catch (error) {
             showModal({ title: 'Lỗi', content: error.response?.data?.message || 'Vui lòng kiểm tra lại thông tin.', type: 'error' });
         } finally {
-            setLoading(false);
+            setIsSaving(false);
         }
     };
 
@@ -661,50 +894,6 @@ const ProductForm = () => {
         virtual: { label: 'Dịch vụ', icon: 'cloud', desc: 'Phi vật thể, không cần vận chuyển.' },
     };
 
-    if (!isEdit && !typeConfirmed) {
-        return (
-            <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full overflow-hidden">
-                <div className="flex-none bg-[#fcfcfa] pb-8 border-b border-gold/10">
-                    <div className="max-w-[1200px] mx-auto flex items-center gap-6">
-                        <button 
-                            onClick={() => navigate('/admin/products')} 
-                            className="size-12 rounded-full border border-gold/20 flex items-center justify-center text-primary hover:bg-gold/10 transition-all group shadow-sm"
-                        >
-                            <span className="material-symbols-outlined text-[24px] group-hover:-translate-x-1 transition-transform">west</span>
-                        </button>
-                        <div>
-                            <h2 className="text-3xl font-display font-bold text-primary italic uppercase tracking-wider leading-none mb-1">Kiến Tạo Tác Phẩm</h2>
-                            <p className="text-[11px] font-black text-stone/40 uppercase tracking-[0.2em] leading-none mt-1">Lựa chọn loại hình sản phẩm để bắt đầu định danh di sản</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto custom-scrollbar flex items-center justify-center py-12">
-                    <div className="max-w-[1200px] w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 px-4">
-                        {Object.entries(TYPE_INFO).map(([key, info]) => (
-                            <button 
-                                key={key} 
-                                onClick={() => { setFormData(prev => ({ ...prev, type: key })); setTypeConfirmed(true); }} 
-                                className={`text-left p-10 border transition-all hover:shadow-premium group relative overflow-hidden flex flex-col h-full rounded-sm ${formData.type === key ? 'border-primary bg-primary/[0.03] shadow-premium ring-1 ring-primary/20' : 'border-gold/10 bg-white hover:border-primary/40'}`}
-                            >
-                                <div className="flex items-center gap-4 mb-6 relative z-10">
-                                    <div className={`size-14 rounded-full flex items-center justify-center transition-all duration-500 ${formData.type === key ? 'bg-primary text-white scale-110 shadow-lg shadow-primary/20' : 'bg-stone/5 text-primary group-hover:bg-primary/10'}`}>
-                                        <span className="material-symbols-outlined text-3xl">{info.icon}</span>
-                                    </div>
-                                    <h3 className="text-[18px] font-display font-bold text-primary uppercase tracking-tight">{info.label}</h3>
-                                </div>
-                                <p className="text-stone font-body text-[14px] leading-relaxed opacity-70 mb-8 flex-1 relative z-10">{info.desc}</p>
-                                <div className="flex justify-end relative z-10">
-                                    <span className={`material-symbols-outlined text-[20px] transition-all duration-300 ${formData.type === key ? 'text-primary' : 'text-stone/20 group-hover:text-primary group-hover:translate-x-1'}`}>arrow_forward</span>
-                                </div>
-                                <div className={`absolute -right-4 -bottom-4 size-24 border-8 rounded-full transition-all duration-700 opacity-5 ${formData.type === key ? 'border-primary scale-150' : 'border-transparent group-hover:border-primary/20 group-hover:scale-125'}`}></div>
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            </div>
-        );
-    }
 
     return (
         <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full overflow-hidden">
@@ -729,8 +918,8 @@ const ProductForm = () => {
                 `}
             </style>
 
-            {/* Header Area */}
-            <div className="flex-none bg-[#fcfcfa] pb-6 border-b border-gold/10">
+            {/* Premium Header - Sticky */}
+            <div className="flex-none sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gold/10 px-6 py-3">
                 <div className="max-w-[1800px] mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
                     <div className="flex items-center gap-4 w-full md:w-auto">
                         <button 
@@ -743,10 +932,10 @@ const ProductForm = () => {
                         </button>
                         <div className="flex flex-col">
                             <h1 className="text-2xl font-display font-bold text-primary italic uppercase tracking-wider leading-none mb-1">
-                                {isDuplicate ? 'Nhân Bản Tác Phẩm' : (isEdit ? 'Biên Tập Tác Phẩm' : 'Khởi Tạo Tác Phẩm Mới')}
+                                {isDuplicate ? 'Nhân bản sản phẩm' : (isEdit ? 'Chỉnh sửa sản phẩm' : 'Tạo sản phẩm mới')}
                             </h1>
                             <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.2em] leading-none mt-1">
-                                {formData.sku ? `SKU: ${formData.sku}` : 'Cấu hình thông tin di sản và thương mại'}
+                                {formData.sku ? `SKU: ${formData.sku}` : 'Cấu hình thông tin sản phẩm và thương mại'}
                             </p>
                         </div>
                     </div>
@@ -762,36 +951,51 @@ const ProductForm = () => {
                         <button
                             form="product-form"
                             type="submit"
-                            disabled={loading}
+                            disabled={isSaving}
                             className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-primary text-white px-10 py-2.5 rounded-sm font-bold text-[11px] uppercase tracking-widest hover:bg-umber transition-all disabled:opacity-50 shadow-premium-sm"
                         >
-                            {loading && <span className="material-symbols-outlined text-sm animate-spin">refresh</span>}
-                            {isDuplicate ? 'Lưu nhân bản' : (isEdit ? 'Lưu cập nhật' : 'Khởi tạo ngay')}
+                            {isSaving && <span className="material-symbols-outlined text-sm animate-spin">refresh</span>}
+                            {isDuplicate ? 'Lưu nhân bản' : (isEdit ? 'Lưu cập nhật' : 'Tạo ngay')}
                         </button>
                     </div>
                 </div>
             </div>
 
             {/* Scrollable Form Content */}
-            <div className="flex-1 overflow-y-auto custom-scrollbar pt-8 pb-12">
-                <form id="product-form" onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-12 gap-5 max-w-[1800px] mx-auto px-1">
-                    <div className="lg:col-span-8 space-y-5">
+            <div className="flex-1 overflow-y-auto custom-scrollbar pt-4 pb-12">
+                <form id="product-form" onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-12 gap-4 max-w-[1800px] mx-auto px-1">
+                    <div className="lg:col-span-8 space-y-4">
                         {/* Basic Info */}
-                        <div className="bg-white border border-gold/10 p-6 shadow-premium-sm rounded-sm">
+                        <div className="bg-white border border-gold/10 p-5 shadow-premium-sm rounded-sm">
                             <SectionTitle icon="shopping_bag" title="Thông tin cơ bản" />
                             
-                            <div className="grid grid-cols-1 gap-2">
-                                <Field label="Tên sản phẩm">
-                                    <input 
-                                        name="name" 
-                                        value={formData.name} 
-                                        onChange={handleChange} 
-                                        required 
-                                        className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[18px] placeholder:text-stone/20"
-                                        placeholder="Nhập tên nghệ thuật của tác phẩm..."
-                                    />
-                                </Field>
-                                
+                            <div className="grid grid-cols-1 gap-y-8">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <Field label="Tên sản phẩm">
+                                        <input 
+                                            name="name" 
+                                            value={formData.name} 
+                                            onChange={handleChange} 
+                                            required 
+                                            className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[16px] placeholder:text-stone/20"
+                                            placeholder="Nhập tên nghệ thuật của tác phẩm..."
+                                        />
+                                    </Field>
+
+                                    <Field label="Loại sản phẩm">
+                                        <select 
+                                            name="type" 
+                                            value={formData.type} 
+                                            onChange={handleChange} 
+                                            className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
+                                        >
+                                            {Object.entries(TYPE_INFO).map(([key, info]) => (
+                                                <option key={key} value={key}>{info.label}</option>
+                                            ))}
+                                        </select>
+                                    </Field>
+                                </div>
+                                    
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <Field label="Mã sản phẩm (SKU)" className="group/sku">
                                         <input 
@@ -810,65 +1014,369 @@ const ProductForm = () => {
                                             <span className="material-symbols-outlined text-[16px]">magic_button</span>
                                         </button>
                                     </Field>
-                                    <Field label="Danh mục gốm sứ">
-                                        <select 
-                                            name="category_id" 
-                                            value={formData.category_id} 
-                                            onChange={handleChange} 
-                                            required
-                                            className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
-                                        >
-                                            <option value="">-- Chọn danh mục --</option>
-                                            {categories.map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
-                                        </select>
-                                    </Field>
+                                    <div className="flex flex-col gap-2">
+                                        <label className="text-[11px] font-black uppercase tracking-widest text-stone/50 ml-2">Danh mục chính & Phụ (Chọn nhiều)</label>
+                                        <div className="border border-stone/30 rounded-sm p-3 bg-white max-h-[160px] overflow-y-auto custom-scrollbar">
+                                            <div className="grid grid-cols-1 gap-2">
+                                                {categories.map(cat => {
+                                                    const isSelected = formData.category_ids.includes(cat.id);
+                                                    const isPrimary = formData.category_id == cat.id;
+                                                    return (
+                                                        <div key={cat.id} className="flex items-center justify-between group/cat">
+                                                            <label className="flex items-center gap-2 cursor-pointer text-[13px] font-bold text-primary flex-1">
+                                                                <input 
+                                                                    type="checkbox" 
+                                                                    checked={isSelected}
+                                                                    onChange={(e) => {
+                                                                        const checked = e.target.checked;
+                                                                        setFormData(prev => {
+                                                                            let newIds = checked 
+                                                                                ? [...prev.category_ids, cat.id] 
+                                                                                : prev.category_ids.filter(id => id !== cat.id);
+                                                                            
+                                                                            // If unchecking the primary, pick the next available as primary
+                                                                            let newPrimary = prev.category_id;
+                                                                            if (!checked && isPrimary) {
+                                                                                newPrimary = newIds.length > 0 ? newIds[0] : '';
+                                                                            } else if (checked && !newPrimary) {
+                                                                                newPrimary = cat.id;
+                                                                            }
+                                                                            
+                                                                            return { ...prev, category_ids: newIds, category_id: newPrimary };
+                                                                        });
+                                                                    }}
+                                                                    className="size-4 accent-primary rounded-sm transition-all"
+                                                                />
+                                                                <span className={isSelected ? 'text-primary' : 'text-stone/40'}>{cat.name}</span>
+                                                            </label>
+                                                            {isSelected && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setFormData({ ...formData, category_id: cat.id })}
+                                                                    className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-[0.1em] transition-all ${isPrimary ? 'bg-gold text-white shadow-sm' : 'bg-stone/5 text-stone/40 hover:bg-gold/10 hover:text-gold'}`}
+                                                                >
+                                                                    {isPrimary ? 'Danh mục chính' : 'Đặt làm chính'}
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                        {formData.category_ids.length === 0 && (
+                                            <p className="text-[10px] text-brick font-bold ml-2 italic">* Vui lòng chọn ít nhất một danh mục</p>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         </div>
 
                         {/* Pricing & Details */}
-                        <div className="bg-white border border-gold/10 p-6 shadow-premium-sm rounded-sm">
+                        <div className="bg-white border border-gold/10 p-5 shadow-premium-sm rounded-sm">
                             <SectionTitle icon="payments" title="Giá và thông số" />
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
-                                <Field label="Giá bán lẻ (VNĐ)" className="border-brick/30 bg-brick/[0.02]">
-                                    <div className="flex items-center w-full">
-                                        <input 
-                                            type="text" 
-                                            name="price" 
-                                            value={formatNumberOutput(formData.price)} 
-                                            onChange={(e) => handlePriceInputChange(e, 'price')} 
-                                            required 
-                                            className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-brick font-black text-[16px]"
-                                        />
-                                        <span className="font-bold text-brick opacity-40 ml-2">₫</span>
-                                    </div>
-                                </Field>
-                                <Field label="Giá nhập (Đối nội)" className="border-primary/20 bg-stone/5">
-                                    <div className="flex items-center w-full">
-                                        <input 
-                                            type="text" 
-                                            name="cost_price" 
-                                            value={formatNumberOutput(formData.cost_price)} 
-                                            onChange={(e) => handlePriceInputChange(e, 'cost_price')} 
-                                            className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]" 
-                                        />
-                                        <span className="font-bold text-primary opacity-30 ml-2">₫</span>
-                                    </div>
-                                </Field>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
-                                <Field label="Khối lượng (gam)">
-                                    <input type="text" name="weight" value={formData.weight} onChange={handleWeightInputChange} className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-indigo-700 font-bold text-[15px]" placeholder="VD: 500" />
-                                </Field>
-                                <Field label="Tồn kho (Stock)">
-                                    <input type="number" name="stock_quantity" value={formData.stock_quantity} onChange={handleChange} className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-indigo-700 font-bold text-[15px]" />
+                            <div className="grid grid-cols-1 gap-y-8">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4">
+                                    <Field label="Giá bán lẻ (VNĐ)" className="border-brick/30 bg-brick/[0.02]">
+                                        <div className="flex items-center w-full">
+                                            <input 
+                                                type="text" 
+                                                name="price" 
+                                                value={formatNumberOutput(formData.price)} 
+                                                onChange={(e) => handlePriceInputChange(e, 'price')} 
+                                                required 
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-brick font-black text-[16px]"
+                                            />
+                                            <span className="font-bold text-brick opacity-40 ml-2">₫</span>
+                                        </div>
+                                    </Field>
+                                    <Field label="Giá nhập (Đối nội)" className="border-primary/20 bg-stone/5">
+                                        <div className="flex items-center w-full">
+                                            <input 
+                                                type="text" 
+                                                name="cost_price" 
+                                                value={formatNumberOutput(formData.cost_price)} 
+                                                onChange={(e) => handlePriceInputChange(e, 'cost_price')} 
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]" 
+                                            />
+                                            <span className="font-bold text-primary opacity-30 ml-2">₫</span>
+                                        </div>
+                                    </Field>
+                                    <Field label="Khối lượng sản phẩm" className="border-primary/20 bg-stone/5">
+                                        <div className="flex items-center w-full">
+                                            <input 
+                                                type="text" 
+                                                name="weight" 
+                                                value={formData.weight} 
+                                                onChange={handleWeightInputChange} 
+                                                placeholder="0"
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]" 
+                                            />
+                                            <span className="font-bold text-primary opacity-30 ml-2 italic">gram</span>
+                                        </div>
+                                    </Field>
+                                </div>
+                                
+                                <Field label="Thông số chi tiết" className="min-h-[80px] items-start pt-3">
+                                    <textarea 
+                                        name="specifications" 
+                                        value={formData.specifications} 
+                                        onChange={handleChange} 
+                                        className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px] resize-none h-[80px]" 
+                                        placeholder="Nhập kích thước, chất liệu, xuất xứ..."
+                                    />
                                 </Field>
                             </div>
                         </div>
 
+                        {/* Variant Management - Only for Configurable Products */}
+                        {formData.type === 'configurable' && (
+                            <div className="bg-white border border-purple-200 p-5 shadow-premium-sm rounded-sm">
+                                <div className="flex justify-between items-center mb-6 border-b border-purple-100 pb-2">
+                                    <div className="flex items-center gap-2.5">
+                                        <span className="material-symbols-outlined text-purple-600/40 p-1.5 bg-purple-50 rounded-full text-base">account_tree</span>
+                                        <h3 className="font-sans text-[15px] font-bold text-purple-900 uppercase tracking-tight">Quản lý biến thể</h3>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        {variants.length > 0 && (
+                                            <>
+                                                <button 
+                                                    type="button"
+                                                    onClick={handleAddManualVariant}
+                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-purple-200 text-purple-600 rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-purple-50 transition-all shadow-sm"
+                                                    title="Thêm một biến thể mới thủ công"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">add_box</span>
+                                                    Thêm biến thể
+                                                </button>
+                                                <button 
+                                                    type="button"
+                                                    onClick={handleResetVariants}
+                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-brick/20 text-brick rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-brick/5 transition-all shadow-sm"
+                                                    title="Xóa toàn bộ biến thể để tạo lại"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">delete_sweep</span>
+                                                    Xóa hết & Reset
+                                                </button>
+                                            </>
+                                        )}
+                                        <button 
+                                            type="button"
+                                            onClick={handleRefreshAttributes}
+                                            disabled={refreshingAttributes}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-purple-200 text-purple-600 rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-purple-50 transition-all shadow-sm disabled:opacity-50"
+                                            title="Tải lại danh sách thuộc tính"
+                                        >
+                                            <span className={`material-symbols-outlined text-[16px] ${refreshingAttributes ? 'animate-spin' : ''}`}>sync</span>
+                                            {refreshingAttributes ? 'Đang làm mới...' : 'Làm mới thuộc tính'}
+                                        </button>
+                                        <button 
+                                            type="button"
+                                            onClick={() => setShowVariantConfig(!showVariantConfig)}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 text-white rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-purple-700 transition-all shadow-sm"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">{showVariantConfig ? 'close' : 'settings'}</span>
+                                            {showVariantConfig ? 'Đóng cấu hình' : 'Cấu hình biến thể'}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {showVariantConfig && (
+                                    <div className="mb-8 p-4 bg-purple-50/50 border border-purple-100 rounded-sm space-y-6 animate-fade-in">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            <div className="space-y-4">
+                                                <label className="text-[11px] font-black uppercase tracking-widest text-purple-900/40">1. Chọn thuộc tính tạo biến thể</label>
+                                                <div className="grid grid-cols-2 gap-2">
+                                                    {allAttributes.filter(a => a.frontend_type === 'select' || a.frontend_type === 'multiselect').map(attr => {
+                                                        const isSelected = selectedSuperAttributes.some(sa => sa.id === attr.id);
+                                                        return (
+                                                            <button
+                                                                key={attr.id}
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    if (isSelected) {
+                                                                        setSelectedSuperAttributes(prev => prev.filter(sa => sa.id !== attr.id));
+                                                                    } else {
+                                                                        setSelectedSuperAttributes(prev => [...prev, { ...attr, selected_values: [] }]);
+                                                                    }
+                                                                }}
+                                                                className={`flex items-center gap-2 p-2 border rounded-sm text-[12px] font-bold transition-all ${isSelected ? 'bg-purple-600 border-purple-600 text-white shadow-md' : 'bg-white border-stone/20 text-stone hover:border-purple-300'}`}
+                                                            >
+                                                                <span className="material-symbols-outlined text-[18px]">{isSelected ? 'check_box' : 'check_box_outline_blank'}</span>
+                                                                {attr.name}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-4">
+                                                <label className="text-[11px] font-black uppercase tracking-widest text-purple-900/40">2. Chọn giá trị cho từng thuộc tính</label>
+                                                <div className="space-y-3">
+                                                    {selectedSuperAttributes.length === 0 ? (
+                                                        <p className="text-[12px] italic text-stone/40 py-4">Chưa chọn thuộc tính nào...</p>
+                                                    ) : (
+                                                        selectedSuperAttributes.map((attr, idx) => (
+                                                            <div key={attr.id} className="p-3 bg-white border border-purple-100 rounded-sm shadow-sm">
+                                                                <div className="flex justify-between items-center mb-2">
+                                                                    <p className="text-[12px] font-black text-purple-900 uppercase m-0">{attr.name}</p>
+                                                                    <div className="flex gap-2">
+                                                                        <button 
+                                                                            type="button"
+                                                                            onClick={() => {
+                                                                                const updated = [...selectedSuperAttributes];
+                                                                                updated[idx].selected_values = (attr.options || []).map(o => o.value);
+                                                                                setSelectedSuperAttributes(updated);
+                                                                            }}
+                                                                            className="px-2 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 hover:bg-purple-200 rounded transition-colors"
+                                                                        >
+                                                                            Chọn tất cả
+                                                                        </button>
+                                                                        <button 
+                                                                            type="button"
+                                                                            onClick={() => {
+                                                                                const updated = [...selectedSuperAttributes];
+                                                                                updated[idx].selected_values = [];
+                                                                                setSelectedSuperAttributes(updated);
+                                                                            }}
+                                                                            className="px-2 py-0.5 text-[10px] font-bold bg-stone-100 text-stone-600 hover:bg-stone-200 rounded transition-colors"
+                                                                        >
+                                                                            Bỏ chọn tất cả
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="flex flex-wrap gap-2">
+                                                                    {(attr.options || []).map(opt => {
+                                                                        const isValSelected = attr.selected_values?.includes(opt.value);
+                                                                        return (
+                                                                            <button
+                                                                                key={opt.id}
+                                                                                type="button"
+                                                                                onClick={() => {
+                                                                                    const updated = [...selectedSuperAttributes];
+                                                                                    const vals = updated[idx].selected_values || [];
+                                                                                    updated[idx].selected_values = isValSelected 
+                                                                                        ? vals.filter(v => v !== opt.value)
+                                                                                        : [...vals, opt.value];
+                                                                                    setSelectedSuperAttributes(updated);
+                                                                                }}
+                                                                                className={`px-3 py-1 text-[11px] font-bold rounded-full border transition-all ${isValSelected ? 'bg-purple-100 border-purple-400 text-purple-800' : 'bg-stone/5 border-transparent text-stone/60 hover:bg-stone/10'}`}
+                                                                            >
+                                                                                {opt.value}
+                                                                            </button>
+                                                                        );
+                                                                    })}
+                                                                </div>
+                                                            </div>
+                                                        ))
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex justify-end pt-4 border-t border-purple-100">
+                                            <button
+                                                type="button"
+                                                onClick={generateVariants}
+                                                className="flex items-center gap-2 px-6 py-2 bg-purple-900 text-white rounded-sm font-bold text-[11px] uppercase tracking-widest hover:bg-black transition-all shadow-lg active:scale-95"
+                                            >
+                                                Tạo tổ hợp biến thể
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {variants.length > 0 ? (
+                                    <div className="overflow-x-auto border border-stone/10 rounded-sm">
+                                        <table className="w-full text-left border-collapse border border-stone/10">
+                                            <thead>
+                                                <tr className="bg-stone/5 text-[10px] font-black uppercase tracking-widest text-stone/50 border-b border-stone/10">
+                                                    <th className="px-4 py-3 border-r border-stone/10 text-center">Biến thể</th>
+                                                    <th className="px-4 py-3 border-r border-stone/10 text-center">Mã SKU</th>
+                                                    <th className="px-4 py-3 border-r border-stone/10 text-center">Giá bán (VNĐ)</th>
+                                                    <th className="px-4 py-3 border-r border-stone/10 text-center">Giá nhập</th>
+                                                    <th className="px-4 py-3 border-r border-stone/10 text-center">Khối lượng</th>
+                                                    <th className="px-4 py-3 border-r border-stone/10 text-center">Kho hàng</th>
+                                                    <th className="px-4 py-3 w-10"></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-stone/5">
+                                                {variants.map((v, index) => (
+                                                    <tr key={v.id} className="hover:bg-purple-50/30 transition-colors">
+                                                        <td className="px-4 py-3 border-r border-stone/10 text-center">
+                                                            <span className="text-[12px] font-bold text-primary">{v.label}</span>
+                                                        </td>
+                                                        <td className="px-4 py-3 border-r border-stone/10">
+                                                            <input 
+                                                                className="w-full bg-stone/5 border border-transparent focus:border-purple-300 focus:bg-white px-2 py-1 rounded text-[12px] font-mono font-bold text-gold text-center"
+                                                                value={v.sku}
+                                                                onChange={(e) => handleVariantChange(index, 'sku', e.target.value)}
+                                                            />
+                                                        </td>
+                                                        <td className="px-4 py-3 border-r border-stone/10">
+                                                            <div className="relative flex items-center justify-center">
+                                                                <input 
+                                                                    className="w-full bg-stone/5 border border-transparent focus:border-purple-300 focus:bg-white pl-2 pr-5 py-1 rounded text-[13px] font-bold text-brick text-center"
+                                                                    value={formatNumberOutput(v.price)}
+                                                                    onChange={(e) => handleVariantChange(index, 'price', e.target.value)}
+                                                                />
+                                                                <span className="absolute right-2 text-[10px] opacity-30 font-bold">₫</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-4 py-3 border-r border-stone/10">
+                                                            <div className="relative flex items-center justify-center">
+                                                                <input 
+                                                                    className="w-full bg-stone/5 border border-transparent focus:border-purple-300 focus:bg-white pl-2 pr-5 py-1 rounded text-[13px] font-bold text-primary text-center"
+                                                                    value={formatNumberOutput(v.cost_price)}
+                                                                    onChange={(e) => handleVariantChange(index, 'cost_price', e.target.value)}
+                                                                />
+                                                                <span className="absolute right-2 text-[10px] opacity-30 font-bold">₫</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-4 py-3 border-r border-stone/10">
+                                                            <div className="relative flex items-center justify-center">
+                                                                <input 
+                                                                    className="w-full bg-stone/5 border border-transparent focus:border-purple-300 focus:bg-white pl-2 pr-8 py-1 rounded text-[13px] font-bold text-primary text-center"
+                                                                    value={v.weight}
+                                                                    onChange={(e) => handleVariantChange(index, 'weight', e.target.value)}
+                                                                />
+                                                                <span className="absolute right-2 text-[9px] opacity-30 font-bold italic">gram</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-4 py-3 border-r border-stone/10">
+                                                            <input 
+                                                                type="number"
+                                                                className="w-full bg-stone/5 border border-transparent focus:border-purple-300 focus:bg-white px-2 py-1 rounded text-[13px] font-bold text-primary text-center"
+                                                                value={v.stock}
+                                                                onChange={(e) => handleVariantChange(index, 'stock', e.target.value)}
+                                                            />
+                                                        </td>
+                                                        <td className="px-4 py-3 text-center">
+                                                            <button 
+                                                                type="button"
+                                                                onClick={() => removeVariant(index)}
+                                                                className="text-stone/30 hover:text-brick transition-colors"
+                                                            >
+                                                                <span className="material-symbols-outlined text-[20px]">delete</span>
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col items-center justify-center py-12 bg-stone/5 border-2 border-dashed border-purple-100 rounded-sm">
+                                        <span className="material-symbols-outlined text-4xl text-purple-200 mb-3">account_tree</span>
+                                        <p className="text-[13px] font-bold text-stone/40 italic">Chưa có biến thể nào được tạo...</p>
+                                        <p className="text-[11px] text-stone/30 mt-1">Bấm "Cấu hình biến thể" để bắt đầu</p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
                         {/* Images Management */}
-                        <div className="bg-white border border-gold/10 p-6 shadow-premium-sm rounded-sm">
-                            <div className="flex justify-between items-center mb-5 border-b border-gold/10 pb-3">
+                        <div className="bg-white border border-gold/10 p-4 shadow-premium-sm rounded-sm">
+                            <div className="flex justify-between items-center mb-4 border-b border-gold/10 pb-2">
                                 <div className="flex items-center gap-3">
                                     <span className="material-symbols-outlined text-primary/40 p-2 bg-stone/5 rounded-full text-lg">photo_library</span>
                                     <h3 className="font-sans text-[16px] font-bold text-primary italic uppercase tracking-tight">Thư viện hình ảnh</h3>
@@ -894,7 +1402,7 @@ const ProductForm = () => {
                             
                             <DndProvider backend={HTML5Backend}>
                                 <div 
-                                    className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 min-h-[160px] p-2 bg-stone/5 border-2 border-dashed border-gold/10 rounded-sm"
+                                    className="flex flex-nowrap overflow-x-auto gap-3 min-h-[140px] p-3 bg-stone/5 border-2 border-dashed border-gold/10 rounded-sm items-start custom-scrollbar"
                                     onMouseDown={(e) => {
                                         if (e.target.closest('.image-item-card') || e.target.closest('button') || e.target.closest('input')) return;
                                         setSelectedImages([]);
@@ -926,20 +1434,31 @@ const ProductForm = () => {
 
                         {/* Description */}
                         <div className="bg-white border border-gold/10 shadow-premium-sm rounded-sm overflow-hidden">
-                            <div className="flex justify-between items-center p-6 border-b border-gold/10">
+                            <div className="flex justify-between items-center p-4 border-b border-gold/10">
                                 <div className="flex items-center gap-3">
                                     <span className="material-symbols-outlined text-primary/40 p-2 bg-stone/5 rounded-full text-lg">description</span>
-                                    <h3 className="font-sans text-[16px] font-bold text-primary italic uppercase tracking-tight">Câu chuyện tác phẩm</h3>
+                                    <h3 className="font-sans text-[16px] font-bold text-primary italic uppercase tracking-tight">Mô tả sản phẩm</h3>
                                 </div>
-                                <button
-                                    type="button"
-                                    onClick={handleAIGenerate}
-                                    disabled={aiGenerating}
-                                    className={`flex items-center gap-2 px-4 py-1.5 rounded-sm border border-gold/30 text-gold font-bold text-[11px] uppercase tracking-widest transition-all ${aiGenerating ? 'opacity-50' : 'hover:bg-primary hover:text-white hover:border-primary active:scale-95'}`}
-                                >
-                                    <span className={`material-symbols-outlined text-[16px] ${aiGenerating ? 'animate-spin' : ''}`}>auto_awesome</span>
-                                    {aiGenerating ? 'AI đang sáng tác...' : 'AI Viết mô tả'}
-                                </button>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleAIRewrite}
+                                        disabled={aiRewriting}
+                                        className={`flex items-center gap-2 px-4 py-1.5 rounded-sm border border-gold/30 text-gold font-bold text-[11px] uppercase tracking-widest transition-all shadow-sm ${aiRewriting ? 'opacity-50 cursor-wait' : 'hover:bg-primary hover:text-white hover:border-primary active:scale-95'}`}
+                                    >
+                                        <span className={`material-symbols-outlined text-[16px] ${aiRewriting ? 'animate-pulse' : ''}`}>edit_document</span>
+                                        {aiRewriting ? 'AI đang viết lại...' : 'AI Viết lại'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleAIGenerate}
+                                        disabled={aiGenerating}
+                                        className={`flex items-center gap-2 px-4 py-1.5 rounded-sm border border-gold/30 text-gold font-bold text-[11px] uppercase tracking-widest transition-all shadow-sm ${aiGenerating ? 'opacity-50 cursor-wait' : 'hover:bg-primary hover:text-white hover:border-primary active:scale-95'}`}
+                                    >
+                                        <span className={`material-symbols-outlined text-[16px] ${aiGenerating ? 'animate-spin' : ''}`}>auto_awesome</span>
+                                        {aiGenerating ? 'AI đang tạo...' : 'AI Viết mới'}
+                                    </button>
+                                </div>
                             </div>
                             <div className="p-1 min-h-[400px]">
                                 <ReactQuill 
@@ -952,9 +1471,9 @@ const ProductForm = () => {
                         </div>
                     </div>
 
-                    <div className="lg:col-span-4 space-y-5">
+                    <div className="lg:col-span-4 space-y-4">
                         {/* Status & Options */}
-                        <div className="bg-white border border-gold/10 p-6 shadow-premium-sm rounded-sm">
+                        <div className="bg-white border border-gold/10 p-5 shadow-premium-sm rounded-sm">
                             <SectionTitle icon="toggle_on" title="Trạng thái hiển thị" />
                             <div className="space-y-4">
                                 <label className="flex items-center justify-between p-3 bg-stone/5 border border-stone/10 rounded-sm cursor-pointer hover:bg-stone/10 transition-all">
@@ -976,9 +1495,9 @@ const ProductForm = () => {
 
                         {/* Custom Attributes */}
                         {allAttributes.filter(a => a.entity_type === 'product').length > 0 && (
-                            <div className="bg-white border border-gold/10 p-6 shadow-premium-sm rounded-sm">
+                            <div className="bg-white border border-gold/10 p-5 shadow-premium-sm rounded-sm">
                                 <SectionTitle icon="fingerprint" title="Thuộc tính nghệ thuật" />
-                                <div className="space-y-1">
+                                <div className="grid grid-cols-1 gap-y-10">
                                     {allAttributes.filter(a => a.entity_type === 'product').map(attr => (
                                         <Field key={attr.id} label={attr.name}>
                                             {renderAttributeField(attr)}
@@ -989,7 +1508,7 @@ const ProductForm = () => {
                         )}
 
                         {/* Related Products */}
-                        <div className="bg-white border border-gold/10 p-6 shadow-premium-sm rounded-sm">
+                        <div className="bg-white border border-gold/10 p-5 shadow-premium-sm rounded-sm">
                             <SectionTitle icon="link" title="Đề xuất liên quan" />
                             <div className="space-y-4">
                                 <label className="text-[11px] font-black uppercase tracking-widest text-stone/50 mb-2 block">Gợi ý tác phẩm cùng bộ sưu tập</label>
@@ -1008,7 +1527,7 @@ const ProductForm = () => {
                                                 className="size-4 accent-primary"
                                             />
                                             <div className="size-10 bg-white border border-stone/10 p-0.5 rounded shadow-sm">
-                                                <img src={prod.thumbnail || 'https://via.placeholder.com/100'} className="w-full h-full object-cover" alt="" />
+                                                <img src={prod.thumbnail || 'https://placehold.co/100'} className="w-full h-full object-cover" alt="" />
                                             </div>
                                             <div className="flex-1 min-w-0">
                                                 <p className="text-[12px] font-bold text-primary truncate">{prod.name}</p>
@@ -1021,14 +1540,14 @@ const ProductForm = () => {
                         </div>
 
                         {/* SEO Tools */}
-                        <div className="bg-white border border-gold/10 p-6 shadow-premium-sm rounded-sm">
+                        <div className="bg-white border border-gold/10 p-5 shadow-premium-sm rounded-sm">
                             <SectionTitle icon="search" title="Tối ưu tìm kiếm (SEO)" />
-                            <div className="space-y-1">
+                            <div className="grid grid-cols-1 gap-y-10">
                                 <Field label="Meta Title">
                                     <input name="meta_title" value={formData.meta_title} onChange={handleChange} className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[13px]" placeholder="Tiêu đề hiển thị trên Google..." />
                                 </Field>
-                                <Field label="Meta Description" className="min-h-[80px]">
-                                    <textarea name="meta_description" value={formData.meta_description} onChange={handleChange} className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary text-[13px] pt-3 resize-none h-[80px]" placeholder="Mô tả tóm tắt nội dung..." />
+                                <Field label="Meta Description" className="min-h-[80px] items-start pt-3">
+                                    <textarea name="meta_description" value={formData.meta_description} onChange={handleChange} className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary text-[13px] resize-none h-[80px]" placeholder="Mô tả tóm tắt nội dung..." />
                                 </Field>
                             </div>
                         </div>

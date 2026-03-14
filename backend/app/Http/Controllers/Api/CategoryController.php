@@ -28,6 +28,7 @@ class CategoryController extends Controller
             'parent_id' => 'nullable|exists:categories,id',
             'description' => 'nullable|string',
             'banner' => 'nullable|image|max:5120', // Max 5MB
+            'filterable_attribute_ids' => 'nullable|array',
         ]);
 
         $bannerPath = null;
@@ -44,6 +45,8 @@ class CategoryController extends Controller
                 'banner_path' => $bannerPath,
                 'status' => $request->status ?? 1,
                 'order' => Category::where('parent_id', $request->parent_id)->max('order') + 1,
+                'display_layout' => $request->display_layout ?? 'layout_1',
+                'filterable_attribute_ids' => $request->filterable_attribute_ids,
             ]);
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error("Error creating category: " . $e->getMessage());
@@ -74,6 +77,7 @@ class CategoryController extends Controller
             'name' => 'sometimes|required|string|max:255',
             'parent_id' => 'sometimes|nullable|exists:categories,id',
             'banner' => 'nullable|image|max:5120',
+            'filterable_attribute_ids' => 'nullable|array',
         ]);
 
         if ($validator->fails()) {
@@ -97,6 +101,13 @@ class CategoryController extends Controller
         $category->parent_id = $request->filled('parent_id') ? $request->parent_id : null;
         $category->description = $request->input('description', $category->description);
         $category->status = $request->input('status', $category->status);
+        $category->display_layout = $request->input('display_layout', $category->display_layout);
+        
+        if ($request->has('filterable_attribute_ids')) {
+            $category->filterable_attribute_ids = $request->filterable_attribute_ids;
+        } elseif ($request->has('clear_attributes') && $request->clear_attributes == 'true') {
+            $category->filterable_attribute_ids = [];
+        }
         
         try {
             $category->save();
@@ -129,7 +140,7 @@ class CategoryController extends Controller
         // items is an array of objects e.g., [['id' => 1, 'parent_id' => null, 'order' => 1], ...]
         foreach ($items as $item) {
             Category::where('id', $item['id'])->update([
-                'parent_id' => current(array_filter([$item['parent_id']], function($v) { return $v !== ''; })) ?: null,
+                'parent_id' => $item['parent_id'] ?: null,
                 'order' => $item['order'] ?? 0,
             ]);
         }

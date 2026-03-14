@@ -41,6 +41,8 @@ export const productApi = {
     bulkDelete: (ids) => api.delete('/products/bulk-delete', { data: { ids } }),
     bulkRestore: (ids) => api.post('/products/bulk-restore', { ids }),
     bulkForceDelete: (ids) => api.delete('/products/bulk-force-delete', { data: { ids } }),
+    bulkUpdateAttributes: (data) => api.post('/products/bulk-update-attributes', data),
+    bulkUpdateUndo: (logId) => api.post('/products/bulk-update-undo', { log_id: logId }),
 };
 
 export const productImageApi = {
@@ -200,6 +202,7 @@ export const cartApi = {
 export const aiApi = {
     chat: (data) => api.post('/ai/chat', data),
     generateProductDescription: (data) => api.post('/ai/generate-product-description', data),
+    rewriteProductDescription: (data) => api.post('/ai/rewrite-product-description', data),
     getHistory: (chatId) => api.get(`/ai/history/${chatId}`),
 };
 

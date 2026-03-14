@@ -140,4 +140,56 @@ class AIController extends Controller
         }
         return response()->json([]);
     }
+
+    public function rewriteProductDescription(Request $request)
+    {
+        $request->validate([
+            'content' => 'required|string',
+        ]);
+
+        $accountId = $request->header('X-Account-Id');
+        $account = \App\Models\Account::find($accountId);
+        $apiKey = $account->ai_api_key ?? env('GEMINI_API_KEY');
+
+        if (!$apiKey) {
+            return response()->json(['message' => 'AI System busy (No API Key configured)'], 503);
+        }
+
+        $client = Gemini::factory()
+            ->withApiKey($apiKey)
+            ->withBaseUrl('https://generativelanguage.googleapis.com/v1beta/')
+            ->make();
+
+        $prompt = "Bạn là một biên tập viên chuyên nghiệp về nghệ thuật gốm sứ Bát Tràng và Marketing cao cấp. 
+        Tôi có một đoạn mô tả nội dung sản phẩm bên dưới được lưu dưới dạng HTML. 
+        Hãy viết lại nội dung dạng text của đoạn HTML này sao cho chuyên nghiệp, mượt mà, cảm xúc và hấp dẫn hơn.
+        
+        YÊU CẦU QUAN TRỌNG NHẤT: BẠN PHẢI GIỮ NGUYÊN HOÀN TOÀN CẤU TRÚC HTML, CÁC THẺ <img>, CÁC ĐƯỜNG LINK <a href>... 
+        Chỉ thay đổi và làm mượt mà phần văn bản hiển thị. 
+        Đặc biệt chú ý: Các thẻ <img src=\"__IMG_PLACEHOLDER_x__\" /> là dữ liệu hệ thống, tuyệt đối GIỮ NGUYÊN HOÀN TOÀN cấu trúc, không sửa thành URL khác và không được xóa.
+        
+        Nội dung HTML đầu vào:
+        " . $request->input('content') . "
+        
+        Lưu ý:
+        1. Ngôn ngữ: Tiếng Việt, sử dụng các từ ngữ tinh tế, sắc sảo.
+        2. Không thay đổi bất kỳ thuộc tính nào của các thẻ HTML (src, class, style...).
+        3. Trả về đúng mã HTML kết quả, không cần có câu chào hỏi hay Markdown dạng ```html.";
+
+        try {
+            $response = $client->generativeModel('gemini-pro-latest')->generateContent($prompt);
+            $rewrittenContent = $response->text();
+            
+            // Dọn dẹp markdown nếu có
+            $rewrittenContent = preg_replace('/```html\s*/', '', $rewrittenContent);
+            $rewrittenContent = preg_replace('/```\s*$/', '', $rewrittenContent);
+
+            return response()->json([
+                'description' => $rewrittenContent,
+                'status' => 'success'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['message' => 'Lỗi AI: ' . $e->getMessage()], 500);
+        }
+    }
 }

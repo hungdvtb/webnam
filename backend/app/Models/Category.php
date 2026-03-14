@@ -8,7 +8,13 @@ class Category extends Model
 {
     use \App\Traits\BelongsToAccount;
 
-    protected $fillable = ['name', 'slug', 'parent_id', 'description', 'banner_path', 'status', 'order', 'account_id'];
+    protected $fillable = ['name', 'slug', 'parent_id', 'description', 'banner_path', 'status', 'order', 'account_id', 'display_layout', 'filterable_attribute_ids'];
+
+    protected $casts = [
+        'filterable_attribute_ids' => 'array',
+        'status' => 'integer',
+        'order' => 'integer'
+    ];
     
     public function parent()
     {
@@ -22,5 +28,5 @@ class Category extends Model
 
     public function products()
     {
-        return $this->hasMany(Product::class);
+        return $this->belongsToMany(Product::class);
     }}

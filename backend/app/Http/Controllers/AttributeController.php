@@ -35,6 +35,8 @@ class AttributeController extends Controller
             'swatch_type' => 'nullable|string|in:none,color,image',
             'options' => 'nullable|array',
             'is_filterable' => 'boolean',
+            'is_filterable_frontend' => 'boolean',
+            'is_filterable_backend' => 'boolean',
             'is_required' => 'boolean',
             'is_variant' => 'boolean'
         ]);
@@ -52,6 +54,8 @@ class AttributeController extends Controller
             'frontend_type' => $request->frontend_type,
             'swatch_type' => $request->swatch_type === 'none' ? null : $request->swatch_type,
             'is_filterable' => $request->is_filterable ?? false,
+            'is_filterable_frontend' => $request->is_filterable_frontend ?? false,
+            'is_filterable_backend' => $request->is_filterable_backend ?? false,
             'is_required' => $request->is_required ?? false,
             'is_variant' => $request->is_variant ?? false,
         ]);
@@ -93,11 +97,13 @@ class AttributeController extends Controller
             'swatch_type' => 'nullable|string|in:none,color,image',
             'options' => 'nullable|array',
             'is_filterable' => 'boolean',
+            'is_filterable_frontend' => 'boolean',
+            'is_filterable_backend' => 'boolean',
             'is_required' => 'boolean',
             'is_variant' => 'boolean'
         ]);
 
-        $data = $request->only('name', 'entity_type', 'frontend_type', 'swatch_type', 'is_filterable', 'is_required', 'is_variant');
+        $data = $request->only('name', 'entity_type', 'frontend_type', 'swatch_type', 'is_filterable', 'is_filterable_frontend', 'is_filterable_backend', 'is_required', 'is_variant');
         if (isset($data['swatch_type']) && $data['swatch_type'] === 'none') {
             $data['swatch_type'] = null;
         }

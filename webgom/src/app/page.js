@@ -1,4 +1,5 @@
 import Image from 'next/image';
+import Link from 'next/link';
 import styles from './page.module.css';
 import { getStorefrontData } from '@/lib/api';
 import config from '@/lib/config';
@@ -117,15 +118,18 @@ export default async function Home() {
           
           <div className={styles.productsGrid}>
             {featuredProducts.map((product) => (
-              <div key={product.id} className={styles.productCard}>
+              <Link href={`/product/${product.slug}`} key={product.id} className={styles.productCard}>
                 <div className={styles.productImage}>
                   {product.primary_image ? (
                      <Image 
-                        src={product.primary_image.url.startsWith('http') ? product.primary_image.url : `${config.storageUrl}/${product.primary_image.path}`} 
+                        src={product.primary_image.url && product.primary_image.url.startsWith('http') 
+                          ? product.primary_image.url 
+                          : `${config.storageUrl}/${product.primary_image.path.startsWith('/') ? product.primary_image.path.substring(1) : product.primary_image.path}`} 
                         alt={product.name} 
                         fill 
                         sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 25vw"
                         style={{ objectFit: 'cover' }}
+                        unoptimized
                       />
                   ) : (
                     <div className={styles.imagePlaceholder}>
@@ -145,7 +149,7 @@ export default async function Home() {
                     <span className={styles.currentPrice}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(product.price)}</span>
                   </div>
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
         </section>

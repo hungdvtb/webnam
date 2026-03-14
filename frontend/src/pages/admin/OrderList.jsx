@@ -248,6 +248,7 @@ const OrderList = () => {
     });
     const [showSearchHistory, setShowSearchHistory] = useState(false);
     const [tempFilters, setTempFilters] = useState(null);
+    const [openAttrId, setOpenAttrId] = useState(null);
     const searchContainerRef = useRef(null);
 
     const [pagination, setPagination] = useState({ current_page: 1, last_page: 1, total: 0, per_page: 20 });
@@ -358,7 +359,9 @@ const OrderList = () => {
 
             if (currentFilters.attributes) {
                 Object.entries(currentFilters.attributes).forEach(([id, val]) => {
-                    if (val) params[`attr_order_${id}`] = val;
+                    if (val && (Array.isArray(val) ? val.length > 0 : val !== '')) {
+                        params[`attr_order_${id}`] = Array.isArray(val) ? val.join(',') : val;
+                    }
                 });
             }
 
@@ -397,6 +400,7 @@ const OrderList = () => {
             if (columnSettingsRef.current && !columnSettingsRef.current.contains(e.target) && !e.target.closest('[data-column-settings-btn]')) setShowColumnSettings(false);
             if (statusMenuRef.current && !statusMenuRef.current.contains(e.target) && !e.target.closest('[data-status-edit-btn]')) setStatusMenuOrderId(null);
             if (searchContainerRef.current && !searchContainerRef.current.contains(e.target)) setShowSearchHistory(false);
+            if (!e.target.closest('[data-attr-dropdown]')) setOpenAttrId(null);
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -408,7 +412,12 @@ const OrderList = () => {
     };
 
     const handleTempAttributeFilterChange = (attrId, value) => {
-        setTempFilters(prev => ({ ...prev, attributes: { ...prev.attributes, [attrId]: value } }));
+        setTempFilters(prev => {
+            const current = (prev.attributes?.[attrId] || []);
+            const currentArray = Array.isArray(current) ? current : (current ? [current] : []);
+            const updated = currentArray.includes(value) ? currentArray.filter(v => v !== value) : [...currentArray, value];
+            return { ...prev, attributes: { ...prev.attributes, [attrId]: updated } };
+        });
     };
 
     const applyFilters = () => {
@@ -636,18 +645,109 @@ const OrderList = () => {
                             <button onClick={applyFilters} className="bg-primary text-white px-8 py-2 rounded-sm font-bold text-[13px] hover:bg-primary/90 shadow-md transform active:scale-95 transition-all">Áp dụng bộ lọc</button>
                         </div>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-6">
-                        <div className="space-y-1.5"><label className="text-[13px] font-medium text-[#0F172A]">Tên khách</label><input name="customer_name" type="text" className="w-full h-10 bg-primary/5 border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary" value={tempFilters.customer_name} onChange={handleTempFilterChange} /></div>
-                        <div className="space-y-1.5"><label className="text-[13px] font-medium text-[#0F172A]">Mã đơn</label><input name="order_number" type="text" className="w-full h-10 bg-primary/5 border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary" value={tempFilters.order_number} onChange={handleTempFilterChange} /></div>
-                        <div className="space-y-1.5"><label className="text-[13px] font-medium text-[#0F172A]">SĐT khách</label><input name="customer_phone" type="text" className="w-full h-10 bg-primary/5 border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary" value={tempFilters.customer_phone} onChange={handleTempFilterChange} /></div>
-                        <div className="space-y-1.5"><label className="text-[13px] font-medium text-[#0F172A]">Trạng thái</label><select name="status" className="w-full h-10 bg-primary/5 border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer appearance-none" value={tempFilters.status[0] || ''} onChange={(e) => setTempFilters({ ...tempFilters, status: e.target.value ? [e.target.value] : [] })}><option value="">Tất cả</option>{orderStatuses.map(s => <option key={s.id} value={s.code}>{s.name}</option>)}</select></div>
-                        <div className="space-y-1.5 col-span-2 md:col-span-1"><label className="text-[13px] font-medium text-[#0F172A]">Ngày đặt</label> <div className="flex gap-2 items-center h-10"><input name="created_at_from" type="date" className="flex-1 h-full bg-primary/5 border border-primary/20 rounded-sm px-2 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer" value={tempFilters.created_at_from} onChange={handleTempFilterChange} /><span className="text-primary/20">-</span><input name="created_at_to" type="date" className="flex-1 h-full bg-primary/5 border border-primary/20 rounded-sm px-2 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer" value={tempFilters.created_at_to} onChange={handleTempFilterChange} /></div></div>
+                    <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 border-t border-l border-primary/10 rounded-sm overflow-hidden mb-6 bg-primary/[0.02]">
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Tên khách</label>
+                            <input name="customer_name" type="text" className="w-full h-10 bg-white border border-primary/10 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary" value={tempFilters.customer_name} onChange={handleTempFilterChange} />
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Mã đơn</label>
+                            <input name="order_number" type="text" className="w-full h-10 bg-white border border-primary/10 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary" value={tempFilters.order_number} onChange={handleTempFilterChange} />
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">SĐT khách</label>
+                            <input name="customer_phone" type="text" className="w-full h-10 bg-white border border-primary/10 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary" value={tempFilters.customer_phone} onChange={handleTempFilterChange} />
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Trạng thái</label>
+                            <div className="relative">
+                                <select name="status" className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer appearance-none" value={tempFilters.status[0] || ''} onChange={(e) => setTempFilters({ ...tempFilters, status: e.target.value ? [e.target.value] : [] })}>
+                                    <option value="">Tất cả</option>
+                                    {orderStatuses.map(s => <option key={s.id} value={s.code}>{s.name}</option>)}
+                                </select>
+                                <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 pointer-events-none text-[18px]">
+                                    expand_more
+                                </span>
+                            </div>
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Ngày đặt</label>
+                            <div className="flex gap-2 items-center h-10">
+                                <input name="created_at_from" type="date" className="flex-1 h-full bg-white border border-primary/10 rounded-sm px-2 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer" value={tempFilters.created_at_from} onChange={handleTempFilterChange} />
+                                <span className="text-primary/20">-</span>
+                                <input name="created_at_to" type="date" className="flex-1 h-full bg-white border border-primary/10 rounded-sm px-2 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer" value={tempFilters.created_at_to} onChange={handleTempFilterChange} />
+                            </div>
+                        </div>
                     </div>
                     {allAttributes.length > 0 && (
                         <div className="mt-8 pt-6 border-t border-primary/10">
                             <h5 className="text-[15px] font-bold text-[#0F172A] mb-4">Lọc theo thuộc tính</h5>
-                            <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-6">
-                                {allAttributes.map(a => (<div key={a.id} className="space-y-1.5"><label className="text-[13px] font-medium text-[#0F172A]">{a.name}</label><input type="text" className="w-full h-10 bg-primary/5 border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary" value={tempFilters.attributes?.[a.id] || ''} onChange={(e) => handleTempAttributeFilterChange(a.id, e.target.value)} /></div>))}
+                            <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 border-t border-l border-primary/10 rounded-sm bg-primary/[0.02]">
+                                {allAttributes.map((a) => (
+                                    <div key={a.id} className="p-4 space-y-2.5 border-r border-b border-primary/10 relative">
+                                        <label className="text-[11px] font-bold text-stone-500 uppercase tracking-[0.15em]">{a.name}</label>
+                                        <div className="relative" data-attr-dropdown>
+                                            <button 
+                                                onClick={() => setOpenAttrId(openAttrId === a.id ? null : a.id)}
+                                                className={`w-full h-10 bg-white border rounded-sm px-3 pr-8 flex items-center transition-all ${openAttrId === a.id ? 'border-primary shadow-inner ring-1 ring-primary/5' : 'border-primary/20 hover:border-primary/40 shadow-sm'}`}
+                                            >
+                                                <span className="truncate text-[13px] font-bold text-primary">
+                                                    {(tempFilters.attributes[a.id] || []).length > 0 
+                                                        ? `${a.name}: ${(tempFilters.attributes[a.id] || []).length}` 
+                                                        : `Chọn ${a.name}...`}
+                                                </span>
+                                                <span className={`material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 transition-transform duration-300 ${openAttrId === a.id ? 'rotate-180' : ''}`}>
+                                                    expand_more
+                                                </span>
+                                            </button>
+
+                                            {openAttrId === a.id && (
+                                                <div className="absolute top-[calc(100%+4px)] left-0 right-0 bg-white border border-primary/30 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] z-[1001] rounded-sm py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-200">
+                                                    <div className="max-h-64 overflow-y-auto custom-scrollbar">
+                                                        {(tempFilters.attributes[a.id] || []).length > 0 && (
+                                                            <button 
+                                                                className="w-full px-3 py-2 text-left text-[11px] font-black text-brick hover:bg-brick/5 border-b border-primary/5 mb-1 uppercase tracking-widest flex items-center gap-2"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setTempFilters(prev => ({
+                                                                        ...prev,
+                                                                        attributes: { ...prev.attributes, [a.id]: [] }
+                                                                    }));
+                                                                }}
+                                                            >
+                                                                <span className="material-symbols-outlined text-[16px]">backspace</span>
+                                                                Xóa các mục đã chọn
+                                                            </button>
+                                                        )}
+                                                        {a.options?.length > 0 ? (
+                                                            a.options.map(opt => (
+                                                                <label 
+                                                                    key={opt.id}
+                                                                    className="px-3 py-2.5 hover:bg-primary/5 cursor-pointer flex items-center gap-3 group transition-colors select-none"
+                                                                    onClick={(e) => e.stopPropagation()}
+                                                                >
+                                                                    <div className="relative flex items-center">
+                                                                        <input 
+                                                                            type="checkbox" 
+                                                                            checked={(tempFilters.attributes[a.id] || []).includes(opt.value)}
+                                                                            onChange={() => handleTempAttributeFilterChange(a.id, opt.value)}
+                                                                            className="w-4 h-4 accent-primary cursor-pointer rounded-sm border-2 border-primary/20"
+                                                                        />
+                                                                    </div>
+                                                                    <span className={`text-[13px] transition-all ${(tempFilters.attributes[a.id] || []).includes(opt.value) ? 'font-bold text-primary' : 'text-stone-600'}`}>
+                                                                        {opt.value}
+                                                                    </span>
+                                                                </label>
+                                                            ))
+                                                        ) : (
+                                                            <div className="px-4 py-6 text-center text-stone-400 italic text-[12px]">Không có dữ liệu</div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
                     )}

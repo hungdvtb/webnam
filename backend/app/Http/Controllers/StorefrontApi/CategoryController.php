@@ -24,7 +24,6 @@ class CategoryController extends Controller
         $categories = Category::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
-            ->whereNull('parent_id') // Only show top-level categories in sidebar
             ->withCount(['products' => function ($q) {
                 $q->where('status', true);
             }])
@@ -42,6 +41,9 @@ class CategoryController extends Controller
         $category = Category::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('slug', $slug)
+            ->with(['children' => function($q) {
+                $q->where('status', true)->orderBy('order')->withCount('products');
+            }])
             ->firstOrFail();
 
         return response()->json($category);

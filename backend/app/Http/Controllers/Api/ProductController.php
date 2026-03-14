@@ -5,8 +5,11 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\ProductImage;
+use App\Models\BulkUpdateLog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+
+use Illuminate\Database\Eloquent\Builder;
 
 class ProductController extends Controller
 {
@@ -22,8 +25,8 @@ class ProductController extends Controller
                 'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status'
             ])
             ->with([
-                'category:id,name', 
-                'images:id,product_id,image_url,is_primary',
+                'categories:id,name', 
+                'category:id,name',                'images:id,product_id,image_url,is_primary',
                 'attributeValues:id,product_id,attribute_id,value',
                 'attributeValues.attribute:id,name,code,is_filterable'
             ]);
@@ -35,7 +38,22 @@ class ProductController extends Controller
 
         // Filter by category
         if ($request->filled('category_id')) {
-            $query->where('category_id', $request->category_id);
+            $query->where(function($q) use ($request) {
+                $q->where('category_id', $request->category_id)
+                  ->orWhereHas('categories', function($sub) use ($request) {
+                      $sub->where('categories.id', $request->category_id);
+                  });
+            });
+        }
+        
+        if ($request->filled('category_ids')) {
+            $catIds = is_array($request->category_ids) ? $request->category_ids : explode(',', $request->category_ids);
+            $query->where(function($q) use ($catIds) {
+                $q->whereIn('category_id', $catIds)
+                  ->orWhereHas('categories', function($sub) use ($catIds) {
+                      $sub->whereIn('categories.id', $catIds);
+                  });
+            });
         }
 
         // Search by name & SKU & more (Advanced Fuzzy & Token Matching)
@@ -124,6 +142,8 @@ class ProductController extends Controller
             'type' => 'required|string|in:simple,configurable,grouped,virtual,bundle,downloadable',
             'name' => 'required|string|max:255',
             'category_id' => 'required|exists:categories,id',
+            'category_ids' => 'nullable|array',
+            'category_ids.*' => 'exists:categories,id',
             'price' => 'required|numeric|min:0',
             'cost_price' => 'nullable|numeric|min:0',
             'special_price' => 'nullable|numeric|min:0',
@@ -138,6 +158,7 @@ class ProductController extends Controller
             'meta_title' => 'nullable|string',
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
+            'specifications' => 'nullable|string',
             // linkages
             'linked_product_ids' => 'nullable|array',
             'linked_product_ids.*' => 'exists:products,id',
@@ -153,6 +174,13 @@ class ProductController extends Controller
         ]);
 
         $product = Product::create(array_merge($validated, ['account_id' => $request->header('X-Account-Id')]));
+
+        if ($request->has('category_ids')) {
+            $product->categories()->sync($request->category_ids);
+        } else {
+            // Default to primary category if no multi-select provided
+            $product->categories()->sync([$request->category_id]);
+        }
 
         if ($request->hasFile('main_image')) {
             $path = $request->file('main_image')->store('products', 'public');
@@ -193,12 +221,12 @@ class ProductController extends Controller
         }
 
         if ($request->has('linked_product_ids')) {
-            $type = $request->get('link_type', ($product->type === 'configurable' ? 'super_link' : $product->type));
+            $type = $request->get('link_type', 'related');
             $links = [];
             foreach ($request->linked_product_ids as $idx => $id) {
                 $links[$id] = ['link_type' => $type, 'position' => $idx];
             }
-            $product->linkedProducts()->sync($links);
+            $product->linkedProducts()->syncWithoutDetaching($links);
         }
 
         if ($request->has('super_attribute_ids') && $product->type === 'configurable') {
@@ -209,7 +237,39 @@ class ProductController extends Controller
             $product->superAttributes()->sync($attrs);
         }
 
-        return response()->json($product->load(['category', 'images', 'linkedProducts', 'superAttributes', 'attributeValues.attribute']), 201);
+        // Handle variants creation
+        if ($request->has('variants') && $product->type === 'configurable') {
+            foreach ($request->variants as $vData) {
+                $variant = Product::create([
+                    'account_id' => $product->account_id,
+                    'type' => 'simple',
+                    'name' => $product->name . ' - ' . ($vData['sku'] ?? 'Variant'),
+                    'sku' => $vData['sku'],
+                    'price' => $vData['price'],
+                    'cost_price' => $vData['cost_price'] ?? null,
+                    'weight' => $vData['weight'] ?? null,
+                    'stock_quantity' => $vData['stock_quantity'] ?? 0,
+                    'category_id' => $product->category_id,
+                    'status' => $product->status,
+                ]);
+
+                // Link to parent
+                $product->linkedProducts()->attach($variant->id, ['link_type' => 'super_link']);
+
+                // Save variant attribute values
+                if (isset($vData['attributes'])) {
+                    foreach ($vData['attributes'] as $attrId => $val) {
+                        \App\Models\ProductAttributeValue::create([
+                            'product_id' => $variant->id,
+                            'attribute_id' => $attrId,
+                            'value' => $val
+                        ]);
+                    }
+                }
+            }
+        }
+
+        return response()->json($product->load(['category', 'categories', 'images', 'linkedProducts.attributeValues', 'superAttributes', 'attributeValues.attribute']), 201);
     }
 
     /**
@@ -219,6 +279,7 @@ class ProductController extends Controller
     {
         $product = Product::with([
             'category',
+            'categories',
             'images',
             'linkedProducts.attributeValues',
             'superAttributes.options',
@@ -239,6 +300,8 @@ class ProductController extends Controller
             'type' => 'sometimes|required|string|in:simple,configurable,grouped,virtual,bundle,downloadable',
             'name' => 'sometimes|required|string|max:255',
             'category_id' => 'sometimes|required|exists:categories,id',
+            'category_ids' => 'nullable|array',
+            'category_ids.*' => 'exists:categories,id',
             'price' => 'sometimes|required|numeric|min:0',
             'cost_price' => 'nullable|numeric|min:0',
             'special_price' => 'nullable|numeric|min:0',
@@ -253,6 +316,7 @@ class ProductController extends Controller
             'meta_title' => 'nullable|string',
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
+            'specifications' => 'nullable|string',
             'linked_product_ids' => 'nullable|array',
             'linked_product_ids.*' => 'exists:products,id',
             'link_type' => 'nullable|string',
@@ -278,7 +342,13 @@ class ProductController extends Controller
             ]);
         }
         // ────────────────────────────────────────────────────────────────────────
-
+        // Sync categories
+        if ($request->has('category_ids')) {
+            $product->categories()->sync($request->category_ids);
+        } elseif ($request->has('category_id')) {
+            // If only primary category changed, sync it as well
+            $product->categories()->syncWithoutDetaching([$request->category_id]);
+        }
         // Sync EAV custom attributes
         if ($request->has('custom_attributes')) {
             foreach ($request->custom_attributes as $attrId => $val) {
@@ -293,11 +363,20 @@ class ProductController extends Controller
         }
 
         if ($request->has('linked_product_ids')) {
-            $type = $request->get('link_type', ($product->type === 'configurable' ? 'super_link' : $product->type));
+            $type = $request->get('link_type', 'related');
             $links = [];
             foreach ($request->linked_product_ids as $idx => $id) {
                 $links[$id] = ['link_type' => $type, 'position' => $idx];
             }
+            
+            // Preserve existing super_link variants
+            $preserveVariantIds = $product->linkedProducts()->wherePivot('link_type', 'super_link')->pluck('products.id')->toArray();
+            foreach ($preserveVariantIds as $vid) {
+                if (!isset($links[$vid])) {
+                    $links[$vid] = ['link_type' => 'super_link'];
+                }
+            }
+            
             $product->linkedProducts()->sync($links);
         }
 
@@ -309,7 +388,56 @@ class ProductController extends Controller
             $product->superAttributes()->sync($attrs);
         }
 
-        return response()->json($product->load(['category', 'images', 'linkedProducts', 'superAttributes', 'attributeValues.attribute']));
+        // Handle variants sync
+        if ($request->has('variants') && $product->type === 'configurable') {
+            $incomingVariantIds = [];
+            foreach ($request->variants as $vData) {
+                if (isset($vData['id'])) {
+                    $variant = Product::findOrFail($vData['id']);
+                    $variant->update([
+                        'sku' => $vData['sku'],
+                        'price' => $vData['price'],
+                        'cost_price' => $vData['cost_price'] ?? null,
+                        'weight' => $vData['weight'] ?? null,
+                        'stock_quantity' => $vData['stock_quantity'] ?? 0,
+                    ]);
+                    $incomingVariantIds[] = $variant->id;
+                } else {
+                    $variant = Product::create([
+                        'account_id' => $product->account_id,
+                        'type' => 'simple',
+                        'name' => $product->name . ' - ' . ($vData['sku'] ?? 'Variant'),
+                        'sku' => $vData['sku'],
+                        'price' => $vData['price'],
+                        'cost_price' => $vData['cost_price'] ?? null,
+                        'weight' => $vData['weight'] ?? null,
+                        'stock_quantity' => $vData['stock_quantity'] ?? 0,
+                        'category_id' => $product->category_id,
+                        'status' => $product->status,
+                    ]);
+                    $product->linkedProducts()->attach($variant->id, ['link_type' => 'super_link']);
+                    $incomingVariantIds[] = $variant->id;
+
+                    // Save variant attribute values
+                    if (isset($vData['attributes'])) {
+                        foreach ($vData['attributes'] as $attrId => $val) {
+                            \App\Models\ProductAttributeValue::create([
+                                'product_id' => $variant->id,
+                                'attribute_id' => $attrId,
+                                'value' => $val
+                            ]);
+                        }
+                    }
+                }
+            }
+
+            // Optional: Remove variants that are no longer in the list
+            // $existingVariantIds = $product->linkedProducts()->wherePivot('link_type', 'super_link')->pluck('products.id')->toArray();
+            // $toDelete = array_diff($existingVariantIds, $incomingVariantIds);
+            // Product::whereIn('id', $toDelete)->delete();
+        }
+
+        return response()->json($product->load(['category', 'categories', 'images', 'linkedProducts.attributeValues', 'superAttributes', 'attributeValues.attribute']));
     }
 
     /**
@@ -364,7 +492,10 @@ class ProductController extends Controller
             }
         }
 
-        return response()->json($clone->load(['category', 'images', 'attributeValues.attribute']));
+        // Copy categories
+        $clone->categories()->sync($original->categories->pluck('id')->toArray());
+
+        return response()->json($clone->load(['category', 'categories', 'images', 'attributeValues.attribute']));
     }
 
     /**
@@ -428,5 +559,148 @@ class ProductController extends Controller
         $ids = $request->input('ids', []);
         Product::whereIn('id', $ids)->delete();
         return response()->json(['message' => 'Đã chuyển các sản phẩm đã chọn vào thùng rác']);
+    }
+
+    /**
+     * Bulk update attributes.
+     */
+    public function bulkUpdateAttributes(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'exists:products,id',
+            'basic_info' => 'nullable|array',
+            'attributes' => 'nullable|array',
+        ]);
+
+        $ids = $request->input('ids');
+        $basicInfo = $request->input('basic_info', []);
+        $attributesData = $request->input('attributes', []);
+
+        if (empty($basicInfo) && empty($attributesData)) {
+            return response()->json(['message' => 'Không có dữ liệu để cập nhật'], 422);
+        }
+
+        // --- Logging original data for BACKUP/UNDO ---
+        $originalDataLog = [];
+        $products = Product::with(['attributeValues', 'categories'])->whereIn('id', $ids)->get();
+
+        foreach ($products as $product) {
+            $pData = [
+                'id' => $product->id,
+                'basic' => [],
+                'attributes' => [],
+                'category_ids' => $product->categories->pluck('id')->toArray(),
+            ];
+
+            // Store original basic fields that ARE being updated
+            foreach (['category_id', 'price', 'cost_price', 'stock_quantity', 'is_featured', 'is_new', 'status', 'type'] as $field) {
+                if (isset($basicInfo[$field]) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
+                    $pData['basic'][$field] = $product->{$field};
+                }
+            }
+
+            // Store original EAV attributes that ARE being updated
+            foreach ($attributesData as $attrId => $val) {
+                if ($val !== null && $val !== '') {
+                    $av = $product->attributeValues->where('attribute_id', $attrId)->first();
+                    $pData['attributes'][$attrId] = $av ? $av->value : null;
+                }
+            }
+
+            $originalDataLog[] = $pData;
+        }
+
+        $log = BulkUpdateLog::create([
+            'batch_name' => 'Cập nhật hàng loạt ' . now()->format('d/m/Y H:i'),
+            'product_count' => count($ids),
+            'original_data' => $originalDataLog,
+        ]);
+        // ---------------------------------------------
+
+        foreach ($ids as $productId) {
+            $product = $products->find($productId);
+            if (!$product) continue;
+            
+            // 1. Update basic info (direct columns)
+            if (!empty($basicInfo)) {
+                $toUpdate = [];
+                foreach (['category_id', 'price', 'cost_price', 'stock_quantity', 'is_featured', 'is_new', 'status', 'type'] as $field) {
+                    if (isset($basicInfo[$field]) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
+                        $toUpdate[$field] = $basicInfo[$field];
+                    }
+                }
+                if (!empty($toUpdate)) {
+                    $product->update($toUpdate);
+                }
+                if (isset($basicInfo['category_ids']) && is_array($basicInfo['category_ids']) && !empty($basicInfo['category_ids'])) {
+                    $product->categories()->sync($basicInfo['category_ids']);
+                }
+            }
+
+            // 2. Update EAV attributes
+            if (!empty($attributesData)) {
+                foreach ($attributesData as $attrId => $val) {
+                    if ($val === null || $val === '') continue; 
+                    $rawValue = is_array($val) ? json_encode($val) : $val;
+                    \App\Models\ProductAttributeValue::updateOrCreate(
+                        ['product_id' => $productId, 'attribute_id' => $attrId],
+                        ['value' => $rawValue]
+                    );
+                }
+            }
+        }
+
+        return response()->json([
+            'message' => 'Cập nhật hàng loạt thành công',
+            'log_id' => $log->id
+        ]);
+    }
+
+    /**
+     * Undo a bulk update operation.
+     */
+    public function undoBulkUpdate(Request $request)
+    {
+        $request->validate(['log_id' => 'required|exists:bulk_update_logs,id']);
+        
+        $log = BulkUpdateLog::findOrFail($request->log_id);
+        $originalData = $log->original_data;
+
+        foreach ($originalData as $pData) {
+            $product = Product::find($pData['id']);
+            if (!$product) continue;
+
+            // Restore basic info
+            if (!empty($pData['basic'])) {
+                $product->update($pData['basic']);
+            }
+
+            // Restore category sync
+            if (isset($pData['category_ids'])) {
+                $product->categories()->sync($pData['category_ids']);
+            }
+
+            // Restore EAV attributes
+            if (!empty($pData['attributes'])) {
+                foreach ($pData['attributes'] as $attrId => $originalValue) {
+                    if ($originalValue === null) {
+                        \App\Models\ProductAttributeValue::where('product_id', $product->id)
+                            ->where('attribute_id', $attrId)
+                            ->delete();
+                    } else {
+                        \App\Models\ProductAttributeValue::updateOrCreate(
+                            ['product_id' => $product->id, 'attribute_id' => $attrId],
+                            ['value' => $originalValue]
+                        );
+                    }
+                }
+            }
+        }
+
+        // Optional: delete the log after undoing
+        $log->delete();
+
+        return response()->json(['message' => 'Đã hoàn tác cập nhật thành công']);
     }
 }

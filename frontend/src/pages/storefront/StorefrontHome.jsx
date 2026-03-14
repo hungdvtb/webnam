@@ -13,7 +13,7 @@ const ProductCard = ({ product, onConsult }) => {
             <Link to={`/san-pham/${product.slug || product.id}`} className="block relative aspect-square overflow-hidden bg-stone-100">
                 {!imgLoaded && <div className="absolute inset-0 animate-pulse bg-stone-200" />}
                 <img
-                    src={product.main_image || 'https://via.placeholder.com/400x400?text=No+Image'}
+                    src={product.main_image || 'https://placehold.co/400x400?text=No+Image'}
                     alt={product.name}
                     loading="lazy"
                     onLoad={() => setImgLoaded(true)}

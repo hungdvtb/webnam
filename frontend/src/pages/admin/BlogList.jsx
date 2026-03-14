@@ -154,7 +154,7 @@ const BlogList = () => {
                                     <td className="px-4 py-3.5">
                                         <div className="relative aspect-square bg-stone/10 border border-gold/20 rounded-sm overflow-hidden group/img shadow-premium-sm">
                                             <img
-                                                src={post.featured_image || 'https://via.placeholder.com/200'}
+                                                src={post.featured_image || 'https://placehold.co/200'}
                                                 alt={post.title}
                                                 className="w-full h-full object-cover group-hover/img:scale-110 transition-transform duration-700"
                                             />

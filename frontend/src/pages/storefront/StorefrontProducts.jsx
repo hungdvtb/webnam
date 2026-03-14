@@ -12,7 +12,7 @@ const ProductCard = ({ product, onConsult }) => {
         <div className="group bg-white rounded-2xl border border-stone-100 overflow-hidden hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300">
             <Link to={`/san-pham/${product.slug || product.id}`} className="block relative aspect-square overflow-hidden bg-stone-100">
                 {!imgLoaded && <div className="absolute inset-0 animate-pulse bg-stone-200" />}
-                <img src={product.main_image || 'https://via.placeholder.com/400'} alt={product.name} loading="lazy"
+                <img src={product.main_image || 'https://placehold.co/400'} alt={product.name} loading="lazy"
                      onLoad={() => setImgLoaded(true)}
                      className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ${imgLoaded ? 'opacity-100' : 'opacity-0'}`} />
                 {hasDiscount && <div className="absolute top-2 left-2 px-2 py-0.5 bg-red-600 text-white text-[9px] font-black rounded-md">-{Math.round((1 - product.current_price / product.price) * 100)}%</div>}

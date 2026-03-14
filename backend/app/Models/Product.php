@@ -10,7 +10,7 @@ class Product extends Model
     use \App\Traits\BelongsToAccount, SoftDeletes;
 
     protected $fillable = [
-        'type', 'name', 'slug', 'description', 'price', 'cost_price', 'special_price', 'special_price_from', 'special_price_to', 
+        'type', 'name', 'slug', 'description', 'specifications', 'price', 'cost_price', 'special_price', 'special_price_from', 'special_price_to', 
         'category_id', 'stock_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
         'meta_title', 'meta_description', 'meta_keywords', 'weight'
     ];
@@ -71,6 +71,11 @@ class Product extends Model
     public function category()
     {
         return $this->belongsTo(Category::class);
+    }
+
+    public function categories()
+    {
+        return $this->belongsToMany(Category::class);
     }
 
     /**

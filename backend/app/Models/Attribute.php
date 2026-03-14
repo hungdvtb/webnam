@@ -8,7 +8,7 @@ class Attribute extends Model
 {
     use \App\Traits\BelongsToAccount;
 
-    protected $fillable = ['name', 'entity_type', 'code', 'frontend_type', 'swatch_type', 'is_filterable', 'is_required', 'is_variant', 'account_id'];
+    protected $fillable = ['name', 'entity_type', 'code', 'frontend_type', 'swatch_type', 'is_filterable', 'is_filterable_frontend', 'is_filterable_backend', 'is_required', 'is_variant', 'account_id'];
 
     public function scopeByEntityType($query, $type)
     {

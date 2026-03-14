@@ -43,7 +43,7 @@ const Blog = () => {
                         <article key={post.id} className="group bg-white border border-gold/10 hover:border-gold/30 shadow-[0_4px_20px_-10px_rgba(44,61,64,0.1)] hover:shadow-premium overflow-hidden flex flex-col hover:-translate-y-2 transition-all duration-700">
                             <div className="aspect-[16/10] overflow-hidden relative">
                                 <img
-                                    src={post.featured_image || 'https://via.placeholder.com/800x500'}
+                                    src={post.featured_image || 'https://placehold.co/800x500'}
                                     alt={post.title}
                                     className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-[1.5s] ease-out"
                                 />

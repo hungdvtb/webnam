@@ -215,7 +215,7 @@ const Shop = () => {
                         {products.map(product => (
                             <ProductCard key={product.id} product={{
                                 ...product,
-                                image: product.images?.[0]?.image_url || 'https://via.placeholder.com/400'
+                                image: product.images?.[0]?.image_url || 'https://placehold.co/400'
                             }} />
                         ))}
                     </div>

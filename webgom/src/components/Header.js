@@ -29,25 +29,13 @@ export default function Header({ menuItems = [] }) {
           </div>
         </Link>
 
-        {/* Navigation Menu */}
         <nav className="main-nav">
           <ul className="nav-list">
-            {menuItems.length > 0 ? (
-              menuItems.map((item, idx) => (
-                <li key={idx} className="nav-item">
-                  <Link href={item.url || '#'} className="nav-link">
-                    {item.title}
-                  </Link>
-                </li>
-              ))
-            ) : (
-              <>
-                <li className="nav-item"><Link href="#" className="nav-link">BỘ SƯU TẬP</Link></li>
-                <li className="nav-item"><Link href="#" className="nav-link">NGHỆ NHÂN</Link></li>
-                <li className="nav-item"><Link href="#" className="nav-link">LỊCH SỬ</Link></li>
-                <li className="nav-item"><Link href="#" className="nav-link">TRIỂN LÃM</Link></li>
-              </>
-            )}
+            <li className="nav-item"><Link href="/" className="nav-link">TRANG CHỦ</Link></li>
+            <li className="nav-item"><Link href="/about" className="nav-link">GIỚI THIỆU</Link></li>
+            <li className="nav-item"><Link href="/agent-registration" className="nav-link">ĐĂNG KÍ ĐẠI LÝ</Link></li>
+            <li className="nav-item"><Link href="/policies" className="nav-link">CHÍNH SÁCH</Link></li>
+            <li className="nav-item"><Link href="/news" className="nav-link">TIN TỨC</Link></li>
           </ul>
         </nav>
 

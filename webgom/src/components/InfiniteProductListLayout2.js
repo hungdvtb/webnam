@@ -4,9 +4,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import config from '@/lib/config';
-import styles from '../app/products/products.module.css';
+import styles from '../app/products/layout2.module.css';
 
-export default function InfiniteProductList({ initialData, category = '', sort = 'popular', search = '', initialAttrs = {} }) {
+export default function InfiniteProductListLayout2({ initialData, category = '', sort = 'popular', search = '', initialAttrs = {} }) {
   const [products, setProducts] = useState(initialData.data || []);
   const [page, setPage] = useState(initialData.current_page || 1);
   const [hasMore, setHasMore] = useState(initialData.current_page < initialData.last_page);
@@ -56,7 +56,6 @@ export default function InfiniteProductList({ initialData, category = '', sort =
       const newData = await response.json();
       
       setProducts(prev => {
-        // Prevent duplicates
         const existingIds = new Set(prev.map(p => p.id));
         const uniqueNew = newData.data.filter(p => !existingIds.has(p.id));
         return [...prev, ...uniqueNew];
@@ -91,48 +90,46 @@ export default function InfiniteProductList({ initialData, category = '', sort =
   return (
     <>
       <div className={styles.productGrid}>
-        {products.map((product, index) => (
-          <div 
-            key={product.id} 
-            className={styles.productCard}
-          >
-            <Link href={`/product/${product.slug}`} className={styles.imageWrapper}>
-              {product.primary_image ? (
-                <Image 
-                  src={product.primary_image.url.startsWith('http') 
-                    ? product.primary_image.url 
-                    : `${config.storageUrl}/${product.primary_image.path.startsWith('/') ? product.primary_image.path.substring(1) : product.primary_image.path}`}
-                  alt={product.name}
-                  fill
-                  sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
-                  style={{ objectFit: 'cover' }}
-                  unoptimized
-                />
-              ) : (
-                <div className={styles.imagePlaceholder}>
-                  <span className="material-symbols-outlined" style={{ fontSize: '48px', color: '#ccc' }}>image</span>
-                </div>
-              )}
-              {product.is_new && <span className={styles.badge}>MỚI</span>}
-            </Link>
-            <div className={styles.productInfo}>
-              <p className={styles.productCategory}>{product.category?.name || 'Bát Tràng Premium'}</p>
-              <Link href={`/product/${product.slug}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+        {products.map((product) => (
+          <div key={product.id} className={styles.productCard}>
+            <div className={styles.imageArea}>
+              <Link href={`/product/${product.slug}`}>
+                {product.primary_image ? (
+                  <Image 
+                    src={product.primary_image.url.startsWith('http') 
+                      ? product.primary_image.url 
+                      : `${config.storageUrl}/${product.primary_image.path.startsWith('/') ? product.primary_image.path.substring(1) : product.primary_image.path}`}
+                    alt={product.name}
+                    fill
+                    className={styles.image}
+                    sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 25vw"
+                    unoptimized
+                  />
+                ) : (
+                  <div className={styles.imagePlaceholder}>
+                    <span className="material-symbols-outlined" style={{ fontSize: '48px', color: '#ccc' }}>image</span>
+                  </div>
+                )}
+              </Link>
+              {product.is_new && <div className={styles.badge}>Bán chạy</div>}
+            </div>
+            
+            <div className={styles.cardBody}>
+              <span className={styles.categoryTag}>{product.category?.name || 'Gốm Sứ'}</span>
+              <Link href={`/product/${product.slug}`} style={{ textDecoration: 'none' }}>
                 <h3 className={styles.productName}>{product.name}</h3>
               </Link>
-              <div className={styles.rating}>
-                {[...Array(5)].map((_, i) => (
-                  <span key={i} className="material-symbols-outlined">star</span>
-                ))}
-                <span className={styles.reviewCount}>(24)</span>
-              </div>
-              <div className={styles.cardFooter}>
-                <span className={styles.price}>
+              
+              <div className={styles.footer}>
+                <p className={styles.price}>
                   {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(product.price)}
-                </span>
-                <button className={styles.cartBtn}>
-                  <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>add_shopping_cart</span>
-                </button>
+                </p>
+                <div className={styles.actions}>
+                  <button className={styles.cartAction}>
+                    <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>add_shopping_cart</span>
+                    Giỏ hàng
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -142,27 +139,23 @@ export default function InfiniteProductList({ initialData, category = '', sort =
       {products.length === 0 && !loading && (
         <div style={{ textAlign: 'center', padding: '5rem 2rem', opacity: 0.5 }}>
           <span className="material-symbols-outlined" style={{ fontSize: '64px', marginBottom: '1rem' }}>search_off</span>
-          <p style={{ fontSize: '18px' }}>Không tìm thấy sản phẩm nào phù hợp với yêu cầu của bạn.</p>
-          <p style={{ fontSize: '14px', marginTop: '0.5rem' }}>Hãy thử đổi từ khóa khác hoặc xóa bộ lọc.</p>
+          <p style={{ fontSize: '18px', fontFamily: 'Playfair Display, serif' }}>Không tìm thấy sản phẩm nào phù hợp.</p>
         </div>
       )}
 
-      {/* Pagination / Load More Sentinel */}
+      {/* Infinite Scroll Trigger */}
       <div 
         ref={lastElementRef}
-        className={styles.pagination} 
-        style={{ visibility: (hasMore && products.length > 0) ? 'visible' : 'hidden', minHeight: '100px' }}
+        className={styles.loader}
+        style={{ visibility: hasMore ? 'visible' : 'hidden' }}
       >
-        <div className={styles.loader}>
-          <div className={styles.spinner}></div>
-          <div className={styles.spinnerActive}></div>
-        </div>
-        <p className={styles.paginationText}>Xem thêm sản phẩm</p>
+        <div className={styles.spinner}></div>
+        <p style={{ fontSize: '12px', fontWeight: 'bold', color: '#C5A059', textTransform: 'uppercase' }}>Đang tải thêm...</p>
       </div>
-
+      
       {!hasMore && products.length > 0 && (
-        <div className={styles.pagination} style={{ marginTop: '2rem' }}>
-          <p className={styles.paginationText} style={{ opacity: 0.4 }}>Đã hiển thị tất cả sản phẩm</p>
+        <div style={{ textAlign: 'center', padding: '3rem 0', opacity: 0.3 }}>
+          <p style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase' }}>Đã hiển thị tất cả sản phẩm</p>
         </div>
       )}
     </>

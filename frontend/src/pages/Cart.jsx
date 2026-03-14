@@ -46,7 +46,7 @@ const Cart = () => {
                         <div key={item.id} className="flex flex-col sm:flex-row gap-6 p-6 bg-white border border-gold/10 group hover:shadow-hover transition-all relative">
                             <div className="w-full sm:w-32 aspect-square bg-background-light overflow-hidden">
                                 <img
-                                    src={item.product?.images?.[0]?.image_url || 'https://via.placeholder.com/200'}
+                                    src={item.product?.images?.[0]?.image_url || 'https://placehold.co/200'}
                                     alt={item.product?.name}
                                     className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
                                 />

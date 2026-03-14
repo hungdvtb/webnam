@@ -3,6 +3,7 @@ import Image from 'next/image';
 import { getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
 import config from '@/lib/config';
 import styles from './product.module.css';
+import ProductGallery from '@/components/ProductGallery';
 
 export default async function ProductDetailPage({ params }) {
   const resolvedParams = await params;
@@ -33,7 +34,11 @@ export default async function ProductDetailPage({ params }) {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
   };
 
-  const mainImage = product.images?.find(img => img.is_primary) || product.images?.[0];
+  // We pass product.images directly to the gallery component
+  const images = product.images || [];
+
+  // Determine main image for the description section
+  const mainImage = images.find(img => img.is_primary) || images[0];
 
   return (
     <div className={styles.productDetail}>
@@ -56,37 +61,7 @@ export default async function ProductDetailPage({ params }) {
         <div className={styles.mainGrid}>
           {/* Gallery */}
           <div className={styles.galleryColumn}>
-            <div className={styles.galleryContainer}>
-              <div className={styles.mainImage}>
-                {mainImage ? (
-                  <Image 
-                    src={mainImage.url.startsWith('http') ? mainImage.url : `${config.storageUrl}/${mainImage.path}`}
-                    alt={product.name}
-                    fill
-                    sizes="(max-width: 768px) 100vw, 50vw"
-                    style={{ objectFit: 'cover' }}
-                    priority
-                  />
-                ) : (
-                  <div className={styles.imagePlaceholder}>
-                    <span className="material-symbols-outlined" style={{ fontSize: '64px', color: '#ccc' }}>image</span>
-                  </div>
-                )}
-              </div>
-              <div className={styles.thumbnails}>
-                {product.images?.slice(0, 4).map((img, idx) => (
-                  <button key={img.id} className={`${styles.thumbBtn} ${img.id === mainImage?.id ? styles.thumbActive : ''}`}>
-                    <Image 
-                      src={img.url.startsWith('http') ? img.url : `${config.storageUrl}/${img.path}`}
-                      alt={`${product.name} thumb ${idx}`}
-                      fill
-                      sizes="100px"
-                      style={{ objectFit: 'cover' }}
-                    />
-                  </button>
-                ))}
-              </div>
-            </div>
+            <ProductGallery images={images} productName={product.name} />
           </div>
 
           {/* Info Section */}
@@ -115,14 +90,20 @@ export default async function ProductDetailPage({ params }) {
                   Thông số chi tiết
                 </h4>
                 <ul className={styles.specList}>
+                  {product.specifications && (
+                    <li className={styles.specItem} style={{ borderBottom: '1px solid rgba(27, 54, 93, 0.1)', paddingBottom: '1rem', marginBottom: '0.5rem', flexDirection: 'column', alignItems: 'flex-start', gap: '0.5rem' }}>
+                      <span className={styles.specLabel} style={{ fontSize: '11px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mô tả kỹ thuật</span>
+                      <span className={styles.specValue} style={{ whiteSpace: 'pre-line', fontWeight: '500', lineHeight: '1.5' }}>{product.specifications}</span>
+                    </li>
+                  )}
                   {product.attributeValues?.map((attr) => (
                     <li key={attr.id} className={styles.specItem}>
                       <span className={styles.specLabel}>{attr.attribute?.name}</span>
                       <span className={styles.specValue}>{attr.value}</span>
                     </li>
                   ))}
-                  {/* Fallback specs if no attributes */}
-                  {(!product.attributeValues || product.attributeValues.length === 0) && (
+                  {/* Fallback specs if no attributes and no specifications */}
+                  {(!product.attributeValues || product.attributeValues.length === 0) && !product.specifications && (
                     <>
                       <li className={styles.specItem}>
                         <span className={styles.specLabel}>Chất liệu</span>
@@ -212,7 +193,7 @@ export default async function ProductDetailPage({ params }) {
             {mainImage && (
               <div className={styles.descImage}>
                 <Image 
-                  src={mainImage.url.startsWith('http') ? mainImage.url : `${config.storageUrl}/${mainImage.path}`}
+                  src={mainImage.url && mainImage.url.startsWith('http') ? mainImage.url : `${config.storageUrl}/${mainImage.path}`}
                   alt="Mô tả sản phẩm"
                   fill
                   sizes="(max-width: 768px) 100vw, 80vw"
@@ -243,7 +224,7 @@ export default async function ProductDetailPage({ params }) {
                     <div className={styles.relImage}>
                       {displayImage ? (
                         <Image 
-                          src={displayImage.url.startsWith('http') ? displayImage.url : `${config.storageUrl}/${displayImage.path}`}
+                          src={displayImage.url && displayImage.url.startsWith('http') ? displayImage.url : `${config.storageUrl}/${displayImage.path}`}
                           alt={rel.name}
                           fill
                           sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 25vw"

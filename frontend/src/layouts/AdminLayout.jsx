@@ -235,7 +235,7 @@ const AdminLayout = () => {
                             >
                                 <div className="flex items-center gap-4 text-left">
                                     <span className={`material-symbols-outlined w-6 text-center ${isDesignOpen ? 'text-gold' : 'text-stone'} group-hover:text-gold transition-colors`}>design_services</span>
-                                    <span className="font-sans text-sm font-medium tracking-wider text-left">Thiết kế & Nội dung</span>
+                                    <span className="font-sans text-sm font-medium tracking-wider text-left">Web</span>
                                 </div>
                                 <span className={`material-symbols-outlined text-xs transition-transform duration-300 ${isDesignOpen ? 'rotate-180 text-gold' : 'text-stone'}`}>
                                     expand_more

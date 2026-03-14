@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+
+<html lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif:wght@400;700&amp;family=Playfair+Display:ital,wght@0,400..900;1,400..900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#1B365D",
+                        "accent": "#C5A059",
+                        "background-light": "#F9F5F0",
+                        "background-dark": "#111821",
+                    },
+                    fontFamily: {
+                        "display": ["Playfair Display", "Noto Serif", "serif"]
+                    },
+                    borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            font-family: 'Noto Serif', serif;
+        }
+        .font-playfair {
+            font-family: 'Playfair Display', serif;
+        }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark text-slate-900 dark:text-slate-100">
+<div class="relative flex h-auto min-h-screen w-full flex-col group/design-root overflow-x-hidden">
+<div class="layout-container flex h-full grow flex-col">
+<!-- Header Section -->
+<header class="flex items-center justify-between whitespace-nowrap border-b border-solid border-primary/10 px-6 md:px-20 py-4 bg-background-light/80 backdrop-blur-md sticky top-0 z-50">
+<div class="flex items-center gap-8">
+<div class="flex items-center gap-3 text-primary">
+<div class="size-6 text-accent">
+<span class="material-symbols-outlined text-3xl">temple_buddhist</span>
+</div>
+<h2 class="text-primary text-xl font-bold leading-tight tracking-tight font-playfair uppercase">Đồ Thờ Tâm Linh</h2>
+</div>
+<nav class="hidden md:flex items-center gap-9">
+<a class="text-primary text-sm font-semibold hover:text-accent transition-colors" href="#">Sản phẩm</a>
+<a class="text-primary text-sm font-semibold hover:text-accent transition-colors" href="#">Bộ đồ thờ</a>
+<a class="text-primary text-sm font-semibold hover:text-accent transition-colors" href="#">Kiến thức</a>
+</nav>
+</div>
+<div class="flex flex-1 justify-end gap-6">
+<label class="hidden sm:flex flex-col min-w-40 h-10 max-w-64">
+<div class="flex w-full flex-1 items-stretch rounded-lg overflow-hidden border border-primary/20">
+<div class="text-primary/60 flex bg-white items-center justify-center pl-4">
+<span class="material-symbols-outlined text-xl">search</span>
+</div>
+<input class="form-input flex w-full min-w-0 flex-1 border-none bg-white focus:ring-0 h-full placeholder:text-primary/40 px-4 text-base" placeholder="Tìm sản phẩm..." value=""/>
+</div>
+</label>
+<div class="flex gap-3">
+<button class="flex items-center justify-center rounded-lg h-10 w-10 bg-primary text-white hover:bg-primary/90 transition-all">
+<span class="material-symbols-outlined">shopping_cart</span>
+</button>
+<button class="flex items-center justify-center rounded-lg h-10 w-10 bg-primary/10 text-primary hover:bg-primary/20 transition-all">
+<span class="material-symbols-outlined">person</span>
+</button>
+</div>
+</div>
+</header>
+<main class="flex flex-col items-center">
+<div class="layout-content-container flex flex-col max-w-[1200px] w-full px-6 md:px-10 py-8">
+<!-- Breadcrumbs -->
+<div class="flex flex-wrap items-center gap-2 mb-6">
+<a class="text-primary/60 text-sm font-medium hover:text-primary" href="#">Trang chủ</a>
+<span class="material-symbols-outlined text-xs text-primary/40">chevron_right</span>
+<a class="text-primary/60 text-sm font-medium hover:text-primary" href="#">Chọn sản phẩm</a>
+<span class="material-symbols-outlined text-xs text-primary/40">chevron_right</span>
+<span class="text-primary text-sm font-bold">Mua lẻ sản phẩm</span>
+</div>
+<!-- Page Title -->
+<div class="flex flex-col gap-2 mb-8 border-l-4 border-accent pl-6">
+<h1 class="text-primary font-playfair text-4xl font-bold leading-tight">Chọn sản phẩm theo ban thờ</h1>
+<p class="text-primary/70 text-base italic">Cá nhân hóa không gian thờ tự với các sản phẩm thủ công tinh xảo</p>
+</div>
+<!-- Step Configuration Header -->
+<div class="bg-white rounded-xl shadow-sm border border-primary/5 p-6 mb-10">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+<!-- Step 1: Altar Size -->
+<div class="flex flex-col gap-3">
+<label class="text-xs font-bold uppercase tracking-wider text-accent flex items-center gap-2"><span class="bg-accent/10 p-1 rounded">01</span> Chọn kích thước ban</label>
+<select class="w-full bg-background-light border-primary/10 rounded-lg text-primary font-medium focus:ring-accent focus:border-accent">
+<option>Ban thờ treo 81cm x 48cm</option>
+<option selected="">Ban thờ đứng 127cm x 61cm</option>
+<option>Ban thờ đứng 153cm x 67cm</option>
+<option>Ban thờ đứng 197cm x 87cm</option>
+</select>
+</div>
+<!-- Step 2: Glaze Type -->
+<div class="flex flex-col gap-3">
+<label class="text-xs font-bold uppercase tracking-wider text-accent flex items-center gap-2"><span class="bg-accent/10 p-1 rounded">02</span> Chọn dòng men</label>
+<select class="w-full bg-background-light border-primary/10 rounded-lg text-primary font-medium focus:ring-accent focus:border-accent">
+<option selected="">Men rạn cổ dát vàng</option>
+<option>Men lam vẽ tay cao cấp</option>
+<option>Men ngọc lục bảo</option>
+<option>Men trắng vẽ vàng</option>
+</select>
+</div>
+<!-- Step 3: Buying Need -->
+<div class="flex flex-col gap-3">
+<label class="text-xs font-bold uppercase tracking-wider text-accent flex items-center gap-2"><span class="bg-accent/10 p-1 rounded">03</span> Chọn nhu cầu</label>
+<div class="flex bg-background-light p-1 rounded-lg border border-primary/10 h-[42px]">
+<button class="flex-1 text-sm font-bold text-primary/50 hover:text-primary transition-all">Mua trọn bộ</button>
+<button class="flex-1 text-sm font-bold bg-primary text-white rounded-md shadow-md">Mua lẻ sản phẩm</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Product Grid Header -->
+<div class="flex flex-col md:flex-row justify-between items-end gap-4 mb-8 pb-4 border-b border-primary/10">
+<div>
+<h2 class="text-2xl font-playfair font-bold text-primary">Danh sách sản phẩm phù hợp</h2>
+<p class="text-sm text-primary/60">Hiển thị 12 sản phẩm cho ban thờ 127cm - Men rạn dát vàng</p>
+</div>
+<div class="flex gap-4">
+<button class="flex items-center gap-2 text-sm font-bold text-primary border border-primary/20 px-4 py-2 rounded hover:bg-primary/5 transition-all">
+<span class="material-symbols-outlined text-lg">filter_list</span>
+                            Lọc sản phẩm
+                        </button>
+<select class="text-sm font-bold text-primary border border-primary/20 px-4 py-2 rounded bg-transparent outline-none">
+<option>Sắp xếp: Phổ biến</option>
+<option>Giá: Thấp đến Cao</option>
+<option>Giá: Cao đến Thấp</option>
+</select>
+</div>
+</div>
+<!-- Products Grid -->
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+<!-- Product Card 1 -->
+<div class="group flex flex-col bg-white rounded-lg overflow-hidden border border-primary/5 hover:shadow-xl transition-all duration-300">
+<div class="relative aspect-square overflow-hidden bg-background-light">
+<img class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="Bát hương men rạn dát vàng thủ công" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBU2An7YdFwE2m8kdfD-hRWYetgAnyU1l17Wq2rb_NOqi6DpYsZ7rwJ2-gJdwYIhPiL5N0nhLAH1mtGi1x-wVtHrDKaRZSxamGUYiZOnXHxUHtTrwWFf1VDSL4PQHsvMFhUUqn7_sBUMGH9nYbuausuwMa_3JovtdCzOq11YmESiJ4mhtpjDpaqY7uyUXSK-jerZLj7BB3wmNSrBIy3tq3WliTAthwDp1IDRXtgtaD9VrGLx6u5Pf5qvuavxufgdwrILctf61rMQqg"/>
+<div class="absolute top-2 right-2 bg-accent text-white text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-widest">Bán chạy</div>
+</div>
+<div class="p-5 flex flex-col flex-1">
+<span class="text-[10px] uppercase tracking-widest text-accent font-bold mb-1">Đồ thờ cúng</span>
+<h3 class="text-primary font-bold text-lg mb-2 line-clamp-2">Bát hương Men rạn Dát vàng (Phi 20)</h3>
+<div class="mt-auto"><p class="text-accent font-bold text-xl mb-4">4.500.000đ</p>
+<div class="flex gap-2">
+<button class="flex-1 bg-primary text-white py-2.5 rounded font-bold text-[13px] flex items-center justify-center gap-1 hover:bg-primary/90 transition-all">
+<span class="material-symbols-outlined text-base">add_shopping_cart</span>
+                                    Giỏ hàng
+                                </button>
+</div></div>
+</div>
+</div>
+<!-- Product Card 2 -->
+<div class="group flex flex-col bg-white rounded-lg overflow-hidden border border-primary/5 hover:shadow-xl transition-all duration-300">
+<div class="relative aspect-square overflow-hidden bg-background-light">
+<img class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="Lọ hoa men rạn cổ dát vàng cao cấp" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBX4Qd8hMpPPtjtnDYHCbQjsiiyrsBmAJV6NiCf9V67MHgtCpr9rB30R8VObZEbJY_gBlqjqAzxyhxVLphOX1qMaQgQ1eCDLNo66SgzqcXVDROUJtq5gK5s_xXwQxojAfCjpQSRYwd0lcu2DqFCp1MpRSx3cpZTzUovm50N7KLzibRMCq6_bIfMtWHvWnWmCwYIzZHIg_QhrhIH4Z-iiNaYUhWl21fSOuWv12dAYFCtdZl8TW2e5NMImj-MwId7ux670pHEX3jPxLU"/>
+</div>
+<div class="p-5 flex flex-col flex-1">
+<span class="text-[10px] uppercase tracking-widest text-accent font-bold mb-1">Lọ hoa</span>
+<h3 class="text-primary font-bold text-lg mb-2 line-clamp-2">Lọ hoa Men rạn Dát vàng - Dáng tỳ bà</h3>
+<div class="mt-auto"><p class="text-accent font-bold text-xl mb-4">2.800.000đ</p>
+<div class="flex gap-2">
+<button class="flex-1 bg-primary text-white py-2.5 rounded font-bold text-[13px] flex items-center justify-center gap-1 hover:bg-primary/90 transition-all">
+<span class="material-symbols-outlined text-base">add_shopping_cart</span>
+                                    Giỏ hàng
+                                </button>
+</div></div>
+</div>
+</div>
+<!-- Product Card 3 -->
+<div class="group flex flex-col bg-white rounded-lg overflow-hidden border border-primary/5 hover:shadow-xl transition-all duration-300">
+<div class="relative aspect-square overflow-hidden bg-background-light">
+<img class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="Mâm bồng đựng quả men rạn dát vàng" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDPnUvxFPj7TBhUVSMP_b8ZYcwmnASEVrvime3DDpMeDJtn6XOS2tPZu5-a-_iaA6jycJN-5WCoGykkIwd24GwA0SF68PWGzIzusmTd6aeZKW6lEYgpnhN7vjOvSwaya9G5YWZpdRErjGabZqKZo1mzaGKxXjDNXjZhdzIUuOCifZOEkYAe7gSGzJrQ6by0GiEe3Yon7FGvPElLRLn-1yDrgcxCuaqpSTG8xabgiGskgdMdMTTjPtge-_vD7-0YcoNlc2pxKj6VO4w"/>
+</div>
+<div class="p-5 flex flex-col flex-1">
+<span class="text-[10px] uppercase tracking-widest text-accent font-bold mb-1">Mâm bồng</span>
+<h3 class="text-primary font-bold text-lg mb-2 line-clamp-2">Mâm bồng Men rạn Dát vàng - Họa tiết Rồng</h3>
+<div class="mt-auto"><p class="text-accent font-bold text-xl mb-4">3.200.000đ</p>
+<div class="flex gap-2">
+<button class="flex-1 bg-primary text-white py-2.5 rounded font-bold text-[13px] flex items-center justify-center gap-1 hover:bg-primary/90 transition-all">
+<span class="material-symbols-outlined text-base">add_shopping_cart</span>
+                                    Giỏ hàng
+                                </button>
+</div></div>
+</div>
+</div>
+<!-- Product Card 4 -->
+<div class="group flex flex-col bg-white rounded-lg overflow-hidden border border-primary/5 hover:shadow-xl transition-all duration-300">
+<div class="relative aspect-square overflow-hidden bg-background-light">
+<img class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="Chân nến men rạn họa tiết tinh xảo" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAO9UyNjSzkgWyO23t_N-SV8nuZnNN6W_-L6G20sI1FRB5NdHcKQYWvFiACox3BRWV2Mwx4aWmGoWgncywMedM9ESa_Upeh1qiW3zbLU4KSt8gvGmnH9nWi7LL90Nq3TapEPBTKm1cQHQqiCvNQIjZvF_-xeFwMEXtfHYBlCKJbvP2YUjrzPpPUsPctfUvCDAwW0VD0i2kgNyMaWxyxNmTWqFWEZgEf5cuRHBEkVln4lbQP1KduZoezoT90ob9C7HfQSnKzULtGZyM"/>
+</div>
+<div class="p-5 flex flex-col flex-1">
+<span class="text-[10px] uppercase tracking-widest text-accent font-bold mb-1">Chân nến</span>
+<h3 class="text-primary font-bold text-lg mb-2 line-clamp-2">Chân nến Men rạn Dát vàng (Đôi)</h3>
+<div class="mt-auto"><p class="text-accent font-bold text-xl mb-4">1.950.000đ</p>
+<div class="flex gap-2">
+<button class="flex-1 bg-primary text-white py-2.5 rounded font-bold text-[13px] flex items-center justify-center gap-1 hover:bg-primary/90 transition-all">
+<span class="material-symbols-outlined text-base">add_shopping_cart</span>
+                                    Giỏ hàng
+                                </button>
+</div></div>
+</div>
+</div>
+<!-- Product Card 5 -->
+<div class="group flex flex-col bg-white rounded-lg overflow-hidden border border-primary/5 hover:shadow-xl transition-all duration-300">
+<div class="relative aspect-square overflow-hidden bg-background-light">
+<img class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="Nậm rượu men rạn vẽ vàng" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAi0kOEXGNhRcBcQxOpUBUbmcq2FUz1P0-zG9oVjqhUWi-MsjhOO3QZpBqc32TwX6r76o6AsT5_k2TIKX8t9LDu0wTHEG1gjnRQcaz9vXeoTt-0UgND9TiUltsMVjVzL0m7lzk4cv36oRznX1PLNXDcog_WpfuY3JwazuROy5YyhSs7mRuVyu4utd4muBsSMLlkSM8dIKJoF5XYpnRUdpkyQByM9vzEJNBiBxoaHBTuhTLXJC-K-oEgkpR8COiHLmaMVC8L2Y97ij8"/>
+</div>
+<div class="p-5 flex flex-col flex-1">
+<span class="text-[10px] uppercase tracking-widest text-accent font-bold mb-1">Nậm rượu</span>
+<h3 class="text-primary font-bold text-lg mb-2 line-clamp-2">Nậm rượu Men rạn Dát vàng dáng cao</h3>
+<div class="mt-auto"><p class="text-accent font-bold text-xl mb-4">1.200.000đ</p>
+<div class="flex gap-2">
+<button class="flex-1 bg-primary text-white py-2.5 rounded font-bold text-[13px] flex items-center justify-center gap-1 hover:bg-primary/90 transition-all">
+<span class="material-symbols-outlined text-base">add_shopping_cart</span>
+                                    Giỏ hàng
+                                </button>
+</div></div>
+</div>
+</div>
+<!-- Product Card 6 -->
+<div class="group flex flex-col bg-white rounded-lg overflow-hidden border border-primary/5 hover:shadow-xl transition-all duration-300">
+<div class="relative aspect-square overflow-hidden bg-background-light">
+<img class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" data-alt="Ống hương men rạn thủ công" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAmb9OBvY28zE5RtH5ouQbiahVWL3l2Yih4xx6K2k8TMiC4q4nRbefh4UHQbifONNIJUXUlOkiXEcre0tziDu3lwssxzUQSXqiLPBFEhurVQvyuCTGzgZUO16oyFujoE586qb21uOT3NG2aMSn-rZAKCLXmJHxHxeH43OOf4C8esrl8YigEbqpZCLFr0hzTxqRgBI5HGZCQ7LcmqRP3yTF0BmAmsv0mr9UV9tISaCir9-Pftq1NSGK8X0WtMSlpTv3Kc1UzJOQ1f5Y"/>
+</div>
+<div class="p-5 flex flex-col flex-1">
+<span class="text-[10px] uppercase tracking-widest text-accent font-bold mb-1">Ống hương</span>
+<h3 class="text-primary font-bold text-lg mb-2 line-clamp-2">Ống đựng hương Men rạn Dát vàng</h3>
+<div class="mt-auto"><p class="text-accent font-bold text-xl mb-4">950.000đ</p>
+<div class="flex gap-2">
+<button class="flex-1 bg-primary text-white py-2.5 rounded font-bold text-[13px] flex items-center justify-center gap-1 hover:bg-primary/90 transition-all">
+<span class="material-symbols-outlined text-base">add_shopping_cart</span>
+                                    Giỏ hàng
+                                </button>
+</div></div>
+</div>
+</div>
+</div>
+<!-- Pagination -->
+</div>
+</main>
+<!-- Footer Section -->
+<footer class="bg-primary text-white mt-20 py-16">
+<div class="max-w-[1200px] mx-auto px-6 grid grid-cols-1 md:grid-cols-4 gap-12">
+<div class="col-span-1 md:col-span-1">
+<div class="flex items-center gap-3 text-accent mb-6">
+<span class="material-symbols-outlined text-3xl">temple_buddhist</span>
+<h2 class="text-xl font-bold leading-tight tracking-tight font-playfair uppercase text-white">Đồ Thờ Tâm Linh</h2>
+</div>
+<p class="text-primary/30 text-slate-300 text-sm leading-relaxed mb-6">
+                        Gìn giữ nét đẹp truyền thống trong từng sản phẩm thủ công tinh xảo từ làng nghề Bát Tràng danh tiếng.
+                    </p>
+<div class="flex gap-4">
+<a class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center hover:bg-accent transition-all" href="#">
+<span class="material-symbols-outlined text-sm">social_leaderboard</span>
+</a>
+<a class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center hover:bg-accent transition-all" href="#">
+<span class="material-symbols-outlined text-sm">video_library</span>
+</a>
+</div>
+</div>
+<div>
+<h4 class="font-bold text-accent uppercase tracking-widest text-sm mb-6">Sản phẩm</h4>
+<ul class="space-y-4 text-slate-300 text-sm">
+<li><a class="hover:text-accent transition-colors" href="#">Bát hương cao cấp</a></li>
+<li><a class="hover:text-accent transition-colors" href="#">Bộ đồ thờ đầy đủ</a></li>
+<li><a class="hover:text-accent transition-colors" href="#">Lọ lộc bình</a></li>
+<li><a class="hover:text-accent transition-colors" href="#">Đèn dầu &amp; Chân nến</a></li>
+</ul>
+</div>
+<div>
+<h4 class="font-bold text-accent uppercase tracking-widest text-sm mb-6">Chính sách</h4>
+<ul class="space-y-4 text-slate-300 text-sm">
+<li><a class="hover:text-accent transition-colors" href="#">Chính sách vận chuyển</a></li>
+<li><a class="hover:text-accent transition-colors" href="#">Chính sách bảo hành</a></li>
+<li><a class="hover:text-accent transition-colors" href="#">Hướng dẫn thanh toán</a></li>
+<li><a class="hover:text-accent transition-colors" href="#">Câu hỏi thường gặp</a></li>
+</ul>
+</div>
+<div>
+<h4 class="font-bold text-accent uppercase tracking-widest text-sm mb-6">Liên hệ</h4>
+<ul class="space-y-4 text-slate-300 text-sm">
+<li class="flex items-start gap-3">
+<span class="material-symbols-outlined text-accent text-lg">location_on</span>
+<span>Xóm 5, Bát Tràng, Gia Lâm, Hà Nội</span>
+</li>
+<li class="flex items-center gap-3">
+<span class="material-symbols-outlined text-accent text-lg">call</span>
+<span>09xx xxx xxx</span>
+</li>
+<li class="flex items-center gap-3">
+<span class="material-symbols-outlined text-accent text-lg">mail</span>
+<span>contact@dothotamlinh.vn</span>
+</li>
+</ul>
+</div>
+</div>
+<div class="max-w-[1200px] mx-auto px-6 mt-16 pt-8 border-t border-white/10 flex flex-col md:flex-row justify-between items-center gap-4 text-xs text-slate-400">
+<p>© 2024 Đồ Thờ Tâm Linh. All rights reserved.</p>
+<div class="flex gap-8">
+<a class="hover:text-white" href="#">Điều khoản sử dụng</a>
+<a class="hover:text-white" href="#">Bảo mật thông tin</a>
+</div>
+</div>
+</footer>
+</div>
+</div>
+</body></html>

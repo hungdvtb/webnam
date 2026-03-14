@@ -19,7 +19,7 @@ Route::post('/register', [AuthController::class , 'register']);
 Route::post('/login', [AuthController::class , 'login']);
 
 Route::get('/products', [ProductController::class , 'index']);
-Route::get('/products/{id}', [ProductController::class , 'show']);
+Route::get('/products/{id}', [ProductController::class , 'show'])->where('id', '[0-9]+');
 
 Route::get('/categories', [CategoryController::class , 'index']);
 Route::get('/categories/{id}', [CategoryController::class , 'show']);
@@ -58,11 +58,13 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Admin Product routes
     Route::post('/products', [ProductController::class , 'store']);
-    Route::post('/products/{id}/duplicate', [ProductController::class , 'duplicate']);
-    Route::post('/products/{id}', [ProductController::class , 'update']); // Use POST for update to handle file uploads
     Route::delete('/products/bulk-delete', [ProductController::class , 'bulkDelete']);
     Route::post('/products/bulk-restore', [ProductController::class , 'bulkRestore']);
+    Route::post('/products/bulk-update-attributes', [ProductController::class , 'bulkUpdateAttributes']);
+    Route::post('/products/bulk-update-undo', [ProductController::class , 'undoBulkUpdate']);
     Route::delete('/products/bulk-force-delete', [ProductController::class , 'bulkForceDelete']);
+    Route::post('/products/{id}/duplicate', [ProductController::class , 'duplicate']);
+    Route::post('/products/{id}', [ProductController::class , 'update']); // Use POST for update to handle file uploads
     Route::delete('/products/{id}', [ProductController::class , 'destroy']);
     Route::post('/products/{id}/restore', [ProductController::class , 'restore']);
     Route::delete('/products/{id}/force', [ProductController::class , 'forceDelete']);
@@ -232,7 +234,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/admin/reviews/{id}/approve', [\App\Http\Controllers\Api\ReviewController::class , 'approve']);
 
         // Admin AI Tools
-        Route::post('/ai/generate-product-description', [AIController::class , 'generateProductDescription']);    });
+        Route::post('/ai/generate-product-description', [AIController::class , 'generateProductDescription']);
+        Route::post('/ai/rewrite-product-description', [AIController::class , 'rewriteProductDescription']);    });
 
 // Public Routes for Reviews (Reading)
 Route::get('/products/{productId}/reviews', [\App\Http\Controllers\Api\ReviewController::class , 'index']);

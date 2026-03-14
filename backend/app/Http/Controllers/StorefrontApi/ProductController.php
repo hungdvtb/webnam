@@ -5,6 +5,8 @@ namespace App\Http\Controllers\StorefrontApi;
 use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\Category;
+use App\Models\Attribute;
+use App\Models\ProductAttributeValue;
 use Illuminate\Http\Request;
 
 class ProductController extends Controller
@@ -25,6 +27,24 @@ class ProductController extends Controller
         return $account ? $account->id : null;
     }
 
+    /**
+     * Get all child category IDs recursively
+     */
+    private function getAllChildCategoryIds($categoryId, $accountId)
+    {
+        $childIds = Category::where('parent_id', $categoryId)
+            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+            ->pluck('id')
+            ->toArray();
+        
+        $allIds = $childIds;
+        foreach ($childIds as $id) {
+            $allIds = array_merge($allIds, $this->getAllChildCategoryIds($id, $accountId));
+        }
+        
+        return $allIds;
+    }
+
     public function index(Request $request)
     {
         $accountId = $this->getAccountId($request);
@@ -32,10 +52,7 @@ class ProductController extends Controller
 
         $query = Product::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
-            ->where('status', true)
-            ->with(['images' => function ($q) {
-                $q->orderBy('is_primary', 'desc')->orderBy('sort_order');
-            }, 'category:id,name,slug']);
+            ->where('status', true);
 
         // Filter by category slug
         if ($request->filled('category')) {
@@ -43,7 +60,8 @@ class ProductController extends Controller
                 ->when($accountId, fn($q) => $q->where('account_id', $accountId))
                 ->first();
             if ($cat) {
-                $catIds = Category::where('parent_id', $cat->id)->pluck('id')->push($cat->id);
+                $childIds = $this->getAllChildCategoryIds($cat->id, $accountId);
+                $catIds = array_merge([$cat->id], $childIds);
                 $query->whereIn('category_id', $catIds);
             }
         }
@@ -59,20 +77,130 @@ class ProductController extends Controller
             });
         }
 
+        // Price range
+        if ($request->filled('min_price')) $query->where('price', '>=', $request->min_price);
+        if ($request->filled('max_price')) $query->where('price', '<=', $request->max_price);
+        
+        // Before applying attribute filters, clone the query to calculate available filters
+        $filterQuery = clone $query;
+
+        // Attribute filtering: ?attrs[color]=Red&attrs[material]=Wood
+        if ($request->filled('attrs')) {
+            $attrs = $request->attrs;
+            foreach ($attrs as $code => $value) {
+                if (empty($value)) continue;
+                $query->whereHas('attributeValues', function ($q) use ($code, $value) {
+                    $q->whereHas('attribute', function($aq) use ($code) {
+                        $aq->where('code', $code);
+                    });
+                    if (is_array($value)) {
+                        $q->whereIn('value', $value);
+                    } else {
+                        $q->where('value', $value);
+                    }
+                });
+            }
+        }
+
         // Sort
-        $sortMap = [
-            'newest' => ['created_at', 'desc'],
-            'price_asc' => ['price', 'asc'],
-            'price_desc' => ['price', 'desc'],
-            'popular' => ['is_featured', 'desc'],
-        ];
-        $sort = $sortMap[$request->get('sort', 'newest')] ?? ['created_at', 'desc'];
-        $query->orderBy($sort[0], $sort[1]);
+        $sortKey = $request->get('sort', 'popular');
+        $finalQuery = clone $query;
+        switch ($sortKey) {
+            case 'price_asc':
+                $finalQuery->orderBy('price', 'asc')->orderBy('id', 'desc');
+                break;
+            case 'price_desc':
+                $finalQuery->orderBy('price', 'desc')->orderBy('id', 'desc');
+                break;
+            case 'newest':
+                $finalQuery->orderBy('created_at', 'desc')->orderBy('id', 'desc');
+                break;
+            case 'popular':
+            default:
+                $finalQuery->orderBy('is_featured', 'desc')->orderBy('created_at', 'desc');
+                break;
+        }
 
-        $perPage = min((int) $request->get('per_page', 20), 60);
-        $products = $query->paginate($perPage);
+        $perPage = min((int) $request->get('per_page', 24), 60);
+        $products = $finalQuery->with(['images' => function ($q) {
+                $q->orderBy('is_primary', 'desc')->orderBy('sort_order');
+            }, 'category:id,name,slug'])
+            ->paginate($perPage);
 
-        return response()->json($products);
+        // Calculate available filters
+        $availableFilters = [];
+        $filterableAttributesQuery = \App\Models\Attribute::where('is_filterable_frontend', true)
+            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+            ->with('options');
+
+        if (isset($cat) && !empty($cat->filterable_attribute_ids)) {
+            $filterableAttributesQuery->whereIn('id', $cat->filterable_attribute_ids);
+        }
+
+        $filterableAttributes = $filterableAttributesQuery->get();
+
+        foreach ($filterableAttributes as $attr) {
+            // Count products for each value of this attribute within the current search result
+            $valueCounts = ProductAttributeValue::where('attribute_id', $attr->id)
+                ->whereIn('product_id', (clone $filterQuery)->select('id'))
+                ->selectRaw('value, count(*) as count')
+                ->groupBy('value')
+                ->get()
+                ->pluck('count', 'value');
+
+            if ($valueCounts->count() > 0) {
+                $options = [];
+                // If it's a select/multiselect, use predefined options but only those that have products
+                if (in_array($attr->frontend_type, ['select', 'multiselect'])) {
+                    foreach ($attr->options as $opt) {
+                        if (isset($valueCounts[$opt->value])) {
+                            $options[] = [
+                                'label' => $opt->value,
+                                'value' => $opt->value,
+                                'count' => $valueCounts[$opt->value],
+                                'swatch_value' => $opt->swatch_value
+                            ];
+                        }
+                    }
+                } else {
+                    // For other types, just use the raw values
+                    foreach ($valueCounts as $val => $count) {
+                        $options[] = [
+                            'label' => $val,
+                            'value' => $val,
+                            'count' => $count
+                        ];
+                    }
+                }
+
+                if (!empty($options)) {
+                    $availableFilters[] = [
+                        'id' => $attr->id,
+                        'name' => $attr->name,
+                        'code' => $attr->code,
+                        'type' => $attr->frontend_type,
+                        'options' => $options
+                    ];
+                }
+            }
+        }
+
+        // For price filter, calculate min/max
+        $priceStats = (clone $filterQuery)->selectRaw('MIN(price) as min_price, MAX(price) as max_price')->getQuery()->first();
+        if ($priceStats && $priceStats->min_price !== null) {
+            $availableFilters[] = [
+                'name' => 'Giá',
+                'code' => 'price',
+                'type' => 'price_range',
+                'min' => floor($priceStats->min_price),
+                'max' => ceil($priceStats->max_price)
+            ];
+        }
+
+        $responseData = $products->toArray();
+        $responseData['available_filters'] = $availableFilters;
+
+        return response()->json($responseData);
     }
 
     public function show(Request $request, $slug)

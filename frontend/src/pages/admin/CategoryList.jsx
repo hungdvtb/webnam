@@ -1,35 +1,82 @@
 import React, { useState, useEffect } from 'react';
-import { categoryApi } from '../../services/api';
+import { categoryApi, attributeApi } from '../../services/api';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { Tree } from '@minoru/react-dnd-treeview';
 
-const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete }) => {
+const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelected, onSelect, isDropTarget }) => {
     return (
-        <div style={{ paddingLeft: depth * 24 }} className="flex items-center gap-2 w-full py-2 hover:bg-gold/5 pr-4 border-b border-gold/10 group">
+        <div 
+            style={{ paddingLeft: depth * 24 }} 
+            className={`flex items-center gap-2 w-full py-2 hover:bg-gold/5 pr-4 border-b border-gold/10 group transition-all relative ${isSelected ? 'bg-gold/10 active-node' : ''} ${isDropTarget ? 'bg-primary/5' : ''}`}
+            onClick={() => onSelect(node.id)}
+        >
+            {isSelected && <div className="absolute left-0 top-0 bottom-0 w-1 bg-gold shadow-[0_0_10px_rgba(212,175,55,0.5)]"></div>}
+            
+            {isDropTarget && (
+                <div className="absolute -top-3 left-[50%] -translate-x-1/2 z-[9999] bg-primary text-white text-[9px] font-black uppercase tracking-[0.2em] px-3 py-1.5 rounded-sm shadow-2xl animate-bounce flex items-center gap-1.5 border-2 border-white/20">
+                    <span className="material-symbols-outlined text-[14px]">subdirectory_arrow_right</span>
+                    Chuyển vào: {node.text}
+                </div>
+            )}
+            
+            {/* Drag Handle */}
+            <div className="flex items-center justify-center text-stone/20 group-hover:text-stone/40 cursor-grab active:cursor-grabbing px-1">
+                <span className="material-symbols-outlined text-[18px]">drag_indicator</span>
+            </div>
+
             <div 
                 className="flex-1 flex items-center gap-2 cursor-pointer select-none" 
-                onClick={node.droppable ? onToggle : undefined}
+                onClick={(e) => {
+                    if (node.droppable) onToggle();
+                }}
                 onDoubleClick={() => onEdit(node)}
             >
-                {node.droppable && (
-                    <span className="material-symbols-outlined text-stone text-sm">
-                        {isOpen ? 'expand_more' : 'chevron_right'}
+                {node.droppable ? (
+                    <span className={`material-symbols-outlined text-stone text-sm transition-transform duration-300 ${isOpen ? 'rotate-90 text-primary' : ''}`}>
+                        chevron_right
                     </span>
+                ) : (
+                    <span className="w-5"></span>
                 )}
-                {!node.droppable && <span className="w-5"></span>}
-                <span className="material-symbols-outlined text-gold" style={{ fontSize: '20px' }}>
-                    {node.droppable ? 'folder' : 'inventory_2'}
+                <span className={`material-symbols-outlined ${isSelected ? 'text-primary scale-110' : 'text-gold'} transition-all`} style={{ fontSize: '20px' }}>
+                    {node.droppable ? (isOpen ? 'folder_open' : 'folder') : 'inventory_2'}
                 </span>
-                <span className="font-ui text-primary font-bold">{node.text}</span>
+                <span className={`font-ui text-primary transition-all ${isSelected ? 'font-black scale-[1.02] translate-x-1' : 'font-bold'}`}>{node.text}</span>
             </div>
             <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button onClick={() => onEdit(node)} className="text-stone hover:text-primary transition-colors p-1" title="Sửa">
+                <button 
+                    onClick={(e) => { e.stopPropagation(); onEdit(node); }} 
+                    className="text-stone hover:text-primary transition-colors p-1" 
+                    title="Sửa"
+                >
                     <span className="material-symbols-outlined text-sm">edit</span>
                 </button>
-                <button onClick={() => onDelete(node)} className="text-stone hover:text-brick transition-colors p-1" title="Xóa">
+                <button 
+                    onClick={(e) => { e.stopPropagation(); onDelete(node); }} 
+                    className="text-stone hover:text-brick transition-colors p-1" 
+                    title="Xóa"
+                >
                     <span className="material-symbols-outlined text-sm">delete</span>
                 </button>
+            </div>
+        </div>
+    );
+};
+
+const Placeholder = (props) => {
+    return (
+        <div 
+            className="absolute left-0 right-0 h-[2px] bg-primary/60 z-[100] flex items-center" 
+            style={{ 
+                left: props.depth * 24,
+                transform: 'translateY(-50%)' 
+            }}
+        >
+            <div className="w-2.5 h-2.5 rounded-full bg-primary border-2 border-white shadow-sm -ml-1.5" />
+            <div className="ml-4 bg-gold text-primary text-[8px] font-black uppercase tracking-[0.2em] px-2 py-0.5 rounded-full shadow-md animate-in fade-in zoom-in duration-200 flex items-center gap-1 border border-primary/20">
+                <span className="material-symbols-outlined text-[12px]">reorder</span>
+                Sắp xếp tại đây
             </div>
         </div>
     );
@@ -44,7 +91,18 @@ const CategoryList = () => {
     const [filterStatus, setFilterStatus] = useState('all'); // 'all', '1', '0'
     const [showFilterMenu, setShowFilterMenu] = useState(false);
     const filterRef = React.useRef(null);
-    const [formData, setFormData] = useState({ id: null, name: '', description: '', parent_id: '', status: 1, banner: null, banner_url: null });
+    const treeRef = React.useRef(null);
+    const [selectedId, setSelectedId] = useState(null);
+    const [isExpandingBranch, setIsExpandingBranch] = useState(false);
+    const [isExpandingAll, setIsExpandingAll] = useState(false);
+    const [isAllOpen, setIsAllOpen] = useState(false);
+    const [openNodes, setOpenNodes] = useState(new Set());
+    const [formData, setFormData] = useState({ 
+        id: null, name: '', description: '', parent_id: '', status: 1, 
+        banner: null, banner_url: null, display_layout: 'layout_1',
+        filterable_attribute_ids: []
+    });
+    const [allAttributes, setAllAttributes] = useState([]);
 
     // Close dropdowns on outside click
     useEffect(() => {
@@ -107,11 +165,36 @@ const CategoryList = () => {
         return treeData.filter(node => includeIds.has(node.id));
     }, [treeData, searchQuery, filterLevel, filterStatus]);
 
-    const fetchCategories = async () => {
+    const fetchInitialData = async () => {
         setLoading(true);
         try {
+            const [catRes, attrRes] = await Promise.all([
+                categoryApi.getAll(),
+                attributeApi.getAll()
+            ]);
+            
+            // Format categories for tree
+            const formattedData = catRes.data.map(cat => ({
+                id: cat.id,
+                parent: cat.parent_id || 0,
+                text: cat.name,
+                droppable: true,
+                data: cat
+            }));
+            setTreeData(formattedData);
+
+            // Set attributes for selection
+            setAllAttributes(attrRes.data || []);
+        } catch (error) {
+            console.error('Error fetching data:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const fetchCategories = async () => {
+        try {
             const res = await categoryApi.getAll();
-            // Data maps to Tree format: { id: number/string, parent: number/string, text: string, droppable: boolean, data: any }
             const formattedData = res.data.map(cat => ({
                 id: cat.id,
                 parent: cat.parent_id || 0,
@@ -122,13 +205,11 @@ const CategoryList = () => {
             setTreeData(formattedData);
         } catch (error) {
             console.error('Error fetching categories:', error);
-        } finally {
-            setLoading(false);
         }
     };
 
     useEffect(() => {
-        fetchCategories();
+        fetchInitialData();
     }, []);
 
     useEffect(() => {
@@ -175,6 +256,16 @@ const CategoryList = () => {
             }
             
             data.append('status', formData.status);
+            data.append('display_layout', formData.display_layout);
+            
+            // Handle array of attributes
+            if (formData.filterable_attribute_ids && formData.filterable_attribute_ids.length > 0) {
+                formData.filterable_attribute_ids.forEach((attrId, idx) => {
+                    data.append(`filterable_attribute_ids[${idx}]`, attrId);
+                });
+            } else {
+                data.append('clear_attributes', 'true');
+            }
             
             if (formData.banner instanceof File) {
                 data.append('banner', formData.banner);
@@ -188,7 +279,11 @@ const CategoryList = () => {
                 await categoryApi.store(data);
             }
             setIsFormOpen(false);
-            setFormData({ id: null, name: '', description: '', parent_id: '', status: 1, banner: null, banner_url: null });
+            setFormData({ 
+                id: null, name: '', description: '', parent_id: '', status: 1, 
+                banner: null, banner_url: null, display_layout: 'layout_1',
+                filterable_attribute_ids: []
+            });
             fetchCategories();
         } catch (error) {
             console.error("Lỗi khi lưu danh mục:", error);
@@ -226,7 +321,9 @@ const CategoryList = () => {
             parent_id: cat.parent_id || '',
             status: cat.status,
             banner: cat.banner_path,
-            banner_url: bannerUrl
+            banner_url: bannerUrl,
+            display_layout: cat.display_layout || 'layout_1',
+            filterable_attribute_ids: (cat.filterable_attribute_ids || []).map(id => Number(id))
         });
         setIsFormOpen(true);
     };
@@ -273,7 +370,7 @@ const CategoryList = () => {
                 <div className="flex-none bg-[#fcfcfa] pb-4">
                     <div className="flex justify-between items-center mb-4">
                         <div className="flex flex-col">
-                            <h1 className="text-2xl font-display font-bold text-primary italic">Phân loại sản phẩm</h1>
+                            <h1 className="text-2xl font-display font-bold text-primary italic">Danh mục sản phẩm</h1>
                             <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.2em] leading-none mt-1">Quản lý cấu trúc danh mục và phân cấp</p>
                         </div>
                     </div>
@@ -358,6 +455,59 @@ const CategoryList = () => {
                                 )}
                             </div>
 
+                            <button 
+                                onClick={async () => {
+                                    if (!selectedId) return;
+                                    setIsExpandingBranch(true);
+                                    
+                                    if (openNodes.has(selectedId)) {
+                                        treeRef.current?.close(selectedId);
+                                        setOpenNodes(prev => {
+                                            const next = new Set(prev);
+                                            next.delete(selectedId);
+                                            return next;
+                                        });
+                                    } else {
+                                        treeRef.current?.open(selectedId);
+                                        setOpenNodes(prev => new Set(prev).add(selectedId));
+                                    }
+                                    
+                                    setTimeout(() => setIsExpandingBranch(false), 600);
+                                }}
+                                disabled={!selectedId || isExpandingBranch}
+                                className={`w-9 h-9 flex items-center justify-center rounded-sm border transition-all ${selectedId ? (isExpandingBranch ? 'bg-amber-500 border-amber-500 text-white scale-95' : 'bg-white border-gold/40 text-primary shadow-sm hover:bg-gold/5 active:scale-90') : 'bg-stone/5 border-stone/10 text-stone/30 cursor-not-allowed opacity-50'}`}
+                                title={openNodes.has(selectedId) ? "Thu gọn nhánh đang chọn" : "Mở rộng nhánh đang chọn"}
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${isExpandingBranch ? 'animate-spin' : ''}`}>
+                                    {isExpandingBranch ? 'sync' : (openNodes.has(selectedId) ? 'collapse_content' : 'expand_content')}
+                                </span>
+                            </button>
+                            <button 
+                                onClick={() => {
+                                    setIsExpandingAll(true);
+                                    if (isAllOpen) {
+                                        treeRef.current?.closeAll();
+                                        setIsAllOpen(false);
+                                        setOpenNodes(new Set());
+                                    } else {
+                                        treeRef.current?.openAll();
+                                        setIsAllOpen(true);
+                                        // When opening all, we could mark all folders as open, but for toggle simplicity 
+                                        // we just track the global state
+                                    }
+                                    setTimeout(() => setIsExpandingAll(false), 800);
+                                }}
+                                disabled={isExpandingAll}
+                                className={`w-9 h-9 flex items-center justify-center transition-all shadow-sm rounded-sm border ${isExpandingAll ? 'bg-amber-600 border-amber-600 text-white' : (isAllOpen ? 'bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-200' : 'bg-primary text-white border-primary hover:bg-umber hover:border-umber active:scale-90')}`}
+                                title={isAllOpen ? "Thu gọn toàn bộ cây" : "Mở rộng toàn bộ cây"}
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${isExpandingAll ? 'animate-spin' : ''}`}>
+                                    {isExpandingAll ? 'sync' : (isAllOpen ? 'collapse_all' : 'expand_all')}
+                                </span>
+                            </button>
+
+                            <div className="w-px h-5 bg-gold/10 mx-1 shrink-0"></div>
+
                             {/* Search Bar */}
                             <div className="relative w-full sm:max-w-md bg-white border border-gold/20 rounded-sm hover:border-gold/40 transition-colors focus-within:bg-white focus-within:border-primary/30 focus-within:ring-1 focus-within:ring-primary/10 shadow-sm flex items-center h-9">
                                 <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[16px] text-stone">search</span>
@@ -394,6 +544,7 @@ const CategoryList = () => {
                                 <span className="material-symbols-outlined text-[16px]">account_tree</span>
                                 Cấu Trúc Cây Danh Mục
                             </h2>
+                            
                             <span className="text-[9px] font-black text-stone/30 uppercase tracking-widest italic hidden sm:block">Kéo thả để sắp xếp</span>
                         </div>
                         
@@ -409,32 +560,44 @@ const CategoryList = () => {
                                     <span className="text-[12px] font-bold italic uppercase tracking-widest">Không tìm thấy danh mục</span>
                                 </div>
                             ) : (
-                                <Tree
-                                    tree={filteredTreeData}
-                                    rootId={0}
-                                    canDrag={() => !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all'}
-                                    canDrop={() => !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all'}
-                                    sort={false}
-                                    render={(node, options) => (
-                                        <CustomNode
-                                            node={node}
-                                            {...options}
-                                            onEdit={handleEdit}
-                                            onDelete={handleDelete}
-                                        />
-                                    )}
-                                    dragPreviewRender={(monitorProps) => (
-                                        <div className="bg-primary text-white px-4 py-2 font-ui font-bold shadow-xl border border-gold/30 rounded-sm scale-110">
-                                            {monitorProps.item.text}
-                                        </div>
-                                    )}
-                                    onDrop={handleDrop}
-                                    classes={{
-                                        root: "w-full",
-                                        draggingSource: "opacity-30",
-                                        dropTarget: "bg-gold/10",
-                                    }}
-                                />
+                                    <Tree
+                                        ref={treeRef}
+                                        tree={filteredTreeData}
+                                        rootId={0}
+                                        canDrag={() => !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all'}
+                                        canDrop={(tree, { dragSource, dropTargetId, isDirectChild }) => {
+                                            if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all') return false;
+                                            return true;
+                                        }}
+                                        sort={false}
+                                        insertDroppableFirst={false}
+                                        dropTargetOffset={35}
+                                        render={(node, options) => (
+                                            <CustomNode
+                                                node={node}
+                                                {...options}
+                                                isDropTarget={options.isDropTarget}
+                                                onEdit={handleEdit}
+                                                onDelete={handleDelete}
+                                                isSelected={selectedId === node.id}
+                                                onSelect={(id) => setSelectedId(id)}
+                                            />
+                                        )}
+                                        renderPlaceholder={(props) => <Placeholder {...props} />}
+                                        dragPreviewRender={(monitorProps) => (
+                                            <div className="bg-primary text-white px-4 py-2 font-ui font-bold shadow-xl border border-gold/30 rounded-sm scale-110 flex items-center gap-2">
+                                                <span className="material-symbols-outlined text-[18px]">drag_pan</span>
+                                                {monitorProps.item.text}
+                                            </div>
+                                        )}
+                                        onDrop={handleDrop}
+                                        classes={{
+                                            root: "w-full py-2",
+                                            draggingSource: "opacity-30",
+                                            dropTarget: "bg-primary/5 border-2 border-primary border-dashed !rounded-sm",
+                                            placeholder: "relative h-0"
+                                        }}
+                                    />
                             )}
                         </div>
                     </div>
@@ -484,6 +647,64 @@ const CategoryList = () => {
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Mô tả chi tiết</label>
                                             <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body h-32 resize-none rounded-sm"></textarea>
+                                        </div>
+
+                                        <div className="space-y-1.5">
+                                            <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Kiểu hiển thị (Layout)</label>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => setFormData({ ...formData, display_layout: 'layout_1' })}
+                                                    className={`p-3 border rounded-sm flex flex-col items-center gap-2 transition-all ${formData.display_layout === 'layout_1' ? 'border-primary bg-primary/5 ring-1 ring-primary/20' : 'border-gold/10 bg-white hover:border-gold/30'}`}
+                                                >
+                                                    <span className="material-symbols-outlined text-2xl text-stone/40">view_compact</span>
+                                                    <span className={`text-[10px] font-black uppercase tracking-widest ${formData.display_layout === 'layout_1' ? 'text-primary' : 'text-stone/40'}`}>Giao diện 1</span>
+                                                </button>
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => setFormData({ ...formData, display_layout: 'layout_2' })}
+                                                    className={`p-3 border rounded-sm flex flex-col items-center gap-2 transition-all ${formData.display_layout === 'layout_2' ? 'border-primary bg-primary/5 ring-1 ring-primary/20' : 'border-gold/10 bg-white hover:border-gold/30'}`}
+                                                >
+                                                    <span className="material-symbols-outlined text-2xl text-stone/40">view_quilt</span>
+                                                    <span className={`text-[10px] font-black uppercase tracking-widest ${formData.display_layout === 'layout_2' ? 'text-primary' : 'text-stone/40'}`}>Giao diện 2</span>
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-3 bg-gold/5 p-4 border border-gold/10 rounded-sm">
+                                            <div className="flex items-center justify-between border-b border-gold/10 pb-2">
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-primary">Bộ lọc thuộc tính (Chỉ Layout 2)</label>
+                                                <span className="text-[9px] text-stone/40 italic">Chọn các thuộc tính hiển thị</span>
+                                            </div>
+                                            
+                                            <div className="grid grid-cols-1 gap-1 max-h-48 overflow-y-auto custom-scrollbar pr-2">
+                                                {allAttributes.filter(a => a.entity_type === 'product').map(attr => (
+                                                    <label key={attr.id} className="flex items-center gap-3 cursor-pointer group hover:bg-white/50 p-1.5 rounded transition-colors select-none">
+                                                        <input 
+                                                            type="checkbox" 
+                                                            checked={formData.filterable_attribute_ids?.includes(attr.id)}
+                                                            onChange={e => {
+                                                                const checked = e.target.checked;
+                                                                setFormData(prev => {
+                                                                    const currentList = Array.isArray(prev.filterable_attribute_ids) ? prev.filterable_attribute_ids : [];
+                                                                    return {
+                                                                        ...prev,
+                                                                        filterable_attribute_ids: checked 
+                                                                            ? [...currentList, attr.id]
+                                                                            : currentList.filter(id => id !== attr.id)
+                                                                    };
+                                                                });
+                                                            }}
+                                                            className="size-4 accent-primary rounded-sm shadow-sm"
+                                                        />
+                                                        <div className="flex flex-col">
+                                                            <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider group-hover:text-primary transition-colors leading-tight">{attr.name}</span>
+                                                            <span className="text-[9px] text-slate-400 font-mono tracking-tighter uppercase leading-tight">{attr.code}</span>
+                                                        </div>
+                                                    </label>
+                                                ))}
+                                                {allAttributes.length === 0 && <div className="text-[10px] text-stone/40 italic py-2">Chưa có thuộc tính sản phẩm nào.</div>}
+                                            </div>
                                         </div>
 
                                         <div className="space-y-1.5">

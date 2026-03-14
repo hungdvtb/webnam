@@ -32,13 +32,40 @@ export async function getStorefrontData() {
 }
 
 export async function getProducts(params = {}) {
-    const query = new URLSearchParams(params).toString();
-    return fetchFromApi(`/storefront/products?${query}`);
+    // Handle nested attrs if present
+    const urlParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+        if (key === 'attrs' && typeof value === 'object') {
+            Object.entries(value).forEach(([attrKey, attrValue]) => {
+                if (Array.isArray(attrValue)) {
+                    attrValue.forEach(v => urlParams.append(`attrs[${attrKey}][]`, v));
+                } else {
+                    urlParams.append(`attrs[${attrKey}]`, attrValue);
+                }
+            });
+        } else {
+            urlParams.append(key, value);
+        }
+    });
+    return fetchFromApi(`/storefront/products?${urlParams.toString()}`);
 }
 
 export async function getWebProducts(params = {}) {
-    const query = new URLSearchParams(params).toString();
-    return fetchFromApi(`/web-api/products?${query}`);
+    const urlParams = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+        if (key === 'attrs' && typeof value === 'object') {
+            Object.entries(value).forEach(([attrKey, attrValue]) => {
+                if (Array.isArray(attrValue)) {
+                    attrValue.forEach(v => urlParams.append(`attrs[${attrKey}][]`, v));
+                } else {
+                    urlParams.append(`attrs[${attrKey}]`, attrValue);
+                }
+            });
+        } else {
+            urlParams.append(key, value);
+        }
+    });
+    return fetchFromApi(`/web-api/products?${urlParams.toString()}`);
 }
 
 export async function getWebCategories() {

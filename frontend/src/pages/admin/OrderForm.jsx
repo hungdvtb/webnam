@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { orderApi, productApi, attributeApi, orderStatusApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
+import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
 import { toPng, toBlob } from 'html-to-image';
 
@@ -24,6 +25,7 @@ const OrderForm = () => {
     const isEdit = !!id;
     const navigate = useNavigate();
     const { user } = useAuth();
+    const { showModal } = useUI();
 
     const [loading, setLoading] = useState(isEdit || !!duplicateFromId);
     const [saving, setSaving] = useState(false);
@@ -262,6 +264,12 @@ const OrderForm = () => {
             });
         } catch (error) {
             console.error("Error fetching order", error);
+            if (error.response?.status === 404) {
+                showModal({ title: 'Lỗi', content: 'Đơn hàng không tồn tại hoặc đã bị xóa.', type: 'error' });
+            } else {
+                showModal({ title: 'Lỗi', content: 'Không thể tải thông tin đơn hàng.', type: 'error' });
+            }
+            navigate('/admin/orders');
         } finally {
             setLoading(false);
         }

@@ -173,7 +173,7 @@ const ProductDetail = () => {
         return <div className="text-center py-20 bg-background-light">Sản phẩm không tồn tại.</div>;
     }
 
-    const images = product.images.length > 0 ? product.images : [{ image_url: 'https://via.placeholder.com/800' }];
+    const images = product.images.length > 0 ? product.images : [{ image_url: 'https://placehold.co/800' }];
     const displayPrice = currentVariant ? currentVariant.price : product.price;
     const displaySpecialPrice = currentVariant ? currentVariant.special_price : product.special_price;
     const isSale = displaySpecialPrice && displaySpecialPrice < displayPrice;
@@ -267,7 +267,7 @@ const ProductDetail = () => {
                                     <div key={idx} className="flex items-center gap-6 p-3 bg-white/50 border border-transparent hover:border-gold/30 hover:bg-white transition-all shadow-sm group">
                                         <div className="size-16 relative bg-white border border-gold/10 overflow-hidden shrink-0">
                                             <img
-                                                src={item.main_image || 'https://via.placeholder.com/200'}
+                                                src={item.main_image || 'https://placehold.co/200'}
                                                 className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
                                                 alt={item.name}
                                             />
@@ -344,7 +344,7 @@ const ProductDetail = () => {
                                                     ) : attr.swatch_type === 'image' ? (
                                                         <div className={`p-1 border-2 ${isSelected ? 'border-primary' : 'border-gold/20'}`}>
                                                             <img
-                                                                src={option?.swatch_value || 'https://via.placeholder.com/40'}
+                                                                src={option?.swatch_value || 'https://placehold.co/40'}
                                                                 className="size-10 object-cover"
                                                                 alt={val}
                                                             />
@@ -562,7 +562,7 @@ const ProductDetail = () => {
                         {relatedProducts.map(p => (
                             <ProductCard key={p.id} product={{
                                 ...p,
-                                image: p.images?.[0]?.image_url || 'https://via.placeholder.com/400'
+                                image: p.images?.[0]?.image_url || 'https://placehold.co/400'
                             }} />
                         ))}
                     </div>

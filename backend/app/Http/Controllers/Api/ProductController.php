@@ -140,6 +140,13 @@ class ProductController extends Controller
                 });
             }
         }
+        // Exclude Child Products by default (unless specifically searching and we want to show them)
+        // A child product is a product linked to another product via 'super_link' link_type
+        if (!$request->filled('type') && !$request->filled('search')) {
+            $query->whereDoesntHave('parentProducts', function($q) {
+                $q->where('product_links.link_type', 'super_link');
+            });
+        }
 
         // Sorting
         $sortBy = $request->input('sort_by', 'created_at');

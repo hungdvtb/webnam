@@ -77,11 +77,61 @@ const ProductList = () => {
     const [bulkUpdateData, setBulkUpdateData] = useState({});
     const [openAttrId, setOpenAttrId] = useState(null);
 
-    const [editingCell, setEditingCell] = useState(null);
-    const [editValue, setEditValue] = useState("");
-    const [justUpdatedId, setJustUpdatedId] = useState(null);
+    const [editingProductId, setEditingProductId] = useState(null);
+    const [editForm, setEditForm] = useState({ price: '', cost_price: '' });
+    const [savingId, setSavingId] = useState(null);
+
+    const handleStartQuickEdit = (p, e) => {
+        e.stopPropagation();
+        setEditingProductId(p.id);
+        setEditForm({
+            price: p.price || 0,
+            cost_price: p.cost_price || 0
+        });
+    };
+
+    const handleCancelQuickEdit = (e) => {
+        if (e) e.stopPropagation();
+        setEditingProductId(null);
+        setEditForm({ price: '', cost_price: '' });
+    };
+
+    const handleSaveQuickEdit = async (e) => {
+        e.stopPropagation();
+        if (!editingProductId) return;
+        
+        setSavingId(editingProductId);
+        try {
+            const response = await productApi.update(editingProductId, {
+                price: editForm.price,
+                cost_price: editForm.cost_price
+            });
+            
+            // Update local state
+            setProducts(prev => prev.map(p => {
+                if (p.id === editingProductId) return { ...p, ...response.data };
+                if (p.linked_products) {
+                    return {
+                        ...p,
+                        linked_products: p.linked_products.map(child => 
+                            child.id === editingProductId ? { ...child, ...response.data } : child
+                        )
+                    };
+                }
+                return p;
+            }));
+            
+            setNotification({ type: 'success', message: 'Cập nhật giá thành công' });
+            setTimeout(() => setNotification(null), 3000);
+            handleCancelQuickEdit();
+        } catch (err) {
+            setNotification({ type: 'error', message: 'Lỗi khi cập nhật giá: ' + (err.response?.data?.message || err.message) });
+        } finally {
+            setSavingId(null);
+        }
+    };
+
     const [notification, setNotification] = useState(null);
-    const [lastBulkUpdateLogId, setLastBulkUpdateLogId] = useState(null);
 
     const [pagination, setPagination] = useState({ current_page: 1, last_page: 1, total: 0, per_page: 20 });
     const [trashCount, setTrashCount] = useState(0);
@@ -604,8 +654,47 @@ const ProductList = () => {
                     transform: scale(1.1);
                 }
                 
-                .row-empty-child {
-                    background-color: #fff1f2 !important;
+                .quick-edit-input {
+                    display: inline-block !important;
+                    width: auto !important;
+                    min-width: 80px !important;
+                    max-width: 100px !important;
+                    background: white !important;
+                    border: 2px solid #9C845A !important;
+                    border-radius: 4px !important;
+                    padding: 2px 6px !important;
+                    font-size: 13px !important;
+                    font-weight: 800 !important;
+                    color: #1B365D !important;
+                    outline: none !important;
+                }
+                
+                .quick-edit-btn {
+                    padding: 4px;
+                    border-radius: 4px;
+                    transition: all 0.2s;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    cursor: pointer;
+                    background: transparent;
+                    border: none;
+                }
+                .quick-edit-btn:hover {
+                    background-color: rgba(156, 132, 90, 0.1);
+                    color: #9C845A;
+                }
+                .quick-save-btn {
+                    color: #059669;
+                }
+                .quick-save-btn:hover {
+                    background-color: #ecfdf5;
+                }
+                .quick-cancel-btn {
+                    color: #dc2626;
+                }
+                .quick-cancel-btn:hover {
+                    background-color: #fef2f2;
                 }
 
             `}</style>
@@ -1069,8 +1158,82 @@ const ProductList = () => {
                                                     </td>
                                                 );
                                                 
-                                                if (col.id === 'cost_price') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#334155] font-bold tracking-tight">{p.cost_price ? new Intl.NumberFormat('vi-VN').format(Math.floor(p.cost_price)) + '₫' : '--'}</td>;
-                                                if (col.id === 'price') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-brick font-black tracking-tight">{p.price ? new Intl.NumberFormat('vi-VN').format(Math.floor(p.price)) + '₫' : '--'}</td>;
+                                                if (col.id === 'cost_price') {
+                                                    const isEditing = editingProductId === p.id;
+                                                    return (
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#334155] font-bold tracking-tight">
+                                                            <div className="flex items-center justify-between group/cell">
+                                                                {isEditing ? (
+                                                                    <input 
+                                                                        type="number" 
+                                                                        className="quick-edit-input" 
+                                                                        value={editForm.cost_price} 
+                                                                        onChange={e => setEditForm({...editForm, cost_price: e.target.value})}
+                                                                        onClick={e => e.stopPropagation()}
+                                                                        autoFocus
+                                                                    />
+                                                                ) : (
+                                                                    <React.Fragment>
+                                                                        <span>{p.cost_price ? new Intl.NumberFormat('vi-VN').format(Math.floor(p.cost_price)) + '₫' : '--'}</span>
+                                                                        {pIsChild && !isEditing && (
+                                                                            <button onClick={(e) => handleStartQuickEdit(p, e)} className="quick-edit-btn opacity-0 group-hover/cell:opacity-100" title="Sửa nhanh giá nhập">
+                                                                                <span className="material-symbols-outlined text-[16px]">edit</span>
+                                                                            </button>
+                                                                        )}
+                                                                    </React.Fragment>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                    );
+                                                }
+
+                                                if (col.id === 'price') {
+                                                    const isEditing = editingProductId === p.id;
+                                                    return (
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-brick font-black tracking-tight">
+                                                            <div className="flex items-center justify-between group/cell">
+                                                                {isEditing ? (
+                                                                    <div className="flex items-center gap-1 w-full">
+                                                                        <input 
+                                                                            type="number" 
+                                                                            className="quick-edit-input" 
+                                                                            value={editForm.price} 
+                                                                            onChange={e => setEditForm({...editForm, price: e.target.value})}
+                                                                            onClick={e => e.stopPropagation()}
+                                                                        />
+                                                                        <div className="flex flex-col gap-0.5">
+                                                                            <button 
+                                                                                onClick={handleSaveQuickEdit} 
+                                                                                disabled={savingId === p.id}
+                                                                                className="quick-edit-btn quick-save-btn" 
+                                                                                title="Lưu"
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[18px] font-bold">{savingId === p.id ? 'sync' : 'check'}</span>
+                                                                            </button>
+                                                                            <button 
+                                                                                onClick={handleCancelQuickEdit} 
+                                                                                className="quick-edit-btn quick-cancel-btn" 
+                                                                                title="Hủy"
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[18px]">close</span>
+                                                                            </button>
+                                                                        </div>
+                                                                    </div>
+                                                                ) : (
+                                                                    <React.Fragment>
+                                                                        <span>{p.price ? new Intl.NumberFormat('vi-VN').format(Math.floor(p.price)) + '₫' : '--'}</span>
+                                                                        {pIsChild && !isEditing && (
+                                                                            <button onClick={(e) => handleStartQuickEdit(p, e)} className="quick-edit-btn opacity-0 group-hover/cell:opacity-100" title="Sửa nhanh giá bán">
+                                                                                <span className="material-symbols-outlined text-[16px]">edit</span>
+                                                                            </button>
+                                                                        )}
+                                                                    </React.Fragment>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                    );
+                                                }
+
                                                 if (col.id === 'stock') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 font-black text-primary">{p.stock_quantity || 0}</td>;
                                                 if (col.id === 'category') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#1e293b] font-medium truncate">{p.category?.name || '-'}</td>;
                                                 if (col.id === 'type') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20"><span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold border ${TYPE_LABELS[p.type]?.cls || ''}`}>{TYPE_LABELS[p.type]?.label || p.type}</span></td>;

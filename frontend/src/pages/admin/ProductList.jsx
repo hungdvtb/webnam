@@ -555,81 +555,44 @@ const ProductList = () => {
                 .table-scrollbar::-webkit-scrollbar-track { background: #F0F4F8; }
                 .table-scrollbar::-webkit-scrollbar-thumb { background: #1B365D; border: 2px solid #F0F4F8; border-radius: 5px; }
 
-                /* Parent & Child Product Styles - Premium Redesign */
+                /* Parent & Child Product Styles - Simplified */
                 .row-parent { 
-                    border-left: 4px solid transparent !important;
-                    background-image: linear-gradient(to right, rgba(156, 132, 90, 0.05), transparent) !important;
-                    border-left-color: #9C845A !important;
+                    background-color: #FFFFFF !important;
                     position: relative;
                 }
                 .row-parent:hover {
-                    background-image: linear-gradient(to right, rgba(156, 132, 90, 0.1), rgba(156, 132, 90, 0.02)) !important;
+                    background-color: #f8fafc !important;
                 }
                 .row-parent .sticky-col-0, .row-parent .sticky-col-1, .row-parent .sticky-col-2 { 
-                    background-color: transparent !important; 
+                    background-color: white !important; 
                 }
                 
                 .row-child { 
-                    background-color: #f8fafc !important;
+                    background-color: #f1f5f9 !important; /* Contrasting background */
                     position: relative;
                 }
                 .row-child:hover {
-                    background-color: #f1f5f9 !important;
-                }
-                .row-child::before {
-                    content: '';
-                    position: absolute;
-                    left: 20px;
-                    top: 0;
-                    bottom: 0;
-                    width: 2px;
-                    background: repeating-linear-gradient(to bottom, #cbd5e1 0, #cbd5e1 4px, transparent 4px, transparent 8px);
-                    z-index: 5;
-                }
-                .row-child:last-child::before {
-                    height: 50%;
+                    background-color: #e2e8f0 !important;
                 }
                 
                 .row-child .child-indent { 
                     padding-left: 32px !important; 
                 }
                 .row-child .sticky-col-0, .row-child .sticky-col-1, .row-child .sticky-col-2 { 
-                    background-color: transparent !important; 
+                    background-color: #f1f5f9 !important; 
                 }
                 
-                .badge-parent { 
-                    background: linear-gradient(135deg, #9C845A, #1B365D);
-                    color: white; 
-                    font-size: 9px; 
-                    padding: 2px 7px; 
-                    border-radius: 4px; 
-                    text-transform: uppercase; 
-                    font-weight: 900; 
-                    letter-spacing: 0.08em; 
-                    display: inline-flex; 
-                    align-items: center; 
-                    gap: 3px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                .expand-btn {
+                    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
                 }
-                .badge-child { 
-                    background: white;
-                    color: #475569; 
-                    font-size: 9px; 
-                    padding: 1px 6px; 
-                    border-radius: 3px; 
-                    text-transform: uppercase; 
-                    font-weight: 800; 
-                    letter-spacing: 0.05em; 
-                    display: inline-flex; 
-                    align-items: center; 
-                    gap: 2px; 
-                    border: 1px solid #cbd5e1;
-                    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+                .expand-btn:hover {
+                    background-color: #9C845A;
+                    color: white;
+                    transform: scale(1.1);
                 }
-                .child-icon { 
-                    font-size: 16px !important; 
-                    color: #94a3b8;
-                    margin-left: -4px;
+                
+                .row-empty-child {
+                    background-color: #fff1f2 !important;
                 }
                 
                 .expand-btn {
@@ -1094,14 +1057,10 @@ const ProductList = () => {
                                                 if (col.id === 'name') return (
                                                     <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-2 font-bold group ${pIsParent ? 'text-primary' : 'text-[#111]'} ${pIsChild ? 'child-indent' : ''}`}>
                                                         <div className="flex items-center gap-2 overflow-hidden">
-                                                            {pIsChild && <span className="material-symbols-outlined child-icon">subdirectory_arrow_right</span>}
                                                             <div className="flex flex-col gap-1 flex-1 overflow-hidden">
                                                                 <div className="flex items-center gap-2">
                                                                     <span className={`truncate ${pIsParent ? 'text-[14px] font-black uppercase tracking-tight' : 'text-[13px] font-bold'}`}>{p.name}</span>
-                                                                    {pIsParent && <span className="badge-parent"><span className="material-symbols-outlined text-[11px]">account_tree</span>Sản phẩm cha</span>}
-                                                                    {pIsChild && <span className="badge-child">Biến thể</span>}
                                                                 </div>
-                                                                {pIsParent && <span className="text-[10px] text-primary/50 font-bold uppercase tracking-tighter">Gồm {children.length} phương án sản phẩm</span>}
                                                             </div>
                                                             <button onClick={(e) => handleCopy(p.name, e)} className={`${copiedText === p.name ? 'text-green-600' : 'text-primary/40 opacity-0 group-hover:opacity-100'} hover:text-primary p-0.5 rounded transition-all`}>
                                                                 <span className="material-symbols-outlined text-[14px]">{copiedText === p.name ? 'check' : 'content_copy'}</span>

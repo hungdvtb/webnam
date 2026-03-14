@@ -1083,13 +1083,13 @@ const ProductList = () => {
                             </tr>
                         ) : (
                             products.map(product => {
-                                const isParent = product.type === 'configurable';
+                                const isParent = product.type === 'configurable' || product.type === 'grouped';
                                 const isChild = product.parent_products?.length > 0;
                                 const isExpanded = expandedRows.includes(product.id);
-                                const children = product.variations || [];
+                                const children = product.type === 'grouped' ? (product.grouped_items || []) : (product.variations || []);
                                 
                                 const renderRow = (p, isSubRow = false) => {
-                                    const pIsParent = p.type === 'configurable';
+                                    const pIsParent = p.type === 'configurable' || p.type === 'grouped';
                                     const pIsChild = isSubRow || p.parent_products?.length > 0;
                                     
                                     // Custom aggregate price display for parent products
@@ -1133,7 +1133,7 @@ const ProductList = () => {
                                                         <button 
                                                             onClick={(e) => toggleExpandRow(p.id, e)} 
                                                             className={`size-6 flex items-center justify-center rounded-full border border-gold/30 text-gold transition-all expand-btn ${isExpanded ? 'bg-gold text-white rotate-90' : 'bg-white'}`}
-                                                            title={isExpanded ? 'Thu gọn' : 'Xem biến thể'}
+                                                            title={isExpanded ? 'Thu gọn' : (p.type === 'grouped' ? 'Xem thành phần' : 'Xem biến thể')}
                                                         >
                                                             <span className="material-symbols-outlined text-[18px]">chevron_right</span>
                                                         </button>
@@ -1163,8 +1163,14 @@ const ProductList = () => {
                                                     <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-2 font-bold group ${pIsParent ? 'text-primary' : 'text-[#111]'} ${pIsChild ? 'child-indent' : ''}`}>
                                                         <div className="flex items-center gap-2 overflow-hidden">
                                                             <div className="flex flex-col gap-1 flex-1 overflow-hidden">
-                                                                <div className="flex items-center gap-2">
+                                                                 <div className="flex items-center gap-2">
                                                                     <span className={`truncate ${pIsParent ? 'text-[14px] font-black uppercase tracking-tight' : 'text-[13px] font-bold'}`}>{p.name}</span>
+                                                                    {isSubRow && product.type === 'grouped' && p.pivot && (
+                                                                        <div className="flex items-center gap-1 shrink-0">
+                                                                            <span className="bg-primary/10 text-primary px-1.5 py-0.5 rounded-sm text-[10px] font-black">x{p.pivot.quantity}</span>
+                                                                            {!p.pivot.is_required && <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-sm text-[10px] font-black uppercase tracking-tighter">Tùy chọn</span>}
+                                                                        </div>
+                                                                    )}
                                                                 </div>
                                                             </div>
                                                             <button onClick={(e) => handleCopy(p.name, e)} className={`${copiedText === p.name ? 'text-green-600' : 'text-primary/40 opacity-0 group-hover:opacity-100'} hover:text-primary p-0.5 rounded transition-all`}>
@@ -1311,7 +1317,7 @@ const ProductList = () => {
                                                             <td className="p-3 border border-primary/20 sticky-col-0" />
                                                             <td colSpan={renderedColumns.length} className="px-8 py-5 border border-primary/20 text-red-400 italic text-[12px] font-bold flex items-center gap-2">
                                                                 <span className="material-symbols-outlined text-[16px]">info</span>
-                                                                Sản phẩm này hiện chưa được cấu hình biến thể chi tiết
+                                                                {product.type === 'grouped' ? 'Nhóm sản phẩm này hiện chưa có thành phần nào' : 'Sản phẩm này hiện chưa được cấu hình biến thể chi tiết'}
                                                             </td>
                                                         </motion.tr>
                                                     )}

@@ -10,7 +10,7 @@ class Product extends Model
     use \App\Traits\BelongsToAccount, SoftDeletes;
 
     protected $fillable = [
-        'type', 'name', 'slug', 'description', 'specifications', 'price', 'cost_price', 'special_price', 'special_price_from', 'special_price_to', 
+        'type', 'name', 'slug', 'description', 'specifications', 'price', 'price_type', 'cost_price', 'special_price', 'special_price_from', 'special_price_to', 
         'category_id', 'stock_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
         'meta_title', 'meta_description', 'meta_keywords', 'weight'
     ];
@@ -144,5 +144,35 @@ class Product extends Model
     {
         return $this->belongsToMany(ProductGroup::class, 'product_group_items')
                     ->withPivot(['quantity', 'is_required']);
+    }
+
+    /**
+     * Items in this product (if it's a grouped/bundle product)
+     */
+    public function groupedItems()
+    {
+        return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
+                    ->wherePivot('link_type', 'grouped')
+                    ->withPivot(['link_type', 'quantity', 'is_required', 'position'])
+                    ->withTimestamps();
+    }
+
+    /**
+     * Calculate price for grouped product if type is 'sum'
+     */
+    public function calculateGroupPrice($removedIds = [])
+    {
+        if ($this->type !== 'grouped' || $this->price_type !== 'sum') {
+            return $this->price;
+        }
+
+        $items = $this->groupedItems;
+        $total = 0;
+        foreach ($items as $item) {
+            if (!in_array($item->id, $removedIds)) {
+                $total += $item->price * $item->pivot->quantity;
+            }
+        }
+        return $total;
     }
 }

@@ -214,6 +214,7 @@ const ProductForm = () => {
         category_id: '',
         category_ids: [],
         price: '',
+        price_type: 'fixed',
         cost_price: '',
         weight: '',
         description: '',
@@ -226,6 +227,7 @@ const ProductForm = () => {
         meta_description: '',
         meta_keywords: '',
         linked_product_ids: [],
+        grouped_items: [], // [{id, name, sku, price, quantity, is_required, image_url}]
         super_attribute_ids: [],
         custom_attributes: {}
     });
@@ -456,6 +458,7 @@ const ProductForm = () => {
                 category_id: data.category_id || '',
                 category_ids: data.categories ? data.categories.map(c => c.id) : [],
                 price: data.price ? Math.floor(data.price) : '',
+                price_type: data.price_type || 'fixed',
                 cost_price: data.cost_price ? Math.floor(data.cost_price) : '',
                 weight: data.weight || '',
                 description: data.description || '',
@@ -468,6 +471,15 @@ const ProductForm = () => {
                 meta_description: data.meta_description || '',
                 meta_keywords: data.meta_keywords || '',
                 linked_product_ids: data.linked_products ? data.linked_products.map(p => p.id) : [],
+                grouped_items: (data.grouped_items || []).map(item => ({
+                    id: item.id,
+                    name: item.name,
+                    sku: item.sku,
+                    price: item.price,
+                    quantity: item.pivot?.quantity || 1,
+                    is_required: !!(item.pivot?.is_required),
+                    image_url: (item.images?.find(img => img.is_primary) || item.images?.[0])?.image_url
+                })),
                 super_attribute_ids: data.super_attributes ? data.super_attributes.map(a => a.id) : [],
                 custom_attributes: (data.attribute_values || []).reduce((acc, curr) => {
                     let val = curr.value;
@@ -898,6 +910,45 @@ const ProductForm = () => {
         setFormData(prev => ({ ...prev, weight: raw }));
     };
 
+    const handleAddGroupItem = (product) => {
+        if (formData.grouped_items.some(item => item.id === product.id)) {
+            showToast({ message: 'Sản phẩm này đã có trong nhóm.', type: 'info' });
+            return;
+        }
+
+        const primaryImage = product.images?.find(img => img.is_primary) || product.images?.[0];
+        const newItem = {
+            id: product.id,
+            name: product.name,
+            sku: product.sku,
+            price: product.price,
+            quantity: 1,
+            is_required: true,
+            image_url: primaryImage?.image_url
+        };
+
+        setFormData(prev => ({
+            ...prev,
+            grouped_items: [...prev.grouped_items, newItem]
+        }));
+    };
+
+    const handleRemoveGroupItem = (id) => {
+        setFormData(prev => ({
+            ...prev,
+            grouped_items: prev.grouped_items.filter(item => item.id !== id)
+        }));
+    };
+
+    const handleGroupItemChange = (id, field, value) => {
+        setFormData(prev => ({
+            ...prev,
+            grouped_items: prev.grouped_items.map(item =>
+                item.id === id ? { ...item, [field]: value } : item
+            )
+        }));
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setIsSaving(true);
@@ -918,6 +969,12 @@ const ProductForm = () => {
                     selectedSuperAttributes.forEach(attr => submitData.append('super_attribute_ids[]', attr.id));
                 } else if (key === 'linked_product_ids') {
                     val.forEach(v => submitData.append('linked_product_ids[]', v));
+                } else if (key === 'grouped_items') {
+                    val.forEach((item, idx) => {
+                        submitData.append(`grouped_items[${idx}][id]`, item.id);
+                        submitData.append(`grouped_items[${idx}][quantity]`, item.quantity);
+                        submitData.append(`grouped_items[${idx}][is_required]`, item.is_required ? '1' : '0');
+                    });
                 } else if (Array.isArray(val)) {
                     val.forEach(v => submitData.append(`${key}[]`, v));
                 } else if (typeof val === 'boolean') {
@@ -1200,19 +1257,34 @@ const ProductForm = () => {
                             <SectionTitle icon="payments" title="Giá và thông số" />
                             <div className="grid grid-cols-1 gap-y-8">
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4">
-                                    <Field label="Giá bán lẻ (VNĐ)" className="border-brick/30 bg-brick/[0.02]">
+                                    <Field label="Giá bán lẻ (VNĐ)" className={`border-brick/30 bg-brick/[0.02] ${formData.price_type === 'sum' ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
                                         <div className="flex items-center w-full">
                                             <input
                                                 type="text"
                                                 name="price"
-                                                value={formatNumberOutput(formData.price)}
+                                                value={formData.price_type === 'sum' 
+                                                    ? formatNumberOutput(formData.grouped_items.reduce((acc, item) => acc + (item.price * item.quantity), 0))
+                                                    : formatNumberOutput(formData.price)}
                                                 onChange={(e) => handlePriceInputChange(e, 'price')}
-                                                required
+                                                required={formData.price_type !== 'sum'}
                                                 className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-brick font-black text-[16px]"
                                             />
                                             <span className="font-bold text-brick opacity-40 ml-2">₫</span>
                                         </div>
                                     </Field>
+                                    {formData.type === 'grouped' && (
+                                        <Field label="Loại giá nhóm" className="border-gold/30 bg-gold/[0.02]">
+                                            <select
+                                                name="price_type"
+                                                value={formData.price_type}
+                                                onChange={handleChange}
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
+                                            >
+                                                <option value="fixed">Cố định</option>
+                                                <option value="sum">Tổng giá các thành phần</option>
+                                            </select>
+                                        </Field>
+                                    )}
                                     <Field label="Giá nhập (Đối nội)" className="border-primary/20 bg-stone/5">
                                         <div className="flex items-center w-full">
                                             <input
@@ -1598,6 +1670,148 @@ const ProductForm = () => {
                                         <p className="text-[11px] text-stone/30 mt-1">Bấm "Cấu hình biến thể" để bắt đầu</p>
                                     </div>
                                 )}
+                            </div>
+                        )}
+
+                        {/* Product Group Management - Only for Grouped Products */}
+                        {formData.type === 'grouped' && (
+                            <div className="bg-white border border-gold/20 p-5 shadow-premium-sm rounded-sm animate-fade-in mb-8">
+                                <SectionTitle icon="group_work" title="Thiết lập nhóm sản phẩm thành phần" />
+                                
+                                <div className="mb-6">
+                                    <p className="text-[12px] text-stone/60 mb-4 italic">Tìm kiếm và chọn các sản phẩm đơn hoặc biến thể cụ thể để thêm vào bộ sưu tập này.</p>
+                                    
+                                    <div className="relative">
+                                        <div className="flex gap-2 mb-4">
+                                            <div className="relative flex-1">
+                                                <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-stone/40">search</span>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Tìm theo tên hoặc SKU..."
+                                                    value={relatedQuery}
+                                                    onChange={(e) => setRelatedQuery(e.target.value)}
+                                                    className="w-full pl-10 pr-4 py-2.5 bg-stone/5 border border-stone/10 rounded-sm focus:outline-none focus:border-gold/30 text-[14px]"
+                                                />
+                                            </div>
+                                            <select
+                                                value={relatedCategory}
+                                                onChange={(e) => setRelatedCategory(e.target.value)}
+                                                className="px-4 py-2.5 bg-stone/5 border border-stone/10 rounded-sm focus:outline-none focus:border-gold/30 text-[14px] text-stone/60"
+                                            >
+                                                <option value="all">Tất cả danh mục</option>
+                                                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                            </select>
+                                        </div>
+
+                                        {relatedQuery.length > 1 && (
+                                            <div className="absolute top-[calc(100%-8px)] left-0 right-0 max-h-[300px] overflow-y-auto bg-white border border-gold/10 shadow-xl rounded-sm z-[60] custom-scrollbar">
+                                                {filteredSuggestedProducts.length === 0 ? (
+                                                    <div className="p-4 text-center text-stone/40 italic">Không tìm thấy sản phẩm nào</div>
+                                                ) : (
+                                                    filteredSuggestedProducts.map(p => (
+                                                        <div 
+                                                            key={p.id} 
+                                                            onClick={() => {
+                                                                handleAddGroupItem(p);
+                                                                setRelatedQuery('');
+                                                            }}
+                                                            className="flex items-center gap-3 p-3 hover:bg-gold/5 cursor-pointer border-b border-stone/5 transition-colors"
+                                                        >
+                                                            <div className="size-10 rounded border border-stone/10 bg-stone/5 overflow-hidden shrink-0">
+                                                                <img 
+                                                                    src={(p.images?.find(img => img.is_primary) || p.images?.[0])?.image_url} 
+                                                                    alt="" 
+                                                                    className="w-full h-full object-cover"
+                                                                />
+                                                            </div>
+                                                            <div className="flex-1">
+                                                                <p className="text-[13px] font-bold text-primary leading-tight">{p.name}</p>
+                                                                <p className="text-[10px] font-mono text-gold uppercase">{p.sku}</p>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <p className="text-[12px] font-black text-brick">{formatNumberOutput(p.price)}₫</p>
+                                                            </div>
+                                                        </div>
+                                                    ))
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-3">
+                                    <div className="grid grid-cols-12 gap-2 px-3 pb-2 border-b border-stone/5">
+                                        <div className="col-span-1 text-[10px] font-black uppercase text-stone/40">Ảnh</div>
+                                        <div className="col-span-4 text-[10px] font-black uppercase text-stone/40">Sản phẩm</div>
+                                        <div className="col-span-2 text-[10px] font-black uppercase text-stone/40 text-center">Số lượng</div>
+                                        <div className="col-span-2 text-[10px] font-black uppercase text-stone/40 text-center">Bắt buộc?</div>
+                                        <div className="col-span-2 text-[10px] font-black uppercase text-stone/40 text-right">Giá gốc</div>
+                                        <div className="col-span-1"></div>
+                                    </div>
+
+                                    {formData.grouped_items.length === 0 ? (
+                                        <div className="py-12 flex flex-col items-center justify-center border-2 border-dashed border-stone/10 rounded-sm bg-stone/[0.02]">
+                                            <span className="material-symbols-outlined text-[48px] text-stone/20 mb-2">inventory_2</span>
+                                            <p className="text-[13px] font-bold text-stone/40 uppercase tracking-widest">Chưa có thành phần nào</p>
+                                            <p className="text-[11px] text-stone/30 mt-1">Sử dụng thanh tìm kiếm phía trên để thêm sản phẩm</p>
+                                        </div>
+                                    ) : (
+                                        formData.grouped_items.map((item, idx) => (
+                                            <div key={item.id} className="grid grid-cols-12 gap-2 p-3 bg-stone/[0.03] rounded-sm group/item items-center border border-transparent hover:border-gold/20 transition-all">
+                                                <div className="col-span-1">
+                                                    <div className="size-10 rounded border border-stone/10 bg-white overflow-hidden">
+                                                        <img src={item.image_url} alt="" className="w-full h-full object-cover" />
+                                                    </div>
+                                                </div>
+                                                <div className="col-span-4">
+                                                    <p className="text-[13px] font-bold text-primary truncate" title={item.name}>{item.name}</p>
+                                                    <p className="text-[10px] font-mono text-gold uppercase">{item.sku}</p>
+                                                </div>
+                                                <div className="col-span-2 flex justify-center">
+                                                    <div className="flex items-center gap-1 bg-white border border-stone/10 rounded-full px-2 py-0.5">
+                                                        <button 
+                                                            type="button"
+                                                            onClick={() => handleGroupItemChange(item.id, 'quantity', Math.max(1, item.quantity - 1))}
+                                                            className="material-symbols-outlined text-[16px] text-stone/40 hover:text-brick"
+                                                        >remove</button>
+                                                        <input 
+                                                            type="number"
+                                                            value={item.quantity}
+                                                            onChange={(e) => handleGroupItemChange(item.id, 'quantity', parseInt(e.target.value) || 1)}
+                                                            className="w-8 text-center bg-transparent border-none p-0 text-[12px] font-black text-primary focus:ring-0"
+                                                        />
+                                                        <button 
+                                                            type="button"
+                                                            onClick={() => handleGroupItemChange(item.id, 'quantity', item.quantity + 1)}
+                                                            className="material-symbols-outlined text-[16px] text-stone/40 hover:text-primary"
+                                                        >add</button>
+                                                    </div>
+                                                </div>
+                                                <div className="col-span-2 flex justify-center">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleGroupItemChange(item.id, 'is_required', !item.is_required)}
+                                                        className={`size-6 rounded-full flex items-center justify-center transition-all ${item.is_required ? 'bg-primary text-white' : 'bg-stone/10 text-stone/40 hover:bg-stone/20'}`}
+                                                    >
+                                                        <span className="material-symbols-outlined text-[16px]">{item.is_required ? 'check' : 'close'}</span>
+                                                    </button>
+                                                </div>
+                                                <div className="col-span-2 text-right">
+                                                    <p className="text-[12px] font-black text-primary/60">{formatNumberOutput(item.price)}₫</p>
+                                                </div>
+                                                <div className="col-span-1 flex justify-end">
+                                                    <button 
+                                                        type="button"
+                                                        onClick={() => handleRemoveGroupItem(item.id)}
+                                                        className="size-8 rounded-full flex items-center justify-center text-stone/20 hover:text-brick hover:bg-brick/5 opacity-0 group-hover/item:opacity-100 transition-all"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
                             </div>
                         )}
 

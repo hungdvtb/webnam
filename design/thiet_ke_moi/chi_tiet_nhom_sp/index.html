@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bộ Sưu Tập Men Lam Cổ | Di Sản Gốm Việt</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+</head>
+<body>
+
+    <header>
+        <div class="container">
+            <div class="nav-wrapper">
+                <div class="logo">
+                    <svg fill="currentColor" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                        <path clip-rule="evenodd" d="M24 4H42V17.3333V30.6667H24V44H6V30.6667V17.3333H24V4Z" fill-rule="evenodd"></path>
+                    </svg>
+                    <span>Di Sản Gốm Việt</span>
+                </div>
+                <div class="nav-actions" style="display: flex; gap: 1.5rem;">
+                    <span class="material-symbols-outlined">search</span>
+                    <span class="material-symbols-outlined">shopping_bag</span>
+                    <span class="material-symbols-outlined">account_circle</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        <nav class="breadcrumbs">
+            <a href="#">Trang chủ</a> / <a href="#">Bộ sưu tập</a> / <span>Bộ Sưu Tập Men Lam Cổ</span>
+        </nav>
+
+        <div class="product-grid">
+            <!-- Left: Gallery -->
+            <div class="gallery-container">
+                <div class="main-image">
+                    <img src="assets/set_full.png" alt="Bộ sưu tập Men Lam Cổ Full" id="mainImg">
+                </div>
+                <div class="thumbnails">
+                    <div class="thumb active" onclick="changeImg('assets/set_full.png', this)">
+                        <img src="assets/set_full.png" alt="Thumb 1">
+                    </div>
+                    <div class="thumb" onclick="changeImg('assets/bowl.png', this)">
+                        <img src="assets/bowl.png" alt="Thumb 2">
+                    </div>
+                    <div class="thumb" onclick="changeImg('assets/plate.png', this)">
+                        <img src="assets/plate.png" alt="Thumb 3">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: Product Info -->
+            <div class="info-section">
+                <span class="badge-tag">Product Group / Combo</span>
+                <h1 class="product-title">Tuyệt Tác "Liên Hoa Men Lam" (Bộ 12 Món)</h1>
+                <p class="artist-tag">Thiết kế bởi Nghệ nhân Ưu tú Trần Độ - Làng gốm Bát Tràng</p>
+
+                <div class="price-container">
+                    <span class="current-price" id="totalPrice">15.500.000₫</span>
+                    <span class="original-price">18.200.000₫</span>
+                    <p style="margin-top: 0.5rem; font-size: 0.9rem; color: #2E7D32; font-weight: 700;">Tiết kiệm 2.700.000₫ khi mua trọn bộ</p>
+                </div>
+
+                <div class="combo-config">
+                    <h3 class="config-title">Cấu hình bộ sản phẩm</h3>
+                    <p style="font-size: 0.9rem; margin-bottom: 1.5rem; font-style: italic;">Bạn có thể tùy chỉnh các thành phần bên dưới. Giá sẽ tự động cập nhật.</p>
+                    
+                    <div class="item-list">
+                        <!-- Item 1 (Required) -->
+                        <div class="combo-item">
+                            <input type="checkbox" class="item-checkbox" checked disabled>
+                            <img src="assets/bowl.png" class="item-img-sm" alt="Bát">
+                            <div class="item-info">
+                                <span class="item-name">Bát chiết yêu Men Lam (Mặc định)</span>
+                                <span style="font-size: 0.8rem; color: #666;">Số lượng: 6 cái | 450.000₫/cái</span>
+                            </div>
+                            <span class="item-price-sum">2.700.000₫</span>
+                        </div>
+
+                        <!-- Item 2 (Optional) -->
+                        <div class="combo-item" data-price="3200000" onclick="toggleItem(this)">
+                            <input type="checkbox" class="item-checkbox" checked>
+                            <img src="assets/plate.png" class="item-img-sm" alt="Đĩa">
+                            <div class="item-info">
+                                <span class="item-name">Đĩa đại sơn thủy vẽ tay</span>
+                                <span style="font-size: 0.8rem; color: #666;">Số lượng: 2 cái | 1.600.000₫/cái</span>
+                            </div>
+                            <span class="item-price-sum">3.200.000₫</span>
+                        </div>
+
+                        <!-- Item 3 (Optional) -->
+                        <div class="combo-item" data-price="5500000" onclick="toggleItem(this)">
+                            <input type="checkbox" class="item-checkbox" checked>
+                            <img src="assets/set_full.png" class="item-img-sm" alt="Ấm">
+                            <div class="item-info">
+                                <span class="item-name">Bộ ấm trà độc bản (1 ấm + 6 chén)</span>
+                                <span style="font-size: 0.8rem; color: #666;">1 bộ duy nhất</span>
+                            </div>
+                            <span class="item-price-sum">5.500.000₫</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="buy-actions">
+                    <div class="main-qty">
+                        <button onclick="changeMainQty(-1)">-</button>
+                        <input type="text" value="1" id="mainQty" readonly>
+                        <button onclick="changeMainQty(1)">+</button>
+                    </div>
+                    <button class="add-to-cart">Thêm vào giỏ hàng</button>
+                </div>
+
+                <div style="margin-top: 2rem; display: flex; gap: 2rem; opacity: 0.7;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem;">
+                        <span class="material-symbols-outlined">verified</span>
+                        <span>Chứng nhận Nghệ nhân</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem;">
+                        <span class="material-symbols-outlined">local_shipping</span>
+                        <span>Đóng gói chuyên dụng</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Description Section -->
+        <section class="product-details">
+            <div class="tabs">
+                <div class="tab active">Mô tả sản phẩm</div>
+                <div class="tab">Quy trình chế tác</div>
+                <div class="tab">Bảo quản</div>
+            </div>
+            <div class="tab-content">
+                <p>Bộ sưu tập "Liên Hoa Men Lam" là sự kết tinh của tinh hoa gốm sứ Bát Tràng thế kỷ 21, được phục dựng từ những mẫu vật triều Lý - Trần bởi bàn tay tài hoa của nghệ nhân Trần Độ.</p>
+                <p>Từng họa tiết hoa sen được vẽ tay tỉ mỉ bằng men lam truyền thống, sau đó được nung ở nhiệt độ 1300 độ C để tạo nên độ bền và sắc men trong như ngọc. Đây không chỉ là vật dụng gia đình mà còn là một tác phẩm nghệ thuật mang tính di sản.</p>
+                <p><strong>Sản phẩm Group/Combo:</strong> Chúng tôi cho phép quý khách tùy chỉnh các thành phần trong bộ sưu tập để phù hợp với nhu cầu trưng bày hoặc sử dụng thực tế. Tổng giá trị đơn hàng sẽ được chiết khấu thêm 15% khi quý khách chọn đầy đủ các món trong bộ sưu tập.</p>
+            </div>
+        </section>
+    </main>
+
+    <footer style="background: var(--primary); color: white; padding: 4rem 0; margin-top: 4rem;">
+        <div class="container" style="text-align: center;">
+            <p>© 2024 Di Sản Gốm Việt - Tôn vinh giá trị thủ công Việt Nam</p>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

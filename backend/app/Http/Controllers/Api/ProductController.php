@@ -31,7 +31,10 @@ class ProductController extends Controller
                 'images:id,product_id,image_url,is_primary',
                 'attributeValues:id,product_id,attribute_id,value',
                 'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
-                'variations:id,sku,name,price,cost_price,stock_quantity,type'
+                'variations:id,sku,name,price,cost_price,stock_quantity,type',
+                'variations.images:id,product_id,image_url,is_primary',
+                'groupedItems:id,sku,name,price,cost_price,stock_quantity,type',
+                'groupedItems.images:id,product_id,image_url,is_primary'
             ]);
 
         // Handle Trash View
@@ -185,6 +188,7 @@ class ProductController extends Controller
             'category_ids' => 'nullable|array',
             'category_ids.*' => 'exists:categories,id',
             'price' => 'required|numeric|min:0',
+            'price_type' => 'nullable|string|in:fixed,sum',
             'cost_price' => 'nullable|numeric|min:0',
             'special_price' => 'nullable|numeric|min:0',
             'special_price_from' => 'nullable|date',
@@ -203,6 +207,10 @@ class ProductController extends Controller
             'linked_product_ids' => 'nullable|array',
             'linked_product_ids.*' => 'exists:products,id',
             'link_type' => 'nullable|string',
+            'grouped_items' => 'nullable|array', // For product groups
+            'grouped_items.*.id' => 'required|exists:products,id',
+            'grouped_items.*.quantity' => 'required|integer|min:1',
+            'grouped_items.*.is_required' => 'required|boolean',
             'super_attribute_ids' => 'nullable|array',
             'super_attribute_ids.*' => 'exists:attributes,id',
             // EAV custom values
@@ -267,6 +275,19 @@ class ProductController extends Controller
                 $links[$id] = ['link_type' => $type, 'position' => $idx];
             }
             $product->linkedProducts()->syncWithoutDetaching($links);
+        }
+
+        if ($request->has('grouped_items') && $product->type === 'grouped') {
+            $items = [];
+            foreach ($request->grouped_items as $idx => $item) {
+                $items[$item['id']] = [
+                    'quantity' => $item['quantity'],
+                    'is_required' => $item['is_required'],
+                    'link_type' => 'grouped',
+                    'position' => $idx
+                ];
+            }
+            $product->groupedItems()->sync($items);
         }
 
         if ($request->has('super_attribute_ids') && $product->type === 'configurable') {
@@ -334,7 +355,10 @@ class ProductController extends Controller
         $product = Product::with([
             'category', 'categories', 'images', 'superAttributes.options', 'attributeValues.attribute',
             'linkedProducts' => function($q) {
-                $q->withPivot(['link_type', 'position'])->with(['images', 'attributeValues']);
+                $q->withPivot(['link_type', 'position', 'quantity', 'is_required'])->with(['images', 'attributeValues']);
+            },
+            'groupedItems' => function($q) {
+                $q->withPivot(['link_type', 'position', 'quantity', 'is_required'])->with(['images', 'attributeValues']);
             },
             'approvedReviews.user'
         ])->findOrFail($id);
@@ -355,6 +379,7 @@ class ProductController extends Controller
             'category_ids' => 'nullable|array',
             'category_ids.*' => 'exists:categories,id',
             'price' => 'sometimes|required|numeric|min:0',
+            'price_type' => 'nullable|string|in:fixed,sum',
             'cost_price' => 'nullable|numeric|min:0',
             'special_price' => 'nullable|numeric|min:0',
             'special_price_from' => 'nullable|date',
@@ -372,6 +397,10 @@ class ProductController extends Controller
             'linked_product_ids' => 'nullable|array',
             'linked_product_ids.*' => 'exists:products,id',
             'link_type' => 'nullable|string',
+            'grouped_items' => 'nullable|array',
+            'grouped_items.*.id' => 'required|exists:products,id',
+            'grouped_items.*.quantity' => 'required|integer|min:1',
+            'grouped_items.*.is_required' => 'required|boolean',
             'super_attribute_ids' => 'nullable|array',
             'super_attribute_ids.*' => 'exists:attributes,id',
             // EAV custom values
@@ -430,6 +459,19 @@ class ProductController extends Controller
             }
             
             $product->linkedProducts()->sync($links);
+        }
+
+        if ($request->has('grouped_items') && $product->type === 'grouped') {
+            $items = [];
+            foreach ($request->grouped_items as $idx => $item) {
+                $items[$item['id']] = [
+                    'quantity' => $item['quantity'],
+                    'is_required' => $item['is_required'],
+                    'link_type' => 'grouped',
+                    'position' => $idx
+                ];
+            }
+            $product->groupedItems()->sync($items);
         }
 
         if ($request->has('super_attribute_ids') && $product->type === 'configurable') {
@@ -625,10 +667,12 @@ class ProductController extends Controller
                         'position' => $lp->pivot->position
                     ]);
                 } else {
-                    // For regular links (related, cross-sell), just attach the same ID
+                    // For regular links (related, cross-sell, grouped), just attach the same ID with pivot data
                     $clone->linkedProducts()->attach($lp->id, [
                         'link_type' => $lp->pivot->link_type,
-                        'position' => $lp->pivot->position
+                        'position' => $lp->pivot->position,
+                        'quantity' => $lp->pivot->quantity ?? 1,
+                        'is_required' => $lp->pivot->is_required ?? true,
                     ]);
                 }
             }

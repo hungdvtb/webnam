@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+
+<html class="light" lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&amp;family=EB+Garamond:ital,wght@0,400..800;1,400..800&amp;family=Noto+Serif:ital,wght@0,100..900;1,100..900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#1B365D", // Cobalt Blue
+                        "antique-gold": "#C5A065",
+                        "rice-paper": "#F9F5F0",
+                        "background-light": "#F9F5F0",
+                        "background-dark": "#111821",
+                    },
+                    fontFamily: {
+                        "display": ["Playfair Display", "serif"],
+                        "body": ["EB Garamond", "serif"],
+                        "sans": ["Noto Serif", "serif"]
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            font-family: 'EB Garamond', serif;
+        }
+        h1, h2, h3, h4, .font-display {
+            font-family: 'Playfair Display', serif;
+        }
+        .gold-border-double {
+            border: 3px double #C5A065;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #C5A065;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark text-slate-900 dark:text-slate-100 min-h-screen">
+<!-- Top Navigation Bar -->
+<header class="border-b border-antique-gold/30 bg-rice-paper/80 backdrop-blur-md sticky top-0 z-50">
+<div class="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
+<div class="flex items-center gap-4">
+<div class="text-primary">
+<svg class="size-8" fill="currentColor" viewbox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+<path clip-rule="evenodd" d="M24 4H42V17.3333V30.6667H24V44H6V30.6667V17.3333H24V4Z" fill-rule="evenodd"></path>
+</svg>
+</div>
+<h1 class="text-2xl font-bold tracking-tight text-primary">Di Sản Gốm Việt</h1>
+</div>
+<nav class="hidden md:flex items-center gap-10">
+<a class="text-primary hover:text-antique-gold transition-colors font-medium" href="#">Sản phẩm</a>
+<a class="text-primary hover:text-antique-gold transition-colors font-medium" href="#">Bộ sưu tập</a>
+<a class="text-primary hover:text-antique-gold transition-colors font-medium" href="#">Nghệ nhân</a>
+<a class="text-primary hover:text-antique-gold transition-colors font-medium underline underline-offset-8 decoration-antique-gold" href="#">Thanh toán</a>
+</nav>
+<div class="flex items-center gap-4">
+<button class="p-2 text-primary hover:bg-antique-gold/10 rounded-full transition-colors">
+<span class="material-symbols-outlined">search</span>
+</button>
+<button class="p-2 text-primary hover:bg-antique-gold/10 rounded-full transition-colors relative">
+<span class="material-symbols-outlined">shopping_bag</span>
+<span class="absolute top-0 right-0 bg-antique-gold text-white text-[10px] size-4 flex items-center justify-center rounded-full font-bold">2</span>
+</button>
+<button class="p-2 text-primary hover:bg-antique-gold/10 rounded-full transition-colors">
+<span class="material-symbols-outlined">account_circle</span>
+</button>
+</div>
+</div>
+</header>
+<main class="max-w-7xl mx-auto px-6 py-12">
+<div class="mb-10">
+<h2 class="text-4xl font-bold text-primary mb-2">Giỏ hàng &amp; Thanh toán</h2>
+<p class="text-slate-600 dark:text-slate-400 italic text-lg">Hoàn tất quy trình để sở hữu những tuyệt tác gốm sứ thủ công</p>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-12">
+<!-- Left Section: Cart & Delivery -->
+<div class="lg:col-span-7 space-y-12"><!-- Section 1: Delivery Info -->
+<section class="bg-[#FDFBF7] p-8 rounded-lg border border-[#E5E7EB] mb-8">
+<div class="flex items-center gap-3 mb-8">
+<span class="size-8 rounded-full bg-primary text-white flex items-center justify-center font-display">1</span>
+<h3 class="text-2xl font-semibold text-primary">Thông tin giao hàng</h3>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6"><!-- Row 1: Name and Phone -->
+<div class="flex flex-col gap-2">
+<label class="text-sm font-semibold text-slate-700">Họ và tên người nhận</label>
+<input class="border-[#94A3B8] focus:border-primary focus:ring-0 rounded-none bg-white py-3 px-4 text-[#1B365D] placeholder-[#94A3B8]" placeholder="Nhập họ và tên" type="text"/>
+</div>
+<div class="flex flex-col gap-2">
+<label class="text-sm font-semibold text-slate-700">Số điện thoại</label>
+<input class="border-[#94A3B8] focus:border-primary focus:ring-0 rounded-none bg-white py-3 px-4 text-[#1B365D] placeholder-[#94A3B8]" placeholder="Nhập số điện thoại" type="tel"/>
+</div>
+<!-- Row 2: Location Dropdowns (Full row, 3 columns) -->
+<div class="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-6">
+<div class="flex flex-col gap-2">
+<label class="text-sm font-semibold text-slate-700">Tỉnh / Thành phố</label>
+<select class="border-[#94A3B8] focus:border-primary focus:ring-0 rounded-none bg-white py-3 px-4 text-[#1B365D] placeholder-[#94A3B8] h-[50px]">
+<option>Chọn Tỉnh/Thành</option>
+<option>Hà Nội</option>
+<option>TP. Hồ Chí Minh</option>
+<option>Đà Nẵng</option>
+</select>
+</div>
+<div class="flex flex-col gap-2">
+<label class="text-sm font-semibold text-slate-700">Quận / Huyện</label>
+<select class="border-[#94A3B8] focus:border-primary focus:ring-0 rounded-none bg-white py-3 px-4 text-[#1B365D] placeholder-[#94A3B8] h-[50px]">
+<option>Chọn Quận/Huyện</option>
+</select>
+</div>
+<div class="flex flex-col gap-2">
+<label class="text-sm font-semibold text-slate-700">Phường / Xã</label>
+<select class="border-[#94A3B8] focus:border-primary focus:ring-0 rounded-none bg-white py-3 px-4 text-[#1B365D] placeholder-[#94A3B8] h-[50px]">
+<option>Chọn Phường/Xã</option>
+</select>
+</div>
+</div>
+<!-- Row 3: Detailed Address -->
+<div class="md:col-span-2 flex flex-col gap-2">
+<label class="text-sm font-semibold text-slate-700">Địa chỉ chi tiết</label>
+<input class="border-[#94A3B8] focus:border-primary focus:ring-0 rounded-none bg-white py-3 px-4 text-[#1B365D] placeholder-[#94A3B8]" placeholder="Ví dụ: 123 Đường Lê Lợi" type="text"/>
+</div></div>
+</section>
+<!-- Section 2: Payment Method moved here -->
+<section>
+<div class="flex items-center gap-3 mb-6">
+<span class="size-8 rounded-full bg-primary text-white flex items-center justify-center font-display">2</span>
+<h3 class="text-2xl font-semibold text-primary">Phương thức thanh toán</h3>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10"><label class="relative flex items-center p-6 border border-slate-200 bg-white hover:border-primary transition-all cursor-pointer group">
+<input class="text-primary focus:ring-primary" name="payment" type="radio"/>
+<div class="ml-4 flex items-center gap-3">
+<span class="material-symbols-outlined text-3xl text-primary">account_balance</span>
+<div>
+<span class="block text-sm font-bold text-primary">Chuyển khoản qua ngân hàng</span>
+</div>
+</div>
+</label>
+<label class="relative flex items-center p-6 border-2 border-primary bg-white cursor-pointer">
+<input checked="" class="text-primary focus:ring-primary" name="payment" type="radio"/>
+<div class="ml-4 flex items-center gap-3">
+<span class="material-symbols-outlined text-3xl text-primary">local_shipping</span>
+<div>
+<span class="block text-sm font-bold text-primary">Giao hàng và thu tiền tại nhà (COD)</span>
+</div>
+</div>
+</label></div>
+<button class="w-full bg-primary text-white py-6 rounded-lg font-display text-2xl font-bold tracking-[0.2em] hover:bg-primary/90 transition-all shadow-xl hover:shadow-primary/20">Xác nhận thanh toán</button>
+<p class="mt-6 text-center text-sm text-slate-500 italic">
+    Bằng cách nhấn xác nhận, quý khách đồng ý với các Điều khoản &amp; Chính sách bảo mật của Di Sản Gốm Việt.
+</p></section></div>
+<!-- Right Section: Order Summary & Payment -->
+<div class="lg:col-span-5">
+<div class="sticky top-28">
+<div class="bg-[#FDFBF7] p-8 border-r-4 border-r-antique-gold shadow-sm relative overflow-hidden"><!-- Decorative corner element -->
+<h3 class="text-xl font-bold text-primary text-center mb-8 uppercase tracking-widest border-b border-slate-200 pb-4">TÓM TẮT ĐƠN HÀNG</h3>
+<!-- Cart Items moved here -->
+<div class="space-y-4 max-h-[400px] overflow-y-auto custom-scrollbar pr-2 mb-4" style="max-height: 500px;"><!-- Item 1: Bình gốm Chu Đậu --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10"> <img alt="Bình gốm Chu Đậu" class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBenASvo8WVi9nPUqV0KlfCgNoCIZ3kvgiQVJklVwBKlsKoIcFlNfNA537KBDfRayV7EzKeZexm_mgihJZJx1iuqGAISngEmeiMt0Ao5Ykhw_l3sg2Mxdv6oKaUq3GEfsSdeFNJW0UX_hD5WSwZE3gpkWL7Ntq7QBDQW6PS-H8M0mnXra18aJGn4shmr5uYf3k3qS9WkWrLjQIvsYl47spbKbS2Z_EUO5Lln376lSEjGlaxkKHxKXo_3dvlnLzqri5b38YgHGvOSAE"/> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Bình gốm Chu Đậu vẽ vàng</h4> <p class="text-xs text-slate-400 italic mb-3">Nghệ nhân: Phạm Văn Đại</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="1"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">4.500.000₫</span> </div> </div> </div> </div> <!-- Item 2: Bộ ấm trà --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10"> <img alt="Bộ ấm trà men lam" class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC4UqRAJzTar9XISRyIgBSM07k7blRtuTJKNRpMQwxiL87aIk4uL0soZhob2LC_7_dOxjn1MCSohUzMgEUMzV0q4wxub6QbI_bpgElPWJFLtlZyBngiRkjIPRhSC3gCTcH52EMno5dzczJ7Pbd9bmTVQKRP6ycBcgHxHxIkt0h2UzavHDuMMHh5Tnd4otpvTKt1fy62zTPW7Cm6ZPrIDKySezkxvdbYVzBxgJEwsvIMBTT3xo5AHFV8BlNuniuaSJ4SLBXXWBJSB10"/> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Bộ ấm trà men lam họa tiết Sen</h4> <p class="text-xs text-slate-400 italic mb-3">Làng gốm Bát Tràng</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="1"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">2.200.000₫</span> </div> </div> </div> </div> <!-- Item 3: Bát chiết yêu --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10"> <img alt="Bát chiết yêu" class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAnqBInA9D04B8G4O7t9m0V12hBwOQ0_jK6k3_3p-8_q-V_t5p-E_N_S_y_o_z_x_w_v_u_t_s_r_q_p_o_n_m_l_k_j_i_h_g_f_e_d_c_b_a"/> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Bát chiết yêu men lam cổ</h4> <p class="text-xs text-slate-400 italic mb-3">Gốm tâm linh Bát Tràng</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="2"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">850.000₫</span> </div> </div> </div> </div> <!-- Item 4: Đĩa cảnh --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10"> <img alt="Đĩa cảnh sơn thủy" class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC9_R8z_j_k_l_m_n_o_p_q_r_s_t_u_v_w_x_y_z_0_1_2_3_4_5_6_7_8_9_A_B_C_D_E_F_G_H_I_J_K_L_M_N_O_P_Q_R_S_T_U_V_W_X"/> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Đĩa cảnh vẽ sơn thủy hữu tình</h4> <p class="text-xs text-slate-400 italic mb-3">Nghệ nhân ưu tú Trần Độ</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="1"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">3.200.000₫</span> </div> </div> </div> </div> <!-- Item 5: Lư hương --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10 text-center flex items-center justify-center bg-slate-50"> <span class="material-symbols-outlined text-antique-gold text-3xl">sanitizer</span> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Lư hương gốm rạn đắp nổi</h4> <p class="text-xs text-slate-400 italic mb-3">Dòng gốm tâm linh cao cấp</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="1"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">1.800.000₫</span> </div> </div> </div> </div> <!-- Item 6: Chén trà tử sa --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10 text-center flex items-center justify-center bg-slate-50"> <span class="material-symbols-outlined text-antique-gold text-3xl">coffee</span> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Bộ 6 chén trà Tử Sa Phù Lãng</h4> <p class="text-xs text-slate-400 italic mb-3">Gốm mộc dân gian</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="1"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">650.000₫</span> </div> </div> </div> </div> <!-- Item 7: Bình tỳ bà --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10 text-center flex items-center justify-center bg-slate-50"> <span class="material-symbols-outlined text-antique-gold text-3xl">local_florist</span> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Bình Tỳ Bà men ngọc</h4> <p class="text-xs text-slate-400 italic mb-3">Phục chế men cổ triều Lý</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="1"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">1.450.000₫</span> </div> </div> </div> </div> <!-- Item 8: Hộp trà --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10 text-center flex items-center justify-center bg-slate-50"> <span class="material-symbols-outlined text-antique-gold text-3xl">inventory_2</span> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Hộp trà men dong vẽ hoa sen</h4> <p class="text-xs text-slate-400 italic mb-3">Gốm gia dụng cao cấp</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="1"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">320.000₫</span> </div> </div> </div> </div> <!-- Item 9: Đĩa quả --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10 text-center flex items-center justify-center bg-slate-50"> <span class="material-symbols-outlined text-antique-gold text-3xl">dinner_dining</span> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Đĩa quả men hỏa biến</h4> <p class="text-xs text-slate-400 italic mb-3">Thiết kế hiện đại phong cách Á Đông</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="1"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">480.000₫</span> </div> </div> </div> </div> <!-- Item 10: Tượng trang trí --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10 text-center flex items-center justify-center bg-slate-50"> <span class="material-symbols-outlined text-antique-gold text-3xl">person</span> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Tượng chú tiểu gốm men rạn</h4> <p class="text-xs text-slate-400 italic mb-3">Gốm nghệ thuật trang trí</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="2"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">560.000₫</span> </div> </div> </div> </div> <!-- Item 11: Chum rượu --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10 text-center flex items-center justify-center bg-slate-50"> <span class="material-symbols-outlined text-antique-gold text-3xl">liquor</span> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Chum rượu gốm sành Phù Lãng</h4> <p class="text-xs text-slate-400 italic mb-3">Dung tích 20L - Gốm truyền thống</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="1"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">1.200.000₫</span> </div> </div> </div> </div> <!-- Item 12: Bình vôi --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10 text-center flex items-center justify-center bg-slate-50"> <span class="material-symbols-outlined text-antique-gold text-3xl">spa</span> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Bình vôi gốm cổ truyền</h4> <p class="text-xs text-slate-400 italic mb-3">Vật phẩm văn hóa dân gian</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="1"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">450.000₫</span> </div> </div> </div> </div> <!-- Item 13: Tranh gốm --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10 text-center flex items-center justify-center bg-slate-50"> <span class="material-symbols-outlined text-antique-gold text-3xl">image</span> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Tranh gốm Bát Tràng đắp nổi</h4> <p class="text-xs text-slate-400 italic mb-3">Chủ đề: Vinh quy bái tổ</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="1"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">2.800.000₫</span> </div> </div> </div> </div> <!-- Item 14: Lọ hoa --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10 text-center flex items-center justify-center bg-slate-50"> <span class="material-symbols-outlined text-antique-gold text-3xl">yard</span> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Lọ hoa men rạn cổ vân mây</h4> <p class="text-xs text-slate-400 italic mb-3">Nghệ nhân ưu tú</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="1"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">1.150.000₫</span> </div> </div> </div> </div> <!-- Item 15: Đèn gốm --> <div class="p-4 bg-white border border-antique-gold/10 rounded-lg relative group mb-4"> <button class="absolute top-2 right-2 text-slate-400 hover:text-red-500 transition-colors"> <span class="material-symbols-outlined text-xl">delete</span> </button> <div class="flex gap-4"> <div class="size-20 shrink-0 overflow-hidden rounded border border-antique-gold/10 text-center flex items-center justify-center bg-slate-50"> <span class="material-symbols-outlined text-antique-gold text-3xl">light</span> </div> <div class="flex-1 flex flex-col"> <h4 class="text-lg font-display text-primary font-bold pr-6 leading-tight mb-1">Đèn gốm thấu quang sen hạc</h4> <p class="text-xs text-slate-400 italic mb-3">Gốm tâm linh cao cấp</p> <div class="flex justify-between items-end mt-auto"> <div class="flex items-center border border-antique-gold/20"> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">-</button> <input class="w-8 text-center border-x border-antique-gold/20 py-1 text-sm bg-transparent border-y-0 focus:ring-0 text-primary font-bold" readonly="" type="text" value="1"/> <button class="px-2 py-1 text-primary hover:bg-antique-gold/10">+</button> </div> <span class="font-body font-bold text-primary text-lg">950.000₫</span> </div> </div> </div> </div></div><button class="w-full py-3 border border-dashed border-antique-gold text-antique-gold font-bold text-xs tracking-widest hover:bg-antique-gold/5 transition-colors mb-8">
+    + THÊM SẢN PHẨM KHÁC
+</button>
+<div class="space-y-3 mb-6"><div class="flex justify-between text-base text-[#1B365D]"><span>Tạm tính (15 sản phẩm)</span>
+<span class="font-medium">23.550.000₫</span></div>
+<div class="flex justify-between text-base text-[#1B365D] mt-4"><span>Phí vận chuyển (Giao hỏa tốc)</span>
+<span class="font-medium">55.000₫</span></div>
+<div class="flex justify-between text-base text-[#2E7D32] mt-4"><span>Ưu đãi (Giảm giá hội viên)</span>
+<span class="font-medium">- 500.000₫</span></div>
+<div class="pt-6 mt-6 border-t border-slate-200 flex justify-between items-center"><span class="text-xl font-bold text-primary uppercase">TỔNG CỘNG</span>
+<span class="text-3xl font-bold text-primary">23.105.000₫</span></div></div></div>
+<!-- Trust Badges -->
+<div class="mt-8 flex justify-center gap-8 opacity-60 grayscale hover:grayscale-0 transition-all duration-500">
+<div class="flex flex-col items-center gap-1">
+<span class="material-symbols-outlined text-primary text-3xl">verified</span>
+<span class="text-[10px] uppercase font-bold tracking-tighter">Bảo hành 10 năm</span>
+</div>
+<div class="flex flex-col items-center gap-1">
+<span class="material-symbols-outlined text-primary text-3xl">local_shipping</span>
+<span class="text-[10px] uppercase font-bold tracking-tighter">Đóng gói chuyên dụng</span>
+</div>
+<div class="flex flex-col items-center gap-1">
+<span class="material-symbols-outlined text-primary text-3xl">workspace_premium</span>
+<span class="text-[10px] uppercase font-bold tracking-tighter">Chứng nhận Nghệ nhân</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<footer class="bg-primary text-white py-16 mt-20 font-body">
+<div class="max-w-7xl mx-auto px-6">
+<div class="grid grid-cols-1 md:grid-cols-4 gap-12 mb-12">
+<!-- Logo & About -->
+<div class="space-y-6">
+<div class="flex items-center gap-3">
+<div class="text-antique-gold">
+<svg class="size-6" fill="currentColor" viewbox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+<path clip-rule="evenodd" d="M24 4H42V17.3333V30.6667H24V44H6V30.6667V17.3333H24V4Z" fill-rule="evenodd"></path>
+</svg>
+</div>
+<h2 class="text-xl font-display font-bold tracking-tight text-antique-gold">DI SẢN GỐM VIỆT</h2>
+</div>
+<p class="text-slate-300 italic text-sm leading-relaxed">
+                    Lưu giữ tinh hoa bàn tay Việt qua từng nét vẽ, từng mảng men gốm cổ truyền.
+                </p>
+<div class="flex gap-4">
+<a class="size-10 rounded bg-white/5 flex items-center justify-center hover:bg-antique-gold/20 transition-colors border border-white/10" href="#">
+<span class="material-symbols-outlined text-sm">language</span>
+</a>
+<a class="size-10 rounded bg-white/5 flex items-center justify-center hover:bg-antique-gold/20 transition-colors border border-white/10" href="#">
+<span class="material-symbols-outlined text-sm">share</span>
+</a>
+<a class="size-10 rounded bg-white/5 flex items-center justify-center hover:bg-antique-gold/20 transition-colors border border-white/10" href="#">
+<span class="material-symbols-outlined text-sm">mail</span>
+</a>
+</div>
+</div>
+<!-- Products -->
+<div>
+<h3 class="text-antique-gold font-display font-bold mb-6">Sản Phẩm</h3>
+<ul class="space-y-3 text-sm text-slate-300">
+<li><a class="hover:text-antique-gold transition-colors" href="#">Gốm Chu Đậu</a></li>
+<li><a class="hover:text-antique-gold transition-colors" href="#">Gốm Bát Tràng</a></li>
+<li><a class="hover:text-antique-gold transition-colors" href="#">Men Lam Huế</a></li>
+<li><a class="hover:text-antique-gold transition-colors" href="#">Gốm Phù Lãng</a></li>
+</ul>
+</div>
+<!-- Support -->
+<div>
+<h3 class="text-antique-gold font-display font-bold mb-6">Chăm Sóc Khách Hàng</h3>
+<ul class="space-y-3 text-sm text-slate-300">
+<li><a class="hover:text-antique-gold transition-colors" href="#">Chính sách vận chuyển</a></li>
+<li><a class="hover:text-antique-gold transition-colors" href="#">Chính sách đổi trả</a></li>
+<li><a class="hover:text-antique-gold transition-colors" href="#">Bảo quản sản phẩm</a></li>
+<li><a class="hover:text-antique-gold transition-colors" href="#">Câu hỏi thường gặp</a></li>
+</ul>
+</div>
+<!-- Newsletter -->
+<div>
+<h3 class="text-antique-gold font-display font-bold mb-6">Bản Tin Nghệ Thuật</h3>
+<p class="text-sm text-slate-300 italic mb-6">Nhận thông tin về các bộ sưu tập giới hạn.</p>
+<div class="relative flex items-center border-b border-white/30 pb-2">
+<input class="bg-transparent border-none focus:ring-0 text-sm w-full placeholder:text-slate-500 italic" placeholder="Email của bạn..." type="email"/>
+<button class="text-antique-gold text-[10px] font-bold tracking-widest uppercase hover:text-white transition-colors">
+                        ĐĂNG KÝ
+                    </button>
+</div>
+</div>
+</div>
+<!-- Bottom Bar -->
+<div class="pt-8 border-t border-white/10 flex flex-col md:row justify-between items-center gap-6">
+<p class="text-[10px] text-slate-500 uppercase tracking-widest font-bold">
+                © 2024 DI SẢN GỐM VIỆT. TẤT CẢ QUYỀN ĐƯỢC BẢO LƯU.
+            </p>
+<div class="flex gap-8 text-[10px] text-slate-500 uppercase tracking-widest font-bold">
+<a class="hover:text-antique-gold" href="#">ĐIỀU KHOẢN</a>
+<a class="hover:text-antique-gold" href="#">BẢO MẬT</a>
+<a class="hover:text-antique-gold" href="#">SƠ ĐỒ TRANG</a>
+</div>
+</div>
+</div>
+</footer>
+</body></html>

@@ -28,7 +28,7 @@ class StorefrontController extends Controller
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
             ->withCount(['products' => function ($q) {
-                $q->where('status', true);
+                $q->where('status', true)->whereDoesntHave('parentConfigurable');
             }])
             ->orderBy('order')
             ->get(['id', 'name', 'slug', 'parent_id', 'description', 'order']);
@@ -50,6 +50,7 @@ class StorefrontController extends Controller
         $query = Product::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
+            ->whereDoesntHave('parentConfigurable')
             ->with(['images' => function ($q) {
                 $q->orderBy('is_primary', 'desc')->orderBy('sort_order');
             }, 'category:id,name,slug']);
@@ -235,6 +236,7 @@ class StorefrontController extends Controller
         $related = Product::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
+            ->whereDoesntHave('parentConfigurable')
             ->where('id', '!=', $id)
             ->where('category_id', $product->category_id)
             ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')])
@@ -273,6 +275,7 @@ class StorefrontController extends Controller
         $featured = Product::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
+            ->whereDoesntHave('parentConfigurable')
             ->where('is_featured', true)
             ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')])
             ->latest()
@@ -288,6 +291,7 @@ class StorefrontController extends Controller
         $newArrivals = Product::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
+            ->whereDoesntHave('parentConfigurable')
             ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')])
             ->latest()
             ->limit(12)

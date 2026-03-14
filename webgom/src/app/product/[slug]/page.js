@@ -3,7 +3,7 @@ import Image from 'next/image';
 import { getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
 import config from '@/lib/config';
 import styles from './product.module.css';
-import ProductGallery from '@/components/ProductGallery';
+import ProductDetailContent from '@/components/ProductDetailContent';
 
 export default async function ProductDetailPage({ params }) {
   const resolvedParams = await params;
@@ -30,14 +30,8 @@ export default async function ProductDetailPage({ params }) {
     );
   }
 
-  const formatPrice = (price) => {
-    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
-  };
-
-  // We pass product.images directly to the gallery component
-  const images = product.images || [];
-
   // Determine main image for the description section
+  const images = product.images || [];
   const mainImage = images.find(img => img.is_primary) || images[0];
 
   return (
@@ -58,126 +52,8 @@ export default async function ProductDetailPage({ params }) {
           <span>{product.name}</span>
         </nav>
 
-        <div className={styles.mainGrid}>
-          {/* Gallery */}
-          <div className={styles.galleryColumn}>
-            <ProductGallery images={images} productName={product.name} />
-          </div>
-
-          {/* Info Section */}
-          <div className={styles.infoColumn}>
-            <div className={styles.infoWrapper}>
-              <div>
-                <span className={styles.badge}>Tuyệt Tác Nghệ Nhân</span>
-                <h1 className={styles.title}>{product.name}</h1>
-                <div className={styles.meta}>
-                  <span className={styles.sku}>SKU: <span className={styles.skuValue}>{product.sku}</span></span>
-                  <span className={styles.statusDot}></span>
-                  <span className={styles.statusText}>
-                    {product.stock_quantity > 0 ? 'Còn hàng' : 'Hết hàng'}
-                  </span>
-                </div>
-              </div>
-
-              <div className={styles.priceCard}>
-                <div className={styles.price}>{formatPrice(product.price)}</div>
-                <p className={styles.priceMeta}>Đã bao gồm VAT và phí bảo hiểm vận chuyển</p>
-              </div>
-
-              <div className={styles.specCard}>
-                <h4 className={styles.specTitle}>
-                  <span className="material-symbols-outlined">info</span>
-                  Thông số chi tiết
-                </h4>
-                <ul className={styles.specList}>
-                  {product.specifications && (
-                    <li className={styles.specItem} style={{ borderBottom: '1px solid rgba(27, 54, 93, 0.1)', paddingBottom: '1rem', marginBottom: '0.5rem', flexDirection: 'column', alignItems: 'flex-start', gap: '0.5rem' }}>
-                      <span className={styles.specLabel} style={{ fontSize: '11px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mô tả kỹ thuật</span>
-                      <span className={styles.specValue} style={{ whiteSpace: 'pre-line', fontWeight: '500', lineHeight: '1.5' }}>{product.specifications}</span>
-                    </li>
-                  )}
-                  {product.attributeValues?.map((attr) => (
-                    <li key={attr.id} className={styles.specItem}>
-                      <span className={styles.specLabel}>{attr.attribute?.name}</span>
-                      <span className={styles.specValue}>{attr.value}</span>
-                    </li>
-                  ))}
-                  {/* Fallback specs if no attributes and no specifications */}
-                  {(!product.attributeValues || product.attributeValues.length === 0) && !product.specifications && (
-                    <>
-                      <li className={styles.specItem}>
-                        <span className={styles.specLabel}>Chất liệu</span>
-                        <span className={styles.specValue}>Gốm sứ cao cấp</span>
-                      </li>
-                      <li className={styles.specItem}>
-                        <span className={styles.specLabel}>Xuất xứ</span>
-                        <span className={styles.specValue}>Bát Tràng, Việt Nam</span>
-                      </li>
-                    </>
-                  )}
-                </ul>
-              </div>
-
-              <div className={styles.actionLinks}>
-                <div className={styles.actionBtn}>
-                  <div className={styles.actionIconBox}>
-                    <span className="material-symbols-outlined">verified</span>
-                  </div>
-                  <div>
-                    <div className={styles.actionLabel}>Chứng nhận quốc gia</div>
-                    <div className={styles.actionText}>Sản phẩm có Chứng nhận Nghệ nhân quốc gia</div>
-                  </div>
-                  <span className={`material-symbols-outlined ${styles.actionChevron}`}>arrow_forward_ios</span>
-                </div>
-                <div className={styles.actionBtn}>
-                  <div className={styles.actionIconBox}>
-                    <span className="material-symbols-outlined">library_books</span>
-                  </div>
-                  <div>
-                    <div className={styles.actionLabel}>Kiến thức gốm sứ</div>
-                    <div className={styles.actionText}>Cách phân biệt các loại men</div>
-                  </div>
-                  <span className={`material-symbols-outlined ${styles.actionChevron}`}>arrow_forward_ios</span>
-                </div>
-              </div>
-
-              <div className={styles.quantitySection}>
-                <span className={styles.quantityLabel}>SỐ LƯỢNG</span>
-                <div className={styles.quantityControl}>
-                  <button className={styles.qBtn}><span className="material-symbols-outlined">remove</span></button>
-                  <input className={styles.qInput} type="number" defaultValue="1" readOnly />
-                  <button className={styles.qBtn}><span className="material-symbols-outlined">add</span></button>
-                </div>
-              </div>
-
-              <div className={styles.buyGrid}>
-                <button className={styles.btnPrimary}>
-                  <span className="material-symbols-outlined">add_shopping_cart</span>
-                  THÊM VÀO GIỎ
-                </button>
-                <button className={styles.btnOutline}>
-                  <span className="material-symbols-outlined">shopping_bag</span>
-                  MUA NGAY
-                </button>
-              </div>
-
-              <div className={styles.trustBadges}>
-                <div className={styles.trustItem}>
-                  <span className="material-symbols-outlined">local_shipping</span>
-                  VẬN CHUYỂN TOÀN QUỐC
-                </div>
-                <div className={styles.trustItem}>
-                  <span className="material-symbols-outlined">security</span>
-                  BẢO HÀNH 10 NĂM
-                </div>
-                <div className={styles.trustItem}>
-                  <span className="material-symbols-outlined">history_edu</span>
-                  CAM KẾT CHÍNH HÃNG
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        {/* Dynamic Product Content (Gallery + Info + Variants) */}
+        <ProductDetailContent product={product} />
 
         {/* Detailed Tabs Section */}
         <div className={styles.tabsSection}>

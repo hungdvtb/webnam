@@ -26,11 +26,11 @@ class ProductController extends Controller
             ])
             ->with([
                 'categories:id,name', 
-                'category:id,name',                'images:id,product_id,image_url,is_primary',
+                'category:id,name',
+                'images:id,product_id,image_url,is_primary',
                 'attributeValues:id,product_id,attribute_id,value',
                 'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
-                'parentProducts:id,name',
-                'linkedProducts:id,sku,name,price,cost_price,stock_quantity,type'
+                'variations:id,sku,name,price,cost_price,stock_quantity,type'
             ]);
 
         // Handle Trash View
@@ -81,7 +81,13 @@ class ProductController extends Controller
                                 ->orWhereRaw('immutable_unaccent(sku) ILIKE immutable_unaccent(?)', [$escapedToken])
                                 ->orWhereRaw("immutable_unaccent(REGEXP_REPLACE(sku, '[^a-zA-Z0-9]', '', 'g')) ILIKE immutable_unaccent(?)", [$escapedToken])
                                 // SKU fuzzy/subsequence match
-                                ->orWhereRaw("immutable_unaccent(REGEXP_REPLACE(sku, '[^a-zA-Z0-9]', '', 'g')) ILIKE immutable_unaccent(?)", [$fuzzyToken]);
+                                ->orWhereRaw("immutable_unaccent(REGEXP_REPLACE(sku, '[^a-zA-Z0-9]', '', 'g')) ILIKE immutable_unaccent(?)", [$fuzzyToken])
+                                
+                                // Nếu là sản phẩm cha, hãy kiểm tra xem có biến thể nào khớp không
+                                ->orWhereHas('variations', function ($sq) use ($escapedToken) {
+                                    $sq->whereRaw('immutable_unaccent(name) ILIKE immutable_unaccent(?)', [$escapedToken])
+                                       ->orWhereRaw('immutable_unaccent(sku) ILIKE immutable_unaccent(?)', [$escapedToken]);
+                                });
 
                         });
                     }
@@ -108,15 +114,11 @@ class ProductController extends Controller
             if ($type === 'configurable') {
                 // Trả về sản phẩm cha thực sự có biến thể
                 $query->where('type', 'configurable')
-                      ->whereHas('linkedProducts', function($q) {
-                          $q->where('product_links.link_type', 'super_link');
-                      });
+                      ->whereHas('variations');
             } elseif ($type === 'simple') {
                 // Trả về sản phẩm đơn độc lập (không phải là biến thể của sản phẩm khác)
                 $query->where('type', 'simple')
-                      ->whereDoesntHave('parentProducts', function($q) {
-                          $q->where('product_links.link_type', 'super_link');
-                      });
+                      ->whereDoesntHave('parentConfigurable');
             } else {
                 $query->where('type', $type);
             }
@@ -140,12 +142,10 @@ class ProductController extends Controller
                 });
             }
         }
-        // Exclude Child Products by default (unless specifically searching and we want to show them)
-        // A child product is a product linked to another product via 'super_link' link_type
-        if (!$request->filled('type') && !$request->filled('search')) {
-            $query->whereDoesntHave('parentProducts', function($q) {
-                $q->where('product_links.link_type', 'super_link');
-            });
+        // Mặc định luôn ẩn sản phẩm con (biến thể) ở danh sách chính
+        // Sản phẩm con chỉ hiển thị khi bấm mở rộng sản phẩm cha ở frontend
+        if (!$request->filled('type')) {
+            $query->whereDoesntHave('parentConfigurable');
         }
 
         // Sorting
@@ -157,9 +157,12 @@ class ProductController extends Controller
 
         $field = $sortMapping[$sortBy] ?? $sortBy;
         if (!in_array($field, $validSortFields)) $field = 'created_at';
-        
+
         $order = (strtolower($sortOrder) === 'asc') ? 'asc' : 'desc';
-        $query->orderBy($field, $order);
+
+        // Ưu tiên đưa sản phẩm có biến thể lên đầu nếu cùng tiêu chí sắp xếp (giúp dễ quản lý)
+        $query->orderByRaw("CASE WHEN type = 'configurable' THEN 0 ELSE 1 END")
+              ->orderBy($field, $order);
 
         $perPage = (int) $request->get('per_page', 20);
         // Ensure perPage is reasonable
@@ -275,11 +278,11 @@ class ProductController extends Controller
 
         // Handle variants creation
         if ($request->has('variants') && $product->type === 'configurable') {
-            foreach ($request->variants as $vData) {
-                $variant = Product::create([
+            foreach ($request->variants as $idx => $vData) {
+                $vProduct = Product::create([
                     'account_id' => $product->account_id,
                     'type' => 'simple',
-                    'name' => $product->name . ' - ' . ($vData['sku'] ?? 'Variant'),
+                    'name' => $vData['name'] ?? ($product->name . ' - ' . ($vData['sku'] ?? 'Variant')),
                     'sku' => $vData['sku'],
                     'price' => $vData['price'],
                     'cost_price' => $vData['cost_price'] ?? null,
@@ -289,14 +292,28 @@ class ProductController extends Controller
                     'status' => $product->status,
                 ]);
 
-                // Link to parent
-                $product->linkedProducts()->attach($variant->id, ['link_type' => 'super_link']);
+                // Handle variant image
+                if ($request->hasFile("variants.{$idx}.image")) {
+                    $imageFile = $request->file("variants.{$idx}.image");
+                    $path = $imageFile->store('products', 'public');
+                    \App\Models\ProductImage::create([
+                        'product_id' => $vProduct->id,
+                        'image_url' => '/storage/' . $path,
+                        'is_primary' => true,
+                        'file_name' => $imageFile->getClientOriginalName(),
+                        'file_size' => $imageFile->getSize(),
+                    ]);
+                }
+
+                $product->linkedProducts()->attach($vProduct->id, [
+                    'link_type' => 'super_link',
+                ]);
 
                 // Save variant attribute values
                 if (isset($vData['attributes'])) {
                     foreach ($vData['attributes'] as $attrId => $val) {
                         \App\Models\ProductAttributeValue::create([
-                            'product_id' => $variant->id,
+                            'product_id' => $vProduct->id,
                             'attribute_id' => $attrId,
                             'value' => $val
                         ]);
@@ -305,7 +322,7 @@ class ProductController extends Controller
             }
         }
 
-        return response()->json($product->load(['category', 'categories', 'images', 'linkedProducts.attributeValues', 'superAttributes', 'attributeValues.attribute']), 201);
+        return response()->json($product->load(['category', 'categories', 'images', 'variations.images', 'variations.attributeValues', 'superAttributes', 'attributeValues.attribute']), 201);
     }
 
     /**
@@ -317,7 +334,8 @@ class ProductController extends Controller
             'category',
             'categories',
             'images',
-            'linkedProducts.attributeValues',
+            'variations.images',
+            'variations.attributeValues',
             'superAttributes.options',
             'attributeValues.attribute',
             'approvedReviews.user'
@@ -335,7 +353,7 @@ class ProductController extends Controller
         $validated = $request->validate([
             'type' => 'sometimes|required|string|in:simple,configurable,grouped,virtual,bundle,downloadable',
             'name' => 'sometimes|required|string|max:255',
-            'category_id' => 'sometimes|required|exists:categories,id',
+            'category_id' => 'nullable|exists:categories,id',
             'category_ids' => 'nullable|array',
             'category_ids.*' => 'exists:categories,id',
             'price' => 'sometimes|required|numeric|min:0',
@@ -346,7 +364,7 @@ class ProductController extends Controller
             'description' => 'nullable|string',
             'is_featured' => 'boolean',
             'is_new' => 'boolean',
-            'stock_quantity' => 'integer|min:0',
+            'stock_quantity' => 'nullable|integer|min:0',
             'weight' => 'nullable|string',
             'sku' => 'nullable|string|unique:products,sku,' . $id,
             'meta_title' => 'nullable|string',
@@ -427,22 +445,52 @@ class ProductController extends Controller
         // Handle variants sync
         if ($request->has('variants') && $product->type === 'configurable') {
             $incomingVariantIds = [];
-            foreach ($request->variants as $vData) {
+            foreach ($request->variants as $idx => $vData) {
                 if (isset($vData['id'])) {
                     $variant = Product::findOrFail($vData['id']);
                     $variant->update([
+                        'name' => $vData['name'] ?? $variant->name,
                         'sku' => $vData['sku'],
                         'price' => $vData['price'],
                         'cost_price' => $vData['cost_price'] ?? null,
                         'weight' => $vData['weight'] ?? null,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                     ]);
+
+                    // Handle variant image update/removal
+                    if ($request->hasFile("variants.{$idx}.image")) {
+                        // Delete old images first to keep it simple (only 1 primary image per variant)
+                        $variant->images()->delete();
+                        
+                        $imageFile = $request->file("variants.{$idx}.image");
+                        $path = $imageFile->store('products', 'public');
+                        \App\Models\ProductImage::create([
+                            'product_id' => $variant->id,
+                            'image_url' => '/storage/' . $path,
+                            'is_primary' => true,
+                            'file_name' => $imageFile->getClientOriginalName(),
+                            'file_size' => $imageFile->getSize(),
+                        ]);
+                    } elseif (isset($vData['remove_image']) && $vData['remove_image'] == 'true') {
+                        $variant->images()->delete();
+                    }
+
+                    // Save/Update variant attribute values
+                    if (isset($vData['attributes'])) {
+                        foreach ($vData['attributes'] as $attrId => $val) {
+                            \App\Models\ProductAttributeValue::updateOrCreate(
+                                ['product_id' => $variant->id, 'attribute_id' => $attrId],
+                                ['value' => $val]
+                            );
+                        }
+                    }
+
                     $incomingVariantIds[] = $variant->id;
                 } else {
                     $variant = Product::create([
                         'account_id' => $product->account_id,
                         'type' => 'simple',
-                        'name' => $product->name . ' - ' . ($vData['sku'] ?? 'Variant'),
+                        'name' => $vData['name'] ?? ($product->name . ' - ' . ($vData['sku'] ?? 'Variant')),
                         'sku' => $vData['sku'],
                         'price' => $vData['price'],
                         'cost_price' => $vData['cost_price'] ?? null,
@@ -451,6 +499,20 @@ class ProductController extends Controller
                         'category_id' => $product->category_id,
                         'status' => $product->status,
                     ]);
+
+                    // Handle variant image for new variant
+                    if ($request->hasFile("variants.{$idx}.image")) {
+                        $imageFile = $request->file("variants.{$idx}.image");
+                        $path = $imageFile->store('products', 'public');
+                        \App\Models\ProductImage::create([
+                            'product_id' => $variant->id,
+                            'image_url' => '/storage/' . $path,
+                            'is_primary' => true,
+                            'file_name' => $imageFile->getClientOriginalName(),
+                            'file_size' => $imageFile->getSize(),
+                        ]);
+                    }
+
                     $product->linkedProducts()->attach($variant->id, ['link_type' => 'super_link']);
                     $incomingVariantIds[] = $variant->id;
 
@@ -473,7 +535,7 @@ class ProductController extends Controller
             // Product::whereIn('id', $toDelete)->delete();
         }
 
-        return response()->json($product->load(['category', 'categories', 'images', 'linkedProducts.attributeValues', 'superAttributes', 'attributeValues.attribute']));
+        return response()->json($product->load(['category', 'categories', 'images', 'variations.images', 'variations.attributeValues', 'superAttributes', 'attributeValues.attribute']));
     }
 
     /**
@@ -481,7 +543,7 @@ class ProductController extends Controller
      */
     public function duplicate($id)
     {
-        $original = Product::with(['attributeValues', 'images', 'superAttributes', 'linkedProducts'])->where('id', $id)->firstOrFail();
+        $original = Product::with(['attributeValues', 'images', 'superAttributes', 'variations'])->where('id', $id)->firstOrFail();
 
         // Clone attributes
         $clone = $original->replicate();

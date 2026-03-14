@@ -109,8 +109,27 @@ class Product extends Model
     }
 
     /**
-     * EAV Attribute Values (Custom attributes like Artist, Story...)
+     * Variations (Children) - linked with super_link
      */
+    public function variations()
+    {
+        return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
+                    ->wherePivot('link_type', 'super_link')
+                    ->withPivot(['link_type', 'position'])
+                    ->withTimestamps();
+    }
+
+    /**
+     * Parent of this variant
+     */
+    public function parentConfigurable()
+    {
+        return $this->belongsToMany(Product::class, 'product_links', 'linked_product_id', 'product_id')
+                    ->wherePivot('link_type', 'super_link')
+                    ->withPivot(['link_type', 'position'])
+                    ->withTimestamps();
+    }
+
     public function attributeValues()
     {
         return $this->hasMany(\App\Models\ProductAttributeValue::class);

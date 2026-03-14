@@ -25,7 +25,7 @@ class CategoryController extends Controller
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
             ->withCount(['products' => function ($q) {
-                $q->where('status', true);
+                $q->where('status', true)->whereDoesntHave('parentConfigurable');
             }])
             ->orderBy('order', 'asc')
             ->orderBy('id', 'asc') // Stable sorting
@@ -42,7 +42,9 @@ class CategoryController extends Controller
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('slug', $slug)
             ->with(['children' => function($q) {
-                $q->where('status', true)->orderBy('order')->withCount('products');
+                $q->where('status', true)->orderBy('order')->withCount(['products' => function($pq) {
+                    $pq->where('status', true)->whereDoesntHave('parentConfigurable');
+                }]);
             }])
             ->firstOrFail();
 

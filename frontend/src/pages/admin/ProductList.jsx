@@ -85,8 +85,8 @@ const ProductList = () => {
         e.stopPropagation();
         setEditingProductId(p.id);
         setEditForm({
-            price: p.price || 0,
-            cost_price: p.cost_price || 0
+            price: Math.floor(p.price || 0),
+            cost_price: Math.floor(p.cost_price || 0)
         });
     };
 
@@ -599,41 +599,45 @@ const ProductList = () => {
                 .sticky-col-0 { position: sticky; left: 0; z-index: 10; background: #FCFEFF; border-right: 2px solid #E2E8F0 !important; }
                 .sticky-col-1 { position: sticky; left: 40px; z-index: 10; background: #FCFEFF; border-right: 1px solid #E2E8F0 !important; }
                 .sticky-col-2 { position: sticky; left: 170px; z-index: 10; background: #FCFEFF; border-right: 2px solid #E2E8F0 !important; }
-                tr:hover .sticky-col-0, tr:hover .sticky-col-1, tr:hover .sticky-col-2 { background-color: #F1F5F9 !important; }
                 tr.bg-primary\/5 .sticky-col-0, tr.bg-primary\/5 .sticky-col-1, tr.bg-primary\/5 .sticky-col-2 { background-color: #E2E8F0 !important; }
                 .table-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
                 .table-scrollbar::-webkit-scrollbar-track { background: #F0F4F8; }
                 .table-scrollbar::-webkit-scrollbar-thumb { background: #1B365D; border: 2px solid #F0F4F8; border-radius: 5px; }
-
-                /* Parent & Child Product Styles - Simplified */
+                  /* Parent & Child Product Styles - Simplified */
                 .row-parent { 
                     background-color: #FFFFFF !important;
                     position: relative;
                 }
                 .row-parent:hover {
-                    background-color: #f8fafc !important;
+                    background-color: #FFFBF0 !important; /* Light gold tint for hover */
                 }
                 .row-parent .sticky-col-0, .row-parent .sticky-col-1, .row-parent .sticky-col-2 { 
                     background-color: white !important; 
                 }
+                .row-parent:hover .sticky-col-0, .row-parent:hover .sticky-col-1, .row-parent:hover .sticky-col-2 { 
+                    background-color: #FFFBF0 !important; 
+                }
                 
                 .row-child { 
-                    background-color: #f1f5f9 !important; /* Contrasting background */
+                    background-color: #f1f5f9 !important;
                     position: relative;
                 }
                 .row-child:hover {
                     background-color: #e2e8f0 !important;
                 }
+                .row-child .sticky-col-0, .row-child .sticky-col-1, .row-child .sticky-col-2 { 
+                    background-color: #f1f5f9 !important; 
+                }
+                .row-child:hover .sticky-col-0, .row-child:hover .sticky-col-1, .row-child:hover .sticky-col-2 { 
+                    background-color: #e2e8f0 !important; 
+                }
                 
                 .row-child .child-indent { 
                     padding-left: 32px !important; 
                 }
-                .row-child .sticky-col-0, .row-child .sticky-col-1, .row-child .sticky-col-2 { 
-                    background-color: #f1f5f9 !important; 
-                }
                 
                 .expand-btn {
-                    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
                 }
                 .expand-btn:hover {
                     background-color: #9C845A;
@@ -643,15 +647,6 @@ const ProductList = () => {
                 
                 .row-empty-child {
                     background-color: #fff1f2 !important;
-                }
-                
-                .expand-btn {
-                    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-                }
-                .expand-btn:hover {
-                    background-color: #9C845A;
-                    color: white;
-                    transform: scale(1.1);
                 }
                 
                 .quick-edit-input {
@@ -1091,11 +1086,32 @@ const ProductList = () => {
                                 const isParent = product.type === 'configurable';
                                 const isChild = product.parent_products?.length > 0;
                                 const isExpanded = expandedRows.includes(product.id);
-                                const children = product.linked_products || [];
+                                const children = product.variations || [];
                                 
                                 const renderRow = (p, isSubRow = false) => {
                                     const pIsParent = p.type === 'configurable';
                                     const pIsChild = isSubRow || p.parent_products?.length > 0;
+                                    
+                                    // Custom aggregate price display for parent products
+                                    let displayCostPrice = p.cost_price;
+                                    let displayPrice = p.price;
+                                    const pVariants = p.variations || [];
+                                    
+                                    if (pIsParent && !isSubRow) {
+                                        if (pVariants.length > 0) {
+                                            // Check if all variants have the same cost price
+                                            const vCostPrices = pVariants.map(v => v.cost_price);
+                                            const firstCost = vCostPrices[0];
+                                            const allCostSame = vCostPrices.every(cp => cp !== null && cp !== undefined && Number(cp) === Number(firstCost));
+                                            displayCostPrice = allCostSame ? firstCost : null;
+
+                                            // Check if all variants have the same selling price
+                                            const vPrices = pVariants.map(v => v.price);
+                                            const firstPrice = vPrices[0];
+                                            const allPriceSame = vPrices.every(pr => pr !== null && pr !== undefined && Number(pr) === Number(firstPrice));
+                                            displayPrice = allPriceSame ? firstPrice : null;
+                                        }
+                                    }
                                     
                                     return (
                                         <motion.tr
@@ -1168,13 +1184,14 @@ const ProductList = () => {
                                                                         type="number" 
                                                                         className="quick-edit-input" 
                                                                         value={editForm.cost_price} 
-                                                                        onChange={e => setEditForm({...editForm, cost_price: e.target.value})}
+                                                                        onChange={e => setEditForm({...editForm, cost_price: Math.floor(e.target.value)})}
                                                                         onClick={e => e.stopPropagation()}
+                                                                        onDoubleClick={e => { e.stopPropagation(); e.target.select(); }}
                                                                         autoFocus
                                                                     />
                                                                 ) : (
                                                                     <React.Fragment>
-                                                                        <span>{p.cost_price ? new Intl.NumberFormat('vi-VN').format(Math.floor(p.cost_price)) + '₫' : '--'}</span>
+                                                                        <span>{displayCostPrice ? new Intl.NumberFormat('vi-VN').format(Math.floor(displayCostPrice)) + '₫' : (pIsParent && pVariants.length > 0 ? '--' : (p.cost_price ? new Intl.NumberFormat('vi-VN').format(Math.floor(p.cost_price)) + '₫' : '--'))}</span>
                                                                         {pIsChild && !isEditing && (
                                                                             <button onClick={(e) => handleStartQuickEdit(p, e)} className="quick-edit-btn opacity-0 group-hover/cell:opacity-100" title="Sửa nhanh giá nhập">
                                                                                 <span className="material-symbols-outlined text-[16px]">edit</span>
@@ -1198,8 +1215,9 @@ const ProductList = () => {
                                                                             type="number" 
                                                                             className="quick-edit-input" 
                                                                             value={editForm.price} 
-                                                                            onChange={e => setEditForm({...editForm, price: e.target.value})}
+                                                                            onChange={e => setEditForm({...editForm, price: Math.floor(e.target.value)})}
                                                                             onClick={e => e.stopPropagation()}
+                                                                            onDoubleClick={e => { e.stopPropagation(); e.target.select(); }}
                                                                         />
                                                                         <div className="flex flex-col gap-0.5">
                                                                             <button 
@@ -1221,7 +1239,7 @@ const ProductList = () => {
                                                                     </div>
                                                                 ) : (
                                                                     <React.Fragment>
-                                                                        <span>{p.price ? new Intl.NumberFormat('vi-VN').format(Math.floor(p.price)) + '₫' : '--'}</span>
+                                                                        <span>{displayPrice ? new Intl.NumberFormat('vi-VN').format(Math.floor(displayPrice)) + '₫' : (pIsParent && pVariants.length > 0 ? '--' : (p.price ? new Intl.NumberFormat('vi-VN').format(Math.floor(p.price)) + '₫' : '--'))}</span>
                                                                         {pIsChild && !isEditing && (
                                                                             <button onClick={(e) => handleStartQuickEdit(p, e)} className="quick-edit-btn opacity-0 group-hover/cell:opacity-100" title="Sửa nhanh giá bán">
                                                                                 <span className="material-symbols-outlined text-[16px]">edit</span>

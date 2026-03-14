@@ -52,7 +52,8 @@ class ProductController extends Controller
 
         $query = Product::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
-            ->where('status', true);
+            ->where('status', true)
+            ->whereDoesntHave('parentConfigurable'); // Đảm bảo không hiển thị sản phẩm con (biến thể) ra danh sách chính
 
         // Filter by category slug
         if ($request->filled('category')) {
@@ -244,7 +245,14 @@ class ProductController extends Controller
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
             ->where('slug', $slug)
-            ->with(['images', 'category', 'attributeValues.attribute'])
+            ->with([
+                'images', 
+                'category', 
+                'attributeValues.attribute',
+                'superAttributes.options',
+                'variations.images',
+                'variations.attributeValues'
+            ])
             ->firstOrFail();
 
         return response()->json($product);
@@ -260,6 +268,7 @@ class ProductController extends Controller
         $related = Product::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
+            ->whereDoesntHave('parentConfigurable')
             ->where('id', '!=', $product->id)
             ->where('category_id', $product->category_id)
             ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->limit(1)])

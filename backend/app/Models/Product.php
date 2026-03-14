@@ -89,6 +89,16 @@ class Product extends Model
     }
 
     /**
+     * Inverse of linkedProducts - find parent products
+     */
+    public function parentProducts()
+    {
+        return $this->belongsToMany(Product::class, 'product_links', 'linked_product_id', 'product_id')
+                    ->withPivot(['link_type', 'position'])
+                    ->withTimestamps();
+    }
+
+    /**
      * Configurable product's super attributes (e.g. Size, Color)
      */
     public function superAttributes()

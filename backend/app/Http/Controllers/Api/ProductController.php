@@ -100,7 +100,25 @@ class ProductController extends Controller
         // Flags
         if ($request->filled('is_featured')) $query->where('is_featured', $request->boolean('is_featured'));
         if ($request->filled('is_new')) $query->where('is_new', $request->boolean('is_new'));
-        if ($request->filled('type')) $query->where('type', $request->type);
+        // Type Filtering (Improved for Variants logic)
+        if ($request->filled('type')) {
+            $type = $request->input('type');
+            if ($type === 'configurable') {
+                // Trả về sản phẩm cha thực sự có biến thể
+                $query->where('type', 'configurable')
+                      ->whereHas('linkedProducts', function($q) {
+                          $q->where('product_links.link_type', 'super_link');
+                      });
+            } elseif ($type === 'simple') {
+                // Trả về sản phẩm đơn độc lập (không phải là biến thể của sản phẩm khác)
+                $query->where('type', 'simple')
+                      ->whereDoesntHave('parentProducts', function($q) {
+                          $q->where('product_links.link_type', 'super_link');
+                      });
+            } else {
+                $query->where('type', $type);
+            }
+        }
 
         // Filter by EAV Attributes
         $inputAttributes = $request->input('attributes');

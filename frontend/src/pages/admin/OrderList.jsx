@@ -289,8 +289,8 @@ const OrderList = () => {
         try {
             const [statusRes, orderAttrRes, prodAttrRes] = await Promise.all([
                 orderStatusApi.getAll(),
-                attributeApi.getAll({ entity_type: 'order' }),
-                attributeApi.getAll({ entity_type: 'product' })
+                attributeApi.getAll({ entity_type: 'order', active_only: true }),
+                attributeApi.getAll({ entity_type: 'product', active_only: true })
             ]);
             setOrderStatuses(statusRes.data || []);
             setAllAttributes(orderAttrRes.data || []);

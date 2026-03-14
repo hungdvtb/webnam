@@ -212,7 +212,7 @@ const OrderForm = () => {
         try {
             const [prodRes, attrRes] = await Promise.all([
                 productApi.getAll({ per_page: 50 }),
-                attributeApi.getAll({ entity_type: 'order' })
+                attributeApi.getAll({ entity_type: 'order', active_only: true })
             ]);
             setProducts(prodRes.data.data || []);
             setAttributes(attrRes.data || []);

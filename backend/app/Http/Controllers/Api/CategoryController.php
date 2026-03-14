@@ -46,7 +46,7 @@ class CategoryController extends Controller
                 'status' => $request->status ?? 1,
                 'order' => Category::where('parent_id', $request->parent_id)->max('order') + 1,
                 'display_layout' => $request->display_layout ?? 'layout_1',
-                'filterable_attribute_ids' => $request->filterable_attribute_ids,
+                'filterable_attribute_ids' => $request->has('filterable_attribute_ids') ? array_values(array_unique(array_map('intval', (array)(is_string($request->filterable_attribute_ids) ? (json_decode($request->filterable_attribute_ids, true) ?: explode(',', $request->filterable_attribute_ids)) : $request->filterable_attribute_ids)))) : null,
             ]);
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error("Error creating category: " . $e->getMessage());
@@ -104,7 +104,11 @@ class CategoryController extends Controller
         $category->display_layout = $request->input('display_layout', $category->display_layout);
         
         if ($request->has('filterable_attribute_ids')) {
-            $category->filterable_attribute_ids = $request->filterable_attribute_ids;
+            $ids = $request->filterable_attribute_ids;
+            if (is_string($ids)) {
+                $ids = json_decode($ids, true) ?: explode(',', $ids);
+            }
+            $category->filterable_attribute_ids = array_values(array_unique(array_map('intval', (array)$ids)));
         } elseif ($request->has('clear_attributes') && $request->clear_attributes == 'true') {
             $category->filterable_attribute_ids = [];
         }

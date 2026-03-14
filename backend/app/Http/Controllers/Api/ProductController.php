@@ -28,7 +28,7 @@ class ProductController extends Controller
                 'categories:id,name', 
                 'category:id,name',                'images:id,product_id,image_url,is_primary',
                 'attributeValues:id,product_id,attribute_id,value',
-                'attributeValues.attribute:id,name,code,is_filterable'
+                'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend'
             ]);
 
         // Handle Trash View
@@ -38,12 +38,16 @@ class ProductController extends Controller
 
         // Filter by category
         if ($request->filled('category_id')) {
-            $query->where(function($q) use ($request) {
-                $q->where('category_id', $request->category_id)
-                  ->orWhereHas('categories', function($sub) use ($request) {
-                      $sub->where('categories.id', $request->category_id);
-                  });
-            });
+            if ($request->category_id === 'uncategorized') {
+                $query->whereNull('category_id')->doesntHave('categories');
+            } else {
+                $query->where(function($q) use ($request) {
+                    $q->where('category_id', $request->category_id)
+                      ->orWhereHas('categories', function($sub) use ($request) {
+                          $sub->where('categories.id', $request->category_id);
+                      });
+                });
+            }
         }
         
         if ($request->filled('category_ids')) {
@@ -107,7 +111,12 @@ class ProductController extends Controller
 
                 $query->whereHas('attributeValues', function ($q) use ($attrId, $valueArray) {
                     $q->where('attribute_id', $attrId)
-                      ->whereIn('value', $valueArray);
+                      ->where(function ($sub) use ($valueArray) {
+                          foreach ($valueArray as $val) {
+                              $sub->orWhere('value', $val)
+                                  ->orWhere('value', 'LIKE', '%"' . $val . '"%');
+                          }
+                      });
                 });
             }
         }

@@ -1,10 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { categoryApi, attributeApi } from '../../services/api';
-import { DndProvider } from 'react-dnd';
+import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { Tree } from '@minoru/react-dnd-treeview';
 
-const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelected, onSelect, isDropTarget }) => {
+const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelected, onSelect, isDropTarget, allAttributes }) => {
+    const layoutLabel = node.data?.display_layout === 'layout_2' ? 'Giao diện 2' : 'Giao diện 1';
+    const layoutIcon = node.data?.display_layout === 'layout_2' ? 'view_quilt' : 'view_compact';
+    
+    // Get filter labels
+    const filterIds = node.data?.filterable_attribute_ids || [];
+    const filterCount = Array.isArray(filterIds) ? filterIds.length : 0;
+    
+    // Get all names of filters - Ensure ID comparison handles both string and number
+    const filterDisplay = [...new Set(filterIds
+        .map(id => {
+            const attr = allAttributes.find(a => Number(a.id) === Number(id));
+            return attr ? attr.name : null;
+        })
+        .filter(Boolean))]
+        .join(', ') || 'Không có';
+
     return (
         <div 
             style={{ paddingLeft: depth * 24 }} 
@@ -44,6 +60,24 @@ const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelecte
                 </span>
                 <span className={`font-ui text-primary transition-all ${isSelected ? 'font-black scale-[1.02] translate-x-1' : 'font-bold'}`}>{node.text}</span>
             </div>
+
+            {/* Layout & Filter Info */}
+            <div className="hidden md:flex items-center gap-6 mr-8">
+                {/* Layout Column */}
+                <div className="flex flex-col items-center justify-center gap-0.5 w-32 border-x border-gold/5 px-2">
+                    <span className="material-symbols-outlined text-[16px] text-primary/40">{layoutIcon}</span>
+                    <span className="text-[10px] font-bold uppercase tracking-tight text-primary/60 whitespace-nowrap">{layoutLabel}</span>
+                </div>
+
+                {/* Filters Column */}
+                <div className="flex flex-col items-center justify-center gap-0.5 min-w-[200px] max-w-[300px] px-2">
+                    <span className="material-symbols-outlined text-[16px] text-primary/40">filter_alt</span>
+                    <span className={`text-[10px] font-bold tracking-tight uppercase text-center leading-tight ${filterCount > 0 ? 'text-umber' : 'text-stone/20 italic'}`}>
+                        {filterDisplay}
+                    </span>
+                </div>
+            </div>
+
             <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button 
                     onClick={(e) => { e.stopPropagation(); onEdit(node); }} 
@@ -60,6 +94,36 @@ const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelecte
                     <span className="material-symbols-outlined text-sm">delete</span>
                 </button>
             </div>
+        </div>
+    );
+};
+
+const DraggableAttributeItem = ({ attrId, name, index, moveItem }) => {
+    const ref = useRef(null);
+    const [, drop] = useDrop({
+        accept: 'selected-attr',
+        hover(item, monitor) {
+            if (!ref.current) return;
+            const dragIndex = item.index;
+            const hoverIndex = index;
+            if (dragIndex === hoverIndex) return;
+            
+            moveItem(dragIndex, hoverIndex);
+            item.index = hoverIndex;
+        },
+    });
+    const [{ isDragging }, drag] = useDrag({
+        type: 'selected-attr',
+        item: { attrId, index },
+        collect: (monitor) => ({
+            isDragging: monitor.isDragging(),
+        }),
+    });
+    drag(drop(ref));
+    return (
+        <div ref={ref} className={`flex items-center gap-2 p-1.5 bg-white border border-gold/20 rounded shadow-sm mb-1 cursor-grab active:cursor-grabbing transition-all hover:border-gold/40 ${isDragging ? 'opacity-0' : 'opacity-100'}`}>
+             <span className="material-symbols-outlined text-[14px] text-stone/40">drag_indicator</span>
+             <span className="text-[11px] font-bold text-primary uppercase tracking-wider truncate">{name}</span>
         </div>
     );
 };
@@ -89,6 +153,7 @@ const CategoryList = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [filterLevel, setFilterLevel] = useState('all'); // 'all', 'root', 'child'
     const [filterStatus, setFilterStatus] = useState('all'); // 'all', '1', '0'
+    const [filterLayout, setFilterLayout] = useState('all'); // 'all', 'layout_1', 'layout_2'
     const [showFilterMenu, setShowFilterMenu] = useState(false);
     const filterRef = React.useRef(null);
     const treeRef = React.useRef(null);
@@ -132,6 +197,13 @@ const CategoryList = () => {
             matchedNodes = matchedNodes.filter(n => n.parent !== 0 && n.parent !== null);
         }
 
+        // Apply Layout filter
+        if (filterLayout === 'layout_1') {
+            matchedNodes = matchedNodes.filter(n => n.data.display_layout === 'layout_1' || !n.data.display_layout);
+        } else if (filterLayout === 'layout_2') {
+            matchedNodes = matchedNodes.filter(n => n.data.display_layout === 'layout_2');
+        }
+
         // Apply Search Query
         if (searchQuery.trim()) {
             const lowerQuery = searchQuery.toLowerCase();
@@ -139,7 +211,7 @@ const CategoryList = () => {
         }
         
         // If no filter is applied, return full tree
-        if (!searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all') {
+        if (!searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all' && filterLayout === 'all') {
             return treeData;
         }
 
@@ -163,14 +235,14 @@ const CategoryList = () => {
         });
         
         return treeData.filter(node => includeIds.has(node.id));
-    }, [treeData, searchQuery, filterLevel, filterStatus]);
+    }, [treeData, searchQuery, filterLevel, filterStatus, filterLayout]);
 
     const fetchInitialData = async () => {
         setLoading(true);
         try {
             const [catRes, attrRes] = await Promise.all([
                 categoryApi.getAll(),
-                attributeApi.getAll()
+                attributeApi.getAll() // Fetch all to ensure names show even if inactive in this view
             ]);
             
             // Format categories for tree
@@ -223,7 +295,7 @@ const CategoryList = () => {
     }, [isFormOpen]);
 
     const handleDrop = async (newTree, options) => {
-        if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all') return; // Disable reorder when filtered
+        if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all' || filterLayout !== 'all') return; // Disable reorder when filtered
 
         setTreeData(newTree); // Optimistic UI update
 
@@ -260,8 +332,8 @@ const CategoryList = () => {
             
             // Handle array of attributes
             if (formData.filterable_attribute_ids && formData.filterable_attribute_ids.length > 0) {
-                formData.filterable_attribute_ids.forEach((attrId, idx) => {
-                    data.append(`filterable_attribute_ids[${idx}]`, attrId);
+                formData.filterable_attribute_ids.forEach((attrId) => {
+                    data.append('filterable_attribute_ids[]', attrId);
                 });
             } else {
                 data.append('clear_attributes', 'true');
@@ -401,10 +473,10 @@ const CategoryList = () => {
                                 <button 
                                     data-filter-btn
                                     onClick={() => setShowFilterMenu(!showFilterMenu)}
-                                    className={`flex w-9 h-9 items-center justify-center rounded-sm border transition-all ${(filterLevel !== 'all' || filterStatus !== 'all') ? 'bg-primary/10 border-primary/20 text-primary' : 'bg-white border-gold/20 text-stone hover:border-gold/40 hover:text-primary shadow-sm'}`}
+                                    className={`flex w-9 h-9 items-center justify-center rounded-sm border transition-all ${(filterLevel !== 'all' || filterStatus !== 'all' || filterLayout !== 'all') ? 'bg-primary/10 border-primary/20 text-primary' : 'bg-white border-gold/20 text-stone hover:border-gold/40 hover:text-primary shadow-sm'}`}
                                     title="Bộ lọc nâng cao"
                                 >
-                                    <span className="material-symbols-outlined text-[18px]">{(filterLevel !== 'all' || filterStatus !== 'all') ? 'filter_alt' : 'filter_list'}</span>
+                                    <span className="material-symbols-outlined text-[18px]">{(filterLevel !== 'all' || filterStatus !== 'all' || filterLayout !== 'all') ? 'filter_alt' : 'filter_list'}</span>
                                 </button>
                                 
                                 {showFilterMenu && (
@@ -415,9 +487,9 @@ const CategoryList = () => {
                                                     <span className="material-symbols-outlined text-[14px]">tune</span>
                                                     Tùy chọn lọc
                                                 </span>
-                                                {(filterLevel !== 'all' || filterStatus !== 'all') && (
+                                                {(filterLevel !== 'all' || filterStatus !== 'all' || filterLayout !== 'all') && (
                                                     <button 
-                                                        onClick={() => { setFilterLevel('all'); setFilterStatus('all'); }} 
+                                                        onClick={() => { setFilterLevel('all'); setFilterStatus('all'); setFilterLayout('all'); }} 
                                                         className="text-[10px] text-brick hover:underline font-bold"
                                                     >
                                                         Xóa lọc
@@ -448,6 +520,18 @@ const CategoryList = () => {
                                                     <option value="all">Tất cả trạng thái</option>
                                                     <option value="1">Đang hiển thị</option>
                                                     <option value="0">Đang bị ẩn</option>
+                                                </select>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Kiểu giao diện</label>
+                                                <select 
+                                                    value={filterLayout} 
+                                                    onChange={(e) => setFilterLayout(e.target.value)}
+                                                    className="w-full bg-stone/5 border border-gold/10 p-2.5 text-[12px] focus:outline-none focus:border-primary font-body rounded-sm"
+                                                >
+                                                    <option value="all">Tất cả kiểu</option>
+                                                    <option value="layout_1">Giao diện 1 (Mặc định)</option>
+                                                    <option value="layout_2">Giao diện 2 (Có lọc)</option>
                                                 </select>
                                             </div>
                                         </div>
@@ -547,6 +631,15 @@ const CategoryList = () => {
                             
                             <span className="text-[9px] font-black text-stone/30 uppercase tracking-widest italic hidden sm:block">Kéo thả để sắp xếp</span>
                         </div>
+
+                        {/* Column Headers */}
+                        <div className="flex-none px-4 py-2 bg-gold/5 border-b border-gold/10 flex items-center">
+                            <div className="flex-1 text-[10px] font-black uppercase tracking-[0.2em] text-primary/40 pl-8">Tên Danh Mục</div>
+                            <div className="hidden md:flex items-center gap-6 mr-20">
+                                <div className="w-32 text-[10px] font-black uppercase tracking-[0.2em] text-primary/60 text-center">Giao diện</div>
+                                <div className="min-w-[200px] max-w-[300px] text-[10px] font-black uppercase tracking-[0.2em] text-primary/60 text-center">Bộ lọc thuộc tính</div>
+                            </div>
+                        </div>
                         
                         <div className="flex-1 overflow-auto custom-scrollbar p-4">
                             {loading ? (
@@ -564,9 +657,9 @@ const CategoryList = () => {
                                         ref={treeRef}
                                         tree={filteredTreeData}
                                         rootId={0}
-                                        canDrag={() => !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all'}
+                                        canDrag={() => !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all' && filterLayout === 'all'}
                                         canDrop={(tree, { dragSource, dropTargetId, isDirectChild }) => {
-                                            if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all') return false;
+                                            if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all' || filterLayout !== 'all') return false;
                                             return true;
                                         }}
                                         sort={false}
@@ -581,6 +674,7 @@ const CategoryList = () => {
                                                 onDelete={handleDelete}
                                                 isSelected={selectedId === node.id}
                                                 onSelect={(id) => setSelectedId(id)}
+                                                allAttributes={allAttributes}
                                             />
                                         )}
                                         renderPlaceholder={(props) => <Placeholder {...props} />}
@@ -682,16 +776,24 @@ const CategoryList = () => {
                                                     <label key={attr.id} className="flex items-center gap-3 cursor-pointer group hover:bg-white/50 p-1.5 rounded transition-colors select-none">
                                                         <input 
                                                             type="checkbox" 
-                                                            checked={formData.filterable_attribute_ids?.includes(attr.id)}
+                                                            checked={formData.filterable_attribute_ids?.some(id => Number(id) === Number(attr.id))}
                                                             onChange={e => {
                                                                 const checked = e.target.checked;
                                                                 setFormData(prev => {
                                                                     const currentList = Array.isArray(prev.filterable_attribute_ids) ? prev.filterable_attribute_ids : [];
+                                                                    let newList;
+                                                                    if (checked) {
+                                                                        // Add as Number and ensure uniqueness
+                                                                        newList = currentList.some(id => Number(id) === Number(attr.id))
+                                                                            ? currentList
+                                                                            : [...currentList, Number(attr.id)];
+                                                                    } else {
+                                                                        // Remove all instances via Number comparison
+                                                                        newList = currentList.filter(id => Number(id) !== Number(attr.id));
+                                                                    }
                                                                     return {
                                                                         ...prev,
-                                                                        filterable_attribute_ids: checked 
-                                                                            ? [...currentList, attr.id]
-                                                                            : currentList.filter(id => id !== attr.id)
+                                                                        filterable_attribute_ids: newList
                                                                     };
                                                                 });
                                                             }}
@@ -705,6 +807,37 @@ const CategoryList = () => {
                                                 ))}
                                                 {allAttributes.length === 0 && <div className="text-[10px] text-stone/40 italic py-2">Chưa có thuộc tính sản phẩm nào.</div>}
                                             </div>
+
+                                            {/* Order selected attributes */}
+                                            {formData.filterable_attribute_ids?.length > 1 && (
+                                                <div className="mt-4 pt-3 border-t border-gold/10">
+                                                    <label className="text-[10px] font-black uppercase tracking-widest text-primary mb-2 block">Thứ tự hiển thị ngoài web</label>
+                                                    <div className="flex flex-col">
+                                                        {formData.filterable_attribute_ids.map((id, idx) => {
+                                                            const attr = allAttributes.find(a => Number(a.id) === Number(id));
+                                                            if (!attr) return null;
+                                                            return (
+                                                                <DraggableAttributeItem 
+                                                                    key={id}
+                                                                    attrId={id}
+                                                                    name={attr.name}
+                                                                    index={idx}
+                                                                    moveItem={(dragIndex, hoverIndex) => {
+                                                                        setFormData(prev => {
+                                                                            const newList = [...prev.filterable_attribute_ids];
+                                                                            const draggedItem = newList[dragIndex];
+                                                                            newList.splice(dragIndex, 1);
+                                                                            newList.splice(hoverIndex, 0, draggedItem);
+                                                                            return { ...prev, filterable_attribute_ids: newList };
+                                                                        });
+                                                                    }}
+                                                                />
+                                                            );
+                                                        })}
+                                                    </div>
+                                                    <p className="text-[9px] text-stone/40 italic mt-1">Kéo thả để thay đổi vị trí bộ lọc trên website</p>
+                                                </div>
+                                            )}
                                         </div>
 
                                         <div className="space-y-1.5">

@@ -148,7 +148,7 @@ const ProductList = () => {
 
     const fetchInitialData = async () => {
         try {
-            const [catRes, attrRes] = await Promise.all([categoryApi.getAll(), attributeApi.getAll()]);
+            const [catRes, attrRes] = await Promise.all([categoryApi.getAll(), attributeApi.getAll({ active_only: true })]);
             setCategories(catRes.data || []);
             setAllAttributes(attrRes.data || []);
 
@@ -732,6 +732,7 @@ const ProductList = () => {
                             <div className="relative">
                                 <select name="category_id" value={tempFilters.category_id} onChange={handleTempFilterChange} className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary transition-all appearance-none cursor-pointer">
                                     <option value="">Tất cả danh mục</option>
+                                    <option value="uncategorized">Chưa gắn danh mục</option>
                                     {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                                 </select>
                                 <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 pointer-events-none text-[18px]">
@@ -769,11 +770,11 @@ const ProductList = () => {
                         </div>
                     </div>
 
-                    {allAttributes.filter(a => a.is_filterable).length > 0 && (
+                    {allAttributes.filter(a => a.is_filterable_backend).length > 0 && (
                         <div className="mt-8 pt-6 border-t border-primary/10">
                             <h5 className="text-[15px] font-bold text-[#111] mb-4">Lọc theo thuộc tính</h5>
                             <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 border-t border-l border-primary/10 rounded-sm bg-primary/[0.02]">
-                                {allAttributes.filter(a => a.is_filterable).map((attr) => (
+                                {allAttributes.filter(a => a.is_filterable_backend).map((attr) => (
                                     <div key={attr.id} className="p-4 space-y-2.5 border-r border-b border-primary/10 relative">
                                         <label className="text-[11px] font-bold text-stone-500 uppercase tracking-[0.15em]">{attr.name}</label>
                                         <div className="relative" data-attr-dropdown>
@@ -852,7 +853,7 @@ const ProductList = () => {
                     {filters.category_id && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">Danh mục:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{categories.find(c => String(c.id) === String(filters.category_id))?.name}</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.category_id === 'uncategorized' ? 'Chưa gắn danh mục' : categories.find(c => String(c.id) === String(filters.category_id))?.name}</span>
                             <button onClick={() => removeFilter('category_id')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     )}

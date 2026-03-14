@@ -22,6 +22,7 @@ const AttributeList = () => {
         is_filterable_backend: true,
         is_required: false,
         is_variant: true,
+        status: true,
         options: [] // Each option: { value: '', swatch_value: '' }
     });
 
@@ -85,6 +86,7 @@ const AttributeList = () => {
             is_filterable_backend: attr.id ? attr.is_filterable_backend : true,
             is_required: attr.is_required,
             is_variant: attr.is_variant,
+            status: attr.id ? !!attr.status : true,
             options: attr.options ? attr.options.map(o => ({ 
                 id: o.id || Math.random().toString(36).substr(2, 9),
                 value: o.value, 
@@ -111,6 +113,29 @@ const AttributeList = () => {
             }
         });
     };
+
+    const handleQuickToggle = async (attr, field = 'status') => {
+        try {
+            const newValue = !attr[field];
+            await attributeApi.update(attr.id, { ...attr, [field]: newValue });
+            setAttributes(attributes.map(a => a.id === attr.id ? { ...a, [field]: newValue } : a));
+        } catch (error) {
+            showModal({ title: 'Lỗi', content: 'Không thể cập nhật trạng thái.', type: 'error' });
+        }
+    };
+
+    const StatusBadge = ({ value, onClick, activeLabel = "Có", inactiveLabel = "Không", activeColor = "bg-green-500", activeText = "text-white" }) => (
+        <button
+            onClick={onClick}
+            className={`px-3 py-1 rounded-sm text-[10px] font-black uppercase tracking-widest transition-all shadow-sm transform active:scale-95 ${
+                value 
+                ? `${activeColor} ${activeText} border border-green-600/20` 
+                : 'bg-stone/10 text-stone/40 border border-stone/20'
+            }`}
+        >
+            {value ? activeLabel : inactiveLabel}
+        </button>
+    );
 
     const addOption = () => {
         if (optionInput.value.trim()) {
@@ -357,28 +382,24 @@ const AttributeList = () => {
                                         </div>
 
                                         <div className="flex flex-wrap gap-6 items-center bg-gold/5 p-4 border border-gold/10 rounded-sm">
-                                            {formData.entity_type === 'product' && (
-                                                <>
-                                                    <label className="flex items-center gap-2.5 cursor-pointer group">
-                                                        <div className="relative flex items-center">
-                                                            <input type="checkbox" checked={formData.is_variant} onChange={e => setFormData({ ...formData, is_variant: e.target.checked })} className="size-4 accent-primary rounded-sm" />
-                                                        </div>
-                                                        <span className="text-[11px] font-bold uppercase text-primary tracking-wider">Biến thể</span>
-                                                    </label>
-                                                    {['select', 'multiselect', 'price'].includes(formData.frontend_type) && (
-                                                        <>
-                                                            <label className="flex items-center gap-2.5 cursor-pointer group">
-                                                                <input type="checkbox" checked={formData.is_filterable_frontend} onChange={e => setFormData({ ...formData, is_filterable_frontend: e.target.checked })} className="size-4 accent-primary rounded-sm" />
-                                                                <span className="text-[11px] font-bold uppercase text-stone-600 tracking-wider">Lọc trên Web</span>
-                                                            </label>
-                                                            <label className="flex items-center gap-2.5 cursor-pointer group">
-                                                                <input type="checkbox" checked={formData.is_filterable_backend} onChange={e => setFormData({ ...formData, is_filterable_backend: e.target.checked })} className="size-4 accent-primary rounded-sm" />
-                                                                <span className="text-[11px] font-bold uppercase text-stone-600 tracking-wider">Lọc Nội Bộ</span>
-                                                            </label>
-                                                        </>
-                                                    )}
-                                                </>
-                                            )}
+                                            <label className="flex items-center gap-2.5 cursor-pointer group">
+                                                <div className="relative flex items-center">
+                                                    <input type="checkbox" checked={formData.is_variant} onChange={e => setFormData({ ...formData, is_variant: e.target.checked })} className="size-4 accent-primary rounded-sm" />
+                                                </div>
+                                                <span className="text-[11px] font-bold uppercase text-primary tracking-wider">Biến thể</span>
+                                            </label>
+                                            <label className="flex items-center gap-2.5 cursor-pointer group">
+                                                <input type="checkbox" checked={formData.is_filterable_frontend} onChange={e => setFormData({ ...formData, is_filterable_frontend: e.target.checked })} className="size-4 accent-primary rounded-sm" />
+                                                <span className="text-[11px] font-bold uppercase text-stone-600 tracking-wider">Lọc trên Web</span>
+                                            </label>
+                                            <label className="flex items-center gap-2.5 cursor-pointer group">
+                                                <input type="checkbox" checked={formData.is_filterable_backend} onChange={e => setFormData({ ...formData, is_filterable_backend: e.target.checked })} className="size-4 accent-primary rounded-sm" />
+                                                <span className="text-[11px] font-bold uppercase text-stone-600 tracking-wider">Lọc Nội Bộ</span>
+                                            </label>
+                                            <label className="flex items-center gap-2.5 cursor-pointer group">
+                                                <input type="checkbox" checked={formData.status} onChange={e => setFormData({ ...formData, status: e.target.checked })} className="size-4 accent-primary rounded-sm" />
+                                                <span className="text-[11px] font-bold uppercase text-stone-600 tracking-wider">Hoạt động</span>
+                                            </label>
                                             <label className="flex items-center gap-2.5 cursor-pointer group">
                                                 <input type="checkbox" checked={formData.is_required} onChange={e => setFormData({ ...formData, is_required: e.target.checked })} className="size-4 accent-primary rounded-sm" />
                                                 <span className="text-[11px] font-bold uppercase text-stone-600 tracking-wider">Bắt buộc</span>
@@ -489,7 +510,11 @@ const AttributeList = () => {
                             <tr>
                                 <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary w-1/4">Tên & Mã Thuộc Tính</th>
                                 <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary text-center w-40">Phân Loại</th>
-                                {activeTab === 'product' && <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary text-center w-32">Biến Thể</th>}
+                                <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary text-center w-32">Biến Thể</th>
+                                <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary text-center w-32">Lọc Web</th>
+                                <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary text-center w-32">Lọc Nội Bộ</th>
+                                <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary text-center w-32">Bắt Buộc</th>
+                                <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary text-center w-32">Trạng Thái</th>
                                 <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary">Danh Sách Giá Trị</th>
                                 <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary text-right w-36">Thao Tác</th>
                             </tr>
@@ -497,7 +522,7 @@ const AttributeList = () => {
                         <tbody className="divide-y divide-gold/10">
                             {loading ? (
                                 <tr>
-                                    <td colSpan={activeTab === 'product' ? 5 : 4} className="p-20 text-center">
+                                    <td colSpan={9} className="p-20 text-center">
                                         <div className="flex flex-col items-center gap-4">
                                             <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
                                             <span className="text-[11px] font-black text-stone/30 uppercase tracking-[0.2em]">Đang tải dữ liệu...</span>
@@ -506,7 +531,7 @@ const AttributeList = () => {
                                 </tr>
                             ) : attributes.length === 0 ? (
                                 <tr>
-                                    <td colSpan={activeTab === 'product' ? 5 : 4} className="p-20 text-center">
+                                    <td colSpan={9} className="p-20 text-center">
                                         <div className="flex flex-col items-center gap-3 opacity-30">
                                             <span className="material-symbols-outlined text-[60px]">inventory_2</span>
                                             <span className="text-[12px] font-bold italic uppercase tracking-widest">Không tìm thấy thuộc tính nào khớp với từ khóa</span>
@@ -532,21 +557,52 @@ const AttributeList = () => {
                                             {attr.frontend_type}
                                         </span>
                                     </td>
-                                    {activeTab === 'product' && (
-                                        <td className="px-4 py-3.5 text-center">
-                                            <div className="flex justify-center">
-                                                {attr.is_variant ? (
-                                                    <div className="w-10 h-6 bg-green-500/10 border border-green-500/20 rounded-full flex items-center justify-center text-green-600 shadow-inner">
-                                                        <span className="material-symbols-outlined text-[16px] font-bold">check</span>
-                                                    </div>
-                                                ) : (
-                                                    <div className="w-10 h-6 bg-stone/5 border border-stone/20 rounded-full flex items-center justify-center text-stone/20">
-                                                        <span className="material-symbols-outlined text-[14px]">horizontal_rule</span>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </td>
-                                    )}
+                                    <td className="px-4 py-3.5 text-center">
+                                        <div className="flex justify-center">
+                                            <StatusBadge 
+                                                value={attr.is_variant} 
+                                                onClick={(e) => { e.stopPropagation(); handleQuickToggle(attr, 'is_variant'); }}
+                                                activeColor="bg-primary"
+                                            />
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3.5 text-center">
+                                        <div className="flex justify-center">
+                                            <StatusBadge 
+                                                value={attr.is_filterable_frontend} 
+                                                onClick={(e) => { e.stopPropagation(); handleQuickToggle(attr, 'is_filterable_frontend'); }}
+                                                activeColor="bg-blue-600"
+                                            />
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3.5 text-center">
+                                        <div className="flex justify-center">
+                                            <StatusBadge 
+                                                value={attr.is_filterable_backend} 
+                                                onClick={(e) => { e.stopPropagation(); handleQuickToggle(attr, 'is_filterable_backend'); }}
+                                                activeColor="bg-amber-500"
+                                            />
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3.5 text-center">
+                                        <div className="flex justify-center">
+                                            <StatusBadge 
+                                                value={attr.is_required} 
+                                                onClick={(e) => { e.stopPropagation(); handleQuickToggle(attr, 'is_required'); }}
+                                                activeColor="bg-brick"
+                                            />
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3.5 text-center">
+                                        <div className="flex justify-center">
+                                            <button 
+                                                onClick={(e) => { e.stopPropagation(); handleQuickToggle(attr); }} 
+                                                className={`relative w-11 h-5.5 rounded-full transition-colors duration-200 focus:outline-none shadow-inner border border-gold/10 ${attr.status ? 'bg-green-500' : 'bg-stone/20'}`}
+                                            >
+                                                <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 ${attr.status ? 'translate-x-5.5' : 'translate-x-0'}`}></div>
+                                            </button>
+                                        </div>
+                                    </td>
                                     <td className="px-4 py-3.5">
                                         <div className="flex flex-wrap gap-1.5 max-w-md">
                                             {attr.options?.slice(0, 5).map((o, i) => (
@@ -564,15 +620,16 @@ const AttributeList = () => {
                                     </td>
                                     <td className="px-4 py-3.5 text-right">
                                         <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-all translate-x-2 group-hover:translate-x-0">
+
                                             <button 
-                                                onClick={() => handleEdit(attr)} 
+                                                onClick={(e) => { e.stopPropagation(); handleEdit(attr); }} 
                                                 className="w-9 h-9 border border-gold/30 text-gold hover:bg-gold hover:text-white transition-all flex items-center justify-center rounded-sm shadow-sm active:scale-90"
                                                 title="Sửa thuộc tính"
                                             >
                                                 <span className="material-symbols-outlined text-[18px]">edit</span>
                                             </button>
                                             <button 
-                                                onClick={() => handleDelete(attr.id)} 
+                                                onClick={(e) => { e.stopPropagation(); handleDelete(attr.id); }} 
                                                 className="w-9 h-9 border border-brick/30 text-brick hover:bg-brick hover:text-white transition-all flex items-center justify-center rounded-sm shadow-sm active:scale-90"
                                                 title="Xóa thuộc tính"
                                             >

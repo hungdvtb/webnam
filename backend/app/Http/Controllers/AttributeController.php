@@ -14,6 +14,11 @@ class AttributeController extends Controller
         if ($request->has('entity_type')) {
             $query->byEntityType($request->entity_type);
         }
+        
+        if ($request->boolean('active_only')) {
+            $query->where('status', true);
+        }
+
         $attributes = $query->get();
         return response()->json($attributes);
     }
@@ -38,7 +43,8 @@ class AttributeController extends Controller
             'is_filterable_frontend' => 'boolean',
             'is_filterable_backend' => 'boolean',
             'is_required' => 'boolean',
-            'is_variant' => 'boolean'
+            'is_variant' => 'boolean',
+            'status' => 'boolean'
         ]);
 
         $code = $request->code ?: Str::slug($request->name);
@@ -58,6 +64,7 @@ class AttributeController extends Controller
             'is_filterable_backend' => $request->is_filterable_backend ?? false,
             'is_required' => $request->is_required ?? false,
             'is_variant' => $request->is_variant ?? false,
+            'status' => $request->status ?? true,
         ]);
 
         if (in_array($request->frontend_type, ['select', 'multiselect']) && $request->has('options')) {
@@ -100,10 +107,11 @@ class AttributeController extends Controller
             'is_filterable_frontend' => 'boolean',
             'is_filterable_backend' => 'boolean',
             'is_required' => 'boolean',
-            'is_variant' => 'boolean'
+            'is_variant' => 'boolean',
+            'status' => 'boolean'
         ]);
 
-        $data = $request->only('name', 'entity_type', 'frontend_type', 'swatch_type', 'is_filterable', 'is_filterable_frontend', 'is_filterable_backend', 'is_required', 'is_variant');
+        $data = $request->only('name', 'entity_type', 'frontend_type', 'swatch_type', 'is_filterable', 'is_filterable_frontend', 'is_filterable_backend', 'is_required', 'is_variant', 'status');
         if (isset($data['swatch_type']) && $data['swatch_type'] === 'none') {
             $data['swatch_type'] = null;
         }

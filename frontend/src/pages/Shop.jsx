@@ -25,7 +25,7 @@ const Shop = () => {
         try {
             const [catRes, attrRes] = await Promise.all([
                 categoryApi.getAll(),
-                attributeApi.getAll()
+                attributeApi.getAll({ active_only: true })
             ]);
             setCategories(catRes.data);
             setAttributes(attrRes.data);
@@ -103,7 +103,7 @@ const Shop = () => {
 
                     {/* Categories Filter */}
                     <div>
-                        <h3 className="font-display text-xl font-bold text-primary mb-6 border-l-4 border-gold pl-3 uppercase tracking-wider">Loại Men</h3>
+                        <h3 className="font-display text-xl font-bold text-primary mb-6 border-l-4 border-gold pl-3 uppercase tracking-wider">Danh mục</h3>
                         <ul className="space-y-4">
                             <li
                                 className={`flex items-center gap-3 group cursor-pointer ${selectedCategory === null ? 'text-primary font-bold' : 'text-umber hover:text-primary transition-colors'}`}
@@ -155,20 +155,35 @@ const Shop = () => {
                     </div>
 
                     {/* Dynamic Attribute filters */}
-                    {attributes.filter(attr => ['select', 'multiselect'].includes(attr.type)).map(attr => (
+                    {attributes.filter(attr => {
+                        // Fix: use frontend_type instead of type
+                        const fType = attr.frontend_type || attr.type;
+                        if (!['select', 'multiselect'].includes(fType)) return false;
+                        
+                        const currentCat = categories.find(c => c.id === selectedCategory);
+                        
+                        // If Layout 2 is active for the category, only show its selected filters
+                        if (currentCat?.display_layout === 'layout_2') {
+                            const allowedIds = currentCat.filterable_attribute_ids || [];
+                            return allowedIds.some(id => Number(id) === Number(attr.id));
+                        }
+                        
+                        // Default: only show attributes marked as filterable_frontend
+                        return attr.is_filterable_frontend;
+                    }).map(attr => (
                         <div key={attr.id}>
-                            <h3 className="font-display text-xl font-bold text-primary mb-6 border-l-4 border-gold pl-3 uppercase tracking-wider">{attr.label}</h3>
+                            <h3 className="font-display text-xl font-bold text-primary mb-6 border-l-4 border-gold pl-3 uppercase tracking-wider">{attr.name}</h3>
                             <ul className={`flex flex-wrap gap-4 ${attr.swatch_type === 'color' ? 'flex-row' : 'flex-col'}`}>
                                 {attr.options?.map(opt => (
                                     <li
-                                        key={opt.value}
+                                        key={opt.id || opt.value}
                                         className="flex items-center gap-3 cursor-pointer group"
                                         onClick={() => handleAttributeToggle(attr.id, opt.value)}
-                                        title={opt.label}
+                                        title={opt.value}
                                     >
                                         {attr.swatch_type === 'color' ? (
                                             <div
-                                                className={`size-10 rounded-full border-2 transition-all flex items-center justify-center p-0.5
+                                                className={`size-10 rounded-full border-2 transition-all flex items-center justify-center p-0.5 relative
                                                     ${attributeFilters[attr.id]?.includes(opt.value) ? 'border-primary ring-2 ring-primary/20' : 'border-gold/20 hover:border-primary'}`}
                                             >
                                                 <div
@@ -180,12 +195,12 @@ const Shop = () => {
                                                 )}
                                             </div>
                                         ) : (
-                                            <>
-                                                <div className={`size-4 border border-gold flex items-center justify-center transition-all ${attributeFilters[attr.id]?.includes(opt.value) ? 'bg-primary border-primary' : 'bg-transparent'}`}>
+                                            <div className="flex items-center gap-3 w-full">
+                                                <div className={`size-4 border border-gold flex items-center justify-center transition-all shrink-0 ${attributeFilters[attr.id]?.includes(opt.value) ? 'bg-primary border-primary' : 'bg-transparent'}`}>
                                                     {attributeFilters[attr.id]?.includes(opt.value) && <span className="material-symbols-outlined text-white text-[10px]">check</span>}
                                                 </div>
-                                                <span className={`font-ui text-sm transition-colors ${attributeFilters[attr.id]?.includes(opt.value) ? 'text-primary font-bold' : 'text-umber group-hover:text-primary'}`}>{opt.label}</span>
-                                            </>
+                                                <span className={`font-ui text-sm transition-colors ${attributeFilters[attr.id]?.includes(opt.value) ? 'text-primary font-bold' : 'text-umber group-hover:text-primary'}`}>{opt.value}</span>
+                                            </div>
                                         )}
                                     </li>
                                 ))}

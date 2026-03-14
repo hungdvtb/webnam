@@ -321,7 +321,7 @@ const ProductForm = () => {
         try {
             const [prodRes, attrRes] = await Promise.all([
                 productApi.getAll({ per_page: 500 }), // Increased to check SKU uniqueness better
-                attributeApi.getAll()
+                attributeApi.getAll({ active_only: true })
             ]);
             setAllProducts(prodRes.data.data);
             setAllAttributes(attrRes.data || []);
@@ -333,7 +333,7 @@ const ProductForm = () => {
     const handleRefreshAttributes = async () => {
         setRefreshingAttributes(true);
         try {
-            const response = await attributeApi.getAll();
+            const response = await attributeApi.getAll({ active_only: true });
             setAllAttributes(response.data || []);
             
             // Sync current selection if attributes were updated

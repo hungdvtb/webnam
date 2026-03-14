@@ -166,6 +166,7 @@ export default async function ProductsPage({ searchParams }) {
           <AttributeFiltersDropdown 
             filters={productsData.available_filters}
             currentAttrs={currentAttrs}
+            currentSort={currentSort}
           />
         )}
 

@@ -93,11 +93,13 @@ class ProductController extends Controller
                     $q->whereHas('attribute', function($aq) use ($code) {
                         $aq->where('code', $code);
                     });
-                    if (is_array($value)) {
-                        $q->whereIn('value', $value);
-                    } else {
-                        $q->where('value', $value);
-                    }
+                    $valueArray = is_array($value) ? $value : explode(',', $value);
+                    $q->where(function ($sub) use ($valueArray) {
+                        foreach ($valueArray as $val) {
+                            $sub->orWhere('value', $val)
+                                ->orWhere('value', 'LIKE', '%"' . $val . '"%');
+                        }
+                    });
                 });
             }
         }
@@ -129,59 +131,90 @@ class ProductController extends Controller
 
         // Calculate available filters
         $availableFilters = [];
-        $filterableAttributesQuery = \App\Models\Attribute::where('is_filterable_frontend', true)
+        
+        $filterableAttributesQuery = \App\Models\Attribute::where('status', true)
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->with('options');
 
         if (isset($cat) && !empty($cat->filterable_attribute_ids)) {
-            $filterableAttributesQuery->whereIn('id', $cat->filterable_attribute_ids);
+            $ids = array_values(array_unique(array_map('intval', (array)$cat->filterable_attribute_ids)));
+            $filterableAttributesQuery->whereIn('id', $ids);
+        } else {
+            $filterableAttributesQuery->where('is_filterable_frontend', true);
         }
 
         $filterableAttributes = $filterableAttributesQuery->get();
 
+        // Sort if category has specific order defined
+        if (isset($cat) && !empty($cat->filterable_attribute_ids)) {
+            $ids = array_values(array_unique(array_map('intval', (array)$cat->filterable_attribute_ids)));
+            $orderMap = array_flip($ids);
+            $filterableAttributes = $filterableAttributes->sortBy(function($attr) use ($orderMap) {
+                return $orderMap[$attr->id] ?? 999;
+            })->values();
+        }
+
         foreach ($filterableAttributes as $attr) {
             // Count products for each value of this attribute within the current search result
-            $valueCounts = ProductAttributeValue::where('attribute_id', $attr->id)
+            $rawCounts = ProductAttributeValue::where('attribute_id', $attr->id)
                 ->whereIn('product_id', (clone $filterQuery)->select('id'))
                 ->selectRaw('value, count(*) as count')
                 ->groupBy('value')
-                ->get()
-                ->pluck('count', 'value');
+                ->get();
 
-            if ($valueCounts->count() > 0) {
-                $options = [];
-                // If it's a select/multiselect, use predefined options but only those that have products
-                if (in_array($attr->frontend_type, ['select', 'multiselect'])) {
-                    foreach ($attr->options as $opt) {
-                        if (isset($valueCounts[$opt->value])) {
-                            $options[] = [
-                                'label' => $opt->value,
-                                'value' => $opt->value,
-                                'count' => $valueCounts[$opt->value],
-                                'swatch_value' => $opt->swatch_value
-                            ];
+            $valueCounts = [];
+            foreach ($rawCounts as $rc) {
+                $v = $rc->value;
+                $c = (int)$rc->count;
+                if ($v !== null && str_starts_with($v, '[') && str_ends_with($v, ']')) {
+                    $arr = json_decode($v, true);
+                    if (is_array($arr)) {
+                        foreach ($arr as $item) {
+                            $valueCounts[$item] = ($valueCounts[$item] ?? 0) + $c;
                         }
+                        continue;
                     }
-                } else {
-                    // For other types, just use the raw values
-                    foreach ($valueCounts as $val => $count) {
+                }
+                $valueCounts[$v] = ($valueCounts[$v] ?? 0) + $c;
+            }
+
+            $options = [];
+            $isGiaoDien2 = isset($cat) && !empty($cat->filterable_attribute_ids);
+
+            // If it's a select/multiselect, use predefined options
+            if (in_array($attr->frontend_type, ['select', 'multiselect'])) {
+                foreach ($attr->options as $opt) {
+                    $count = $valueCounts[$opt->value] ?? 0;
+                    // For Giao diện 2, show all options even if count is 0
+                    // For others, only show options that have products
+                    if ($count > 0 || $isGiaoDien2) {
                         $options[] = [
-                            'label' => $val,
-                            'value' => $val,
-                            'count' => $count
+                            'label' => $opt->value,
+                            'value' => $opt->value,
+                            'count' => (int)$count,
+                            'swatch_value' => $opt->swatch_value
                         ];
                     }
                 }
-
-                if (!empty($options)) {
-                    $availableFilters[] = [
-                        'id' => $attr->id,
-                        'name' => $attr->name,
-                        'code' => $attr->code,
-                        'type' => $attr->frontend_type,
-                        'options' => $options
+            } else {
+                // For other types (text, etc.), show existing values from product counts
+                foreach ($valueCounts as $val => $count) {
+                    $options[] = [
+                        'label' => $val,
+                        'value' => $val,
+                        'count' => (int)$count
                     ];
                 }
+            }
+
+            if (!empty($options) || $isGiaoDien2) {
+                $availableFilters[] = [
+                    'id' => $attr->id,
+                    'name' => $attr->name,
+                    'code' => $attr->code,
+                    'type' => $attr->frontend_type,
+                    'options' => $options
+                ];
             }
         }
 

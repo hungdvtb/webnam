@@ -39,7 +39,73 @@ const CategoryList = () => {
     const [treeData, setTreeData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isFormOpen, setIsFormOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [filterLevel, setFilterLevel] = useState('all'); // 'all', 'root', 'child'
+    const [filterStatus, setFilterStatus] = useState('all'); // 'all', '1', '0'
+    const [showFilterMenu, setShowFilterMenu] = useState(false);
+    const filterRef = React.useRef(null);
     const [formData, setFormData] = useState({ id: null, name: '', description: '', parent_id: '', status: 1, banner: null, banner_url: null });
+
+    // Close dropdowns on outside click
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (filterRef.current && !filterRef.current.contains(event.target) && !event.target.closest('[data-filter-btn]')) {
+                setShowFilterMenu(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    const filteredTreeData = React.useMemo(() => {
+        let matchedNodes = treeData;
+
+        // Apply Status filter
+        if (filterStatus === '1') {
+            matchedNodes = matchedNodes.filter(n => n.data.status === 1);
+        } else if (filterStatus === '0') {
+            matchedNodes = matchedNodes.filter(n => n.data.status === 0);
+        }
+
+        // Apply Level filter
+        if (filterLevel === 'root') {
+            matchedNodes = matchedNodes.filter(n => n.parent === 0 || n.parent === null);
+        } else if (filterLevel === 'child') {
+            matchedNodes = matchedNodes.filter(n => n.parent !== 0 && n.parent !== null);
+        }
+
+        // Apply Search Query
+        if (searchQuery.trim()) {
+            const lowerQuery = searchQuery.toLowerCase();
+            matchedNodes = matchedNodes.filter(node => node.text.toLowerCase().includes(lowerQuery));
+        }
+        
+        // If no filter is applied, return full tree
+        if (!searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all') {
+            return treeData;
+        }
+
+        // Find all their parents
+        const includeIds = new Set(matchedNodes.map(node => node.id));
+        
+        // Helper to add parent recursively
+        const addParent = (parentId) => {
+            if (parentId === 0 || parentId === null) return;
+            if (!includeIds.has(parentId)) {
+                includeIds.add(parentId);
+                const parentNode = treeData.find(n => n.id === parentId);
+                if (parentNode) {
+                    addParent(parentNode.parent);
+                }
+            }
+        };
+
+        matchedNodes.forEach(node => {
+            addParent(node.parent);
+        });
+        
+        return treeData.filter(node => includeIds.has(node.id));
+    }, [treeData, searchQuery, filterLevel, filterStatus]);
 
     const fetchCategories = async () => {
         setLoading(true);
@@ -76,6 +142,8 @@ const CategoryList = () => {
     }, [isFormOpen]);
 
     const handleDrop = async (newTree, options) => {
+        if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all') return; // Disable reorder when filtered
+
         setTreeData(newTree); // Optimistic UI update
 
         // Prepare items array for backend: [{ id: 1, parent_id: 0, order: 0 }, ...]
@@ -212,24 +280,106 @@ const CategoryList = () => {
 
                     {/* Toolbar */}
                     <div className="bg-white border border-gold/10 p-2 shadow-sm rounded-sm flex items-center justify-between">
-                        <div className="flex gap-1.5 items-center">
+                        <div className="flex gap-1.5 items-center w-full max-w-3xl">
                             <button
                                 onClick={() => { setFormData({ id: null, name: '', description: '', parent_id: '', status: 1 }); setIsFormOpen(true); }}
-                                className="bg-brick text-white p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 shadow-sm"
+                                className="bg-brick text-white p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 shadow-sm shrink-0"
                                 title="Thêm danh mục mới"
                             >
                                 <span className="material-symbols-outlined text-[18px]">add</span>
                             </button>
                             <button
                                 onClick={fetchCategories}
-                                className={`bg-primary text-white border border-primary p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 ${loading ? 'opacity-70' : ''}`}
+                                className={`bg-primary text-white border border-primary p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 ${loading ? 'opacity-70' : ''}`}
                                 title="Làm mới"
                                 disabled={loading}
                             >
                                 <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>refresh</span>
                             </button>
+
+                            <div className="w-px h-5 bg-gold/10 mx-1 shrink-0"></div>
+
+                            {/* Filter Button */}
+                            <div className="relative shrink-0">
+                                <button 
+                                    data-filter-btn
+                                    onClick={() => setShowFilterMenu(!showFilterMenu)}
+                                    className={`flex w-9 h-9 items-center justify-center rounded-sm border transition-all ${(filterLevel !== 'all' || filterStatus !== 'all') ? 'bg-primary/10 border-primary/20 text-primary' : 'bg-white border-gold/20 text-stone hover:border-gold/40 hover:text-primary shadow-sm'}`}
+                                    title="Bộ lọc nâng cao"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">{(filterLevel !== 'all' || filterStatus !== 'all') ? 'filter_alt' : 'filter_list'}</span>
+                                </button>
+                                
+                                {showFilterMenu && (
+                                    <div ref={filterRef} className="absolute left-0 top-full mt-2 w-64 bg-white rounded-sm shadow-[0_0_20px_rgba(0,0,0,0.1)] border border-gold/20 z-50 animate-in fade-in zoom-in-95 duration-200">
+                                        <div className="p-3 border-b border-gold/10">
+                                            <div className="flex items-center justify-between mb-2">
+                                                <span className="text-[10px] font-black uppercase tracking-widest text-primary flex items-center gap-1.5">
+                                                    <span className="material-symbols-outlined text-[14px]">tune</span>
+                                                    Tùy chọn lọc
+                                                </span>
+                                                {(filterLevel !== 'all' || filterStatus !== 'all') && (
+                                                    <button 
+                                                        onClick={() => { setFilterLevel('all'); setFilterStatus('all'); }} 
+                                                        className="text-[10px] text-brick hover:underline font-bold"
+                                                    >
+                                                        Xóa lọc
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="p-3 space-y-4">
+                                            <div className="space-y-2">
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Cấp danh mục</label>
+                                                <select 
+                                                    value={filterLevel} 
+                                                    onChange={(e) => setFilterLevel(e.target.value)}
+                                                    className="w-full bg-stone/5 border border-gold/10 p-2.5 text-[12px] focus:outline-none focus:border-primary font-body rounded-sm"
+                                                >
+                                                    <option value="all">Tất cả cấp</option>
+                                                    <option value="root">Chỉ danh mục cha (Gốc)</option>
+                                                    <option value="child">Chỉ danh mục con</option>
+                                                </select>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Trạng thái hiển thị</label>
+                                                <select 
+                                                    value={filterStatus} 
+                                                    onChange={(e) => setFilterStatus(e.target.value)}
+                                                    className="w-full bg-stone/5 border border-gold/10 p-2.5 text-[12px] focus:outline-none focus:border-primary font-body rounded-sm"
+                                                >
+                                                    <option value="all">Tất cả trạng thái</option>
+                                                    <option value="1">Đang hiển thị</option>
+                                                    <option value="0">Đang bị ẩn</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Search Bar */}
+                            <div className="relative w-full sm:max-w-md bg-white border border-gold/20 rounded-sm hover:border-gold/40 transition-colors focus-within:bg-white focus-within:border-primary/30 focus-within:ring-1 focus-within:ring-primary/10 shadow-sm flex items-center h-9">
+                                <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-[16px] text-stone">search</span>
+                                <input 
+                                    type="text" 
+                                    placeholder="Tìm theo tên danh mục..." 
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    className="w-full h-full pl-9 pr-8 text-[12px] bg-transparent focus:outline-none rounded-sm font-medium placeholder:font-normal placeholder:italic placeholder:text-stone/40 transition-all font-body"
+                                />
+                                {searchQuery && (
+                                    <button 
+                                        onClick={() => setSearchQuery('')}
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 text-stone/40 hover:text-brick flex items-center justify-center p-0.5 bg-white rounded-full shadow-sm"
+                                        title="Xóa tìm kiếm"
+                                    >
+                                        <span className="material-symbols-outlined text-[14px]">cancel</span>
+                                    </button>
+                                )}
+                            </div>
                         </div>
-                        <div className="text-[11px] font-bold text-stone/40 uppercase tracking-[0.1em]">
+                        <div className="text-[11px] font-bold text-stone/40 uppercase tracking-[0.1em] hidden sm:block shrink-0">
                             {treeData.length} danh mục đã khởi tạo
                         </div>
                     </div>
@@ -244,7 +394,7 @@ const CategoryList = () => {
                                 <span className="material-symbols-outlined text-[16px]">account_tree</span>
                                 Cấu Trúc Cây Danh Mục
                             </h2>
-                            <span className="text-[9px] font-black text-stone/30 uppercase tracking-widest italic">Kéo thả để sắp xếp</span>
+                            <span className="text-[9px] font-black text-stone/30 uppercase tracking-widest italic hidden sm:block">Kéo thả để sắp xếp</span>
                         </div>
                         
                         <div className="flex-1 overflow-auto custom-scrollbar p-4">
@@ -253,15 +403,18 @@ const CategoryList = () => {
                                     <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
                                     <span className="text-[11px] font-black text-stone/30 uppercase tracking-[0.2em]">Đang tải dữ liệu...</span>
                                 </div>
-                            ) : treeData.length === 0 ? (
+                            ) : filteredTreeData.length === 0 ? (
                                 <div className="h-full flex flex-col items-center justify-center gap-3 opacity-30">
-                                    <span className="material-symbols-outlined text-[60px]">inventory_2</span>
-                                    <span className="text-[12px] font-bold italic uppercase tracking-widest">Chưa có danh mục nào</span>
+                                    <span className="material-symbols-outlined text-[60px]">search_off</span>
+                                    <span className="text-[12px] font-bold italic uppercase tracking-widest">Không tìm thấy danh mục</span>
                                 </div>
                             ) : (
                                 <Tree
-                                    tree={treeData}
+                                    tree={filteredTreeData}
                                     rootId={0}
+                                    canDrag={() => !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all'}
+                                    canDrop={() => !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all'}
+                                    sort={false}
                                     render={(node, options) => (
                                         <CustomNode
                                             node={node}

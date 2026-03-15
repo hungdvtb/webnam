@@ -156,7 +156,8 @@ class StorefrontController extends Controller
                 'approvedReviews' => fn($q) => $q->latest()->limit(20),
                 'superAttributes.options',
                 'linkedProducts' => fn($q) => $q->where('status', true)->with('images'),
-                'groupedItems' => fn($q) => $q->where('status', true)->with('images'),
+                'bundleItems' => fn($q) => $q->where('status', true)->with(['images', 'category', 'attributeValues.attribute']),
+                'groupedItems' => fn($q) => $q->where('status', true)->with(['images', 'category', 'attributeValues.attribute']),
             ]);
 
         // Try slug first, then id
@@ -235,6 +236,22 @@ class StorefrontController extends Controller
                 'is_required' => $v->pivot->is_required ?? false,
                 'main_image' => $v->main_image,
                 'primary_image' => $v->primary_image,
+            ]) : [],
+            'bundle_items' => $product->type === 'bundle' ? $product->bundleItems->map(fn($v) => [
+                'id' => $v->id,
+                'name' => $v->name,
+                'sku' => $v->sku,
+                'price' => $v->price,
+                'current_price' => $v->current_price,
+                'stock_quantity' => $v->stock_quantity,
+                'quantity' => $v->pivot->quantity ?? 1,
+                'is_required' => $v->pivot->is_required ?? false,
+                'option_title' => $v->pivot->option_title,
+                'is_default' => $v->pivot->is_default ?? false,
+                'position' => $v->pivot->position ?? 0,
+                'main_image' => $v->main_image,
+                'primary_image' => $v->primary_image,
+                'category' => $v->category ? ['id' => $v->category->id, 'name' => $v->category->name] : null,
             ]) : [],
         ]);
     }

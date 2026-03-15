@@ -261,24 +261,37 @@ class ProductController extends Controller
         }
 
         if ($request->hasFile('main_image')) {
-            $path = $request->file('main_image')->store('products', 'public');
+            $disk = 's3';
+            $imageFile = $request->file('main_image');
+            $path = Storage::disk($disk)->put('products', $imageFile, 'public');
+            
+            // Construct Clean S3 URL
+            $baseUrl = rtrim(config('filesystems.disks.s3.url'), '/');
+            $url = $baseUrl . '/' . ltrim($path, '/');
+
             ProductImage::create([
                 'product_id' => $product->id,
-                'image_url' => Storage::disk('public')->url($path),
-                'file_name' => $request->file('main_image')->getClientOriginalName(),
-                'file_size' => $request->file('main_image')->getSize(),
+                'image_url' => $url,
+                'file_name' => $imageFile->getClientOriginalName(),
+                'file_size' => $imageFile->getSize(),
                 'is_primary' => true
             ]);
         }
 
         if ($request->hasFile('images')) {
+            $disk = 's3';
             foreach ($request->file('images') as $idx => $image) {
-                $path = $image->store('products', 'public');
+                $path = Storage::disk($disk)->put('products', $image, 'public');
+                
+                // Construct Clean S3 URL
+                $baseUrl = rtrim(config('filesystems.disks.s3.url'), '/');
+                $url = $baseUrl . '/' . ltrim($path, '/');
+
                 // If no main_image provided, set first in array as primary
                 $isPrimary = (!$request->hasFile('main_image')) && ($idx === 0);
                 ProductImage::create([
                     'product_id' => $product->id,
-                    'image_url' => Storage::disk('public')->url($path),
+                    'image_url' => $url,
                     'file_name' => $image->getClientOriginalName(),
                     'file_size' => $image->getSize(),
                     'is_primary' => $isPrimary,
@@ -309,17 +322,24 @@ class ProductController extends Controller
             $product->linkedProducts()->syncWithoutDetaching($links);
         }
 
-        if ($request->has('grouped_items') && $product->type === 'grouped') {
+        if ($request->has('grouped_items') && in_array($product->type, ['grouped', 'bundle'])) {
             $items = [];
             foreach ($request->grouped_items as $idx => $item) {
+                $linkType = $product->type === 'bundle' ? 'bundle' : 'grouped';
                 $items[$item['id']] = [
                     'quantity' => $item['quantity'],
                     'is_required' => $item['is_required'],
-                    'link_type' => 'grouped',
-                    'position' => $idx
+                    'link_type' => $linkType,
+                    'position' => $idx,
+                    'option_title' => $item['option_title'] ?? null,
+                    'is_default' => $item['is_default'] ?? false,
                 ];
             }
-            $product->groupedItems()->sync($items);
+            if ($product->type === 'bundle') {
+                $product->bundleItems()->sync($items);
+            } else {
+                $product->groupedItems()->sync($items);
+            }
         }
 
         if ($request->has('super_attribute_ids') && $product->type === 'configurable') {
@@ -352,7 +372,7 @@ class ProductController extends Controller
                     $path = $imageFile->store('products', 'public');
                     \App\Models\ProductImage::create([
                         'product_id' => $vProduct->id,
-                        'image_url' => '/storage/' . $path,
+                        'image_url' => \Illuminate\Support\Facades\Storage::disk('public')->url($path),
                         'is_primary' => true,
                         'file_name' => $imageFile->getClientOriginalName(),
                         'file_size' => $imageFile->getSize(),
@@ -404,13 +424,21 @@ class ProductController extends Controller
                 ]);
         },
             'groupedItems' => function ($q) {
-            $q->select(['products.id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'type', 'weight'])
-                ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
-                ->with([
-                    'images:id,product_id,image_url,is_primary',
-                    'attributeValues:id,product_id,attribute_id,value'
-                ]);
-        },
+                $q->select(['products.id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'type', 'weight'])
+                    ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
+                    ->with([
+                        'images:id,product_id,image_url,is_primary',
+                        'attributeValues:id,product_id,attribute_id,value'
+                    ]);
+            },
+            'bundleItems' => function ($q) {
+                $q->select(['products.id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'type', 'weight'])
+                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'is_default'])
+                    ->with([
+                        'images:id,product_id,image_url,is_primary',
+                        'attributeValues:id,product_id,attribute_id,value'
+                    ]);
+            },
             'approvedReviews.user:id,name'
         ])->findOrFail($id);
 
@@ -532,34 +560,32 @@ class ProductController extends Controller
         }
 
         if ($request->has('linked_product_ids')) {
-            $type = $request->get('link_type', 'related');
             $links = [];
             foreach ($request->linked_product_ids as $idx => $id) {
-                $links[$id] = ['link_type' => $type, 'position' => $idx];
+                $links[$id] = ['link_type' => 'related', 'position' => $idx];
             }
 
-            // Preserve existing super_link variants
-            $preserveVariantIds = $product->linkedProducts()->wherePivot('link_type', 'super_link')->pluck('products.id')->toArray();
-            foreach ($preserveVariantIds as $vid) {
-                if (!isset($links[$vid])) {
-                    $links[$vid] = ['link_type' => 'super_link'];
-                }
-            }
-
-            $product->linkedProducts()->sync($links);
+            $product->relatedProducts()->sync($links);
         }
 
-        if ($request->has('grouped_items') && $product->type === 'grouped') {
+        if ($request->has('grouped_items') && in_array($product->type, ['grouped', 'bundle'])) {
             $items = [];
             foreach ($request->grouped_items as $idx => $item) {
+                $linkType = $product->type === 'bundle' ? 'bundle' : 'grouped';
                 $items[$item['id']] = [
                     'quantity' => $item['quantity'],
                     'is_required' => $item['is_required'],
-                    'link_type' => 'grouped',
-                    'position' => $idx
+                    'link_type' => $linkType,
+                    'position' => $idx,
+                    'option_title' => $item['option_title'] ?? null,
+                    'is_default' => $item['is_default'] ?? false,
                 ];
             }
-            $product->groupedItems()->sync($items);
+            if ($product->type === 'bundle') {
+                $product->bundleItems()->sync($items);
+            } else {
+                $product->groupedItems()->sync($items);
+            }
         }
 
         if ($request->has('super_attribute_ids') && $product->type === 'configurable') {
@@ -610,12 +636,18 @@ class ProductController extends Controller
 
                     // Handle variant image update/removal
                     if ($request->hasFile("variants.{$idx}.image")) {
+                        $disk = 's3';
                         $variant->images()->delete();
                         $imageFile = $request->file("variants.{$idx}.image");
-                        $path = $imageFile->store('products', 'public');
+                        $path = Storage::disk($disk)->put('products', $imageFile, 'public');
+
+                        // Construct Clean S3 URL
+                        $baseUrl = rtrim(config('filesystems.disks.s3.url'), '/');
+                        $url = $baseUrl . '/' . ltrim($path, '/');
+
                         \App\Models\ProductImage::create([
                             'product_id' => $variant->id,
-                            'image_url' => '/storage/' . $path,
+                            'image_url' => $url,
                             'is_primary' => true,
                             'file_name' => $imageFile->getClientOriginalName(),
                             'file_size' => $imageFile->getSize(),
@@ -656,11 +688,17 @@ class ProductController extends Controller
                     ]);
 
                     if ($request->hasFile("variants.{$idx}.image")) {
+                        $disk = 's3';
                         $imageFile = $request->file("variants.{$idx}.image");
-                        $path = $imageFile->store('products', 'public');
+                        $path = Storage::disk($disk)->put('products', $imageFile, 'public');
+
+                        // Construct Clean S3 URL
+                        $baseUrl = rtrim(config('filesystems.disks.s3.url'), '/');
+                        $url = $baseUrl . '/' . ltrim($path, '/');
+
                         \App\Models\ProductImage::create([
                             'product_id' => $variant->id,
-                            'image_url' => '/storage/' . $path,
+                            'image_url' => $url,
                             'is_primary' => true,
                             'file_name' => $imageFile->getClientOriginalName(),
                             'file_size' => $imageFile->getSize(),

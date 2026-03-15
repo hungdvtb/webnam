@@ -95,6 +95,17 @@ class Product extends Model
     }
 
     /**
+     * Related products (Suggestions for the user)
+     */
+    public function relatedProducts()
+    {
+        return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
+                    ->wherePivot('link_type', 'related')
+                    ->withPivot(['link_type', 'position'])
+                    ->withTimestamps();
+    }
+
+    /**
      * Inverse of linkedProducts - find parent products
      */
     public function parentProducts()
@@ -160,6 +171,17 @@ class Product extends Model
         return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
                     ->wherePivot('link_type', 'grouped')
                     ->withPivot(['link_type', 'quantity', 'is_required', 'position'])
+                    ->withTimestamps();
+    }
+
+    /**
+     * Items in this bundle product
+     */
+    public function bundleItems()
+    {
+        return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
+                    ->wherePivot('link_type', 'bundle')
+                    ->withPivot(['link_type', 'quantity', 'is_required', 'position', 'option_title', 'is_default'])
                     ->withTimestamps();
     }
 

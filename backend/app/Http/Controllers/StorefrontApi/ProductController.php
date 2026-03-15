@@ -260,7 +260,11 @@ class ProductController extends Controller
                         $q->where('status', true); // Only active variants
                     },
                     'variations.images',
-                    'variations.attributeValues.attribute'
+                    'variations.attributeValues.attribute',
+                    'bundleItems.images',
+                    'bundleItems.attributeValues.attribute',
+                    'groupedItems.images',
+                    'groupedItems.attributeValues.attribute'
                 ])
                 ->firstOrFail();
 

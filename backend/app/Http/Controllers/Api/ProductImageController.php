@@ -26,9 +26,13 @@ class ProductImageController extends Controller
 
         if($request->hasFile('images')) {
             foreach ($request->file('images') as $file) {
-                // Store on public disk instead of hardcoded S3
-                $path = $file->store('products', 'public');
-                $url = Storage::disk('public')->url($path);
+                // Use Storage::disk() as requested
+                $disk = 's3';
+                $path = Storage::disk($disk)->put('products', $file, 'public');
+                
+                // Construct Clean S3 URL
+                $baseUrl = rtrim(config('filesystems.disks.s3.url'), '/');
+                $url = $baseUrl . '/' . ltrim($path, '/');
 
                 // Check if this is the first image, if so set as default primary
                 $isPrimary = $product->images()->count() === 0;
@@ -72,11 +76,31 @@ class ProductImageController extends Controller
     {
         $image = ProductImage::findOrFail($id);
         
-        // Parse path from URL for public disk
-        $path = str_replace(url('/storage') . '/', '', $image->image_url);
+        $disk = 's3';
         
-        if (Storage::disk('public')->exists($path)) {
-            Storage::disk('public')->delete($path);
+        // Try to determine the path from the URL
+        $url = $image->image_url;
+        $path = '';
+
+        // Case 1: URL starts with the disk's base URL
+        $baseUrl = Storage::disk($disk)->url('');
+        if (str_starts_with($url, $baseUrl)) {
+            $path = str_replace($baseUrl, '', $url);
+        } 
+        // Case 2: Fallback for local storage URL format
+        elseif (str_contains($url, '/storage/')) {
+            $path = substr($url, strpos($url, '/storage/') + 9);
+        }
+        // Case 3: S3 direct URL format fallback
+        elseif ($disk === 's3' && str_contains($url, '.amazonaws.com/')) {
+            $path = substr($url, strrpos($url, '.amazonaws.com/') + 15);
+        }
+
+        $path = ltrim($path, '/');
+        
+        // Only attempt deletion if we have a valid non-empty path/key
+        if (!empty($path) && Storage::disk($disk)->exists($path)) {
+            Storage::disk($disk)->delete($path);
         }
         
         $image->delete();
@@ -117,16 +141,22 @@ class ProductImageController extends Controller
         $url = $request->query('url');
         if (!$url) return abort(404);
 
+        // If it's an S3 URL, always redirect immediately to avoid local file path issues
+        if (str_contains($url, 'amazonaws.com') || !str_contains($url, url('/storage'))) {
+            return redirect($url);
+        }
+
         // Graceful fallback if PHP GD extension is not available
         if (!function_exists('imagecreatefromjpeg')) {
             return redirect($url);
         }
 
-        // Remove base url to get relative path
+        // Determine path from URL dynamically
         $path = str_replace(url('/storage') . '/', '', $url);
+        $path = ltrim($path, '/');
 
-        // Simple fallback if external or missing
-        if (!Storage::disk('public')->exists($path)) {
+        // Simple fallback if missing
+        if (empty($path) || !Storage::disk('public')->exists($path)) {
             return redirect($url);
         }
 

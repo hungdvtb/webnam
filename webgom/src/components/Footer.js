@@ -7,11 +7,13 @@ export default function Footer() {
         <div className="footer-grid">
           <div className="footer-col about-col">
             <div className="footer-logo">
-              <img src="/logo-brand.jpg" alt="Logo Gôm Đại Thành" className="footer-logo-img" />
-              <h2>GÔM ĐẠI THÀNH</h2>
+               <svg className="logo-icon" fill="var(--accent)" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" style={{ width: '32px', height: '32px' }}>
+                  <path clipRule="evenodd" d="M24 4H42V17.3333V30.6667H24V44H6V30.6667V17.3333H24V4Z" fillRule="evenodd"></path>
+               </svg>
+              <h2>DI SẢN GỐM VIỆT</h2>
             </div>
             <p className="footer-desc">
-              Tự hào gìn giữ và phát triển tinh hoa gốm sứ Bát Tràng, mang những tác phẩm nghệ thuật độc bản từ Gôm Đại Thành đến với mọi không gian sống.
+              Gìn giữ tinh hoa đất Việt qua từng nét vẽ, mảng men. Chúng tôi mang những giá trị văn hóa và nghệ thuật gốm sứ độc bản từ Bát Tràng đến với mọi không gian sống đương đại.
             </p>
             <div className="social-links">
               <span className="material-symbols-outlined">share</span>
@@ -53,7 +55,7 @@ export default function Footer() {
         </div>
 
         <div className="footer-bottom">
-          <p>© 2024 GÔM ĐẠI THÀNH. TẤT CẢ QUYỀN ĐƯỢC BẢO LƯU.</p>
+          <p>© 2024 DI SẢN GỐM VIỆT. TẤT CẢ QUYỀN ĐƯỢC BẢO LƯU.</p>
           <div className="footer-legal">
             <a href="#">Điều khoản sử dụng</a>
             <a href="#">Chính sách bảo mật</a>

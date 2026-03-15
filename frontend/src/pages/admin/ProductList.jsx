@@ -31,6 +31,7 @@ const DEFAULT_COLUMNS = [
     { id: 'stock', label: 'Tồn kho', minWidth: '80px' },
     { id: 'is_featured', label: 'Nổi bật', minWidth: '80px', align: 'center' },
     { id: 'is_new', label: 'Mới', minWidth: '80px', align: 'center' },
+    { id: 'status', label: 'Bán', minWidth: '60px', align: 'center' },
     { id: 'actions', label: 'Thao tác', minWidth: '100px', align: 'right', fixed: true },
 ];
 
@@ -58,7 +59,6 @@ const ProductList = () => {
     const [selectedIds, setSelectedIds] = useState([]);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [showColumnSettings, setShowColumnSettings] = useState(false);
-    const [isTrashView, setIsTrashView] = useState(false);
     const [copiedText, setCopiedText] = useState(null);
     const [previewImage, setPreviewImage] = useState(null);
     const [expandedRows, setExpandedRows] = useState([]);
@@ -133,16 +133,86 @@ const ProductList = () => {
 
     const [notification, setNotification] = useState(null);
 
-    const [pagination, setPagination] = useState({ current_page: 1, last_page: 1, total: 0, per_page: 20 });
-    const [trashCount, setTrashCount] = useState(0);
-    const [filters, setFilters] = useState(() => {
-        const savedSearch = localStorage.getItem('product_list_search_current');
-        return {
-            search: savedSearch || '', category_id: '', type: '', is_featured: '', is_new: '',
+    // PERSISTENCE LOGIC: Load state from localStorage on init
+    const getSavedState = () => {
+        const saved = localStorage.getItem('product_management_persistent_state');
+        if (saved) {
+            try {
+                return JSON.parse(saved);
+            } catch (e) {
+                console.error("Error parsing saved product list state", e);
+            }
+        }
+        return null;
+    };
+
+    const savedState = getSavedState();
+
+    const [pagination, setPagination] = useState({ 
+        current_page: savedState?.page || 1, 
+        last_page: 1, 
+        total: 0, 
+        per_page: savedState?.perPage || 20 
+    });
+
+    const [isTrashView, setIsTrashView] = useState(savedState?.isTrashView || false);
+
+    // Sanitize saved filters to ensure category_id and type are always arrays (legacy compatibility)
+    const getInitialFilters = () => {
+        const baseFilters = savedState?.filters || {
+            search: '', category_id: [], type: [], is_featured: '', is_new: '',
             min_price: '', max_price: '', min_stock: '', max_stock: '', start_date: '', end_date: '',
             attributes: {}
         };
+        
+        if (baseFilters.category_id && !Array.isArray(baseFilters.category_id)) {
+            if (typeof baseFilters.category_id === 'string') {
+                baseFilters.category_id = baseFilters.category_id.trim() === '' ? [] : baseFilters.category_id.split(',').filter(Boolean);
+            } else {
+                baseFilters.category_id = [baseFilters.category_id].filter(Boolean);
+            }
+        } else if (!baseFilters.category_id) {
+            baseFilters.category_id = [];
+        }
+        
+        if (baseFilters.type && !Array.isArray(baseFilters.type)) {
+            if (typeof baseFilters.type === 'string') {
+                baseFilters.type = baseFilters.type.trim() === '' ? [] : baseFilters.type.split(',').filter(Boolean);
+            } else {
+                baseFilters.type = [baseFilters.type].filter(Boolean);
+            }
+        } else if (!baseFilters.type) {
+            baseFilters.type = [];
+        }
+
+        if (!baseFilters.attributes || typeof baseFilters.attributes !== 'object') {
+            baseFilters.attributes = {};
+        }
+        
+        return baseFilters;
+    };
+
+    const [filters, setFilters] = useState(getInitialFilters());
+
+    const [sortConfig, setSortConfig] = useState(savedState?.sortConfig || { 
+        key: 'created_at', 
+        direction: 'desc', 
+        phase: 1 
     });
+
+    // PERSISTENCE LOGIC: Save state whenever it changes
+    useEffect(() => {
+        const stateToSave = {
+            filters,
+            sortConfig,
+            page: pagination.current_page,
+            perPage: pagination.per_page,
+            isTrashView
+        };
+        localStorage.setItem('product_management_persistent_state', JSON.stringify(stateToSave));
+    }, [filters, sortConfig, pagination.current_page, pagination.per_page, isTrashView]);
+
+    const [trashCount, setTrashCount] = useState(0);
 
     const [searchHistory, setSearchHistory] = useState(() => {
         const saved = localStorage.getItem('product_search_history');
@@ -151,11 +221,6 @@ const ProductList = () => {
     const [showSearchHistory, setShowSearchHistory] = useState(false);
     const [tempFilters, setTempFilters] = useState(null);
     const searchContainerRef = useRef(null);
-
-    const [sortConfig, setSortConfig] = useState(() => {
-        const saved = localStorage.getItem('product_list_sort');
-        return saved ? JSON.parse(saved) : { key: 'created_at', direction: 'desc', phase: 1 };
-    });
 
     const {
         visibleColumns,
@@ -175,7 +240,8 @@ const ProductList = () => {
 
     useEffect(() => {
         fetchInitialData();
-        fetchProducts(1);
+        // Load with persisted page/filters
+        fetchProducts(pagination.current_page);
     }, []);
 
     useEffect(() => {
@@ -191,13 +257,14 @@ const ProductList = () => {
 
     useEffect(() => {
         const timer = setTimeout(() => {
-            if (filters.search !== localStorage.getItem('product_list_search_current') || !filters.search) {
-                if (filters.search) {
-                    localStorage.setItem('product_list_search_current', filters.search);
+            const lastSearchStored = localStorage.getItem('product_list_search_current_term');
+            if (filters.search !== lastSearchStored) {
+                if (filters.search && filters.search.trim() !== '') {
+                    localStorage.setItem('product_list_search_current_term', filters.search);
                     fetchProducts(1);
                     addToSearchHistory(filters.search);
-                } else {
-                    localStorage.removeItem('product_list_search_current');
+                } else if (lastSearchStored !== null) {
+                    localStorage.removeItem('product_list_search_current_term');
                     fetchProducts(1);
                 }
             }
@@ -268,6 +335,15 @@ const ProductList = () => {
                 sort_order: currentSort.direction === 'none' ? 'desc' : currentSort.direction
             };
 
+            if (params.category_id && Array.isArray(params.category_id) && params.category_id.length > 0) {
+                params.category_ids = params.category_id.join(',');
+                delete params.category_id;
+            }
+
+            if (params.type && Array.isArray(params.type) && params.type.length > 0) {
+                params.type = params.type.join(',');
+            }
+
             if (params.attributes) {
                 Object.entries(params.attributes).forEach(([id, val]) => {
                     if (val && (Array.isArray(val) ? val.length > 0 : val !== '')) {
@@ -293,6 +369,16 @@ const ProductList = () => {
         setTempFilters(prev => ({ ...prev, [name]: value }));
     };
 
+    const handleTempMultiSelectChange = (name, value) => {
+        setTempFilters(prev => {
+            const currentValues = prev[name] || [];
+            let newValues;
+            if (currentValues.includes(value)) newValues = currentValues.filter(v => v !== value);
+            else newValues = [...currentValues, value];
+            return { ...prev, [name]: newValues };
+        });
+    };
+
     const handleTempAttributeFilterChange = (attrId, value) => {
         setTempFilters(prev => {
             const currentValues = prev.attributes[attrId] || [];
@@ -316,6 +402,10 @@ const ProductList = () => {
                 const currentVals = prev.attributes[value.attrId] || [];
                 const newVals = currentVals.filter(v => v !== value.val);
                 newFilters.attributes = { ...prev.attributes, [value.attrId]: newVals };
+            } else if (key === 'category_id') {
+                newFilters.category_id = (Array.isArray(prev.category_id) ? prev.category_id : []).filter(id => id !== value);
+            } else if (key === 'type') {
+                newFilters.type = (Array.isArray(prev.type) ? prev.type : []).filter(t => t !== value);
             } else if (key === 'stock') {
                 newFilters.min_stock = '';
                 newFilters.max_stock = '';
@@ -348,10 +438,17 @@ const ProductList = () => {
     };
 
     const handleReset = () => {
-        const resetFilters = { search: '', category_id: '', type: '', is_featured: '', is_new: '', min_price: '', max_price: '', min_stock: '', max_stock: '', start_date: '', end_date: '', attributes: {} };
-        const defaultSort = { key: 'id', direction: 'desc', phase: 1 };
+        const resetFilters = { search: '', category_id: [], type: [], is_featured: '', is_new: '', min_price: '', max_price: '', min_stock: '', max_stock: '', start_date: '', end_date: '', attributes: {} };
+        const defaultSort = { key: 'created_at', direction: 'desc', phase: 1 };
+        
+        localStorage.removeItem('product_management_persistent_state');
+        localStorage.removeItem('product_list_search_current_term');
+        
         setFilters(resetFilters);
         setSortConfig(defaultSort);
+        setPagination(prev => ({ ...prev, current_page: 1 }));
+        setIsTrashView(false);
+        
         fetchProducts(1, resetFilters, defaultSort);
     };
 
@@ -385,7 +482,11 @@ const ProductList = () => {
     }, []);
 
     useEffect(() => {
-        fetchProducts(1);
+        // Initial load skip is handled by the main useEffect(fetchInitialData)
+        // But if isTrashView changes manually, we refresh
+        if (handleInitialFetch.current) {
+            fetchProducts(1);
+        }
     }, [isTrashView]);
 
     const handleDelete = async (id) => {
@@ -872,7 +973,7 @@ const ProductList = () => {
                     <div className="flex justify-between items-center mb-6 pb-3 border-b border-primary/10">
                         <h4 className="font-bold text-primary flex items-center gap-2 text-[15px]"><span className="material-symbols-outlined text-[20px]">tune</span> Cấu hình bộ lọc sản phẩm</h4>
                         <div className="flex gap-4">
-                            <button onClick={() => { const r = { ...filters, category_id: '', type: '', min_stock: '', max_stock: '', start_date: '', end_date: '', attributes: {} }; setTempFilters(r); }} className="text-[13px] font-bold text-primary/40 hover:text-brick transition-colors">Thiết lập lại</button>
+                            <button onClick={() => { const r = { ...tempFilters, category_id: [], type: [], min_stock: '', max_stock: '', start_date: '', end_date: '', attributes: {} }; setTempFilters(r); }} className="text-[13px] font-bold text-primary/40 hover:text-brick transition-colors">Thiết lập lại</button>
                             <button onClick={applyFilters} className="bg-primary text-white px-8 py-2 rounded-sm font-bold text-[13px] hover:bg-primary/90 shadow-md transform active:scale-95 transition-all">Áp dụng bộ lọc</button>
                         </div>
                     </div>
@@ -880,27 +981,121 @@ const ProductList = () => {
                     <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 border-t border-l border-primary/10 rounded-sm mb-6 bg-primary/[0.02]">
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Danh mục</label>
-                            <div className="relative">
-                                <select name="category_id" value={tempFilters.category_id} onChange={handleTempFilterChange} className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary transition-all appearance-none cursor-pointer">
-                                    <option value="">Tất cả danh mục</option>
-                                    <option value="uncategorized">Chưa gắn danh mục</option>
-                                    {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                </select>
-                                <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 pointer-events-none text-[18px]">
-                                    expand_more
-                                </span>
+                            <div className="relative" data-attr-dropdown>
+                                <button 
+                                    onClick={() => setOpenAttrId(openAttrId === 'category' ? null : 'category')}
+                                    className={`w-full h-10 bg-white border rounded-sm px-3 pr-8 flex items-center transition-all ${openAttrId === 'category' ? 'border-primary shadow-inner ring-1 ring-primary/5' : 'border-primary/20 hover:border-primary/40 shadow-sm'}`}
+                                >
+                                    <span className="truncate text-[13px] font-bold text-primary">
+                                        {(tempFilters.category_id || []).length > 0 
+                                            ? `Danh mục: ${(tempFilters.category_id || []).length}` 
+                                            : `Chọn danh mục...`}
+                                    </span>
+                                    <span className={`material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 transition-transform duration-300 ${openAttrId === 'category' ? 'rotate-180' : ''}`}>
+                                        expand_more
+                                    </span>
+                                </button>
+
+                                {openAttrId === 'category' && (
+                                    <div className="absolute top-[calc(100%+4px)] left-0 right-0 bg-white border border-primary/30 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] z-[1001] rounded-sm py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-200">
+                                        <div className="max-h-64 overflow-y-auto custom-scrollbar">
+                                            <div className="flex border-b border-primary/5 mb-1 px-1 gap-1">
+                                                <button 
+                                                    className="flex-1 py-1.5 text-[10px] font-black text-primary hover:bg-primary/5 uppercase tracking-widest"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setTempFilters(prev => ({
+                                                            ...prev,
+                                                            category_id: ['uncategorized', ...categories.map(c => String(c.id))]
+                                                        }));
+                                                    }}
+                                                >Chọn tất cả</button>
+                                                <button 
+                                                    className="flex-1 py-1.5 text-[10px] font-black text-brick hover:bg-brick/5 uppercase tracking-widest"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setTempFilters(prev => ({ ...prev, category_id: [] }));
+                                                    }}
+                                                >Xóa hết</button>
+                                            </div>
+                                            <label className="px-3 py-2 hover:bg-primary/5 cursor-pointer flex items-center gap-3 transition-colors select-none" onClick={(e) => e.stopPropagation()}>
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={(tempFilters.category_id || []).includes('uncategorized')}
+                                                    onChange={() => handleTempMultiSelectChange('category_id', 'uncategorized')}
+                                                    className="w-4 h-4 accent-primary"
+                                                />
+                                                <span className={`text-[13px] ${(tempFilters.category_id || []).includes('uncategorized') ? 'font-bold text-primary' : 'text-stone-600'}`}>Chưa gắn danh mục</span>
+                                            </label>
+                                            {categories.map(c => (
+                                                <label key={c.id} className="px-3 py-2 hover:bg-primary/5 cursor-pointer flex items-center gap-3 transition-colors select-none" onClick={(e) => e.stopPropagation()}>
+                                                    <input 
+                                                        type="checkbox" 
+                                                        checked={(tempFilters.category_id || []).includes(String(c.id))}
+                                                        onChange={() => handleTempMultiSelectChange('category_id', String(c.id))}
+                                                        className="w-4 h-4 accent-primary"
+                                                    />
+                                                    <span className={`text-[13px] ${(tempFilters.category_id || []).includes(String(c.id)) ? 'font-bold text-primary' : 'text-stone-600'}`}>{c.name}</span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Loại sản phẩm</label>
-                            <div className="relative">
-                                <select name="type" value={tempFilters.type} onChange={handleTempFilterChange} className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary transition-all appearance-none cursor-pointer">
-                                    <option value="">Tất cả loại hình</option>
-                                    {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-                                </select>
-                                <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 pointer-events-none text-[18px]">
-                                    expand_more
-                                </span>
+                            <div className="relative" data-attr-dropdown>
+                                <button 
+                                    onClick={() => setOpenAttrId(openAttrId === 'type' ? null : 'type')}
+                                    className={`w-full h-10 bg-white border rounded-sm px-3 pr-8 flex items-center transition-all ${openAttrId === 'type' ? 'border-primary shadow-inner ring-1 ring-primary/5' : 'border-primary/20 hover:border-primary/40 shadow-sm'}`}
+                                >
+                                    <span className="truncate text-[13px] font-bold text-primary">
+                                        {(tempFilters.type || []).length > 0 
+                                            ? `Loại: ${(tempFilters.type || []).length}` 
+                                            : `Chọn loại...`}
+                                    </span>
+                                    <span className={`material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 transition-transform duration-300 ${openAttrId === 'type' ? 'rotate-180' : ''}`}>
+                                        expand_more
+                                    </span>
+                                </button>
+
+                                {openAttrId === 'type' && (
+                                    <div className="absolute top-[calc(100%+4px)] left-0 right-0 bg-white border border-primary/30 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] z-[1001] rounded-sm py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-200">
+                                        <div className="max-h-64 overflow-y-auto custom-scrollbar">
+                                            <div className="flex border-b border-primary/5 mb-1 px-1 gap-1">
+                                                <button 
+                                                    className="flex-1 py-1.5 text-[10px] font-black text-primary hover:bg-primary/5 uppercase tracking-widest"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setTempFilters(prev => ({
+                                                            ...prev,
+                                                            type: Object.keys(TYPE_LABELS)
+                                                        }));
+                                                    }}
+                                                >Chọn tất cả</button>
+                                                <button 
+                                                    className="flex-1 py-1.5 text-[10px] font-black text-brick hover:bg-brick/5 uppercase tracking-widest"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setTempFilters(prev => ({ ...prev, type: [] }));
+                                                    }}
+                                                >Xóa hết</button>
+                                            </div>
+                                            {Object.entries(TYPE_LABELS).map(([k, v]) => (
+                                                <label key={k} className="px-3 py-2 hover:bg-primary/5 cursor-pointer flex items-center gap-3 transition-colors select-none" onClick={(e) => e.stopPropagation()}>
+                                                    <input 
+                                                        type="checkbox" 
+                                                        checked={(tempFilters.type || []).includes(k)}
+                                                        onChange={() => handleTempMultiSelectChange('type', k)}
+                                                        className="w-4 h-4 accent-primary"
+                                                    />
+                                                    <span className={`text-[13px] ${(tempFilters.type || []).includes(k) ? 'font-bold text-primary' : 'text-stone-600'}`}>{v.label}</span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
@@ -1001,21 +1196,21 @@ const ProductList = () => {
                 <div className="flex flex-wrap items-center gap-2 mb-4 bg-primary/5 p-2 border border-primary/10 rounded-sm animate-in fade-in duration-300">
                     <span className="text-[13px] font-bold text-primary px-1 mr-1 border-r border-primary/20">Bộ lọc đang hoạt động:</span>
                     
-                    {filters.category_id && (
-                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                    {filters.category_id && Array.isArray(filters.category_id) && filters.category_id.length > 0 && filters.category_id.map(id => (
+                        <div key={id} className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">Danh mục:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.category_id === 'uncategorized' ? 'Chưa gắn danh mục' : categories.find(c => String(c.id) === String(filters.category_id))?.name}</span>
-                            <button onClick={() => removeFilter('category_id')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{id === 'uncategorized' ? 'Chưa gắn danh mục' : categories.find(c => String(c.id) === String(id))?.name}</span>
+                            <button onClick={() => removeFilter('category_id', id)} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
-                    )}
+                    ))}
                     
-                    {filters.type && (
-                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                    {filters.type && Array.isArray(filters.type) && filters.type.length > 0 && filters.type.map(t => (
+                        <div key={t} className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">Loại:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{TYPE_LABELS[filters.type]?.label}</span>
-                            <button onClick={() => removeFilter('type')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{TYPE_LABELS[t]?.label}</span>
+                            <button onClick={() => removeFilter('type', t)} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
-                    )}
+                    ))}
 
                     {(filters.min_stock || filters.max_stock) && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
@@ -1283,6 +1478,7 @@ const ProductList = () => {
                                                         </div>
                                                     </td>
                                                 );
+                                                if (col.id === 'status') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-center"><span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold ${p.status ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{p.status ? 'Bật' : 'Tắt'}</span></td>;
                                                 if (col.id === 'is_featured' || col.id === 'is_new') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-center">{p[col.id] ? <span className="material-symbols-outlined text-gold">check_circle</span> : <span className="material-symbols-outlined text-primary/30">circle</span>}</td>;
                                                 if (col.id === 'actions') return (
                                                     <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-right">

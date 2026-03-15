@@ -2,9 +2,11 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { useCart } from '@/context/CartContext';
 
 export default function Header({ menuItems = [] }) {
   const [searchQuery, setSearchQuery] = useState('');
+  const { cartCount } = useCart();
   const router = typeof window !== 'undefined' ? require('next/navigation').useRouter() : null;
 
   const handleSearch = (e) => {
@@ -19,23 +21,24 @@ export default function Header({ menuItems = [] }) {
     <header className="site-header">
       <div className="container header-content">
         {/* Logo Section */}
-        <Link href="/" className="logo-section" style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: '15px', textDecoration: 'none', flexWrap: 'nowrap', paddingBottom: '4px' }}>
-          <div className="logo-img-box" style={{ width: '48px', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-             <img src="/logo-brand.jpg" alt="Logo Gốm Đại Thành" className="logo-img" style={{ height: '100%', width: 'auto', objectFit: 'contain' }} />
+        <Link href="/" className="logo-section" style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '15px', textDecoration: 'none', flexWrap: 'nowrap' }}>
+          <div className="logo-img-box" style={{ width: '42px', height: '42px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+             <svg className="logo-icon" fill="#1B365D" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" style={{ width: '100%', height: '100%' }}>
+                <path clipRule="evenodd" d="M24 4H42V17.3333V30.6667H24V44H6V30.6667V17.3333H24V4Z" fillRule="evenodd"></path>
+             </svg>
           </div>
-          <div className="logo-text" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', borderLeft: '1.5px solid rgba(197, 160, 89, 0.5)', paddingLeft: '15px', flexShrink: 0, marginBottom: '-2px' }}>
-            <h1 className="logo-title" style={{ fontFamily: 'var(--font-display)', fontSize: '24px', fontWeight: '700', color: 'var(--primary)', margin: '0', whiteSpace: 'nowrap', textTransform: 'uppercase', lineHeight: '1', letterSpacing: '0.02em' }}>GỐM ĐẠI THÀNH</h1>
+          <div className="logo-text" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', borderLeft: '1.5px solid rgba(197, 160, 89, 0.4)', paddingLeft: '15px', flexShrink: 0 }}>
+            <h1 className="logo-title" style={{ fontFamily: 'var(--font-display)', fontSize: '24px', fontWeight: '700', color: 'var(--primary)', margin: '0', whiteSpace: 'nowrap', textTransform: 'uppercase', lineHeight: '1', letterSpacing: '0.05em' }}>Di Sản Gốm Việt</h1>
             <span className="logo-subtitle" style={{ fontFamily: 'var(--font-body)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.4em', color: 'var(--accent)', fontWeight: '600', marginTop: '4px', lineHeight: '1', whiteSpace: 'nowrap' }}>TINH HOA ĐẤT VIỆT</span>
           </div>
         </Link>
 
         <nav className="main-nav">
           <ul className="nav-list">
-            <li className="nav-item"><Link href="/" className="nav-link">TRANG CHỦ</Link></li>
-            <li className="nav-item"><Link href="/about" className="nav-link">GIỚI THIỆU</Link></li>
-            <li className="nav-item"><Link href="/agent-registration" className="nav-link">ĐĂNG KÍ ĐẠI LÝ</Link></li>
-            <li className="nav-item"><Link href="/policies" className="nav-link">CHÍNH SÁCH</Link></li>
-            <li className="nav-item"><Link href="/news" className="nav-link">TIN TỨC</Link></li>
+            <li className="nav-item"><Link href="/products" className="nav-link">SẢN PHẨM</Link></li>
+            <li className="nav-item"><Link href="/collections" className="nav-link">BỘ SƯU TẬP</Link></li>
+            <li className="nav-item"><Link href="/artists" className="nav-link">NGHỆ NHÂN</Link></li>
+            <li className="nav-item"><Link href="/stories" className="nav-link">CÂU CHUYỆN</Link></li>
           </ul>
         </nav>
 
@@ -60,18 +63,19 @@ export default function Header({ menuItems = [] }) {
           </div>
           
           <Link href="/cart" className="cart-action">
-            <span className="material-symbols-outlined">shopping_cart</span>
-            <span className="cart-badge">2</span>
+            <span className="material-symbols-outlined">shopping_bag</span>
+            {cartCount > 0 && <span className="cart-badge">{cartCount}</span>}
           </Link>
         </div>
       </div>
 
       <style jsx>{`
         .site-header {
-          background-color: #ffffff;
-          border-bottom: 2px solid #6366f1; /* Purple line from image top */
-          padding: 1rem 0;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+          background: rgba(255, 255, 255, 0.7);
+          backdrop-filter: blur(10px);
+          border-bottom: 1px solid var(--border);
+          padding: 1.5rem 0;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.02);
           position: sticky;
           top: 0;
           z-index: 1000;
@@ -220,10 +224,10 @@ export default function Header({ menuItems = [] }) {
 
         .cart-badge {
           position: absolute;
-          top: -8px;
-          right: -8px;
-          background-color: #c5a059;
-          color: white;
+          top: 0;
+          right: 0;
+          background-color: var(--accent);
+          color: var(--white);
           font-size: 10px;
           font-weight: 700;
           width: 18px;

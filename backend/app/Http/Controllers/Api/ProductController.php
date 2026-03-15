@@ -22,20 +22,20 @@ class ProductController extends Controller
         // Start with optimized column selection for products list to reduce memory & payload
         $query = Product::query()
             ->select([
-                'id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 
-                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status'
-            ])
+            'id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity',
+            'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications'
+        ])
             ->with([
-                'categories:id,name', 
-                'category:id,name',
-                'images:id,product_id,image_url,is_primary',
-                'attributeValues:id,product_id,attribute_id,value',
-                'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
-                'variations:id,sku,name,price,cost_price,stock_quantity,type',
-                'variations.images:id,product_id,image_url,is_primary',
-                'groupedItems:id,sku,name,price,cost_price,stock_quantity,type',
-                'groupedItems.images:id,product_id,image_url,is_primary'
-            ]);
+            'categories:id,name',
+            'category:id,name',
+            'images:id,product_id,image_url,is_primary',
+            'attributeValues:id,product_id,attribute_id,value',
+            'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
+            'variations:id,sku,name,price,cost_price,stock_quantity,type',
+            'variations.images:id,product_id,image_url,is_primary',
+            'groupedItems:id,sku,name,price,cost_price,stock_quantity,type',
+            'groupedItems.images:id,product_id,image_url,is_primary'
+        ]);
 
         // Handle Trash View
         if ($request->boolean('is_trash')) {
@@ -46,23 +46,26 @@ class ProductController extends Controller
         if ($request->filled('category_id')) {
             if ($request->category_id === 'uncategorized') {
                 $query->whereNull('category_id')->doesntHave('categories');
-            } else {
-                $query->where(function($q) use ($request) {
+            }
+            else {
+                $query->where(function ($q) use ($request) {
                     $q->where('category_id', $request->category_id)
-                      ->orWhereHas('categories', function($sub) use ($request) {
-                          $sub->where('categories.id', $request->category_id);
-                      });
+                        ->orWhereHas('categories', function ($sub) use ($request) {
+                        $sub->where('categories.id', $request->category_id);
+                    }
+                    );
                 });
             }
         }
-        
+
         if ($request->filled('category_ids')) {
             $catIds = is_array($request->category_ids) ? $request->category_ids : explode(',', $request->category_ids);
-            $query->where(function($q) use ($catIds) {
+            $query->where(function ($q) use ($catIds) {
                 $q->whereIn('category_id', $catIds)
-                  ->orWhereHas('categories', function($sub) use ($catIds) {
-                      $sub->whereIn('categories.id', $catIds);
-                  });
+                    ->orWhereHas('categories', function ($sub) use ($catIds) {
+                    $sub->whereIn('categories.id', $catIds);
+                }
+                );
             });
         }
 
@@ -73,76 +76,94 @@ class ProductController extends Controller
             $tokens = preg_split('/\s+/', $search, -1, PREG_SPLIT_NO_EMPTY);
 
             if (!empty($tokens)) {
-                $query->where(function ($q) use ($tokens) {
+                $query->where(function (Builder $q) use ($tokens) {
                     foreach ($tokens as $token) {
-                        $q->where(function ($sub) use ($token) {
-                            $escapedToken = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $token) . '%';
-                            $fuzzyToken = '%' . implode('%', preg_split('//u', str_replace(['%', '_'], '', $token), -1, PREG_SPLIT_NO_EMPTY)) . '%';
+                        $q->where(function (Builder $sub) use ($token) {
+                                    $escapedToken = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $token) . '%';
+                                    $fuzzyToken = '%' . implode('%', preg_split('//u', str_replace(['%', '_'], '', $token), -1, PREG_SPLIT_NO_EMPTY)) . '%';
 
-                            // Name match
-                            $sub->whereRaw('immutable_unaccent(name) ILIKE immutable_unaccent(?)', [$escapedToken])
-                                // SKU match (substring or compacted substring)
-                                ->orWhereRaw('immutable_unaccent(sku) ILIKE immutable_unaccent(?)', [$escapedToken])
-                                ->orWhereRaw("immutable_unaccent(REGEXP_REPLACE(sku, '[^a-zA-Z0-9]', '', 'g')) ILIKE immutable_unaccent(?)", [$escapedToken])
-                                // SKU fuzzy/subsequence match
-                                ->orWhereRaw("immutable_unaccent(REGEXP_REPLACE(sku, '[^a-zA-Z0-9]', '', 'g')) ILIKE immutable_unaccent(?)", [$fuzzyToken])
-                                
-                                // Nếu là sản phẩm cha, hãy kiểm tra xem có biến thể nào khớp không
-                                ->orWhereHas('variations', function ($sq) use ($escapedToken) {
-                                    $sq->whereRaw('immutable_unaccent(name) ILIKE immutable_unaccent(?)', [$escapedToken])
-                                       ->orWhereRaw('immutable_unaccent(sku) ILIKE immutable_unaccent(?)', [$escapedToken]);
-                                });
+                                    // Name match
+                                    $sub->whereRaw('immutable_unaccent(name) ILIKE immutable_unaccent(?)', [$escapedToken])
+                                        // SKU match (substring or compacted substring)
+                                        ->orWhereRaw('immutable_unaccent(sku) ILIKE immutable_unaccent(?)', [$escapedToken])
+                                        ->orWhereRaw("immutable_unaccent(REGEXP_REPLACE(sku, '[^a-zA-Z0-9]', '', 'g')) ILIKE immutable_unaccent(?)", [$escapedToken])
+                                        // SKU fuzzy/subsequence match
+                                        ->orWhereRaw("immutable_unaccent(REGEXP_REPLACE(sku, '[^a-zA-Z0-9]', '', 'g')) ILIKE immutable_unaccent(?)", [$fuzzyToken])
 
-                        });
+                                        // Nếu là sản phẩm cha, hãy kiểm tra xem có biến thể nào khớp không
+                                        ->orWhereHas('variations', function (Builder $sq) use ($escapedToken) {
+                                $sq->whereRaw('immutable_unaccent(name) ILIKE immutable_unaccent(?)', [$escapedToken])
+                                    ->orWhereRaw('immutable_unaccent(sku) ILIKE immutable_unaccent(?)', [$escapedToken]);
+                            }
+                            );
+
+                        }
+                        );
                     }
                 });
             }
         }
 
         // Numberic Filters
-        if ($request->filled('min_price')) $query->where('price', '>=', $request->min_price);
-        if ($request->filled('max_price')) $query->where('price', '<=', $request->max_price);
-        if ($request->filled('min_stock')) $query->where('stock_quantity', '>=', $request->min_stock);
-        if ($request->filled('max_stock')) $query->where('stock_quantity', '<=', $request->max_stock);
+        if ($request->filled('min_price'))
+            $query->where('price', '>=', $request->min_price);
+        if ($request->filled('max_price'))
+            $query->where('price', '<=', $request->max_price);
+        if ($request->filled('min_stock'))
+            $query->where('stock_quantity', '>=', $request->min_stock);
+        if ($request->filled('max_stock'))
+            $query->where('stock_quantity', '<=', $request->max_stock);
 
         // Filter by date range
-        if ($request->filled('start_date')) $query->whereDate('created_at', '>=', $request->start_date);
-        if ($request->filled('end_date')) $query->whereDate('created_at', '<=', $request->end_date);
+        if ($request->filled('start_date'))
+            $query->whereDate('created_at', '>=', $request->start_date);
+        if ($request->filled('end_date'))
+            $query->whereDate('created_at', '<=', $request->end_date);
 
         // Flags
-        if ($request->filled('is_featured')) $query->where('is_featured', $request->boolean('is_featured'));
-        if ($request->filled('is_new')) $query->where('is_new', $request->boolean('is_new'));
-        // Type Filtering (Improved for Variants logic)
+        if ($request->filled('is_featured'))
+            $query->where('is_featured', $request->boolean('is_featured'));
+        if ($request->filled('is_new'))
+            $query->where('is_new', $request->boolean('is_new'));
+        // Type Filtering (Improved for Multiple Types & Variants logic)
         if ($request->filled('type')) {
-            $type = $request->input('type');
-            if ($type === 'configurable') {
-                // Trả về sản phẩm cha thực sự có biến thể
-                $query->where('type', 'configurable')
-                      ->whereHas('variations');
-            } elseif ($type === 'simple') {
-                // Trả về sản phẩm đơn độc lập (không phải là biến thể của sản phẩm khác)
-                $query->where('type', 'simple')
-                      ->whereDoesntHave('parentConfigurable');
-            } else {
-                $query->where('type', $type);
-            }
+            $types = is_array($request->type) ? $request->type : explode(',', $request->type);
+            $query->where(function ($q) use ($types) {
+                foreach ($types as $type) {
+                    $q->orWhere(function ($sub) use ($type) {
+                        if ($type === 'configurable') {
+                            // Trả về sản phẩm cha thực sự có biến thể
+                            $sub->where('type', 'configurable')
+                                ->whereHas('variations');
+                        } elseif ($type === 'simple') {
+                            // Trả về sản phẩm đơn độc lập (không phải là biến thể của sản phẩm khác)
+                            $sub->where('type', 'simple')
+                                ->whereDoesntHave('parentConfigurable');
+                        } else {
+                            $sub->where('type', $type);
+                        }
+                    });
+                }
+            });
         }
 
         // Filter by EAV Attributes
         $inputAttributes = $request->input('attributes');
         if (!empty($inputAttributes) && is_array($inputAttributes)) {
             foreach ($inputAttributes as $attrId => $values) {
-                if (empty($values)) continue;
+                if (empty($values))
+                    continue;
                 $valueArray = is_array($values) ? $values : explode(',', $values);
 
                 $query->whereHas('attributeValues', function ($q) use ($attrId, $valueArray) {
                     $q->where('attribute_id', $attrId)
-                      ->where(function ($sub) use ($valueArray) {
-                          foreach ($valueArray as $val) {
-                              $sub->orWhere('value', $val)
-                                  ->orWhere('value', 'LIKE', '%"' . $val . '"%');
-                          }
-                      });
+                        ->where(function ($sub) use ($valueArray) {
+                        foreach ($valueArray as $val) {
+                            $sub->orWhere('value', $val)
+                                ->orWhere('value', 'LIKE', '%"' . $val . '"%');
+                        }
+                    }
+                    );
                 });
             }
         }
@@ -160,15 +181,16 @@ class ProductController extends Controller
         $validSortFields = ['id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'created_at', 'type', 'category_id'];
 
         $field = $sortMapping[$sortBy] ?? $sortBy;
-        if (!in_array($field, $validSortFields)) $field = 'created_at';
+        if (!in_array($field, $validSortFields))
+            $field = 'created_at';
 
         $order = (strtolower($sortOrder) === 'asc') ? 'asc' : 'desc';
 
         // Ưu tiên đưa sản phẩm có biến thể lên đầu nếu cùng tiêu chí sắp xếp (giúp dễ quản lý)
         $query->orderByRaw("CASE WHEN type = 'configurable' THEN 0 ELSE 1 END")
-              ->orderBy($field, $order);
+            ->orderBy($field, $order);
 
-        $perPage = (int) $request->get('per_page', 20);
+        $perPage = (int)$request->get('per_page', 20);
         // Ensure perPage is reasonable
         $perPage = min(max($perPage, 1), 100);
 
@@ -184,7 +206,7 @@ class ProductController extends Controller
         $validated = $request->validate([
             'type' => 'required|string|in:simple,configurable,grouped,virtual,bundle,downloadable',
             'name' => 'required|string|max:255',
-            'category_id' => 'required|exists:categories,id',
+            'category_id' => 'nullable|exists:categories,id',
             'category_ids' => 'nullable|array',
             'category_ids.*' => 'exists:categories,id',
             'price' => 'required|numeric|min:0',
@@ -203,6 +225,7 @@ class ProductController extends Controller
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
             'specifications' => 'nullable|string',
+            'status' => 'nullable|boolean',
             // linkages
             'linked_product_ids' => 'nullable|array',
             'linked_product_ids.*' => 'exists:products,id',
@@ -219,13 +242,20 @@ class ProductController extends Controller
             'main_image' => 'nullable|image',
             'images' => 'nullable|array',
             'images.*' => 'image',
+        ], [
+            'type.required' => 'Vui lòng chọn loại sản phẩm.',
+            'name.required' => 'Vui lòng nhập tên tác phẩm nghệ thuật.',
+            'price.required' => 'Vui lòng nhập giá bán.',
+            'sku.unique' => 'Mã SKU này đã tồn tại, vui lòng chọn mã khác.',
+            'stock_quantity.integer' => 'Số lượng tồn kho phải là số nguyên.',
         ]);
 
         $product = Product::create(array_merge($validated, ['account_id' => $request->header('X-Account-Id')]));
 
         if ($request->has('category_ids')) {
             $product->categories()->sync($request->category_ids);
-        } else {
+        }
+        elseif ($request->has('category_id') && !empty($request->category_id)) {
             // Default to primary category if no multi-select provided
             $product->categories()->sync([$request->category_id]);
         }
@@ -258,7 +288,9 @@ class ProductController extends Controller
         }
 
         if ($request->has('custom_attributes')) {
+            $validAttrIds = \App\Models\Attribute::whereIn('id', array_keys($request->custom_attributes))->pluck('id')->toArray();
             foreach ($request->custom_attributes as $attrId => $val) {
+                if (!in_array($attrId, $validAttrIds)) continue;
                 $rawValue = is_array($val) ? json_encode($val) : $val;
                 \App\Models\ProductAttributeValue::create([
                     'product_id' => $product->id,
@@ -311,7 +343,7 @@ class ProductController extends Controller
                     'weight' => $vData['weight'] ?? null,
                     'stock_quantity' => $vData['stock_quantity'] ?? 0,
                     'category_id' => $product->category_id,
-                    'status' => $product->status,
+                    'status' => $product->status ?? true,
                 ]);
 
                 // Handle variant image
@@ -333,7 +365,9 @@ class ProductController extends Controller
 
                 // Save variant attribute values
                 if (isset($vData['attributes'])) {
+                    $vValidAttrIds = \App\Models\Attribute::whereIn('id', array_keys($vData['attributes']))->pluck('id')->toArray();
                     foreach ($vData['attributes'] as $attrId => $val) {
+                        if (!in_array($attrId, $vValidAttrIds)) continue;
                         \App\Models\ProductAttributeValue::create([
                             'product_id' => $vProduct->id,
                             'attribute_id' => $attrId,
@@ -353,15 +387,56 @@ class ProductController extends Controller
     public function show($id)
     {
         $product = Product::with([
-            'category', 'categories', 'images', 'superAttributes.options', 'attributeValues.attribute',
-            'linkedProducts' => function($q) {
-                $q->withPivot(['link_type', 'position', 'quantity', 'is_required'])->with(['images', 'attributeValues']);
-            },
-            'groupedItems' => function($q) {
-                $q->withPivot(['link_type', 'position', 'quantity', 'is_required'])->with(['images', 'attributeValues']);
-            },
-            'approvedReviews.user'
+            'category:id,name',
+            'categories:id,name',
+            'images:id,product_id,image_url,is_primary,file_name,file_size',
+            'superAttributes:id,name,code,frontend_type',
+            'superAttributes.options:id,attribute_id,value,swatch_value,order',
+            'attributeValues:id,product_id,attribute_id,value',
+            'attributeValues.attribute:id,name,code,frontend_type',
+            'linkedProducts' => function ($q) {
+            $q->select(['products.id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'type', 'weight'])
+                ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
+                ->with([
+                    'images:id,product_id,image_url,is_primary',
+                    'attributeValues:id,product_id,attribute_id,value',
+                    'attributeValues.attribute:id,name,code'
+                ]);
+        },
+            'groupedItems' => function ($q) {
+            $q->select(['products.id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'type', 'weight'])
+                ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
+                ->with([
+                    'images:id,product_id,image_url,is_primary',
+                    'attributeValues:id,product_id,attribute_id,value'
+                ]);
+        },
+            'approvedReviews.user:id,name'
         ])->findOrFail($id);
+
+        if ($product->type === 'configurable') {
+            // Get variations manually to find all used attribute values
+            $variations = $product->linkedProducts()->wherePivot('link_type', 'super_link')->with('attributeValues')->get();
+            $usedValuesByAttr = [];
+            foreach ($variations as $v) {
+                foreach ($v->attributeValues as $av) {
+                    $usedValuesByAttr[$av->attribute_id][] = $av->value;
+                }
+            }
+
+            // Filter the eager-loaded superAttributes' options
+            foreach ($product->superAttributes as $attribute) {
+                $relevantValues = array_unique($usedValuesByAttr[$attribute->id] ?? []);
+                $filteredOptions = $attribute->options->filter(function($opt) use ($relevantValues) {
+                    return in_array($opt->value, $relevantValues);
+                })->values();
+                $attribute->setRelation('options', $filteredOptions);
+            }
+
+            // Also expose variations more explicitly for frontend mapping
+            $product->setRelation('variations', $variations);
+        }
+
         return response()->json($product);
     }
 
@@ -390,6 +465,7 @@ class ProductController extends Controller
             'stock_quantity' => 'nullable|integer|min:0',
             'weight' => 'nullable|string',
             'sku' => 'nullable|string|unique:products,sku,' . $id,
+            'status' => 'nullable|boolean',
             'meta_title' => 'nullable|string',
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
@@ -405,6 +481,10 @@ class ProductController extends Controller
             'super_attribute_ids.*' => 'exists:attributes,id',
             // EAV custom values
             'custom_attributes' => 'nullable|array',
+        ], [
+            'name.required' => 'Tên sản phẩm không được để trống.',
+            'price.required' => 'Giá bán không được để trống.',
+            'sku.unique' => 'Mã SKU này đã được sử dụng.',
         ]);
 
         // Capture which fields changed before saving
@@ -426,19 +506,27 @@ class ProductController extends Controller
         // Sync categories
         if ($request->has('category_ids')) {
             $product->categories()->sync($request->category_ids);
-        } elseif ($request->has('category_id')) {
+        }
+        elseif ($request->has('category_id') && !empty($request->category_id)) {
             // If only primary category changed, sync it as well
             $product->categories()->syncWithoutDetaching([$request->category_id]);
         }
+        elseif ($request->has('category_id') && empty($request->category_id)) {
+            // If primary category was explicitly cleared
+            $product->categories()->detach();
+            $product->update(['category_id' => null]);
+        }
         // Sync EAV custom attributes
         if ($request->has('custom_attributes')) {
+            $validAttrIds = \App\Models\Attribute::whereIn('id', array_keys($request->custom_attributes))->pluck('id')->toArray();
             foreach ($request->custom_attributes as $attrId => $val) {
+                if (!in_array($attrId, $validAttrIds)) continue;
                 // $val could be string, or array (for multiselect)
                 $rawValue = is_array($val) ? json_encode($val) : $val;
 
                 \App\Models\ProductAttributeValue::updateOrCreate(
-                ['product_id' => $product->id, 'attribute_id' => $attrId],
-                ['value' => $rawValue]
+                    ['product_id' => $product->id, 'attribute_id' => $attrId],
+                    ['value' => $rawValue]
                 );
             }
         }
@@ -449,7 +537,7 @@ class ProductController extends Controller
             foreach ($request->linked_product_ids as $idx => $id) {
                 $links[$id] = ['link_type' => $type, 'position' => $idx];
             }
-            
+
             // Preserve existing super_link variants
             $preserveVariantIds = $product->linkedProducts()->wherePivot('link_type', 'super_link')->pluck('products.id')->toArray();
             foreach ($preserveVariantIds as $vid) {
@@ -457,7 +545,7 @@ class ProductController extends Controller
                     $links[$vid] = ['link_type' => 'super_link'];
                 }
             }
-            
+
             $product->linkedProducts()->sync($links);
         }
 
@@ -484,8 +572,31 @@ class ProductController extends Controller
 
         // Handle variants sync
         if ($request->has('variants') && $product->type === 'configurable') {
+            $incomingVariants = $request->variants;
             $incomingVariantIds = [];
-            foreach ($request->variants as $idx => $vData) {
+
+            // 1. Identify which variants to keep vs delete
+            foreach ($incomingVariants as $vData) {
+                if (isset($vData['id'])) {
+                    $incomingVariantIds[] = $vData['id'];
+                }
+            }
+
+            // 2. Remove variants that are no longer in the list (Clean up orphans) FIRST
+            // This prevents duplicate SKU errors if a variant is recreated with the same SKU
+            $existingVariantIds = $product->linkedProducts()
+                ->wherePivot('link_type', 'super_link')
+                ->pluck('products.id')
+                ->toArray();
+            
+            $toDelete = array_diff($existingVariantIds, $incomingVariantIds);
+            if (!empty($toDelete)) {
+                $product->linkedProducts()->detach($toDelete);
+                Product::whereIn('id', $toDelete)->delete();
+            }
+
+            // 3. Process remaining variants (Update or Create)
+            foreach ($incomingVariants as $idx => $vData) {
                 if (isset($vData['id'])) {
                     $variant = Product::findOrFail($vData['id']);
                     $variant->update([
@@ -499,9 +610,7 @@ class ProductController extends Controller
 
                     // Handle variant image update/removal
                     if ($request->hasFile("variants.{$idx}.image")) {
-                        // Delete old images first to keep it simple (only 1 primary image per variant)
                         $variant->images()->delete();
-                        
                         $imageFile = $request->file("variants.{$idx}.image");
                         $path = $imageFile->store('products', 'public');
                         \App\Models\ProductImage::create([
@@ -511,22 +620,28 @@ class ProductController extends Controller
                             'file_name' => $imageFile->getClientOriginalName(),
                             'file_size' => $imageFile->getSize(),
                         ]);
-                    } elseif (isset($vData['remove_image']) && $vData['remove_image'] == 'true') {
+                    }
+                    elseif (isset($vData['remove_image']) && $vData['remove_image'] == 'true') {
                         $variant->images()->delete();
                     }
 
                     // Save/Update variant attribute values
                     if (isset($vData['attributes'])) {
+                        $vValidAttrIds = \App\Models\Attribute::whereIn('id', array_keys($vData['attributes']))->pluck('id')->toArray();
                         foreach ($vData['attributes'] as $attrId => $val) {
+                            if (!in_array($attrId, $vValidAttrIds)) continue;
                             \App\Models\ProductAttributeValue::updateOrCreate(
                                 ['product_id' => $variant->id, 'attribute_id' => $attrId],
                                 ['value' => $val]
                             );
                         }
                     }
-
-                    $incomingVariantIds[] = $variant->id;
-                } else {
+                }
+                else {
+                    // It's a "new" variant from frontend's perspective.
+                    // But maybe it's actually an existing simple product by SKU?
+                    // (Optional: can try to find by SKU if you want to be extra safe,
+                    // but usually create is fine as long as toDelete happened)
                     $variant = Product::create([
                         'account_id' => $product->account_id,
                         'type' => 'simple',
@@ -537,10 +652,9 @@ class ProductController extends Controller
                         'weight' => $vData['weight'] ?? null,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                         'category_id' => $product->category_id,
-                        'status' => $product->status,
+                        'status' => $product->status ?? true,
                     ]);
 
-                    // Handle variant image for new variant
                     if ($request->hasFile("variants.{$idx}.image")) {
                         $imageFile = $request->file("variants.{$idx}.image");
                         $path = $imageFile->store('products', 'public');
@@ -554,11 +668,11 @@ class ProductController extends Controller
                     }
 
                     $product->linkedProducts()->attach($variant->id, ['link_type' => 'super_link']);
-                    $incomingVariantIds[] = $variant->id;
 
-                    // Save variant attribute values
                     if (isset($vData['attributes'])) {
+                        $vValidAttrIds = \App\Models\Attribute::whereIn('id', array_keys($vData['attributes']))->pluck('id')->toArray();
                         foreach ($vData['attributes'] as $attrId => $val) {
+                            if (!in_array($attrId, $vValidAttrIds)) continue;
                             \App\Models\ProductAttributeValue::create([
                                 'product_id' => $variant->id,
                                 'attribute_id' => $attrId,
@@ -567,16 +681,6 @@ class ProductController extends Controller
                         }
                     }
                 }
-            }
-
-            // Remove variants that are no longer in the list (Clean up orphans)
-            $existingVariantIds = $product->linkedProducts()->wherePivot('link_type', 'super_link')->pluck('products.id')->toArray();
-            $toDelete = array_diff($existingVariantIds, $incomingVariantIds);
-            if (!empty($toDelete)) {
-                // Detach from parent first
-                $product->linkedProducts()->detach($toDelete);
-                // Then delete the variant products themselves
-                Product::whereIn('id', $toDelete)->delete();
             }
         }
 
@@ -635,10 +739,11 @@ class ProductController extends Controller
                     $vSuffix = \Illuminate\Support\Str::afterLast($lp->sku, '-');
                     if (is_numeric($vSuffix)) {
                         $newVariant->sku = $clone->sku . '-' . $vSuffix;
-                    } else {
+                    }
+                    else {
                         $newVariant->sku = $clone->sku . '-' . \Illuminate\Support\Str::random(4);
                     }
-                    
+
                     $newVariant->name = $lp->name; // Keep name or update? Keep is usually better for variants
                     $newVariant->slug = \Illuminate\Support\Str::slug($newVariant->name) . '-' . strtolower(\Illuminate\Support\Str::random(6));
                     $newVariant->save();
@@ -666,7 +771,8 @@ class ProductController extends Controller
                         'link_type' => 'super_link',
                         'position' => $lp->pivot->position
                     ]);
-                } else {
+                }
+                else {
                     // For regular links (related, cross-sell, grouped), just attach the same ID with pivot data
                     $clone->linkedProducts()->attach($lp->id, [
                         'link_type' => $lp->pivot->link_type,
@@ -785,7 +891,7 @@ class ProductController extends Controller
             // Store original basic fields that ARE being updated
             foreach (['category_id', 'price', 'cost_price', 'stock_quantity', 'is_featured', 'is_new', 'status', 'type'] as $field) {
                 if (isset($basicInfo[$field]) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
-                    $pData['basic'][$field] = $product->{$field};
+                    $pData['basic'][$field] = $product->{ $field};
                 }
             }
 
@@ -809,8 +915,9 @@ class ProductController extends Controller
 
         foreach ($ids as $productId) {
             $product = $products->find($productId);
-            if (!$product) continue;
-            
+            if (!$product)
+                continue;
+
             // 1. Update basic info (direct columns)
             if (!empty($basicInfo)) {
                 $toUpdate = [];
@@ -830,11 +937,12 @@ class ProductController extends Controller
             // 2. Update EAV attributes
             if (!empty($attributesData)) {
                 foreach ($attributesData as $attrId => $val) {
-                    if ($val === null || $val === '') continue; 
+                    if ($val === null || $val === '')
+                        continue;
                     $rawValue = is_array($val) ? json_encode($val) : $val;
                     \App\Models\ProductAttributeValue::updateOrCreate(
-                        ['product_id' => $productId, 'attribute_id' => $attrId],
-                        ['value' => $rawValue]
+                    ['product_id' => $productId, 'attribute_id' => $attrId],
+                    ['value' => $rawValue]
                     );
                 }
             }
@@ -852,13 +960,14 @@ class ProductController extends Controller
     public function undoBulkUpdate(Request $request)
     {
         $request->validate(['log_id' => 'required|exists:bulk_update_logs,id']);
-        
+
         $log = BulkUpdateLog::findOrFail($request->log_id);
         $originalData = $log->original_data;
 
         foreach ($originalData as $pData) {
             $product = Product::find($pData['id']);
-            if (!$product) continue;
+            if (!$product)
+                continue;
 
             // Restore basic info
             if (!empty($pData['basic'])) {
@@ -877,10 +986,11 @@ class ProductController extends Controller
                         \App\Models\ProductAttributeValue::where('product_id', $product->id)
                             ->where('attribute_id', $attrId)
                             ->delete();
-                    } else {
+                    }
+                    else {
                         \App\Models\ProductAttributeValue::updateOrCreate(
-                            ['product_id' => $product->id, 'attribute_id' => $attrId],
-                            ['value' => $originalValue]
+                        ['product_id' => $product->id, 'attribute_id' => $attrId],
+                        ['value' => $originalValue]
                         );
                     }
                 }

@@ -36,9 +36,9 @@ export default async function Home() {
           </div>
           <nav className={styles.categoryNav}>
             {categories.map((cat, idx) => (
-              <a key={idx} href={`/category/${cat.slug}`}>
+              <Link key={idx} href={`/category/${cat.slug}`}>
                 {cat.name} <span className="material-symbols-outlined">chevron_right</span>
-              </a>
+              </Link>
             ))}
           </nav>
         </aside>
@@ -57,7 +57,7 @@ export default async function Home() {
             <div className={styles.heroContent}>
               <p className={styles.heroSubtitle}>BỘ SƯU TẬP ĐỘC BẢN</p>
               <h2 className={styles.heroTitle}>TINH HOA<br/>ĐẤT VIÊT</h2>
-              <button className="btn-primary">KHÁM PHÁ NGAY</button>
+              <Link href="/products" className="btn-primary" style={{ display: 'inline-block' }}>KHÁM PHÁ NGAY</Link>
             </div>
           </div>
         </section>
@@ -108,34 +108,39 @@ export default async function Home() {
             <div className={styles.headerLeft}>
               <h2 className={styles.sectionTitle}>SẢN PHẨM NỔI BẬT</h2>
               <div className={styles.sectionTabs}>
-                <a href="#" className={styles.active}>TẤT CẢ</a>
+                <button className={styles.active}>TẤT CẢ</button>
               </div>
             </div>
-            <a href="/products" className={styles.viewAll}>
+            <Link href="/products" className={styles.viewAll}>
               Xem tất cả <span className="material-symbols-outlined">arrow_forward</span>
-            </a>
+            </Link>
           </div>
           
           <div className={styles.productsGrid}>
             {featuredProducts.map((product) => (
               <Link href={`/product/${product.slug}`} key={product.id} className={styles.productCard}>
                 <div className={styles.productImage}>
-                  {product.primary_image ? (
-                     <Image 
-                        src={product.primary_image.url && product.primary_image.url.startsWith('http') 
-                          ? product.primary_image.url 
-                          : `${config.storageUrl}/${product.primary_image.path.startsWith('/') ? product.primary_image.path.substring(1) : product.primary_image.path}`} 
+                  {(() => {
+                    const img = product.primary_image;
+                    let src = 'https://placehold.co/400';
+                    if (img) {
+                      if (img.url && img.url.startsWith('http')) src = img.url;
+                      else if (img.path && img.path !== 'undefined' && img.path !== 'null') {
+                        const cleanPath = img.path.startsWith('/') ? img.path.substring(1) : img.path;
+                        src = `${config.storageUrl}/${cleanPath}`;
+                      } else if (img.url) src = img.url;
+                    }
+                    return (
+                      <Image 
+                        src={src} 
                         alt={product.name} 
                         fill 
                         sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 25vw"
                         style={{ objectFit: 'cover' }}
                         unoptimized
                       />
-                  ) : (
-                    <div className={styles.imagePlaceholder}>
-                      <span className="material-symbols-outlined" style={{ fontSize: '48px', color: '#ccc' }}>image</span>
-                    </div>
-                  )}
+                    );
+                  })()}
                   {product.is_featured && <span className={`${styles.badge} ${styles.badgeHot}`}>HOT</span>}
                 </div>
                 <div className={styles.productInfo}>

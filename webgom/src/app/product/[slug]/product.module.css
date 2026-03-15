@@ -1,7 +1,12 @@
 .productDetail {
-  background-color: #F9F5F0;
+  background-color: #FDFBF7;
   min-height: 100vh;
-  color: #1B365D;
+  color: #1A1A1A;
+  font-family: 'EB Garamond', serif;
+}
+
+.productDetail h1, .productDetail h2, .productDetail h3, .productDetail h4 {
+  font-family: 'Playfair Display', serif;
 }
 
 .breadcrumb {
@@ -113,6 +118,20 @@
   margin-bottom: 1rem;
 }
 
+.badgeTag {
+  display: inline-block;
+  padding: 0.25rem 1rem;
+  background: var(--accent);
+  color: white;
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  border-radius: 20px;
+  margin-bottom: 1.5rem;
+}
+
 .title {
   font-family: var(--font-serif);
   font-size: 2.25rem;
@@ -149,6 +168,14 @@
   font-weight: 500;
 }
 
+.artistTag {
+  font-style: italic;
+  color: #666;
+  margin-bottom: 2rem;
+  font-size: 1.1rem;
+  display: block;
+}
+
 .priceCard {
   padding: 1.5rem;
   background-color: rgba(27, 54, 93, 0.05);
@@ -156,17 +183,33 @@
   border: 1px solid rgba(27, 54, 93, 0.1);
 }
 
-.price {
-  font-size: 2.25rem;
-  font-weight: 700;
-  color: #1B365D;
+.priceContainer {
+  margin-bottom: 2.5rem;
+  padding: 1.5rem;
+  background: white;
+  border-left: 4px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
 }
 
-.priceMeta {
-  font-size: 0.875rem;
-  color: rgba(27, 54, 93, 0.6);
-  font-style: italic;
-  margin-top: 0.25rem;
+.currentPrice {
+  font-size: 2.25rem;
+  color: #1B365D;
+  font-weight: 800;
+}
+
+.originalPrice {
+  text-decoration: line-through;
+  color: #666;
+  font-size: 1.25rem;
+  margin-left: 1rem;
+}
+
+.savingsText {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+  color: #2E7D32;
+  font-weight: 700;
 }
 
 .variantsCard {
@@ -255,98 +298,109 @@
 
 
 .specCard {
+  background: white;
+  border: 1px solid #E5E1D8;
+  border-radius: 8px;
   padding: 1.5rem;
-  background-color: white;
-  border-radius: 0.75rem;
-  border: 1px solid rgba(27, 54, 93, 0.1);
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
 }
 
 .specTitle {
-  font-weight: 700;
+  font-family: 'Playfair Display', serif;
+  font-size: 1.25rem;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid #F0EFE9;
+  padding-bottom: 0.75rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 1rem;
 }
 
 .specList {
   list-style: none;
   padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
 }
 
 .specItem {
   display: flex;
   justify-content: space-between;
-  border-bottom: 1px solid rgba(27, 54, 93, 0.05);
-  padding-bottom: 0.5rem;
-  font-size: 0.875rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #F0EFE9;
+}
+
+.specItem:last-child {
+  border-bottom: none;
 }
 
 .specLabel {
-  color: rgba(27, 54, 93, 0.6);
+  color: #666;
+  font-size: 0.9rem;
 }
 
 .specValue {
   font-weight: 700;
+  color: #1B365D;
+  font-size: 0.9rem;
 }
 
 /* Action Links */
 .actionLinks {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 1.5rem;
+  margin: 2.5rem 0;
 }
 
 .actionBtn {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  border-radius: 0.5rem;
-  border: 1px solid rgba(197, 160, 101, 0.3);
-  background-color: rgba(197, 160, 101, 0.05);
+  gap: 1.5rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid #E5E1D8;
   text-decoration: none;
-  transition: all 0.3s;
+  transition: all 0.3s ease;
   cursor: pointer;
+  position: relative;
+}
+
+.actionBtn::after {
+  content: '';
+  position: absolute;
+  left: -1rem;
+  top: 1rem;
+  bottom: 1rem;
+  width: 3px;
+  background: var(--accent);
+  opacity: 0;
+  transition: all 0.3s;
+}
+
+.actionBtn:hover::after {
+  opacity: 1;
 }
 
 .actionIconBox {
-  width: 2.5rem;
-  height: 2.5rem;
-  background-color: rgba(197, 160, 101, 0.2);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   color: var(--accent);
-}
-
-.actionBtn:hover {
-  background-color: rgba(197, 160, 101, 0.1);
-  border-color: var(--accent);
 }
 
 .actionLabel {
-  font-size: 0.75rem;
-  font-weight: 700;
-  color: var(--accent);
+  font-size: 0.7rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 1px;
+  color: #888;
+  margin-bottom: 0.25rem;
 }
 
 .actionText {
-  font-size: 0.875rem;
-  font-weight: 600;
+  font-family: 'Playfair Display', serif;
+  font-size: 1rem;
+  color: #1B365D;
+  font-weight: 700;
 }
 
 .actionChevron {
   margin-left: auto;
-  color: rgba(197, 160, 101, 0.4);
+  font-size: 0.9rem;
+  color: #CCC;
 }
 
 /* Buttons */
@@ -454,6 +508,109 @@
   flex-direction: column;
   align-items: center;
   gap: 0.5rem;
+}
+
+/* Grouped Items Logic */
+.groupedCard {
+  margin-top: 2rem;
+}
+
+.groupedTitle {
+  font-size: 1.5rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #E5E1D8;
+  color: #1B365D;
+  font-family: 'Playfair Display', serif;
+}
+
+.groupedSub {
+  font-size: 0.9rem;
+  margin-bottom: 1.5rem;
+  font-style: italic;
+  color: #666;
+}
+
+.groupedList {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.groupedItem {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 1.25rem;
+  background: white;
+  border: 1px solid #E5E1D8;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.groupedItem:hover {
+  border-color: var(--accent);
+  transform: translateX(10px);
+}
+
+.itemSelected {
+  border-color: var(--accent);
+  background-color: white;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+}
+
+.itemRequired {
+  cursor: default;
+  background-color: #f9f9f9;
+}
+
+.itemCheck input {
+  width: 20px;
+  height: 20px;
+  accent-color: #1B365D;
+}
+
+.itemThumb {
+  width: 60px;
+  height: 60px;
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  flex-shrink: 0;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.itemInfo {
+  flex-grow: 1;
+}
+
+.itemName {
+  display: block;
+  font-weight: 700;
+  color: #1B365D;
+  font-size: 0.9rem;
+  margin-bottom: 0.25rem;
+}
+
+.requiredTag {
+  font-size: 0.75rem;
+  color: #666;
+  font-weight: normal;
+  font-style: italic;
+}
+
+.itemMeta {
+  font-size: 0.8rem;
+  color: #666;
+}
+
+.itemPriceSum {
+  font-weight: 700;
+  font-size: 1rem;
+  color: #1B365D;
+  text-align: right;
+  min-width: 100px;
 }
 
 /* Tabs / Description */
@@ -611,4 +768,210 @@
   font-size: 0.75rem;
   color: rgba(27, 54, 93, 0.4);
   text-decoration: line-through;
+}
+
+/* Bundle Product Specific Styles */
+.imageCaption {
+  position: absolute;
+  bottom: 1.5rem;
+  left: 1.5rem;
+  right: 1.5rem;
+  padding: 1.5rem;
+  background-color: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  border-left: 4px solid var(--accent);
+  border-radius: 4px;
+  z-index: 10;
+}
+
+.captionTitle {
+  font-family: 'Playfair Display', serif;
+  font-size: 1.125rem;
+  font-weight: 700;
+  font-style: italic;
+  color: #1B365D;
+  margin-bottom: 0.25rem;
+}
+
+.captionSub {
+  font-size: 0.75rem;
+  color: rgba(27, 54, 93, 0.7);
+}
+
+.scrollableConfig {
+  background: white;
+  padding: 2rem;
+  border: 1px solid rgba(197, 160, 101, 0.2);
+  border-radius: 12px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);
+  display: flex;
+  flex-direction: column;
+  max-height: 900px;
+  overflow-y: auto;
+}
+
+.bundleGroup {
+  margin-bottom: 2.5rem;
+}
+
+.bundleGroupTitle {
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.bundleGroupTitle::before {
+  content: '';
+  display: block;
+  height: 1px;
+  width: 32px;
+  background-color: var(--accent);
+}
+
+.bundleItem {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem;
+  border-radius: 8px;
+  transition: background-color 0.2s;
+  border-bottom: 1px solid rgba(197, 160, 101, 0.1);
+}
+
+.bundleItem:hover {
+  background-color: #F9F5F0;
+}
+
+.bundleItemThumb {
+  width: 64px;
+  height: 64px;
+  background-color: #f1f1f1;
+  border-radius: 4px;
+  border: 1px solid rgba(197, 160, 101, 0.1);
+  overflow: hidden;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.bundleItemInfo {
+  flex-grow: 1;
+}
+
+.bundleItemType {
+  font-size: 0.625rem;
+  font-weight: 800;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+}
+
+.bundleItemName {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #1B365D;
+  display: block;
+}
+
+.bundleItemPrice {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: rgba(27, 54, 93, 0.8);
+}
+
+.bundleItemActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.miniQuantity {
+  display: flex;
+  align-items: center;
+  background: white;
+  border: 1px solid rgba(197, 160, 101, 0.3);
+  border-radius: 999px;
+  height: 32px;
+  padding: 0 4px;
+}
+
+.miniQBtn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: #1B365D;
+}
+
+.miniQBtn:hover {
+  color: var(--accent);
+}
+
+.miniQValue {
+  width: 32px;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.deleteItemBtn {
+  background: none;
+  border: none;
+  padding: 4px;
+  color: rgba(27, 54, 93, 0.2);
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.deleteItemBtn:hover {
+  color: #ef4444;
+}
+
+.bundleSummary {
+  position: sticky;
+  bottom: 0;
+  background-color: white;
+  padding-top: 1.5rem;
+  margin-top: 2rem;
+  border-top: 2px solid rgba(27, 54, 93, 0.05);
+  z-index: 20;
+}
+
+.summaryPrice {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 1.5rem;
+}
+
+.summaryLabel {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: rgba(27, 54, 93, 0.5);
+  font-weight: 700;
+}
+
+.summaryTotal {
+  font-family: 'Playfair Display', serif;
+  font-size: 1.875rem;
+  font-weight: 900;
+  color: #1B365D;
+}
+
+.summaryMeta {
+  font-size: 0.625rem;
+  color: var(--accent);
+  font-weight: 800;
+  text-transform: uppercase;
+  font-style: italic;
 }

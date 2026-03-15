@@ -15,6 +15,12 @@ class Product extends Model
         'meta_title', 'meta_description', 'meta_keywords', 'weight'
     ];
 
+    protected $attributes = [
+        'status' => true,
+        'is_new' => true,
+        'is_featured' => false,
+    ];
+
     protected $appends = ['average_rating', 'current_price', 'main_image', 'primary_image'];
 
     public function reviews()

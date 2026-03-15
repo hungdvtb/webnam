@@ -61,6 +61,7 @@ export const categoryApi = {
     update: (id, data) => api.post(`/categories/${id}`, data),
     destroy: (id) => api.delete(`/categories/${id}`),
     reorder: (items) => api.post('/categories/reorder', { items }),
+    bulkUpdateLayout: (data) => api.post('/categories/bulk-layout', data),
 };
 
 export const attributeApi = {

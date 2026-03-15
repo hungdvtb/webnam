@@ -69,7 +69,7 @@ export default async function ProductDetailPage({ params }) {
               className={styles.descBody}
               dangerouslySetInnerHTML={{ __html: product.description || 'Đang cập nhật nội dung...' }}
             />
-            {mainImage && (
+            {mainImage && (mainImage.url || mainImage.path) && (
               <div className={styles.descImage}>
                 <Image 
                   src={mainImage.url && mainImage.url.startsWith('http') ? mainImage.url : `${config.storageUrl}/${mainImage.path}`}
@@ -101,7 +101,7 @@ export default async function ProductDetailPage({ params }) {
                 return (
                   <Link key={rel.id} href={`/product/${rel.slug}`} className={styles.relatedCard}>
                     <div className={styles.relImage}>
-                      {displayImage ? (
+                    {displayImage && (displayImage.url || displayImage.path) ? (
                         <Image 
                           src={displayImage.url && displayImage.url.startsWith('http') ? displayImage.url : `${config.storageUrl}/${displayImage.path}`}
                           alt={rel.name}

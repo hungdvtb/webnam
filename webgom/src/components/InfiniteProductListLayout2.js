@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import config from '@/lib/config';
 import styles from '../app/products/layout2.module.css';
+import { useCart } from '@/context/CartContext';
 
 export default function InfiniteProductListLayout2({ initialData, category = '', sort = 'popular', search = '', initialAttrs = {} }) {
   const [products, setProducts] = useState(initialData.data || []);
@@ -12,6 +13,7 @@ export default function InfiniteProductListLayout2({ initialData, category = '',
   const [hasMore, setHasMore] = useState(initialData.current_page < initialData.last_page);
   const [loading, setLoading] = useState(false);
   const [attrs, setAttrs] = useState(initialAttrs);
+  const { addToCart } = useCart();
   const observer = useRef();
 
   // Reset when filters change
@@ -94,22 +96,27 @@ export default function InfiniteProductListLayout2({ initialData, category = '',
           <div key={product.id} className={styles.productCard}>
             <div className={styles.imageArea}>
               <Link href={`/product/${product.slug}`}>
-                {product.primary_image ? (
-                  <Image 
-                    src={product.primary_image.url.startsWith('http') 
-                      ? product.primary_image.url 
-                      : `${config.storageUrl}/${product.primary_image.path.startsWith('/') ? product.primary_image.path.substring(1) : product.primary_image.path}`}
-                    alt={product.name}
-                    fill
-                    className={styles.image}
-                    sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 25vw"
-                    unoptimized
-                  />
-                ) : (
-                  <div className={styles.imagePlaceholder}>
-                    <span className="material-symbols-outlined" style={{ fontSize: '48px', color: '#ccc' }}>image</span>
-                  </div>
-                )}
+                {(() => {
+                  const img = product.primary_image;
+                  let src = 'https://placehold.co/400';
+                  if (img) {
+                    if (img.url && img.url.startsWith('http')) src = img.url;
+                    else if (img.path && img.path !== 'undefined' && img.path !== 'null') {
+                      const cleanPath = img.path.startsWith('/') ? img.path.substring(1) : img.path;
+                      src = `${config.storageUrl}/${cleanPath}`;
+                    } else if (img.url) src = img.url;
+                  }
+                  return (
+                    <Image 
+                      src={src}
+                      alt={product.name}
+                      fill
+                      className={styles.image}
+                      sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 25vw"
+                      unoptimized
+                    />
+                  );
+                })()}
               </Link>
               {product.is_new && <div className={styles.badge}>Bán chạy</div>}
             </div>
@@ -125,7 +132,14 @@ export default function InfiniteProductListLayout2({ initialData, category = '',
                   {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(product.price)}
                 </p>
                 <div className={styles.actions}>
-                  <button className={styles.cartAction}>
+                  <button 
+                    className={styles.cartAction}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      addToCart(product, 1);
+                      alert('Đã thêm sản phẩm vào giỏ hàng!');
+                    }}
+                  >
                     <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>add_shopping_cart</span>
                     Giỏ hàng
                   </button>

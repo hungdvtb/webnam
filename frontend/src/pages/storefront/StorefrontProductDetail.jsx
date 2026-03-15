@@ -14,7 +14,7 @@ const ImageGallery = ({ images }) => {
         <div className="space-y-3">
             {/* Main Image */}
             <div className="relative aspect-square bg-stone-100 rounded-2xl overflow-hidden cursor-zoom-in" onClick={() => setZoomed(true)}>
-                <img src={imgs[active]?.url} alt="" className="w-full h-full object-cover" />
+                <img src={imgs[active]?.url || 'https://placehold.co/800'} alt="" className="w-full h-full object-cover" />
                 {imgs.length > 1 && (
                     <>
                         <button onClick={e => { e.stopPropagation(); setActive((active - 1 + imgs.length) % imgs.length); }}
@@ -34,7 +34,7 @@ const ImageGallery = ({ images }) => {
                     {imgs.map((img, i) => (
                         <button key={img.id} onClick={() => setActive(i)}
                                 className={`w-16 h-16 md:w-20 md:h-20 rounded-xl overflow-hidden border-2 shrink-0 transition-all ${i === active ? 'border-primary shadow-md' : 'border-transparent opacity-60 hover:opacity-100'}`}>
-                            <img src={img.url} alt="" className="w-full h-full object-cover" loading="lazy" />
+                            <img src={img.url || 'https://placehold.co/1200x600'} alt="" className="w-full h-full object-cover" loading={i === 0 ? 'eager' : 'lazy'} />
                         </button>
                     ))}
                 </div>
@@ -45,7 +45,7 @@ const ImageGallery = ({ images }) => {
                     <button className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 text-white flex items-center justify-center">
                         <span className="material-symbols-outlined">close</span>
                     </button>
-                    <img src={imgs[active]?.url} alt="" className="max-w-[90vw] max-h-[90vh] object-contain" />
+                    <img src={imgs[active]?.url || 'https://placehold.co/800'} alt="" className="max-w-[90vw] max-h-[90vh] object-contain" />
                 </div>
             )}
         </div>
@@ -182,6 +182,28 @@ const StorefrontProductDetail = () => {
                                         <span className="text-sm font-bold text-stone-800">{attr.value}</span>
                                     </div>
                                 ))}
+                            </div>
+                        )}
+
+                        {/* Textarea Specifications Fallback */}
+                        {product.specifications && (
+                            <div className="space-y-3 border-t border-stone-100 pt-4">
+                                {product.specifications.split('\n').filter(l => l.trim().length > 0).map((line, idx) => {
+                                    const colonIndex = line.indexOf(':');
+                                    let key = 'Thông số';
+                                    let val = line;
+                                    if (colonIndex !== -1) {
+                                        key = line.substring(0, colonIndex).trim();
+                                        val = line.substring(colonIndex + 1).trim();
+                                        if (key === '-' || key === '*') key = 'Thông số';
+                                    }
+                                    return (
+                                        <div key={idx} className="flex items-center gap-3">
+                                            <span className="text-[10px] font-bold text-stone-500 uppercase tracking-widest w-24 shrink-0">{key}:</span>
+                                            <span className="text-sm font-bold text-stone-800 whitespace-pre-wrap">{val}</span>
+                                        </div>
+                                    );
+                                })}
                             </div>
                         )}
 

@@ -173,10 +173,41 @@ const ProductDetail = () => {
         return <div className="text-center py-20 bg-background-light">Sản phẩm không tồn tại.</div>;
     }
 
-    const images = product.images.length > 0 ? product.images : [{ image_url: 'https://placehold.co/800' }];
-    const displayPrice = currentVariant ? currentVariant.price : product.price;
-    const displaySpecialPrice = currentVariant ? currentVariant.special_price : product.special_price;
-    const isSale = displaySpecialPrice && displaySpecialPrice < displayPrice;
+    const images = (product.images && product.images.length > 0)
+        ? product.images.map(img => ({ ...img, image_url: img.image_url || 'https://placehold.co/800' }))
+        : [{ image_url: 'https://placehold.co/800' }];
+    const parseSpecifications = (specString) => {
+        if (!specString) return [];
+        
+        // Handle JSON if possible
+        try {
+            if (typeof specString === 'string' && (specString.trim().startsWith('{') || specString.trim().startsWith('['))) {
+                const parsed = JSON.parse(specString);
+                if (Array.isArray(parsed)) {
+                    return [{ key: 'Thông số chi tiết', value: parsed.join(', ') }];
+                }
+                return Object.entries(parsed).map(([key, value]) => ({ 
+                    key, 
+                    value: typeof value === 'object' ? JSON.stringify(value) : value 
+                }));
+            }
+        } catch (e) { }
+
+        // Standard line parsing
+        return specString.split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0)
+            .map(line => {
+                const colonIndex = line.indexOf(':');
+                if (colonIndex !== -1) {
+                    return {
+                        key: line.substring(0, colonIndex).trim(),
+                        value: line.substring(colonIndex + 1).trim()
+                    };
+                }
+                return { key: '', value: line };
+            });
+    };
 
     return (
         <main className="w-full max-w-[1280px] mx-auto px-6 lg:px-12 py-12 bg-background-light">
@@ -249,6 +280,57 @@ const ProductDetail = () => {
                                 <p className="font-body text-4xl text-brick italic">{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(displayPrice)}</p>
                             )}
                         </div>
+                    </div>
+
+                    {/* Detailed Specifications Box */}
+                    <div className="bg-white border border-gold/20 p-6 rounded-sm space-y-4 shadow-sm relative overflow-hidden">
+                        <div className="flex items-center gap-2 border-b border-gold/10 pb-3 mb-4">
+                            <span className="material-symbols-outlined text-primary text-xl">info</span>
+                            <h3 className="font-display font-bold text-xs uppercase tracking-[0.15em] text-primary">Thông số chi tiết</h3>
+                        </div>
+                        <div className="space-y-3.5">
+                            <div className="flex justify-between items-start text-[11px] group">
+                                <span className="text-stone/50 font-medium w-1/3 uppercase tracking-tighter">Tên & Phân loại</span>
+                                <span className="text-primary font-bold w-2/3 text-right">{product.name}</span>
+                            </div>
+                            <div className="flex justify-between items-start text-[11px] group border-t border-gold/5 pt-3.5">
+                                <span className="text-stone/50 font-medium w-1/3 uppercase tracking-tighter">Mã SKU</span>
+                                <span className="text-primary font-bold w-2/3 text-right font-mono">{product.sku}</span>
+                            </div>
+                            {product.weight && (
+                                <div className="flex justify-between items-start text-[11px] group border-t border-gold/5 pt-3.5">
+                                    <span className="text-stone/50 font-medium w-1/3 uppercase tracking-tighter">Khối lượng</span>
+                                    <span className="text-primary font-bold w-2/3 text-right">{product.weight} gram</span>
+                                </div>
+                            )}
+
+                            {/* Attributes */}
+                            {(product.attribute_values || []).map(av => (
+                                <div key={av.id} className="flex justify-between items-start text-[11px] group border-t border-gold/5 pt-3.5">
+                                    <span className="text-stone/50 font-medium w-1/3 uppercase tracking-tighter">{av.attribute?.name}</span>
+                                    <span className="text-primary font-bold w-2/3 text-right uppercase tracking-tighter">
+                                        {(() => {
+                                            try {
+                                                if (av.value && (av.value.startsWith('[') || av.value.startsWith('{'))) {
+                                                    const parsed = JSON.parse(av.value);
+                                                    return Array.isArray(parsed) ? parsed.join(', ') : av.value;
+                                                }
+                                            } catch (e) { }
+                                            return av.value === '1' ? 'Có' : (av.value === '0' ? 'Không' : av.value);
+                                        })()}
+                                    </span>
+                                </div>
+                            ))}
+
+                            {/* From Specifications Area */}
+                            {parseSpecifications(product.specifications).map((spec, idx) => (
+                                <div key={`spec-${idx}`} className="flex justify-between items-start text-[11px] group border-t border-gold/5 pt-3.5">
+                                    <span className="text-stone/50 font-medium w-1/3 uppercase tracking-tighter">{spec.key || 'Thông số chi tiết'}</span>
+                                    <span className="text-primary font-bold w-2/3 text-right whitespace-pre-wrap leading-relaxed">{spec.value}</span>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="absolute -bottom-10 -right-10 size-32 bg-gold/5 rounded-full blur-3xl pointer-events-none"></div>
                     </div>
 
                     {/* Grouped Product - Items List */}
@@ -458,18 +540,24 @@ const ProductDetail = () => {
                     {activeTab === 'spec' && (
                         <div className="animate-fade-in">
                             <ul className="space-y-4">
-                                <li className="flex border-b border-gold/5 pb-2">
-                                    <span className="font-ui font-bold w-40 text-sm uppercase">Mã hiệu (SKU):</span>
-                                    <span>{product.sku}</span>
+                                <li className="flex justify-between border-b border-gold/10 pb-4">
+                                    <span className="font-ui font-bold text-xs uppercase tracking-widest text-stone/60">Tên & Phân loại:</span>
+                                    <span className="text-primary font-bold text-sm text-right">{product.name}</span>
                                 </li>
-                                <li className="flex border-b border-gold/5 pb-2">
-                                    <span className="font-ui font-bold w-40 text-sm uppercase">Phân loại:</span>
-                                    <span>{product.category?.name}</span>
+                                <li className="flex justify-between border-b border-gold/10 pb-4">
+                                    <span className="font-ui font-bold text-xs uppercase tracking-widest text-stone/60">Mã hiệu (SKU):</span>
+                                    <span className="text-primary font-bold text-sm font-mono text-right">{product.sku}</span>
                                 </li>
+                                {product.weight && (
+                                    <li className="flex justify-between border-b border-gold/10 pb-4">
+                                        <span className="font-ui font-bold text-xs uppercase tracking-widest text-stone/60">Khối lượng:</span>
+                                        <span className="text-primary font-bold text-sm text-right">{product.weight} gram</span>
+                                    </li>
+                                )}
                                 {(product.attribute_values || []).map(av => (
-                                    <li key={av.id} className="flex border-b border-gold/5 pb-2">
-                                        <span className="font-ui font-bold w-40 text-sm uppercase">{av.attribute?.name || 'Thuộc tính'}:</span>
-                                        <span>
+                                    <li key={av.id} className="flex justify-between border-b border-gold/10 pb-4">
+                                        <span className="font-ui font-bold text-xs uppercase tracking-widest text-stone/60">{av.attribute?.name || 'Thuộc tính'}:</span>
+                                        <span className="text-primary font-bold text-sm text-right">
                                             {(() => {
                                                 try {
                                                     if (av.value && (av.value.startsWith('[') || av.value.startsWith('{'))) {
@@ -480,6 +568,12 @@ const ProductDetail = () => {
                                                 return av.value === '1' ? 'Có' : (av.value === '0' ? 'Không' : av.value);
                                             })()}
                                         </span>
+                                    </li>
+                                ))}
+                                {parseSpecifications(product.specifications).map((spec, idx) => (
+                                    <li key={`tab-spec-${idx}`} className="flex justify-between border-b border-gold/10 pb-4">
+                                        <span className="font-ui font-bold text-xs uppercase tracking-widest text-stone/60">{spec.key || 'Khác'}:</span>
+                                        <span className="text-primary font-bold text-sm text-right whitespace-pre-wrap">{spec.value}</span>
                                     </li>
                                 ))}
                             </ul>
@@ -560,10 +654,7 @@ const ProductDetail = () => {
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
                         {relatedProducts.map(p => (
-                            <ProductCard key={p.id} product={{
-                                ...p,
-                                image: p.images?.[0]?.image_url || 'https://placehold.co/400'
-                            }} />
+                            <ProductCard key={p.id} product={p} />
                         ))}
                     </div>
                 </div>

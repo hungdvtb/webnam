@@ -4,7 +4,7 @@ import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { Tree } from '@minoru/react-dnd-treeview';
 
-const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelected, onSelect, isDropTarget, allAttributes }) => {
+const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelected, onSelect, isCheckable, isChecked, onCheck, isDropTarget, allAttributes }) => {
     const layoutLabel = node.data?.display_layout === 'layout_2' ? 'Giao diện 2' : 'Giao diện 1';
     const layoutIcon = node.data?.display_layout === 'layout_2' ? 'view_quilt' : 'view_compact';
     
@@ -36,6 +36,16 @@ const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelecte
                 </div>
             )}
             
+            {/* Checkbox for Bulk Actions */}
+            <div className="flex items-center justify-center pl-2 pr-1" onClick={(e) => e.stopPropagation()}>
+                <input 
+                    type="checkbox" 
+                    checked={isChecked} 
+                    onChange={() => onCheck(node.id)}
+                    className="size-4 rounded-sm accent-primary cursor-pointer"
+                />
+            </div>
+
             {/* Drag Handle */}
             <div className="flex items-center justify-center text-stone/20 group-hover:text-stone/40 cursor-grab active:cursor-grabbing px-1">
                 <span className="material-symbols-outlined text-[18px]">drag_indicator</span>
@@ -167,6 +177,8 @@ const CategoryList = () => {
         banner: null, banner_url: null, display_layout: 'layout_1',
         filterable_attribute_ids: []
     });
+    const [selectedIds, setSelectedIds] = useState(new Set());
+    const [isBulkUpdating, setIsBulkUpdating] = useState(false);
     const [allAttributes, setAllAttributes] = useState([]);
 
     // Close dropdowns on outside click
@@ -412,6 +424,43 @@ const CategoryList = () => {
         }
     };
 
+    const handleCheck = (id) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    };
+
+    const handleBulkCheck = (checked) => {
+        if (checked) {
+            setSelectedIds(new Set(filteredTreeData.map(n => n.id)));
+        } else {
+            setSelectedIds(new Set());
+        }
+    };
+
+    const handleBulkUpdateLayout = async (layout) => {
+        if (selectedIds.size === 0) return;
+        
+        setIsBulkUpdating(true);
+        try {
+            await categoryApi.bulkUpdateLayout({
+                ids: Array.from(selectedIds),
+                display_layout: layout
+            });
+            alert(`Đã cập nhật giao diện ${layout === 'layout_1' ? '1' : '2'} cho ${selectedIds.size} danh mục.`);
+            setSelectedIds(new Set());
+            fetchCategories();
+        } catch (error) {
+            console.error("Bulk update error:", error);
+            alert("Lỗi khi cập nhật giao diện hàng loạt.");
+        } finally {
+            setIsBulkUpdating(false);
+        }
+    };
+
     if (loading) return <div className="p-8 text-center text-stone">Đang tải danh sách...</div>;
 
     return (
@@ -634,7 +683,15 @@ const CategoryList = () => {
 
                         {/* Column Headers */}
                         <div className="flex-none px-4 py-2 bg-gold/5 border-b border-gold/10 flex items-center">
-                            <div className="flex-1 text-[10px] font-black uppercase tracking-[0.2em] text-primary/40 pl-8">Tên Danh Mục</div>
+                            <div className="flex items-center justify-center pl-2 pr-1">
+                                <input 
+                                    type="checkbox" 
+                                    checked={selectedIds.size > 0 && selectedIds.size === filteredTreeData.length}
+                                    onChange={(e) => handleBulkCheck(e.target.checked)}
+                                    className="size-4 rounded-sm accent-primary cursor-pointer"
+                                />
+                            </div>
+                            <div className="flex-1 text-[10px] font-black uppercase tracking-[0.2em] text-primary/40 pl-11">Tên Danh Mục</div>
                             <div className="hidden md:flex items-center gap-6 mr-20">
                                 <div className="w-32 text-[10px] font-black uppercase tracking-[0.2em] text-primary/60 text-center">Giao diện</div>
                                 <div className="min-w-[200px] max-w-[300px] text-[10px] font-black uppercase tracking-[0.2em] text-primary/60 text-center">Bộ lọc thuộc tính</div>
@@ -674,6 +731,8 @@ const CategoryList = () => {
                                                 onDelete={handleDelete}
                                                 isSelected={selectedId === node.id}
                                                 onSelect={(id) => setSelectedId(id)}
+                                                isChecked={selectedIds.has(node.id)}
+                                                onCheck={handleCheck}
                                                 allAttributes={allAttributes}
                                             />
                                         )}
@@ -694,6 +753,41 @@ const CategoryList = () => {
                                     />
                             )}
                         </div>
+
+                        {/* Bulk Action Bar */}
+                        {selectedIds.size > 0 && (
+                            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-primary dark:bg-slate-900 text-white px-6 py-4 rounded-full shadow-[0_10px_40px_rgba(0,0,0,0.3)] flex items-center gap-6 animate-in slide-in-from-bottom duration-300 z-[100] border border-white/10">
+                                <div className="flex items-center gap-3 pr-6 border-r border-white/10">
+                                    <div className="text-xl font-bold text-gold">{selectedIds.size}</div>
+                                    <div className="text-[10px] font-black uppercase tracking-[0.2em] opacity-60">đã chọn</div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-black uppercase tracking-[0.2em] opacity-40 mr-2">Cập nhật giao diện:</span>
+                                    <button 
+                                        disabled={isBulkUpdating}
+                                        onClick={() => handleBulkUpdateLayout('layout_1')}
+                                        className="flex items-center gap-2 bg-white/10 hover:bg-white/20 px-4 py-2 rounded-full transition-all text-[11px] font-bold uppercase tracking-wider disabled:opacity-50"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">view_compact</span>
+                                        Giao diện 1
+                                    </button>
+                                    <button 
+                                        disabled={isBulkUpdating}
+                                        onClick={() => handleBulkUpdateLayout('layout_2')}
+                                        className="flex items-center gap-2 bg-gold text-primary hover:bg-white px-4 py-2 rounded-full transition-all text-[11px] font-bold uppercase tracking-wider disabled:opacity-50"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">view_quilt</span>
+                                        Giao diện 2
+                                    </button>
+                                </div>
+                                <button 
+                                    onClick={() => setSelectedIds(new Set())}
+                                    className="ml-4 size-8 flex items-center justify-center rounded-full hover:bg-brick/20 text-white transition-all"
+                                >
+                                    <span className="material-symbols-outlined text-[20px]">close</span>
+                                </button>
+                            </div>
+                        )}
                     </div>
 
                     {/* Right side Form Area */}
@@ -704,15 +798,26 @@ const CategoryList = () => {
                                     <h3 className="font-display font-bold text-lg text-primary uppercase italic">
                                         {formData.id ? 'Cập Nhật' : 'Tạo Mới'}
                                     </h3>
-                                    <button
-                                        onClick={() => setIsFormOpen(false)}
-                                        className="size-8 flex items-center justify-center text-stone/30 hover:text-brick hover:bg-brick/5 rounded-full transition-all"
-                                    >
-                                        <span className="material-symbols-outlined text-[20px]">close</span>
-                                    </button>
+                                    <div className="flex items-center gap-2">
+                                        <button 
+                                            type="submit" 
+                                            form="category-form"
+                                            className="bg-brick text-white font-ui text-[10px] font-bold uppercase tracking-widest px-4 py-2 hover:bg-umber transition-all shadow-md rounded-sm flex items-center gap-2 active:scale-95"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">save</span>
+                                            {formData.id ? 'Lưu lại' : 'Tạo mới'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsFormOpen(false)}
+                                            className="size-8 flex items-center justify-center text-stone/30 hover:text-brick hover:bg-brick/5 rounded-full transition-all"
+                                        >
+                                            <span className="material-symbols-outlined text-[20px]">close</span>
+                                        </button>
+                                    </div>
                                 </div>
                                 <div className="flex-1 overflow-auto custom-scrollbar">
-                                    <form onSubmit={handleFormSubmit} className="space-y-6">
+                                    <form id="category-form" onSubmit={handleFormSubmit} className="space-y-6">
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Tên danh mục</label>
                                             <input required type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body rounded-sm" />
@@ -891,9 +996,6 @@ const CategoryList = () => {
                                             </div>
                                         </div>
 
-                                        <button type="submit" className="w-full bg-primary text-white font-ui text-[11px] font-bold uppercase tracking-widest py-3.5 mt-4 hover:bg-umber transition-all shadow-sm rounded-sm">
-                                            {formData.id ? 'Lưu cập nhật' : 'Khởi tạo ngay'}
-                                        </button>
                                     </form>
                                 </div>
                             </div>

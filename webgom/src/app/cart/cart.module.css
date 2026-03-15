@@ -1,0 +1,487 @@
+/* CSS variables already defined in globals.css, but we use local ones for scoping or overrides if needed */
+/* Following strictly C:\xampp\htdocs\webnam\design\thiet_ke_moi\gio_hang_va_thanh_toan\style.css */
+
+.cartPage {
+    background-color: #FDFBF7;
+    color: #1A1A1A;
+    font-family: 'EB Garamond', serif;
+    font-size: 18px;
+    line-height: 1.6;
+    overflow-x: hidden;
+    background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M11 18c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm48 25c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm-43-7c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm63 31c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM34 90c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm56-76c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM12 86c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zm66-3c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zm-40-39c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zm0-24c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2z' fill='%23c5a065' fill-opacity='0.03' fill-rule='evenodd'/%3E%3C/svg%3E");
+    padding: 4rem 0;
+    min-height: 100vh;
+}
+
+.pageHeader {
+    margin-bottom: 3rem;
+    text-align: center;
+}
+
+.pageTitle {
+    font-family: 'Playfair Display', serif;
+    font-weight: 700;
+    color: #1B365D;
+    font-size: 3rem;
+    margin-bottom: 0.5rem;
+}
+
+.pageSubtitle {
+    font-style: italic;
+    color: #666666;
+}
+
+.checkoutGrid {
+    display: grid;
+    grid-template-columns: 1.6fr 1fr;
+    gap: 4rem;
+    align-items: start;
+}
+
+@media (max-width: 1024px) {
+    .checkoutGrid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.sectionCard {
+    background: #FFFFFF;
+    border: 1px solid #E5E1D8;
+    border-radius: 8px;
+    padding: 2.5rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 10px 30px -5px rgba(27, 54, 93, 0.1);
+    animation: fadeInUp 0.6s ease forwards;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.sectionHead {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.sectionNumber {
+    width: 32px;
+    height: 32px;
+    background: #1B365D;
+    color: #FFFFFF;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Playfair Display', serif;
+    font-weight: 700;
+}
+
+.sectionTitle {
+    font-family: 'Playfair Display', serif;
+    font-weight: 700;
+    color: #1B365D;
+    font-size: 1.75rem;
+}
+
+.cartList {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.cartItem {
+    padding: 1.5rem;
+    border: 1px solid #E5E1D8;
+    border-radius: 6px;
+    transition: border-color 0.3s ease;
+    animation: fadeInUp 0.6s ease forwards;
+    animation-delay: 0.2s;
+}
+
+.cartItem:hover {
+    border-color: #C5A065;
+}
+
+.itemMain {
+    display: flex;
+    gap: 1.5rem;
+}
+
+.itemImage {
+    width: 120px;
+    height: 120px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #F5F1EA;
+    border: 1px solid #E5E1D8;
+    position: relative;
+    flex-shrink: 0;
+}
+
+.itemImage img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.itemDetails {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.itemHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.itemName {
+    font-family: 'Playfair Display', serif;
+    font-weight: 700;
+    color: #1B365D;
+    font-size: 1.25rem;
+    margin-bottom: 0.25rem;
+}
+
+.itemMeta {
+    font-size: 0.9rem;
+    font-style: italic;
+    color: #666666;
+    margin-bottom: 1rem;
+}
+
+.itemActions {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-top: auto;
+}
+
+.quantityCtrl {
+    display: flex;
+    align-items: center;
+    border: 1px solid #E5E1D8;
+    border-radius: 4px;
+}
+
+.quantityCtrl button {
+    padding: 0.25rem 0.75rem;
+    color: #1B365D;
+    font-weight: 700;
+    cursor: pointer;
+    background: none;
+    border: none;
+}
+
+.quantityCtrl input {
+    width: 40px;
+    text-align: center;
+    border: none;
+    border-left: 1px solid #E5E1D8;
+    border-right: 1px solid #E5E1D8;
+    font-weight: 700;
+    padding: 0.25rem 0;
+    background: transparent;
+}
+
+.itemPrice {
+    font-family: 'EB Garamond', serif;
+    font-weight: 800;
+    color: #1B365D;
+    font-size: 1.3rem;
+}
+
+.itemGroup {
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px dashed #E5E1D8;
+}
+
+.groupLabel {
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #C5A065;
+    margin-bottom: 1rem;
+    display: block;
+}
+
+.groupChildren {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.childItem {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem;
+    background: #F5F1EA;
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+
+.childIcon {
+    width: 40px;
+    height: 40px;
+    background: #FFFFFF;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #C5A065;
+}
+
+.childName {
+    flex: 1;
+    font-weight: 600;
+}
+
+.childRemove {
+    color: #cc0000;
+    font-size: 0.8rem;
+    opacity: 0.6;
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+
+.childRemove:hover {
+    opacity: 1;
+}
+
+.formGrid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+}
+
+@media (max-width: 640px) {
+    .formGrid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.fullWidth {
+    grid-column: span 2;
+}
+
+@media (max-width: 640px) {
+    .fullWidth {
+        grid-column: span 1;
+    }
+}
+
+.inputGroup {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.inputGroup label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #1B365D;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.inputField {
+    width: 100%;
+    padding: 0.85rem 1rem;
+    border: 1px solid #E5E1D8;
+    border-radius: 4px;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.95rem;
+    background: #FDFBF7;
+    transition: all 0.3s ease;
+}
+
+.inputField:focus {
+    outline: none;
+    border-color: #C5A065;
+    background: #FFFFFF;
+    box-shadow: 0 0 0 3px rgba(197, 160, 101, 0.1);
+}
+
+.paymentOptions {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.paymentOption {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 1.5rem;
+    border: 1.5px solid #E5E1D8;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.paymentOption:hover {
+    border-color: #C5A065;
+    background: rgba(197, 160, 101, 0.05);
+}
+
+.activeOption {
+    border-color: #1B365D;
+    background: rgba(27, 54, 93, 0.02);
+}
+
+.paymentOption input {
+    width: 20px;
+    height: 20px;
+    accent-color: #1B365D;
+}
+
+.optionText {
+    flex: 1;
+}
+
+.optionTitle {
+    display: block;
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: #1B365D;
+}
+
+.optionDesc {
+    display: block;
+    font-size: 0.85rem;
+    color: #666666;
+    font-style: italic;
+}
+
+.summaryCard {
+    position: sticky;
+    top: 120px;
+    background: #1B365D;
+    color: #FFFFFF;
+    padding: 3rem;
+    border-radius: 8px;
+    box-shadow: 0 20px 40px -10px rgba(27, 54, 93, 0.5);
+}
+
+.summaryCard h3 {
+    font-family: 'Playfair Display', serif;
+    font-weight: 700;
+    color: #C5A065;
+    text-align: center;
+    border-bottom: 1px solid rgba(197, 160, 101, 0.3);
+    padding-bottom: 1.5rem;
+    margin-bottom: 2rem;
+    letter-spacing: 0.2rem;
+    text-transform: uppercase;
+}
+
+.summaryRow {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.95rem;
+}
+
+.totalRow {
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    font-family: 'Playfair Display', serif;
+    font-size: 1.5rem;
+}
+
+.totalPrice {
+    font-size: 2.25rem;
+    color: #C5A065;
+}
+
+.ctaButton {
+    width: 100%;
+    background: #C5A065;
+    color: #FFFFFF;
+    padding: 1.25rem;
+    border-radius: 4px;
+    font-family: 'Playfair Display', serif;
+    font-weight: 700;
+    font-size: 1.25rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15rem;
+    margin-top: 2.5rem;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(197, 160, 101, 0.3);
+    border: none;
+    cursor: pointer;
+}
+
+.ctaButton:hover {
+    background: #A68249;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(197, 160, 101, 0.4);
+}
+
+.trustBadges {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+    margin-top: 3rem;
+    opacity: 0.8;
+}
+
+.badgeItem {
+    text-align: center;
+    font-size: 0.75rem;
+}
+
+.badgeIcon {
+    font-size: 1.5rem;
+    color: #C5A065;
+    margin-bottom: 0.5rem;
+    display: block;
+}
+
+.iconBtn {
+    padding: 0.5rem;
+    border-radius: 50%;
+    transition: background 0.3s ease;
+    cursor: pointer;
+    background: none;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.iconBtn:hover {
+    background: rgba(197, 160, 101, 0.1);
+}
+
+.textAccent { color: #C5A065; }
+.textPrimary { color: #1B365D; }
+.mt4 { margin-top: 1rem; }
+
+.emptyState {
+    text-align: center;
+    padding: 10rem 2rem;
+}
+
+.emptyIcon {
+    font-size: 10rem;
+    color: #C5A065;
+    opacity: 0.3;
+    margin-bottom: 2rem;
+}

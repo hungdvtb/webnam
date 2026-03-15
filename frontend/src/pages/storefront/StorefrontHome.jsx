@@ -89,7 +89,7 @@ const BannerSlider = ({ banners }) => {
         <div className="relative h-[50vh] md:h-[65vh] overflow-hidden bg-stone-100">
             {banners.map((b, i) => (
                 <div key={b.id || i} className={`absolute inset-0 transition-opacity duration-700 ${i === current ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-                    <img src={b.image_url} alt={b.title} className="w-full h-full object-cover" loading={i === 0 ? 'eager' : 'lazy'} />
+                    <img src={b.image_url || 'https://placehold.co/1200x600'} alt={b.title} className="w-full h-full object-cover" loading={i === 0 ? 'eager' : 'lazy'} />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
                 </div>
             ))}

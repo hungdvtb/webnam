@@ -239,23 +239,72 @@ class ProductController extends Controller
 
     public function show(Request $request, $slug)
     {
-        $accountId = $this->getAccountId($request);
+        try {
+            $accountId = $this->getAccountId($request);
+            \Illuminate\Support\Facades\Log::info("Fetching product detail for slug: '{$slug}' (Account: " . ($accountId ?? 'ALL') . ")");
 
-        $product = Product::query()
-            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
-            ->where('status', true)
-            ->where('slug', $slug)
-            ->with([
-                'images', 
-                'category', 
-                'attributeValues.attribute',
-                'superAttributes.options',
-                'variations.images',
-                'variations.attributeValues'
-            ])
-            ->firstOrFail();
+            $product = Product::query()
+                ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+                ->where('status', true)
+                ->where('slug', $slug)
+                ->with([
+                    'images', 
+                    'category', 
+                    'attributeValues.attribute',
+                    'superAttributes' => function($q) {
+                        // Use a safe way to order by pivot
+                        $q->withPivot('position')->orderBy('product_super_attributes.position', 'asc');
+                    },
+                    'superAttributes.options',
+                    'variations' => function($q) {
+                        $q->where('status', true); // Only active variants
+                    },
+                    'variations.images',
+                    'variations.attributeValues.attribute'
+                ])
+                ->firstOrFail();
 
-        return response()->json($product);
+            if ($product->type === 'configurable') {
+                // Filter options to only show what actually exists in variations
+                $usedValuesByAttr = [];
+                foreach ($product->variations as $v) {
+                    foreach ($v->attributeValues as $av) {
+                        $usedValuesByAttr[$av->attribute_id][] = $av->value;
+                    }
+                }
+
+                foreach ($product->superAttributes as $attribute) {
+                    $relevantValues = array_unique($usedValuesByAttr[$attribute->id] ?? []);
+                    $filteredOptions = $attribute->options->filter(function($opt) use ($relevantValues) {
+                        return in_array($opt->value, $relevantValues);
+                    })->values();
+                    $attribute->setRelation('options', $filteredOptions);
+                }
+            }
+
+            // Also include all available product attributes
+            $allProductAttributes = Attribute::where('entity_type', 'product')
+                ->where('status', true)
+                ->orderBy('id', 'asc') 
+                ->get(['id', 'name', 'code', 'frontend_type']);
+            
+            $responseData = $product->toArray();
+            $responseData['all_attributes'] = $allProductAttributes;
+
+            return response()->json($responseData);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error("Error in ProductController@show for slug '{$slug}': " . $e->getMessage());
+            \Illuminate\Support\Facades\Log::error($e->getTraceAsString());
+            
+            if ($e instanceof \Illuminate\Database\Eloquent\ModelNotFoundException) {
+                return response()->json(['message' => 'Product not found'], 404);
+            }
+            
+            return response()->json([
+                'message' => 'Internal server error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     public function related(Request $request, $slug)

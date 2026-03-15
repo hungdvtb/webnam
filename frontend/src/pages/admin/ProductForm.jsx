@@ -226,9 +226,10 @@ const ProductForm = () => {
         cost_price: '',
         weight: '',
         description: '',
-        specifications: '',
+        specifications: [], // [{label, value}]
         is_featured: false,
         is_new: true,
+        status: true,
         stock_quantity: 10,
         sku: '',
         meta_title: '',
@@ -489,9 +490,27 @@ const ProductForm = () => {
                 cost_price: data.cost_price ? Math.floor(data.cost_price) : '',
                 weight: data.weight || '',
                 description: data.description || '',
-                specifications: data.specifications || '',
+                specifications: (() => {
+                    if (!data.specifications) return [];
+                    try {
+                        const parsed = JSON.parse(data.specifications);
+                        return Array.isArray(parsed) ? parsed : [];
+                    } catch (e) {
+                         // Fallback for legacy text data
+                        return data.specifications.split('\n')
+                            .filter(l => l.trim())
+                            .map(l => {
+                                const parts = l.split(':');
+                                return { 
+                                    label: parts[0]?.trim() || 'Thông số', 
+                                    value: parts.slice(1).join(':').trim() || l 
+                                };
+                            });
+                    }
+                })(),
                 is_featured: !!data.is_featured,
                 is_new: !!data.is_new,
+                status: data.hasOwnProperty('status') ? !!data.status : true,
                 stock_quantity: data.stock_quantity || 0,
                 sku: data.sku || '',
                 meta_title: data.meta_title || '',
@@ -707,6 +726,27 @@ const ProductForm = () => {
             custom_attributes: { ...prev.custom_attributes, [attrId]: value }
         }));
     };
+    const addSpecRow = () => {
+        setFormData(prev => ({
+            ...prev,
+            specifications: [...prev.specifications, { label: '', value: '' }]
+        }));
+    };
+
+    const removeSpecRow = (index) => {
+        setFormData(prev => ({
+            ...prev,
+            specifications: prev.specifications.filter((_, i) => i !== index)
+        }));
+    };
+
+    const updateSpecRow = (index, field, value) => {
+        setFormData(prev => {
+            const newSpecs = [...prev.specifications];
+            newSpecs[index] = { ...newSpecs[index], [field]: value };
+            return { ...prev, specifications: newSpecs };
+        });
+    };
 
     const handleAIGenerate = async () => {
         if (!formData.name) {
@@ -884,9 +924,17 @@ const ProductForm = () => {
 
         const newVariants = combinations.map((combo, index) => {
             const attrLabel = selectedSuperAttributes.map(attr => combo[attr.id]).join(' / ');
+            
+            // Create a descriptive SKU based on parent SKU + attribute name/value pairs
+            const skuSuffix = selectedSuperAttributes.map(attr => {
+                const namePart = removeAccents(attr.name).replace(/\s+/g, '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+                const valPart = removeAccents(combo[attr.id]).replace(/\s+/g, '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+                return `${namePart}-${valPart}`;
+            }).join('-');
+
             return {
                 id: `new_${Date.now()}_${index}`,
-                sku: `${formData.sku}-${index + 1}`,
+                sku: `${formData.sku}-${skuSuffix}`,
                 price: formData.price,
                 cost_price: formData.cost_price,
                 weight: formData.weight,
@@ -1006,6 +1054,8 @@ const ProductForm = () => {
                     val.forEach(v => submitData.append(`${key}[]`, v));
                 } else if (typeof val === 'boolean') {
                     submitData.append(key, val ? '1' : '0');
+                } else if (key === 'specifications') {
+                    submitData.append(key, JSON.stringify(val));
                 } else if (val !== '' && val !== null && val !== undefined) {
                     submitData.append(key, val);
                 }
@@ -1178,102 +1228,77 @@ const ProductForm = () => {
                             <SectionTitle icon="shopping_bag" title="Thông tin cơ bản" />
 
                             <div className="grid grid-cols-1 gap-y-8">
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <Field label="Tên sản phẩm">
-                                        <input
-                                            name="name"
-                                            value={formData.name}
-                                            onChange={handleChange}
-                                            required
-                                            className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[16px] placeholder:text-stone/20"
-                                            placeholder="Nhập tên nghệ thuật của tác phẩm..."
-                                        />
-                                    </Field>
+                                <div className="grid grid-cols-1 lg:grid-cols-6 gap-4">
+                                    <div className="lg:col-span-2">
+                                        <Field label={<>Tên sản phẩm <span className="text-brick text-[14px] ml-1">*</span></>}>
+                                            <input
+                                                name="name"
+                                                value={formData.name}
+                                                onChange={handleChange}
+                                                required
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[16px] placeholder:text-stone/20"
+                                                placeholder="Nhập tên nghệ thuật của tác phẩm..."
+                                            />
+                                        </Field>
+                                    </div>
 
-                                    <Field label="Loại sản phẩm">
-                                        <select
-                                            name="type"
-                                            value={formData.type}
-                                            onChange={handleChange}
-                                            className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
-                                        >
-                                            {Object.entries(TYPE_INFO).map(([key, info]) => (
-                                                <option key={key} value={key}>{info.label}</option>
-                                            ))}
-                                        </select>
-                                    </Field>
-                                </div>
+                                    <div className="lg:col-span-2">
+                                        <Field label={<>Mã sản phẩm (SKU) <span className="text-brick text-[14px] ml-1">*</span></>} className="group/sku border-gold/20">
+                                            <input
+                                                name="sku"
+                                                value={formData.sku}
+                                                onChange={handleChange}
+                                                required
+                                                placeholder="GỐM-VH-001"
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-gold font-bold tracking-widest text-[14px]"
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={handleAutoGenerateSKU}
+                                                title="Tự động tạo mã thông minh"
+                                                className="size-7 flex items-center justify-center bg-stone/5 rounded-full text-stone/40 hover:bg-primary hover:text-white transition-all transform hover:scale-110 shrink-0"
+                                            >
+                                                <span className="material-symbols-outlined text-[16px]">magic_button</span>
+                                            </button>
+                                        </Field>
+                                    </div>
 
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <Field label="Mã sản phẩm (SKU)" className="group/sku">
-                                        <input
-                                            name="sku"
-                                            value={formData.sku}
-                                            onChange={handleChange}
-                                            placeholder="GỐM-VH-001"
-                                            className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-gold font-bold tracking-widest text-[14px]"
-                                        />
-                                        <button
-                                            type="button"
-                                            onClick={handleAutoGenerateSKU}
-                                            title="Tự động tạo mã thông minh"
-                                            className="size-7 flex items-center justify-center bg-stone/5 rounded-full text-stone/40 hover:bg-primary hover:text-white transition-all transform hover:scale-110 shrink-0"
-                                        >
-                                            <span className="material-symbols-outlined text-[16px]">magic_button</span>
-                                        </button>
-                                    </Field>
-                                    <div className="flex flex-col gap-2">
-                                        <label className="text-[11px] font-black uppercase tracking-widest text-stone/50 ml-2">Danh mục chính & Phụ (Chọn nhiều)</label>
-                                        <div className="border border-stone/30 rounded-sm p-3 bg-white max-h-[160px] overflow-y-auto custom-scrollbar">
-                                            <div className="grid grid-cols-1 gap-2">
-                                                {categories.map(cat => {
-                                                    const isSelected = formData.category_ids.includes(cat.id);
-                                                    const isPrimary = formData.category_id == cat.id;
-                                                    return (
-                                                        <div key={cat.id} className="flex items-center justify-between group/cat">
-                                                            <label className="flex items-center gap-2 cursor-pointer text-[13px] font-bold text-primary flex-1">
-                                                                <input
-                                                                    type="checkbox"
-                                                                    checked={isSelected}
-                                                                    onChange={(e) => {
-                                                                        const checked = e.target.checked;
-                                                                        setFormData(prev => {
-                                                                            let newIds = checked
-                                                                                ? [...prev.category_ids, cat.id]
-                                                                                : prev.category_ids.filter(id => id !== cat.id);
+                                    <div className="lg:col-span-1">
+                                        <Field label={<>Loại sản phẩm <span className="text-brick text-[14px] ml-1">*</span></>}>
+                                            <select
+                                                name="type"
+                                                value={formData.type}
+                                                onChange={handleChange}
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
+                                            >
+                                                {Object.entries(TYPE_INFO).map(([key, info]) => (
+                                                    <option key={key} value={key}>{info.label}</option>
+                                                ))}
+                                            </select>
+                                        </Field>
+                                    </div>
 
-                                                                            // If unchecking the primary, pick the next available as primary
-                                                                            let newPrimary = prev.category_id;
-                                                                            if (!checked && isPrimary) {
-                                                                                newPrimary = newIds.length > 0 ? newIds[0] : '';
-                                                                            } else if (checked && !newPrimary) {
-                                                                                newPrimary = cat.id;
-                                                                            }
-
-                                                                            return { ...prev, category_ids: newIds, category_id: newPrimary };
-                                                                        });
-                                                                    }}
-                                                                    className="size-4 accent-primary rounded-sm transition-all"
-                                                                />
-                                                                <span className={isSelected ? 'text-primary' : 'text-stone/40'}>{cat.name}</span>
-                                                            </label>
-                                                            {isSelected && (
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => setFormData({ ...formData, category_id: cat.id })}
-                                                                    className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-[0.1em] transition-all ${isPrimary ? 'bg-gold text-white shadow-sm' : 'bg-stone/5 text-stone/40 hover:bg-gold/10 hover:text-gold'}`}
-                                                                >
-                                                                    {isPrimary ? 'Danh mục chính' : 'Đặt làm chính'}
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                        {formData.category_ids.length === 0 && (
-                                            <p className="text-[10px] text-brick font-bold ml-2 italic">* Vui lòng chọn ít nhất một danh mục</p>
-                                        )}
+                                    <div className="lg:col-span-1">
+                                        <Field label="Danh mục">
+                                            <select
+                                                name="category_id"
+                                                value={formData.category_id}
+                                                onChange={(e) => {
+                                                    const val = e.target.value;
+                                                    setFormData(prev => ({
+                                                        ...prev,
+                                                        category_id: val,
+                                                        category_ids: val ? [parseInt(val)] : []
+                                                    }));
+                                                }}
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
+                                            >
+                                                <option value="">Chọn danh mục</option>
+                                                {categories.map(cat => (
+                                                    <option key={cat.id} value={cat.id}>{cat.name}</option>
+                                                ))}
+                                            </select>
+                                        </Field>
                                     </div>
                                 </div>
                             </div>
@@ -1289,7 +1314,7 @@ const ProductForm = () => {
                                             <input
                                                 type="text"
                                                 name="price"
-                                                value={formData.price_type === 'sum' 
+                                                value={formData.price_type === 'sum'
                                                     ? formatNumberOutput(formData.grouped_items.reduce((acc, item) => acc + (item.price * item.quantity), 0))
                                                     : formatNumberOutput(formData.price)}
                                                 onChange={(e) => handlePriceInputChange(e, 'price')}
@@ -1339,15 +1364,52 @@ const ProductForm = () => {
                                     </Field>
                                 </div>
 
-                                <Field label="Thông số chi tiết" className="min-h-[80px] items-start pt-3">
-                                    <textarea
-                                        name="specifications"
-                                        value={formData.specifications}
-                                        onChange={handleChange}
-                                        className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px] resize-none h-[80px]"
-                                        placeholder="Nhập kích thước, chất liệu, xuất xứ..."
-                                    />
-                                </Field>
+                                <div className="space-y-3">
+                                    <div className="flex justify-between items-center bg-stone/5 p-2 rounded-sm border border-stone/10">
+                                        <span className="text-[12px] font-bold text-primary uppercase">Bảng thông số kĩ thuật (JSON)</span>
+                                        <button 
+                                            type="button" 
+                                            onClick={addSpecRow}
+                                            className="size-8 bg-primary text-white flex items-center justify-center rounded-sm hover:bg-gold transition-colors shadow-sm"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px]">add</span>
+                                        </button>
+                                    </div>
+                                    <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
+                                        {formData.specifications.map((spec, idx) => (
+                                            <div key={idx} className="flex gap-2 items-center group animate-fade-in-up" style={{ animationDelay: `${idx * 0.05}s` }}>
+                                                <div className="flex-1 grid grid-cols-2 gap-2 border border-stone/15 rounded-sm p-1.5 bg-white shadow-sm transition-all hover:border-primary/30">
+                                                    <input 
+                                                        placeholder="Nhãn (VD: Kích thước)" 
+                                                        className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-[13px] font-bold text-primary border-r border-stone/10 placeholder:font-normal placeholder:opacity-30 pr-2"
+                                                        value={spec.label}
+                                                        onChange={(e) => updateSpecRow(idx, 'label', e.target.value)}
+                                                    />
+                                                    <input 
+                                                        placeholder="Giá trị (VD: 20x30cm)" 
+                                                        className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-[13px] text-stone placeholder:opacity-40"
+                                                        value={spec.value}
+                                                        onChange={(e) => updateSpecRow(idx, 'value', e.target.value)}
+                                                    />
+                                                </div>
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => removeSpecRow(idx)}
+                                                    className="size-8 bg-brick/5 text-brick rounded-sm flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-brick hover:text-white transition-all shadow-sm shrink-0"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">close</span>
+                                                </button>
+                                            </div>
+                                        ))}
+                                        {formData.specifications.length === 0 && (
+                                            <div className="py-8 border-2 border-dashed border-stone/10 rounded-sm flex flex-col items-center justify-center text-stone/30">
+                                                <span className="material-symbols-outlined text-[32px] mb-1">table_rows</span>
+                                                <p className="text-[11px] font-bold uppercase tracking-widest">Chưa có thông số nào</p>
+                                                <button type="button" onClick={addSpecRow} className="mt-2 text-[10px] text-primary hover:text-gold font-black uppercase">Thêm ngay</button>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -1704,88 +1766,88 @@ const ProductForm = () => {
                         {formData.type === 'grouped' && (
                             <div className="bg-white border border-gold/20 p-5 shadow-premium-sm rounded-sm animate-fade-in mb-8">
                                 <SectionTitle icon="group_work" title="Thiết lập nhóm sản phẩm thành phần" />
-                                
+
                                 <div className="mb-6">
                                     <p className="text-[12px] text-stone/60 mb-4 italic">Tìm kiếm và chọn các sản phẩm đơn hoặc biến thể cụ thể để thêm vào bộ sưu tập này.</p>
-                                    
-                                    <div className="relative">
-                                    <div className="flex gap-2 mb-4">
-                                        <div className="relative flex-1" ref={searchContainerRef}>
-                                            <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-stone/40 text-[20px] z-10">search</span>
-                                            <input
-                                                type="text"
-                                                autoComplete="off"
-                                                placeholder="Tìm theo tên hoặc SKU..."
-                                                value={relatedQuery}
-                                                onChange={(e) => setRelatedQuery(e.target.value)}
-                                                onFocus={() => setShowSearchHistory(true)}
-                                                onKeyDown={(e) => {
-                                                    if (e.key === 'Enter') {
-                                                        setShowSearchHistory(false);
-                                                        addToSearchHistory(relatedQuery);
-                                                    }
-                                                }}
-                                                className="w-full pl-10 pr-10 py-2.5 bg-primary/5 border border-primary/10 rounded-sm focus:outline-none focus:border-gold/30 text-[14px] transition-all relative z-0 font-bold"
-                                            />
-                                            {relatedQuery && (
-                                                <button 
-                                                    onClick={() => { setRelatedQuery(''); setShowSearchHistory(false); }} 
-                                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors z-10"
-                                                >
-                                                    <span className="material-symbols-outlined text-[18px]">cancel</span>
-                                                </button>
-                                            )}
 
-                                            {showSearchHistory && searchHistory.length > 0 && (
-                                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[70] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
-                                                    <div className="flex justify-between items-center px-3 mb-2 border-b border-primary/10 pb-1">
-                                                        <span className="text-[10px] font-bold text-primary/40 uppercase tracking-widest">Tìm kiếm gần đây</span>
-                                                        <button 
-                                                            onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('product_search_history'); }} 
-                                                            className="text-[10px] text-brick hover:underline font-bold"
-                                                        >Xóa tất cả</button>
-                                                    </div>
-                                                    <div className="max-h-56 overflow-y-auto custom-scrollbar">
-                                                        {searchHistory.map((item, idx) => (
-                                                            <div
-                                                                key={idx}
-                                                                className="group flex items-center justify-between px-3 py-2 hover:bg-primary/5 cursor-pointer transition-colors"
-                                                                onClick={() => {
-                                                                    setRelatedQuery(item);
-                                                                    setShowSearchHistory(false);
-                                                                    addToSearchHistory(item);
-                                                                }}
-                                                            >
-                                                                <div className="flex items-center gap-2 overflow-hidden">
-                                                                    <span className="material-symbols-outlined text-[18px] text-primary/30">history</span>
-                                                                    <span className="text-[13px] text-primary truncate font-bold">{item}</span>
-                                                                </div>
-                                                                <button
-                                                                    onClick={(e) => {
-                                                                        e.stopPropagation();
-                                                                        const updated = searchHistory.filter(h => h !== item);
-                                                                        setSearchHistory(updated);
-                                                                        localStorage.setItem('product_search_history', JSON.stringify(updated));
+                                    <div className="relative">
+                                        <div className="flex gap-2 mb-4">
+                                            <div className="relative flex-1" ref={searchContainerRef}>
+                                                <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-stone/40 text-[20px] z-10">search</span>
+                                                <input
+                                                    type="text"
+                                                    autoComplete="off"
+                                                    placeholder="Tìm theo tên hoặc SKU..."
+                                                    value={relatedQuery}
+                                                    onChange={(e) => setRelatedQuery(e.target.value)}
+                                                    onFocus={() => setShowSearchHistory(true)}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') {
+                                                            setShowSearchHistory(false);
+                                                            addToSearchHistory(relatedQuery);
+                                                        }
+                                                    }}
+                                                    className="w-full pl-10 pr-10 py-2.5 bg-primary/5 border border-primary/10 rounded-sm focus:outline-none focus:border-gold/30 text-[14px] transition-all relative z-0 font-bold"
+                                                />
+                                                {relatedQuery && (
+                                                    <button
+                                                        onClick={() => { setRelatedQuery(''); setShowSearchHistory(false); }}
+                                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors z-10"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[18px]">cancel</span>
+                                                    </button>
+                                                )}
+
+                                                {showSearchHistory && searchHistory.length > 0 && (
+                                                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[70] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                                        <div className="flex justify-between items-center px-3 mb-2 border-b border-primary/10 pb-1">
+                                                            <span className="text-[10px] font-bold text-primary/40 uppercase tracking-widest">Tìm kiếm gần đây</span>
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('product_search_history'); }}
+                                                                className="text-[10px] text-brick hover:underline font-bold"
+                                                            >Xóa tất cả</button>
+                                                        </div>
+                                                        <div className="max-h-56 overflow-y-auto custom-scrollbar">
+                                                            {searchHistory.map((item, idx) => (
+                                                                <div
+                                                                    key={idx}
+                                                                    className="group flex items-center justify-between px-3 py-2 hover:bg-primary/5 cursor-pointer transition-colors"
+                                                                    onClick={() => {
+                                                                        setRelatedQuery(item);
+                                                                        setShowSearchHistory(false);
+                                                                        addToSearchHistory(item);
                                                                     }}
-                                                                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-brick transition-all rounded-full hover:bg-primary/5 text-stone/40"
                                                                 >
-                                                                    <span className="material-symbols-outlined text-[16px]">close</span>
-                                                                </button>
-                                                            </div>
-                                                        ))}
+                                                                    <div className="flex items-center gap-2 overflow-hidden">
+                                                                        <span className="material-symbols-outlined text-[18px] text-primary/30">history</span>
+                                                                        <span className="text-[13px] text-primary truncate font-bold">{item}</span>
+                                                                    </div>
+                                                                    <button
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            const updated = searchHistory.filter(h => h !== item);
+                                                                            setSearchHistory(updated);
+                                                                            localStorage.setItem('product_search_history', JSON.stringify(updated));
+                                                                        }}
+                                                                        className="opacity-0 group-hover:opacity-100 p-1 hover:text-brick transition-all rounded-full hover:bg-primary/5 text-stone/40"
+                                                                    >
+                                                                        <span className="material-symbols-outlined text-[16px]">close</span>
+                                                                    </button>
+                                                                </div>
+                                                            ))}
+                                                        </div>
                                                     </div>
-                                                </div>
-                                            )}
+                                                )}
+                                            </div>
+                                            <select
+                                                value={relatedCategory}
+                                                onChange={(e) => setRelatedCategory(e.target.value)}
+                                                className="px-4 py-2.5 bg-primary/5 border border-primary/10 rounded-sm focus:outline-none focus:border-gold/30 text-[14px] font-bold text-primary"
+                                            >
+                                                <option value="all">Tất cả danh mục</option>
+                                                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                            </select>
                                         </div>
-                                        <select
-                                            value={relatedCategory}
-                                            onChange={(e) => setRelatedCategory(e.target.value)}
-                                            className="px-4 py-2.5 bg-primary/5 border border-primary/10 rounded-sm focus:outline-none focus:border-gold/30 text-[14px] font-bold text-primary"
-                                        >
-                                            <option value="all">Tất cả danh mục</option>
-                                            {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                        </select>
-                                    </div>
 
                                         {relatedQuery.length > 1 && (
                                             <div className="absolute top-[calc(100%-8px)] left-0 right-0 max-h-[300px] overflow-y-auto bg-white border border-gold/10 shadow-xl rounded-sm z-[60] custom-scrollbar">
@@ -1793,8 +1855,8 @@ const ProductForm = () => {
                                                     <div className="p-4 text-center text-stone/40 italic">Không tìm thấy sản phẩm nào</div>
                                                 ) : (
                                                     filteredSuggestedProducts.map(p => (
-                                                        <div 
-                                                            key={p.id} 
+                                                        <div
+                                                            key={p.id}
                                                             onClick={() => {
                                                                 handleAddGroupItem(p);
                                                                 setRelatedQuery('');
@@ -1803,9 +1865,9 @@ const ProductForm = () => {
                                                             className="flex items-center gap-3 p-3 hover:bg-gold/5 cursor-pointer border-b border-stone/5 transition-colors"
                                                         >
                                                             <div className="size-10 rounded border border-stone/10 bg-stone/5 overflow-hidden shrink-0">
-                                                                <img 
-                                                                    src={(p.images?.find(img => img.is_primary) || p.images?.[0])?.image_url} 
-                                                                    alt="" 
+                                                                <img
+                                                                    src={(p.images?.find(img => img.is_primary) || p.images?.[0])?.image_url}
+                                                                    alt=""
                                                                     className="w-full h-full object-cover"
                                                                 />
                                                             </div>
@@ -1854,18 +1916,18 @@ const ProductForm = () => {
                                                 </div>
                                                 <div className="col-span-2 flex justify-center">
                                                     <div className="flex items-center gap-1 bg-white border border-stone/10 rounded-full px-2 py-0.5">
-                                                        <button 
+                                                        <button
                                                             type="button"
                                                             onClick={() => handleGroupItemChange(item.id, 'quantity', Math.max(1, item.quantity - 1))}
                                                             className="material-symbols-outlined text-[16px] text-stone/40 hover:text-brick"
                                                         >remove</button>
-                                                        <input 
+                                                        <input
                                                             type="number"
                                                             value={item.quantity}
                                                             onChange={(e) => handleGroupItemChange(item.id, 'quantity', parseInt(e.target.value) || 1)}
                                                             className="w-8 text-center bg-transparent border-none p-0 text-[12px] font-black text-primary focus:ring-0"
                                                         />
-                                                        <button 
+                                                        <button
                                                             type="button"
                                                             onClick={() => handleGroupItemChange(item.id, 'quantity', item.quantity + 1)}
                                                             className="material-symbols-outlined text-[16px] text-stone/40 hover:text-primary"
@@ -1885,7 +1947,7 @@ const ProductForm = () => {
                                                     <p className="text-[12px] font-black text-primary/60">{formatNumberOutput(item.price)}₫</p>
                                                 </div>
                                                 <div className="col-span-1 flex justify-end">
-                                                    <button 
+                                                    <button
                                                         type="button"
                                                         onClick={() => handleRemoveGroupItem(item.id)}
                                                         className="size-8 rounded-full flex items-center justify-center text-stone/20 hover:text-brick hover:bg-brick/5 opacity-0 group-hover/item:opacity-100 transition-all"
@@ -1998,23 +2060,40 @@ const ProductForm = () => {
                     </div>
 
                     <div className="lg:col-span-4 space-y-4">
-                        {/* Status & Options */}
-                        <div className="bg-white border border-gold/10 p-5 shadow-premium-sm rounded-sm">
-                            <SectionTitle icon="toggle_on" title="Trạng thái hiển thị" />
-                            <div className="space-y-4">
-                                <label className="flex items-center justify-between p-3 bg-stone/5 border border-stone/10 rounded-sm cursor-pointer hover:bg-stone/10 transition-all">
-                                    <div className="flex items-center gap-3">
-                                        <span className="material-symbols-outlined text-primary">star</span>
-                                        <span className="font-bold text-[13px] text-primary">Tác phẩm nổi bật</span>
+                        {/* Standalone Status Toggle */}
+                        <div className="bg-white border border-gold/10 p-4 shadow-premium-sm rounded-sm flex items-center justify-between group transition-all hover:border-gold/30">
+                            <div className="flex items-center gap-3">
+                                <div className={`size-10 rounded-full flex items-center justify-center transition-all duration-300 ${formData.status ? 'bg-green-50 text-green-600 shadow-[inset_0_2px_4px_rgba(0,0,0,0.05)]' : 'bg-stone/5 text-stone/40'}`}>
+                                    <span className="material-symbols-outlined text-[20px]">{formData.status ? 'inventory_2' : 'inventory'}</span>
+                                </div>
+                                <div className="space-y-0.5">
+                                    <p className="text-[13px] font-black text-primary uppercase tracking-tight leading-none">Trạng thái kinh doanh</p>
+                                    <p className={`text-[11px] font-bold transition-colors duration-300 ${formData.status ? 'text-green-600' : 'text-stone/40'}`}>
+                                        {formData.status ? 'Đang mở bán trên toàn hệ thống' : 'Sản phẩm đang được tạm ẩn'}
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="relative">
+                                <input 
+                                    type="checkbox" 
+                                    name="status" 
+                                    checked={formData.status} 
+                                    onChange={handleChange} 
+                                    className="sr-only peer" 
+                                    id="main-status-toggle"
+                                />
+                                <label 
+                                    htmlFor="main-status-toggle"
+                                    className="block w-14 h-7 bg-stone/20 rounded-full cursor-pointer transition-all duration-300 peer-checked:bg-green-500 relative shadow-[inset_0_2px_4px_rgba(0,0,0,0.1)] overflow-hidden"
+                                >
+                                    <div className="absolute top-1 left-1 bg-white w-5 h-5 rounded-full shadow-md transition-all duration-300 transform peer-checked:translate-x-7 flex items-center justify-center">
+                                        <span className={`material-symbols-outlined text-[12px] font-bold transition-colors duration-300 ${formData.status ? 'text-green-500' : 'text-stone/30'}`}>
+                                            {formData.status ? 'done' : 'close'}
+                                        </span>
                                     </div>
-                                    <input type="checkbox" name="is_featured" checked={formData.is_featured} onChange={handleChange} className="size-5 accent-primary" />
-                                </label>
-                                <label className="flex items-center justify-between p-3 bg-stone/5 border border-stone/10 rounded-sm cursor-pointer hover:bg-stone/10 transition-all">
-                                    <div className="flex items-center gap-3">
-                                        <span className="material-symbols-outlined text-primary">new_releases</span>
-                                        <span className="font-bold text-[13px] text-primary">Tác phẩm mới ra lò</span>
-                                    </div>
-                                    <input type="checkbox" name="is_new" checked={formData.is_new} onChange={handleChange} className="size-5 accent-primary" />
+                                    {/* Subtle ON/OFF text inside track */}
+                                    <span className={`absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-black text-white/40 uppercase transition-opacity duration-300 ${formData.status ? 'opacity-0' : 'opacity-100'}`}>Off</span>
+                                    <span className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] font-black text-white/60 uppercase transition-opacity duration-300 ${formData.status ? 'opacity-100' : 'opacity-0'}`}>On</span>
                                 </label>
                             </div>
                         </div>
@@ -2057,8 +2136,8 @@ const ProductForm = () => {
                                             className="w-full bg-white border border-stone/20 rounded-sm pl-9 pr-9 py-2 text-[12px] font-bold text-primary focus:outline-none focus:border-gold/30 transition-all shadow-sm relative z-0"
                                         />
                                         {relatedQuery && (
-                                            <button 
-                                                onClick={() => { setRelatedQuery(''); setShowSearchHistory(false); }} 
+                                            <button
+                                                onClick={() => { setRelatedQuery(''); setShowSearchHistory(false); }}
                                                 className="absolute right-2 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors z-10"
                                             >
                                                 <span className="material-symbols-outlined text-[16px]">cancel</span>
@@ -2069,8 +2148,8 @@ const ProductForm = () => {
                                             <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[70] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
                                                 <div className="flex justify-between items-center px-3 mb-1 border-b border-primary/10 pb-1">
                                                     <span className="text-[9px] font-bold text-primary/40 uppercase tracking-widest">Gần đây</span>
-                                                    <button 
-                                                        onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('product_search_history'); }} 
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('product_search_history'); }}
                                                         className="text-[9px] text-brick hover:underline font-bold"
                                                     >Xóa</button>
                                                 </div>

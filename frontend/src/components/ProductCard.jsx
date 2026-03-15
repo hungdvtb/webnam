@@ -25,7 +25,7 @@ const ProductCard = ({ product }) => {
                 <div className="w-full h-full border-2 border-gold/20 overflow-hidden relative">
                     {(() => {
                         const primaryImage = product.images?.find(img => img.is_primary) || product.images?.[0];
-                        const imageSrc = primaryImage ? primaryImage.image_url : "https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?auto=format&fit=crop&q=80&w=800";
+                        const imageSrc = (primaryImage && primaryImage.image_url) ? primaryImage.image_url : "https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?auto=format&fit=crop&q=80&w=800";
                         return (
                             <img
                                 alt={product.name}

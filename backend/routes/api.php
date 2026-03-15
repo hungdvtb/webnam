@@ -78,6 +78,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Admin Category routes
     Route::post('/categories', [CategoryController::class , 'store']);
     Route::post('/categories/reorder', [CategoryController::class , 'reorder']);
+    Route::post('/categories/bulk-layout', [CategoryController::class , 'bulkUpdateLayout']);
     Route::post('/categories/{id}', [CategoryController::class , 'update']);
     Route::delete('/categories/{id}', [CategoryController::class , 'destroy']);
 
@@ -245,7 +246,7 @@ Route::post('/ai/chat', [AIController::class , 'chat']);
 Route::get('/ai/history/{chat_id}', [AIController::class , 'getHistory']);
 
 // ─── Storefront Public API (Website bán hàng) ───
-Route::prefix('storefront')->group(function () {
+Route::group(['prefix' => 'storefront'], function () {
     Route::get('/homepage', [\App\Http\Controllers\Api\StorefrontController::class , 'homepage']);
     Route::get('/categories', [\App\Http\Controllers\Api\StorefrontController::class , 'categories']);
     Route::get('/products', [\App\Http\Controllers\Api\StorefrontController::class , 'products']);
@@ -256,7 +257,7 @@ Route::prefix('storefront')->group(function () {
 });
 
 // ─── Separate Storefront API (Web API) ───
-Route::prefix('web-api')->group(function () {
+Route::group(['prefix' => 'web-api'], function () {
     Route::get('/products', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'index']);
     Route::get('/products/{slug}', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'show']);
     Route::get('/products/{slug}/related', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'related']);

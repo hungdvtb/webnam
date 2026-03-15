@@ -131,6 +131,7 @@ class StorefrontController extends Controller
                 'stock_quantity' => $p->stock_quantity,
                 'average_rating' => round($p->average_rating, 1),
                 'primary_image' => $p->primary_image,
+                'specifications' => $p->specifications,
             ];
         });
 
@@ -155,6 +156,7 @@ class StorefrontController extends Controller
                 'approvedReviews' => fn($q) => $q->latest()->limit(20),
                 'superAttributes.options',
                 'linkedProducts' => fn($q) => $q->where('status', true)->with('images'),
+                'groupedItems' => fn($q) => $q->where('status', true)->with('images'),
             ]);
 
         // Try slug first, then id
@@ -175,6 +177,7 @@ class StorefrontController extends Controller
             'special_price_from' => $product->special_price_from,
             'special_price_to' => $product->special_price_to,
             'description' => $product->description,
+            'specifications' => $product->specifications,
             'weight' => $product->weight,
             'stock_quantity' => $product->stock_quantity,
             'is_featured' => $product->is_featured,
@@ -221,6 +224,18 @@ class StorefrontController extends Controller
                 'comment' => $r->comment,
                 'created_at' => $r->created_at->toDateString(),
             ]),
+            'grouped_items' => $product->type === 'grouped' ? $product->groupedItems->map(fn($v) => [
+                'id' => $v->id,
+                'name' => $v->name,
+                'sku' => $v->sku,
+                'price' => $v->price,
+                'current_price' => $v->current_price,
+                'stock_quantity' => $v->stock_quantity,
+                'quantity' => $v->pivot->quantity ?? 1,
+                'is_required' => $v->pivot->is_required ?? false,
+                'main_image' => $v->main_image,
+                'primary_image' => $v->primary_image,
+            ]) : [],
         ]);
     }
 

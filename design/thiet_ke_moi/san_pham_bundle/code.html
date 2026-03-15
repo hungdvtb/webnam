@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+
+<html class="light" lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Cấu hình Bộ Đồ Thờ Tâm Linh - Nghệ Nhân Việt</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&amp;family=Noto+Serif:ital,wght@0,100..900;1,100..900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#1B365D", // Cobalt Blue
+                        "accent": "#C5A059", // Antique Gold
+                        "background-light": "#F9F5F0", // Rice Paper
+                        "background-dark": "#111821",
+                        "border-gold": "#D4AF37",
+                    },
+                    fontFamily: {
+                        "display": ["Playfair Display", "serif"],
+                        "body": ["Noto Serif", "serif"]
+                    },
+                    borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+                },
+            },
+        }
+    </script>
+<style>
+        body { font-family: 'Noto Serif', serif; }
+        h1, h2, h3, .font-serif-display { font-family: 'Playfair Display', serif; }
+        .bg-rice-paper { background-color: #F9F5F0; }
+        .gold-gradient { background: linear-gradient(45deg, #C5A059, #F1D38E, #C5A059); }
+        .cobalt-glow { box-shadow: 0 4px 20px rgba(27, 54, 93, 0.15); }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark text-primary selection:bg-accent selection:text-white">
+<!-- Top Navigation -->
+<header class="sticky top-0 z-50 w-full bg-background-light/90 backdrop-blur-md border-b border-accent/20 px-6 lg:px-20 py-4">
+<div class="max-w-7xl mx-auto flex items-center justify-between">
+<div class="flex items-center gap-12">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 flex items-center justify-center bg-primary text-accent rounded-sm shadow-lg">
+<span class="material-symbols-outlined text-2xl">temple_buddhist</span>
+</div>
+<div>
+<h1 class="text-xl font-bold tracking-tight text-primary leading-none">ĐỒ THỜ TÂM LINH</h1>
+<p class="text-[10px] tracking-[0.2em] uppercase text-accent font-semibold">Nghệ nhân truyền thống</p>
+</div>
+</div>
+<nav class="hidden md:flex items-center gap-8">
+<a class="text-sm font-semibold hover:text-accent transition-colors" href="#">Trang chủ</a>
+<a class="text-sm font-semibold hover:text-accent transition-colors border-b-2 border-accent" href="#">Sản phẩm</a>
+<a class="text-sm font-semibold hover:text-accent transition-colors" href="#">Bộ đồ thờ</a>
+<a class="text-sm font-semibold hover:text-accent transition-colors" href="#">Tư vấn</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<div class="relative hidden lg:block">
+<input class="bg-white/50 border-accent/30 rounded-full py-1.5 pl-10 pr-4 text-sm focus:ring-accent focus:border-accent w-64" placeholder="Tìm kiếm sản phẩm..." type="text"/>
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-primary/60 text-lg">search</span>
+</div>
+<button class="p-2 text-primary hover:text-accent transition-colors relative">
+<span class="material-symbols-outlined">shopping_bag</span>
+<span class="absolute top-1 right-1 w-2 h-2 bg-accent rounded-full border-2 border-background-light"></span>
+</button>
+<button class="p-2 text-primary hover:text-accent transition-colors">
+<span class="material-symbols-outlined">person</span>
+</button>
+</div>
+</div>
+</header>
+<main class="max-w-7xl mx-auto px-4 lg:px-10 py-8">
+<!-- Breadcrumbs & Promo -->
+<div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-10">
+<nav class="flex items-center gap-2 text-xs uppercase tracking-widest text-primary/60 font-semibold">
+<a class="hover:text-accent" href="#">Trang chủ</a>
+<span class="material-symbols-outlined text-[10px]">chevron_right</span>
+<a class="hover:text-accent" href="#">Bộ đồ thờ</a>
+<span class="material-symbols-outlined text-[10px]">chevron_right</span>
+<span class="text-primary">Thiết kế trọn bộ</span>
+</nav>
+<div class="inline-flex items-center gap-2 bg-accent/10 border border-accent/30 px-4 py-2 rounded-full text-primary text-xs font-bold">
+<span class="material-symbols-outlined text-sm animate-pulse">verified</span>
+                MIỄN PHÍ VẬN CHUYỂN &amp; LẮP ĐẶT TOÀN QUỐC
+            </div>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-12 mb-20">
+<!-- Left Side: Media Gallery -->
+<div class="lg:col-span-7 space-y-6">
+<div class="relative group aspect-[4/5] w-full overflow-hidden rounded-lg bg-slate-200 cobalt-glow border-4 border-white">
+<img alt="Altar master arrangement" class="w-full h-full object-cover" data-alt="Traditional Vietnamese altar setup with blue ceramics" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBZMBbhBxcvJZcmT9nZG8AbwW2_CGr-VxDjqRQz0VWt3lAPMeRmdzDuKJ6pom0xUCgRIyhiFdbMZeRc6zqebTrEtgN59o9skp-ZnRAk8MkAacsTPLyZCp1wcIK2cig1qg64cotRADAChb0T95cYfTH7FC4_jeNgmc5qgL653j1g1E4fyY8qN6KvXFhw86aj75baH2rJCX-bRatD3p8osxWQGEqCwNYL9Y3kFtNoaDktauT5UFMnguu8Cys_dBrWdav-jVxhu38sh7E"/>
+<div class="absolute bottom-6 left-6 right-6 p-6 bg-white/80 backdrop-blur-md rounded border-l-4 border-accent">
+<h3 class="text-lg font-serif-display font-bold text-primary italic">"Không gian thờ tự trang nghiêm, chuẩn phong thủy"</h3>
+<p class="text-xs text-primary/70 mt-1">Phối cảnh thực tế: Bộ sản phẩm men rạn cổ dát vàng tại tư gia.</p>
+</div>
+</div>
+<div class="grid grid-cols-4 gap-4">
+<div class="aspect-square rounded-md overflow-hidden border-2 border-accent/30 cursor-pointer hover:border-accent">
+<img alt="Detail 1" class="w-full h-full object-cover" data-alt="Close up of a dragon incense burner" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCoHHEeYx8rgqJgknxa29fG1z2ZlR4TC2jDnZA-FItko8IP0dmoBz2PCpLOkEHtGOJsoi_ItVVwRei8Blg-iN9wMpFrW0-1mWINuoiuixHX8rbyxh977qgMAQq1e--WsM9zOX16gHwz6zegcdZGafGh8tLrDfGIKEk4B0ZGZLfe4dKfxqIWOOWPCCZttEIPihQzZdAhbQe7qpgXYLjzav8Gn3nPJ6OHnpXUiNA_vC_bfbHDuTjiXKjthJW1HBcOHMiHCizEfy30Lp4"/>
+</div>
+<div class="aspect-square rounded-md overflow-hidden border-2 border-transparent cursor-pointer hover:border-accent">
+<img alt="Detail 2" class="w-full h-full object-cover" data-alt="Golden plated ritual plates and cups" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAmyR4-ib6G4GYUq24nwmqF8JE4LbKeHO__iKxNEK7FsCiM-4tDLdYAnIISz0TjfGmj8Ct4j2Cso3NI85BfHqeHCBrguliLO0UNrUW5KfCxFf8Su7DKr7zDcPeGrLTww3cEjMxzCGE6vKH_7jUvoSqeTQwfZHYp0qBwQuqPYpD2Ak4VuI2tVMtCW2MKQuS9jLwJK6Oo4EWAxWz9pY7RSgCtcDFIWot2o2FQJFeDgSnRusAs3QN4VtJAMiOLUZPznqVoL6-etZz1SUE"/>
+</div>
+<div class="aspect-square rounded-md overflow-hidden border-2 border-transparent cursor-pointer hover:border-accent relative group">
+<img alt="Video" class="w-full h-full object-cover opacity-60" data-alt="Ceramic manufacturing process" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBJS8wHyDn3Pn3XQ4asxiwnHmS7TAVNewtuY7VNmXxpKXX3zDkLfLfd-m5Ks6k43kKulE5HcOMHrD3Yq6Rrdc_RSd_3RfY3ajLyWLuFCgn1fKsY6qN-1XRl1imCJVrS-0XdzSeVhRormXMEziflZhp8IoMb7L4eCz0y-lLO53OaTUY1kq4AvwWjeZo-8doxOJkZZqoPBc7ssBDZWcbHmeTDhnerqCvyWF4XRrqtiw3_VjtBpLSRQsFfA6vECzpjAV0EWGL0l0pTTmI"/>
+<span class="material-symbols-outlined absolute inset-0 flex items-center justify-center text-primary text-3xl group-hover:scale-110 transition-transform">play_circle</span>
+</div>
+<div class="aspect-square rounded-md overflow-hidden border-2 border-transparent cursor-pointer hover:border-accent">
+<img alt="Detail 3" class="w-full h-full object-cover" data-alt="Floral arrangements on traditional altar" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBwIdowP--niT00eAuxjg4CFdkIN_THtsBfCq_wkpxoJVhDEE2A0GjrkzcPWYMt7wAmMjjvOlSWFLGbUNolNsvpYbSru5Gukywji25F-ztaT2IROB8E9TpD-KeBeHlnj0hZ284n4bvYAO2MaglfAKIo-6mFa7dLSFohhwgVITfeo_iD1BUOtV8fbnRECxF1c7NXTrYyUFwcmxbpLrnfaNHNT-k7ZaZFchdbvHdTbI8kZyhWb1_C0OjGY2YCcWALbjF-J3o2e2bgd_Q"/>
+</div>
+</div>
+</div>
+<!-- Right Side: Config Section -->
+<div class="lg:col-span-5 flex flex-col h-full">
+<div class="bg-white p-8 rounded-xl border border-accent/20 shadow-xl flex-grow overflow-y-auto max-h-[900px]">
+<h2 class="text-3xl font-serif-display font-black text-primary mb-2">Cấu hình bộ sản phẩm</h2>
+<p class="text-sm text-primary/60 mb-8 border-b border-accent/10 pb-4">Cá nhân hóa bộ đồ thờ theo kích thước ban thờ gia đình bạn.</p>
+<!-- Group: Main Worship -->
+<div class="mb-10">
+<h3 class="text-xs font-bold uppercase tracking-widest text-accent mb-4 flex items-center gap-2">
+<span class="h-px w-8 bg-accent"></span> Nhóm Thờ Cúng Chính
+                        </h3>
+<div class="space-y-4">
+<!-- Item 1 -->
+<div class="flex items-center gap-4 p-3 rounded hover:bg-background-light transition-colors group">
+<div class="w-16 h-16 bg-slate-100 rounded border border-accent/10 overflow-hidden flex-shrink-0">
+<img alt="Bát Hương" class="w-full h-full object-cover" data-alt="Blue ceramic incense burner" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD4cFKjuu3Sb0ST5vzA75ny7QAd8SPXTZRzaa46htGOhByce4wdx6OIe61xksR0RFjzvsUtyo3sZVi5KY840UVIYAXZ0nZ2e9xjCzNkq7SKqZB0rMD_Y3OY534_nSVFu3qjC70WlOOISYSZH1G-VTNsLphgyG92RqsVMbJDgz9jGzCl_WBCY2f4FKdARTFtc34uNL1Ak3MKg3sH79MZSMw1uIncsFH5u0YILPaPl5DxtN1tuQ4_oO0Oyhqg8dsoJuEcGcCaf__zp6o"/>
+</div>
+<div class="flex-grow">
+<p class="text-[10px] font-bold text-accent uppercase tracking-tighter">LOẠI: BÁT HƯƠNG</p>
+<h4 class="text-sm font-bold text-primary">Bát hương men rạn P18</h4>
+<p class="text-sm font-semibold text-primary/80">3.500.000đ</p>
+</div>
+<div class="flex items-center bg-white border border-accent/30 rounded-full h-8 px-1">
+<button class="w-6 h-6 flex items-center justify-center hover:text-accent"><span class="material-symbols-outlined text-sm">remove</span></button>
+<span class="w-8 text-center text-xs font-bold">01</span>
+<button class="w-6 h-6 flex items-center justify-center hover:text-accent"><span class="material-symbols-outlined text-sm">add</span></button>
+</div>
+<button class="p-2 text-primary/30 hover:text-red-600"><span class="material-symbols-outlined text-sm">delete</span></button>
+</div>
+<!-- Item 2 -->
+<div class="flex items-center gap-4 p-3 rounded hover:bg-background-light transition-colors group border-t border-accent/5">
+<div class="w-16 h-16 bg-slate-100 rounded border border-accent/10 overflow-hidden flex-shrink-0">
+<img alt="Đỉnh Hạc" class="w-full h-full object-cover" data-alt="Traditional ritual burner with crane motifs" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDux8QpC6PztZ703ej32JO0MOZYW6XAyDL_yVW92KfYEgUk5rKZQ9YIkbnsP8-nMe7a_UEx6G-mEY-JfXZxXmhIK8riEKNWc2So83CHUZD-s775B7ssY4_ZDFQBsbrldQOulRJyoGYgXmJkS-pvXLePtXSrBEjcp9s5Jq4K5mfgvfOs9P7X9KO-S30LsAERGEOC7qaXOY1kMTlvaK6tMcLbVjI8bF0BWhx35JFonEvITtcTHJLrSa_mq0At0qwelTNAIVrqBiEISJA"/>
+</div>
+<div class="flex-grow">
+<p class="text-[10px] font-bold text-accent uppercase tracking-tighter">LOẠI: ĐỈNH HẠC</p>
+<h4 class="text-sm font-bold text-primary">Bộ Đỉnh Hạc men rạn</h4>
+<p class="text-sm font-semibold text-primary/80">12.200.000đ</p>
+</div>
+<div class="flex items-center bg-white border border-accent/30 rounded-full h-8 px-1">
+<button class="w-6 h-6 flex items-center justify-center hover:text-accent"><span class="material-symbols-outlined text-sm">remove</span></button>
+<span class="w-8 text-center text-xs font-bold">01</span>
+<button class="w-6 h-6 flex items-center justify-center hover:text-accent"><span class="material-symbols-outlined text-sm">add</span></button>
+</div>
+<button class="p-2 text-primary/30 hover:text-red-600"><span class="material-symbols-outlined text-sm">delete</span></button>
+</div>
+</div>
+</div>
+<!-- Group: Offerings -->
+<div class="mb-10">
+<h3 class="text-xs font-bold uppercase tracking-widest text-accent mb-4 flex items-center gap-2">
+<span class="h-px w-8 bg-accent"></span> Nhóm Đồ Dâng Lễ
+                        </h3>
+<div class="space-y-4">
+<!-- Item 3 -->
+<div class="flex items-center gap-4 p-3 rounded hover:bg-background-light transition-colors group">
+<div class="w-16 h-16 bg-slate-100 rounded border border-accent/10 overflow-hidden flex-shrink-0">
+<img alt="Mâm Bồng" class="w-full h-full object-cover" data-alt="Ceramic plate for offerings" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD2peVfuhH6NYQ_qJA56zHJJ1dUNQHoa7Pk3DG99ZJwMkoaQhRmlBmKhtJwubiH4ilKo328W37LP7W2-opscSrxC_c8iMVLfydg5pa7bFDj71B-aLuLONdVfIQwwvWDADt3ViuVogTFTIgMgBaTT7H8D5oPjN9Scy6N7w_mPbmVuRu0P2FlBuNeVwh4goYlMAqycp2pAoCpJoiLjI4oqPvlH2nMaLNwUDRpeJdhDRfBg7WDhI-oIJV0EidxHzRfwmxKDRmBj_F-5Yk"/>
+</div>
+<div class="flex-grow">
+<p class="text-[10px] font-bold text-accent uppercase tracking-tighter">LOẠI: MÂM BỒNG</p>
+<h4 class="text-sm font-bold text-primary">Mâm bồng họa tiết Long Phụng</h4>
+<p class="text-sm font-semibold text-primary/80">1.850.000đ</p>
+</div>
+<div class="flex items-center bg-white border border-accent/30 rounded-full h-8 px-1">
+<button class="w-6 h-6 flex items-center justify-center hover:text-accent"><span class="material-symbols-outlined text-sm">remove</span></button>
+<span class="w-8 text-center text-xs font-bold">02</span>
+<button class="w-6 h-6 flex items-center justify-center hover:text-accent"><span class="material-symbols-outlined text-sm">add</span></button>
+</div>
+<button class="p-2 text-primary/30 hover:text-accent"><span class="material-symbols-outlined text-sm">autorenew</span></button>
+</div>
+<!-- Item 4 -->
+<div class="flex items-center gap-4 p-3 rounded hover:bg-background-light transition-colors group border-t border-accent/5">
+<div class="w-16 h-16 bg-slate-100 rounded border border-accent/10 overflow-hidden flex-shrink-0">
+<img alt="Chóe" class="w-full h-full object-cover" data-alt="Set of small ceramic jars" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB4Ro733-l5zkz8QkCawBThIgthoJgeLeWFG-nAUJRnKRdYo_6vhRFHLN9cohBVfxArobeb15XZZNGLAqrB6NndYnTC1iry_VBkjnk8V6kO23RG7CYGqJGdH0f6XPzjKUSUMvKFGwfY36J0WiTk-CLZmUibjLCBHEJjsXReMu_rqxBAKpasXkkbeDB8-Z3sw8-mKzvAEikf5OLn1qEaA6gz7-x_ifYkuGD-8wO2et4sVAEhyNaKsSSlbtuaeYSmtbtElutdh46K6I4"/>
+</div>
+<div class="flex-grow">
+<p class="text-[10px] font-bold text-accent uppercase tracking-tighter">LOẠI: CHÓE THỜ</p>
+<h4 class="text-sm font-bold text-primary">Chóe thờ nhỏ men cổ</h4>
+<p class="text-sm font-semibold text-primary/80">650.000đ</p>
+</div>
+<div class="flex items-center bg-white border border-accent/30 rounded-full h-8 px-1">
+<button class="w-6 h-6 flex items-center justify-center hover:text-accent"><span class="material-symbols-outlined text-sm">remove</span></button>
+<span class="w-8 text-center text-xs font-bold">03</span>
+<button class="w-6 h-6 flex items-center justify-center hover:text-accent"><span class="material-symbols-outlined text-sm">add</span></button>
+</div>
+<button class="p-2 text-primary/30 hover:text-red-600"><span class="material-symbols-outlined text-sm">delete</span></button>
+</div>
+</div>
+</div>
+<!-- Group: Decoration -->
+<div>
+<h3 class="text-xs font-bold uppercase tracking-widest text-accent mb-4 flex items-center gap-2">
+<span class="h-px w-8 bg-accent"></span> Nhóm Trang Trí
+                        </h3>
+<div class="space-y-4">
+<!-- Item 5 -->
+<div class="flex items-center gap-4 p-3 rounded hover:bg-background-light transition-colors group">
+<div class="w-16 h-16 bg-slate-100 rounded border border-accent/10 overflow-hidden flex-shrink-0">
+<img alt="Lọ Hoa" class="w-full h-full object-cover" data-alt="Traditional ceramic vase" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA4VXd9cOEFdxefrwqw4akgUwc2CzzIsKmlPba5uJXkYrDHdp6U8Zfl6kSCf-mQoCv3F9eRxvAQ_2rDoHeeYArG1cuDCq9YNF6j7itNsD1PIW8wAiTGCVld081sw8kypPltv5E602yQQko_6qTuHAJ591JsS8s9oYkH8vi9MMpmV8RO1Khy0OhRG_R8QF06AQpW4rhEFqS6R45mKqPWN6x-_vFimhjYeGbjwoLdtvybOvWX8udJKpTtZmgc9mLVq4MMqMQsy1-9t6Q"/>
+</div>
+<div class="flex-grow">
+<p class="text-[10px] font-bold text-accent uppercase tracking-tighter">LOẠI: LỌ HOA</p>
+<h4 class="text-sm font-bold text-primary">Lọ hoa Sen Liên Hoa</h4>
+<p class="text-sm font-semibold text-primary/80">2.100.000đ</p>
+</div>
+<div class="flex items-center bg-white border border-accent/30 rounded-full h-8 px-1">
+<button class="w-6 h-6 flex items-center justify-center hover:text-accent"><span class="material-symbols-outlined text-sm">remove</span></button>
+<span class="w-8 text-center text-xs font-bold">02</span>
+<button class="w-6 h-6 flex items-center justify-center hover:text-accent"><span class="material-symbols-outlined text-sm">add</span></button>
+</div>
+<button class="p-2 text-primary/30 hover:text-red-600"><span class="material-symbols-outlined text-sm">delete</span></button>
+</div>
+</div>
+</div>
+<!-- Summary Area -->
+<div class="mt-12 sticky bottom-0 bg-white pt-6 border-t-2 border-primary/5">
+<div class="flex justify-between items-end mb-6">
+<div>
+<p class="text-xs uppercase tracking-widest text-primary/50 font-bold">tổng cộng dự kiến</p>
+<p class="text-3xl font-serif-display font-black text-primary">24.550.000đ</p>
+</div>
+<div class="text-right">
+<p class="text-[10px] text-accent font-bold uppercase italic">Sản phẩm: 15/15</p>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-3">
+<button class="py-4 bg-primary text-white font-bold text-sm tracking-widest uppercase hover:bg-primary/90 transition-all shadow-lg hover:shadow-primary/20">
+                                Đặt hàng ngay
+                            </button>
+<button class="py-4 border-2 border-primary text-primary font-bold text-sm tracking-widest uppercase hover:bg-primary hover:text-white transition-all">
+                                Thêm vào giỏ
+                            </button>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Detailed Description Section -->
+<section class="border-t border-accent/20 pt-16 pb-24">
+<div class="max-w-4xl mx-auto">
+<div class="text-center mb-16">
+<span class="material-symbols-outlined text-accent text-5xl mb-4">ink_pen</span>
+<h2 class="text-4xl font-serif-display font-bold text-primary mb-4">Mô tả chi tiết</h2>
+<div class="w-24 h-1 bg-accent mx-auto mb-6"></div>
+</div>
+<div class="prose prose-lg prose-slate max-w-none space-y-8 leading-relaxed text-primary/80 italic">
+<p class="text-xl font-serif-display leading-relaxed first-letter:text-6xl first-letter:font-bold first-letter:text-accent first-letter:mr-3 first-letter:float-left">
+                        Mỗi sản phẩm trong bộ đồ thờ này không chỉ là một vật dụng cúng bái đơn thuần, mà là kết tinh của hàng ngàn năm văn hóa tâm linh Việt. Được chế tác từ đất sét tinh tuyển của vùng đất linh thiêng, trải qua hàng chục công đoạn nhào nặn, vẽ tay tỉ mỉ bởi đôi bàn tay của những nghệ nhân tài hoa bậc nhất.
+                    </p>
+<div class="grid md:grid-cols-2 gap-12 items-center">
+<img alt="Process" class="rounded-lg shadow-xl border border-accent/20" data-alt="Potter hand painting a ceramic piece" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC9X444usVyfExuFbufArbHb7gFtAQ6sDDKUJwq8mdAvRPsVddb0Qte-fQY-cn750rmkS-Ew45v2qKzRUJ1EQ4ZtsBvsXd-tSMY815P834HDMN8R1kqTefPPTBfb5-8zBs3PpUafoX4qm0_WUNoZKXWMK_cspFUGTW50IGLwAJnzXFpk4Py5wZjYyA5Fb_NbAU6X2lK84orr-COv8hxxQoRJxn9PFeazjoqRbA2uh1JSaqunc3w9mlvrM9xlCUpasSJjWNRcP8d84E"/>
+<div class="space-y-4">
+<h4 class="text-2xl font-serif-display text-primary font-bold">Hồn Cốt Nghệ Nhân</h4>
+<p>
+                                Lớp men rạn đặc trưng được phục dựng từ những kỹ thuật thất truyền của triều đại Lê - Nguyễn. Những vết rạn tự nhiên như chứng tích của thời gian, được nhấn nhá bằng những đường vẽ vàng kim 24k quý tộc, tạo nên vẻ đẹp sang trọng nhưng vẫn giữ được nét cổ kính, trang nghiêm.
+                            </p>
+</div>
+</div>
+<div class="bg-primary text-white p-10 rounded-xl relative overflow-hidden">
+<div class="relative z-10">
+<h4 class="text-2xl font-serif-display text-accent mb-4">Ý Nghĩa Phong Thủy</h4>
+<p class="text-lg opacity-90">
+                                Việc sắp xếp 15 sản phẩm theo đúng quy tắc "Tiền nhị hậu nhất" không chỉ mang lại sự cân đối cho không gian thờ tự mà còn giúp gia chủ thu hút vượng khí, trấn trạch trừ tà, thể hiện lòng thành kính sâu sắc đối với tổ tiên, cội nguồn.
+                            </p>
+</div>
+<div class="absolute -bottom-10 -right-10 opacity-10">
+<span class="material-symbols-outlined text-[200px]">temple_buddhist</span>
+</div>
+</div>
+<p class="text-center font-serif-display text-2xl text-primary border-y border-accent/20 py-8 italic">
+                        "Lòng thành dâng kính - Phúc lộc đầy nhà"
+                    </p>
+</div>
+</div>
+</section>
+</main>
+<!-- Footer Summary Mini (Mobile only) -->
+<div class="fixed bottom-0 left-0 right-0 bg-white border-t border-accent/20 p-4 flex items-center justify-between lg:hidden z-50">
+<div>
+<p class="text-[10px] uppercase font-bold text-primary/50">Dự kiến</p>
+<p class="text-xl font-serif-display font-black text-primary leading-none">24.550.000đ</p>
+</div>
+<button class="bg-primary text-white px-6 py-3 rounded font-bold text-xs uppercase tracking-widest">
+            Tiếp tục
+        </button>
+</div>
+</body></html>

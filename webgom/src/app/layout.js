@@ -2,6 +2,7 @@ import "./globals.css";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import { getActiveMenu } from "@/lib/api";
+import { CartProvider } from "@/context/CartContext";
 
 export const metadata = {
   title: "GÔM ĐẠI THÀNH - Tinh Hoa Đất Việt | Gốm Sứ Bát Tràng Cao Cấp",
@@ -35,9 +36,11 @@ export default async function RootLayout({ children }) {
         <div className="top-promotion-bar">
           MIỄN PHÍ VẬN CHUYỂN TOÀN QUỐC CHO ĐƠN HÀNG TỪ 500.000Đ
         </div>
-        <Header menuItems={menuItems} />
-        {children}
-        <Footer />
+        <CartProvider>
+          <Header menuItems={menuItems} />
+          {children}
+          <Footer />
+        </CartProvider>
         <style dangerouslySetInnerHTML={{ __html: `
           .top-promotion-bar {
             background-color: #1a2c4e;

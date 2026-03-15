@@ -151,4 +151,19 @@ class CategoryController extends Controller
 
         return response()->json(['message' => 'Tree reordered successfully']);
     }
+
+    public function bulkUpdateLayout(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'exists:categories,id',
+            'display_layout' => 'required|string|in:layout_1,layout_2',
+        ]);
+
+        Category::whereIn('id', $request->ids)->update([
+            'display_layout' => $request->display_layout
+        ]);
+
+        return response()->json(['message' => 'Bulk update successful']);
+    }
 }

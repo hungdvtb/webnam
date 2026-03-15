@@ -46,6 +46,8 @@ const Hero = () => {
         link_url: '/shop'
     };
 
+    const bannerImageUrl = currentBanner.image_url || 'https://lh3.googleusercontent.com/aida-public/AB6AXuDxyxuenD-UTiSSDUsliBib3rtgLHsYtiaH9MZN635eMD2i5g6jBh21b_i4PS_GT-soo2VMNLwfy-Oq73sxuHpQzbLd0Q_s9D1BH0YlxEqdZH8QEUgJYgO69GgRJ7_S90Z0flvVhLFMtyRI4JYn5oDhNjJMOQQaPXYg1SOZi9xdBl-CuNrWoXgMx6FnoRXcNlQW805WC7pDVrZpAcA2C5nFT-F8aUk5Y9RG_yhTxI8LujIcyvaI3MKicA_JeOFP3EJ48T_0LzUsYQM';
+
     return (
         <section className="relative w-full overflow-hidden bg-background-dark h-[60vh] lg:h-[70vh]">
             <AnimatePresence mode="wait">
@@ -60,7 +62,7 @@ const Hero = () => {
                     {/* Background Image with slow zoom effect */}
                     <motion.div
                         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-                        style={{ backgroundImage: `url('${currentBanner.image_url}')` }}
+                        style={{ backgroundImage: `url('${bannerImageUrl}')` }}
                         animate={{ scale: [1, 1.05] }}
                         transition={{ duration: 10, ease: "linear", repeat: 0 }}
                     />

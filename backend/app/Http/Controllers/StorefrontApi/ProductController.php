@@ -268,6 +268,40 @@ class ProductController extends Controller
                 ])
                 ->firstOrFail();
 
+            // Enrich bundle items with variant data if variant_id is present
+            if (($product->type === 'bundle' || $product->type === 'grouped') && $product->bundleItems) {
+                // Collect all variant IDs to fetch them in one query
+                $variantIds = $product->bundleItems->pluck('pivot.variant_id')->filter()->unique()->toArray();
+                
+                if (!empty($variantIds)) {
+                    $variants = Product::whereIn('id', $variantIds)
+                        ->with(['images', 'attributeValues.attribute'])
+                        ->get()
+                        ->keyBy('id');
+                        
+                    foreach ($product->bundleItems as $item) {
+                        $vId = $item->pivot->variant_id;
+                        if ($vId && isset($variants[$vId])) {
+                            $v = $variants[$vId];
+                            // Merge variant data into item
+                            $item->price = $v->price;
+                            $item->sku = $v->sku;
+                            $item->name = $v->name; 
+                            
+                            // Merge images if variant has images
+                            if ($v->images && $v->images->count() > 0) {
+                                $item->setRelation('images', $v->images);
+                            }
+                            
+                            // Merge attributes
+                            if ($v->attributeValues && $v->attributeValues->count() > 0) {
+                                $item->setRelation('attributeValues', $v->attributeValues);
+                            }
+                        }
+                    }
+                }
+            }
+
             if ($product->type === 'configurable') {
                 // Filter options to only show what actually exists in variations
                 $usedValuesByAttr = [];

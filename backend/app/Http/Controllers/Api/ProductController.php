@@ -23,7 +23,7 @@ class ProductController extends Controller
         $query = Product::query()
             ->select([
             'id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity',
-            'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url'
+            'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title'
         ])
             ->with([
             'categories:id,name',
@@ -232,6 +232,7 @@ class ProductController extends Controller
             'status' => 'nullable|boolean',
             'video_url' => 'nullable|string',
             'slug' => 'nullable|string|max:255|unique:products,slug',
+            'bundle_title' => 'nullable|string|max:255',
             // linkages
             'linked_product_ids' => 'nullable|array',
             'linked_product_ids.*' => 'exists:products,id',
@@ -545,6 +546,7 @@ class ProductController extends Controller
             'specifications' => 'nullable|string',
             'video_url' => 'nullable|string',
             'slug' => 'nullable|string|max:255|unique:products,slug,' . $id,
+            'bundle_title' => 'nullable|string|max:255',
             'linked_product_ids' => 'nullable|array',
             'linked_product_ids.*' => 'exists:products,id',
             'link_type' => 'nullable|string',

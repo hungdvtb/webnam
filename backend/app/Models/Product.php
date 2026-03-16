@@ -12,7 +12,7 @@ class Product extends Model
     protected $fillable = [
         'type', 'name', 'slug', 'description', 'specifications', 'price', 'price_type', 'cost_price', 'special_price', 'special_price_from', 'special_price_to', 
         'category_id', 'stock_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
-        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'video_url', 'additional_info'
+        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'video_url', 'additional_info', 'bundle_title'
     ];
 
     protected $attributes = [
@@ -91,6 +91,7 @@ class Product extends Model
     {
         return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
                     ->withPivot(['link_type', 'position'])
+                    ->orderByPivot('position', 'asc')
                     ->withTimestamps();
     }
 
@@ -102,6 +103,7 @@ class Product extends Model
         return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
                     ->wherePivot('link_type', 'related')
                     ->withPivot(['link_type', 'position'])
+                    ->orderByPivot('position', 'asc')
                     ->withTimestamps();
     }
 
@@ -133,6 +135,7 @@ class Product extends Model
         return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
                     ->wherePivot('link_type', 'super_link')
                     ->withPivot(['link_type', 'position'])
+                    ->orderByPivot('position', 'asc')
                     ->withTimestamps();
     }
 
@@ -171,6 +174,7 @@ class Product extends Model
         return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
                     ->wherePivot('link_type', 'grouped')
                     ->withPivot(['link_type', 'quantity', 'is_required', 'position', 'variant_id'])
+                    ->orderByPivot('position', 'asc')
                     ->withTimestamps();
     }
 
@@ -182,6 +186,7 @@ class Product extends Model
         return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
                     ->wherePivot('link_type', 'bundle')
                     ->withPivot(['link_type', 'quantity', 'is_required', 'position', 'option_title', 'is_default', 'variant_id'])
+                    ->orderByPivot('position', 'asc')
                     ->withTimestamps();
     }
 

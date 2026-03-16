@@ -11,6 +11,7 @@ import { compressImage, formatBytes } from '../../utils/imageUtils';
 
 const ItemType = {
     IMAGE: 'image',
+    BUNDLE_ITEM: 'bundle_item',
 };
 
 const DraggableImage = ({ img, index, moveImage, handleSetPrimary, handleDeleteImage, isSelected, toggleSelectImage, isDragSelecting }) => {
@@ -151,6 +152,134 @@ const DraggableImage = ({ img, index, moveImage, handleSetPrimary, handleDeleteI
     );
 };
 
+const DraggableBundleItem = ({ 
+    index, 
+    optionId, 
+    item, 
+    moveBundleItem, 
+    handleSetDefaultInOption, 
+    handleUpdateBundleItemVariant, 
+    bundleItemVariants, 
+    handleUpdateBundleItemQty, 
+    handleRemoveItemFromOption, 
+    formatNumberOutput,
+    isSortingMode 
+}) => {
+    const ref = useRef(null);
+    const [, drop] = useDrop({
+        accept: `bundle_item_${optionId}`,
+        hover(draggedItem, monitor) {
+            if (!ref.current) return;
+            const dragIndex = draggedItem.index;
+            const hoverIndex = index;
+            if (dragIndex === hoverIndex) return;
+            const hoverBoundingRect = ref.current?.getBoundingClientRect();
+            const hoverMiddleY = (hoverBoundingRect.bottom - hoverBoundingRect.top) / 2;
+            const clientOffset = monitor.getClientOffset();
+            const hoverClientY = clientOffset.y - hoverBoundingRect.top;
+            if (dragIndex < hoverIndex && hoverClientY < hoverMiddleY) return;
+            if (dragIndex > hoverIndex && hoverClientY > hoverMiddleY) return;
+            moveBundleItem(optionId, dragIndex, hoverIndex);
+            draggedItem.index = hoverIndex;
+        },
+    });
+
+    const [{ isDragging }, drag] = useDrag({
+        type: `bundle_item_${optionId}`,
+        item: () => ({ id: item.id, index, optionId }),
+        canDrag: isSortingMode,
+        collect: (monitor) => ({
+            isDragging: monitor.isDragging(),
+        }),
+    });
+
+    drag(drop(ref));
+
+    return (
+        <tr 
+            ref={ref}
+            className={`border-b border-stone/5 transition-colors group/row ${isDragging ? 'opacity-30 bg-gold/5' : 'hover:bg-gold/[0.02]'} ${isSortingMode ? 'cursor-move' : ''}`}
+        >
+            <td className="pl-5 py-3 text-center">
+                {isSortingMode ? (
+                    <div className="flex items-center justify-center gap-2">
+                        <span className="material-symbols-outlined text-[18px] text-stone/40 group-hover/row:text-gold transition-colors">reorder</span>
+                        <span className="text-[11px] font-black text-primary bg-stone/5 w-6 h-6 flex items-center justify-center rounded-full border border-stone/10">
+                            {index + 1}
+                        </span>
+                    </div>
+                ) : (
+                    <button
+                        type="button"
+                        onClick={() => handleSetDefaultInOption(optionId, item.id)}
+                        className={`size-6 mx-auto rounded-full flex items-center justify-center transition-all ${item.is_default ? 'bg-primary text-white' : 'bg-stone/10 text-black/40 hover:bg-stone/20'}`}
+                    >
+                        <span className="material-symbols-outlined text-[16px]">{item.is_default ? 'check' : 'close'}</span>
+                    </button>
+                )}
+            </td>
+            <td className="px-3 py-3">
+                <div className="flex items-center gap-3">
+                    <img src={item.image_url || 'https://placehold.co/100'} alt="" className="size-10 object-cover rounded border border-stone/10 bg-white" />
+                    <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-bold text-black truncate" title={item.name}>{item.name}</p>
+                        <p className="text-[10px] font-mono text-gold uppercase">{item.sku}</p>
+                    </div>
+                </div>
+            </td>
+            <td className="px-3 py-3">
+                {item.type === 'configurable' ? (
+                    <select
+                        value={item.variant_id || ''}
+                        onChange={(e) => handleUpdateBundleItemVariant(optionId, item.id, e.target.value)}
+                        className="w-full bg-stone/5 border border-stone/10 rounded px-2 py-1 text-[11px] font-bold text-black focus:outline-none focus:border-gold/30"
+                    >
+                        <option value="">Chọn biến thể...</option>
+                        {(bundleItemVariants[item.id] || []).map(v => (
+                            <option key={v.id} value={v.id}>{v.name || (v.attribute_values || []).map(av => av.value).join(' / ')}</option>
+                        ))}
+                    </select>
+                ) : (
+                    <span className="text-[11px] text-black/60 italic">Sản phẩm đơn</span>
+                )}
+            </td>
+            <td className="px-3 py-3 text-center">
+                <p className="text-[12px] font-black text-black">{formatNumberOutput(item.price)}₫</p>
+            </td>
+            <td className="px-3 py-3 text-center">
+                <div className="flex items-center justify-center gap-1 bg-white border border-stone/10 rounded-full px-2 py-0.5 mx-auto w-fit">
+                    <button
+                        type="button"
+                        onClick={() => handleUpdateBundleItemQty(optionId, item.id, Math.max(1, item.quantity - 1))}
+                        className="material-symbols-outlined text-[16px] text-black/40 hover:text-brick"
+                    >remove</button>
+                    <input
+                        type="number"
+                        value={item.quantity}
+                        onChange={(e) => handleUpdateBundleItemQty(optionId, item.id, e.target.value)}
+                        className="w-8 text-center bg-transparent border-none p-0 text-[12px] font-black text-black focus:ring-0"
+                    />
+                    <button
+                        type="button"
+                        onClick={() => handleUpdateBundleItemQty(optionId, item.id, item.quantity + 1)}
+                        className="material-symbols-outlined text-[16px] text-black/40 hover:text-primary"
+                    >add</button>
+                </div>
+            </td>
+            <td className="px-3 py-3 text-right">
+                <button
+                    type="button"
+                    onClick={() => handleRemoveItemFromOption(optionId, item.id)}
+                    className="size-8 rounded-full flex items-center justify-center text-black/20 hover:text-brick hover:bg-brick/5 opacity-0 group-hover/row:opacity-100 transition-all"
+                >
+                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                </button>
+            </td>
+        </tr>
+    );
+};
+
+
 const formatNumberOutput = (num) => {
     if (num === null || num === undefined || num === '') return '';
     return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
@@ -253,7 +382,8 @@ const ProductForm = () => {
         custom_attributes: {},
         video_url: '',
         slug: '',
-        additional_info: [] // [{title, post_id, post_title}]
+        additional_info: [], // [{title, post_id, post_title}]
+        bundle_title: ''
     });
 
     const [variants, setVariants] = useState([]);
@@ -262,7 +392,9 @@ const ProductForm = () => {
     const [refreshingAttributes, setRefreshingAttributes] = useState(false);
     const [bundleOptions, setBundleOptions] = useState([]); // [{ id, title, items: [] }]
     const [showBundleSearch, setShowBundleSearch] = useState(null); // optionId
+    const [isSortingBundle, setIsSortingBundle] = useState({}); // { optionId: boolean }
     const [bundleItemVariants, setBundleItemVariants] = useState({}); // { productId: [variants] }
+    const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
 
     // Filters for Related Products suggestions
     const [relatedQuery, setRelatedQuery] = useState('');
@@ -624,7 +756,8 @@ const ProductForm = () => {
                     try {
                         return typeof data.additional_info === 'string' ? JSON.parse(data.additional_info) : data.additional_info;
                     } catch (e) { return []; }
-                })()
+                })(),
+                bundle_title: data.bundle_title || ''
             });
             setImages(data.images || []);
 
@@ -896,6 +1029,112 @@ const ProductForm = () => {
             newInfo[index] = { ...newInfo[index], [field]: value, ...extra };
             return { ...prev, additional_info: newInfo };
         });
+    };
+
+    const copySpecifications = () => {
+        if (!formData.specifications || formData.specifications.length === 0) {
+            showToast('Không có thông số nào để copy', 'warning');
+            return;
+        }
+        localStorage.setItem('product_form_clipboard', JSON.stringify({
+            type: 'specifications',
+            data: formData.specifications
+        }));
+        showToast('Đã copy bảng thông số kỹ thuật', 'success');
+    };
+
+    const pasteSpecifications = () => {
+        const saved = localStorage.getItem('product_form_clipboard');
+        if (!saved) {
+            showToast('Chưa có dữ liệu đã copy', 'error');
+            return;
+        }
+        try {
+            const { type, data } = JSON.parse(saved);
+            if (!Array.isArray(data)) throw new Error('Invalid data');
+
+            let toPaste = [];
+            let success = 0;
+            let fail = 0;
+
+            if (type === 'specifications') {
+                toPaste = data.map(item => {
+                    if (item.label || item.value) { success++; return { label: item.label || '', value: item.value || '' }; }
+                    fail++; return null;
+                }).filter(Boolean);
+            } else if (type === 'additional_info') {
+                toPaste = data.map(item => {
+                    if (item.title || item.post_title) {
+                        success++;
+                        return { label: item.title || 'Thông tin', value: item.post_title || '' };
+                    }
+                    fail++; return null;
+                }).filter(Boolean);
+            }
+
+            if (toPaste.length > 0) {
+                setFormData(prev => ({ ...prev, specifications: [...prev.specifications, ...toPaste] }));
+                const msg = type === 'specifications' ? `Đã dán ${success} thông số` : `Đã dán chéo ${success} mục từ Thông tin bổ sung`;
+                showToast(msg + (fail > 0 ? `, bỏ qua ${fail} dòng lỗi` : ''), 'success');
+            } else {
+                showToast('Không tìm thấy dữ liệu hợp lệ để dán', 'warning');
+            }
+        } catch (e) {
+            showToast('Lỗi khi dán dữ liệu', 'error');
+        }
+    };
+
+    const copyAdditionalInfo = () => {
+        if (!formData.additional_info || formData.additional_info.length === 0) {
+            showToast('Không có thông tin bổ sung nào để copy', 'warning');
+            return;
+        }
+        localStorage.setItem('product_form_clipboard', JSON.stringify({
+            type: 'additional_info',
+            data: formData.additional_info
+        }));
+        showToast('Đã copy bảng thông tin bổ sung', 'success');
+    };
+
+    const pasteAdditionalInfo = () => {
+        const saved = localStorage.getItem('product_form_clipboard');
+        if (!saved) {
+            showToast('Chưa có dữ liệu đã copy', 'error');
+            return;
+        }
+        try {
+            const { type, data } = JSON.parse(saved);
+            if (!Array.isArray(data)) throw new Error('Invalid data');
+
+            let toPaste = [];
+            let success = 0;
+            let fail = 0;
+
+            if (type === 'additional_info') {
+                toPaste = data.map(item => {
+                    if (item.title || item.post_title || item.post_id) { success++; return { ...item }; }
+                    fail++; return null;
+                }).filter(Boolean);
+            } else if (type === 'specifications') {
+                toPaste = data.map(item => {
+                    if (item.label || item.value) {
+                        success++;
+                        return { title: item.label || 'Thông tin', post_id: '', post_title: item.value || '' };
+                    }
+                    fail++; return null;
+                }).filter(Boolean);
+            }
+
+            if (toPaste.length > 0) {
+                setFormData(prev => ({ ...prev, additional_info: [...prev.additional_info, ...toPaste] }));
+                const msg = type === 'additional_info' ? `Đã dán ${success} mục thông tin` : `Đã dán chéo ${success} mục từ Bảng thông số`;
+                showToast(msg + (fail > 0 ? `, bỏ qua ${fail} dòng lỗi` : ''), 'success');
+            } else {
+                showToast('Không tìm thấy dữ liệu hợp lệ để dán', 'warning');
+            }
+        } catch (e) {
+            showToast('Lỗi khi dán dữ liệu', 'error');
+        }
     };
 
     const handleAIGenerate = async () => {
@@ -1288,6 +1527,86 @@ const ProductForm = () => {
         }));
     };
 
+    const moveBundleItem = (optionId, dragIndex, hoverIndex) => {
+        setBundleOptions(prev => prev.map(o => {
+            if (o.id !== optionId) return o;
+            const newItems = [...o.items];
+            const dragItem = newItems[dragIndex];
+            newItems.splice(dragIndex, 1);
+            newItems.splice(hoverIndex, 0, dragItem);
+            return { ...o, items: newItems };
+        }));
+    };
+
+    const toggleBundleSorting = (optionId) => {
+        setIsSortingBundle(prev => ({
+            ...prev,
+            [optionId]: !prev[optionId]
+        }));
+    };
+
+    const handleRefreshBundlePrices = async () => {
+        if (bundleOptions.length === 0) {
+            showToast('Không có sản phẩm nào để làm mới', 'warning');
+            return;
+        }
+
+        setIsRefreshingPrices(true);
+        try {
+            const allItems = bundleOptions.flatMap(opt => opt.items);
+            const updatedItemsMap = {}; // { key: {price, sku} }
+            
+            // Collect unique product IDs to fetch
+            const productIds = [...new Set(allItems.map(it => it.id))];
+            
+            await Promise.all(productIds.map(async (pId) => {
+                try {
+                    const res = await productApi.getOne(pId);
+                    const product = res.data;
+                    
+                    // Root product price
+                    updatedItemsMap[pId] = {
+                        price: product.price,
+                        sku: product.sku
+                    };
+
+                    // Variant prices
+                    if (product.type === 'configurable') {
+                        const variants = (product.linked_products || []).filter(p => p.pivot?.link_type === 'super_link');
+                        variants.forEach(v => {
+                            updatedItemsMap[`${pId}_${v.id}`] = {
+                                price: v.price,
+                                sku: v.sku
+                            };
+                        });
+                        // Update cache for variant selectors
+                        setBundleItemVariants(prev => ({ ...prev, [pId]: variants }));
+                    }
+                } catch (e) {
+                    console.error(`Failed to refresh item ${pId}`, e);
+                }
+            }));
+
+            setBundleOptions(prev => prev.map(opt => ({
+                ...opt,
+                items: opt.items.map(item => {
+                    const key = item.variant_id ? `${item.id}_${item.variant_id}` : item.id;
+                    const updates = updatedItemsMap[key] || updatedItemsMap[item.id];
+                    if (updates) {
+                        return { ...item, ...updates };
+                    }
+                    return item;
+                })
+            })));
+
+            showToast('Đã làm mới giá bán từ sản phẩm gốc.', 'success');
+        } catch (error) {
+            showToast('Lỗi khi làm mới giá.', 'error');
+        } finally {
+            setIsRefreshingPrices(false);
+        }
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setIsSaving(true);
@@ -1566,6 +1885,7 @@ const ProductForm = () => {
             </div>
 
             {/* Scrollable Form Content */}
+            <DndProvider backend={HTML5Backend}>
             <div className="flex-1 overflow-y-auto custom-scrollbar pt-4 pb-12">
                 <form id="product-form" onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-12 gap-4 max-w-[1800px] mx-auto px-1">
                     <div className="lg:col-span-8 space-y-4">
@@ -1712,14 +2032,34 @@ const ProductForm = () => {
 
                                 <div className="space-y-3">
                                     <div className="flex justify-between items-center bg-stone/5 p-2 rounded-sm border border-stone/10">
-                                        <span className="text-[12px] font-bold text-primary uppercase">Bảng thông số kĩ thuật (JSON)</span>
-                                        <button 
-                                            type="button" 
-                                            onClick={addSpecRow}
-                                            className="size-8 bg-primary text-white flex items-center justify-center rounded-sm hover:bg-gold transition-colors shadow-sm"
-                                        >
-                                            <span className="material-symbols-outlined text-[18px]">add</span>
-                                        </button>
+                                        <span className="text-[12px] font-bold text-primary uppercase">Bảng thông số kĩ thuật</span>
+                                        <div className="flex items-center gap-1.5">
+                                            <button 
+                                                type="button"
+                                                onClick={copySpecifications}
+                                                className="h-8 px-2.5 bg-white border border-stone/20 text-stone hover:text-primary hover:border-primary flex items-center gap-1.5 rounded-sm transition-all text-[10px] font-bold uppercase"
+                                                title="Sắp chép bảng thông số"
+                                            >
+                                                <span className="material-symbols-outlined text-[16px]">content_copy</span>
+                                                Copy
+                                            </button>
+                                            <button 
+                                                type="button"
+                                                onClick={pasteSpecifications}
+                                                className="h-8 px-2.5 bg-white border border-stone/20 text-stone hover:text-primary hover:border-primary flex items-center gap-1.5 rounded-sm transition-all text-[10px] font-bold uppercase"
+                                                title="Dán bảng thông số"
+                                            >
+                                                <span className="material-symbols-outlined text-[16px]">content_paste</span>
+                                                Paste
+                                            </button>
+                                            <button 
+                                                type="button" 
+                                                onClick={addSpecRow}
+                                                className="size-8 bg-primary text-white flex items-center justify-center rounded-sm hover:bg-gold transition-colors shadow-sm"
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]">add</span>
+                                            </button>
+                                        </div>
                                     </div>
                                     <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
                                         {formData.specifications.map((spec, idx) => (
@@ -1764,13 +2104,33 @@ const ProductForm = () => {
                                             <span className="material-symbols-outlined text-primary/40 text-[18px]">library_books</span>
                                             <span className="text-[12px] font-bold text-primary uppercase">Thông tin bổ sung</span>
                                         </div>
-                                        <button 
-                                            type="button" 
-                                            onClick={addAdditionalInfoRow}
-                                            className="size-8 bg-primary text-white flex items-center justify-center rounded-sm hover:bg-gold transition-colors shadow-sm"
-                                        >
-                                            <span className="material-symbols-outlined text-[18px]">add</span>
-                                        </button>
+                                        <div className="flex items-center gap-1.5">
+                                            <button 
+                                                type="button"
+                                                onClick={copyAdditionalInfo}
+                                                className="h-8 px-2.5 bg-white border border-stone/20 text-stone hover:text-primary hover:border-primary flex items-center gap-1.5 rounded-sm transition-all text-[10px] font-bold uppercase"
+                                                title="Sao chép thông tin bổ sung"
+                                            >
+                                                <span className="material-symbols-outlined text-[16px]">content_copy</span>
+                                                Copy
+                                            </button>
+                                            <button 
+                                                type="button"
+                                                onClick={pasteAdditionalInfo}
+                                                className="h-8 px-2.5 bg-white border border-stone/20 text-stone hover:text-primary hover:border-primary flex items-center gap-1.5 rounded-sm transition-all text-[10px] font-bold uppercase"
+                                                title="Dán thông tin bổ sung"
+                                            >
+                                                <span className="material-symbols-outlined text-[16px]">content_paste</span>
+                                                Paste
+                                            </button>
+                                            <button 
+                                                type="button" 
+                                                onClick={addAdditionalInfoRow}
+                                                className="size-8 bg-primary text-white flex items-center justify-center rounded-sm hover:bg-gold transition-colors shadow-sm"
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]">add</span>
+                                            </button>
+                                        </div>
                                     </div>
                                     <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1">
                                         {formData.additional_info.map((info, idx) => (
@@ -2345,15 +2705,15 @@ const ProductForm = () => {
 
                                 <div className="space-y-3">
                                     <div className="grid grid-cols-12 gap-2 px-3 pb-2 border-b border-stone/5">
-                                        <div className="col-span-1 text-[10px] font-black uppercase text-stone/40">Ảnh</div>
-                                        <div className="col-span-4 text-[10px] font-black uppercase text-stone/40">Sản phẩm</div>
-                                        <div className="col-span-2 text-[10px] font-black uppercase text-stone/40 text-center">Số lượng</div>
+                                        <div className="col-span-1 text-[10px] font-black uppercase text-black">Ảnh</div>
+                                        <div className="col-span-4 text-[10px] font-black uppercase text-black">Sản phẩm</div>
+                                        <div className="col-span-2 text-[10px] font-black uppercase text-black text-center">Số lượng</div>
                                         {formData.type === 'bundle' ? (
-                                            <div className="col-span-2 text-[10px] font-black uppercase text-stone/40 text-right">Tổng giá</div>
+                                            <div className="col-span-2 text-[10px] font-black uppercase text-black text-right">Tổng giá</div>
                                         ) : (
-                                            <div className="col-span-2 text-[10px] font-black uppercase text-stone/40 text-center">Bắt buộc?</div>
+                                            <div className="col-span-2 text-[10px] font-black uppercase text-black text-center">Bắt buộc?</div>
                                         )}
-                                        <div className="col-span-2 text-[10px] font-black uppercase text-stone/40 text-right">Giá gốc</div>
+                                        <div className="col-span-2 text-[10px] font-black uppercase text-black text-right">Giá gốc</div>
                                         <div className="col-span-1"></div>
                                     </div>
 
@@ -2409,7 +2769,7 @@ const ProductForm = () => {
                                                     )}
                                                 </div>
                                                 <div className="col-span-2 text-right">
-                                                    <p className="text-[12px] font-black text-primary/60">{formatNumberOutput(item.price)}₫</p>
+                                                    <p className="text-[12px] font-black text-black">{formatNumberOutput(item.price)}₫</p>
                                                 </div>
                                                 <div className="col-span-1 flex justify-end">
                                                     <button
@@ -2432,14 +2792,46 @@ const ProductForm = () => {
                             <div className="bg-white border border-gold/20 p-6 shadow-premium-sm rounded-sm animate-fade-in mb-8">
                                 <div className="flex justify-between items-center mb-6 pb-4 border-b border-gold/10">
                                     <SectionTitle icon="inventory_2" title="Cấu hình tùy chọn Bộ / Combo" />
-                                    <button
-                                        type="button"
-                                        onClick={handleAddBundleOption}
-                                        className="flex items-center gap-2 bg-gold/10 hover:bg-gold/20 text-gold px-4 py-2 rounded-sm transition-all text-[13px] font-black uppercase tracking-widest"
-                                    >
-                                        <span className="material-symbols-outlined text-[20px]">add_circle</span>
-                                        Thêm Tùy chọn mới
-                                    </button>
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={handleRefreshBundlePrices}
+                                            disabled={isRefreshingPrices || bundleOptions.length === 0}
+                                            className={`flex items-center gap-2 px-4 py-2 rounded-sm transition-all text-[12px] font-bold uppercase tracking-widest ${isRefreshingPrices ? 'bg-stone/10 text-stone/40' : 'bg-primary/5 hover:bg-primary/10 text-primary border border-primary/20'}`}
+                                            title="Lấy giá mới nhất từ sản phẩm gốc"
+                                        >
+                                            <span className={`material-symbols-outlined text-[18px] ${isRefreshingPrices ? 'animate-spin' : ''}`}>refresh</span>
+                                            {isRefreshingPrices ? 'Đang làm mới...' : 'Làm mới giá'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleAddBundleOption}
+                                            className="flex items-center gap-2 bg-gold/10 hover:bg-gold/20 text-gold px-4 py-2 rounded-sm transition-all text-[12px] font-black uppercase tracking-widest"
+                                        >
+                                            <span className="material-symbols-outlined text-[20px]">add_circle</span>
+                                            Thêm Tùy chọn mới
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Dynamic Bundle Header/Title */}
+                                <div className="mb-8 p-4 bg-primary/[0.02] border border-primary/5 rounded-sm">
+                                    <Field label="Tiêu đề hiển thị cho vùng chọn bộ (Frontend)" icon="title">
+                                        <div className="flex items-center gap-2">
+                                            <input
+                                                type="text"
+                                                name="bundle_title"
+                                                value={formData.bundle_title}
+                                                onChange={handleChange}
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px] placeholder:text-stone/20"
+                                                placeholder="VD: Chọn cấu hình theo ban thờ, Chọn kích thước..."
+                                            />
+                                            {formData.bundle_title && (
+                                                <span className="material-symbols-outlined text-green-500 text-[18px]">verified</span>
+                                            )}
+                                        </div>
+                                    </Field>
+                                    <p className="text-[10px] text-stone/40 mt-1.5 ml-1 italic">Văn bản này sẽ hiển thị ngay phía trên các nút chọn cấu hình ngoài trang chủ. Nếu để trống, tiêu đề sẽ tự động được ẩn.</p>
                                 </div>
 
                                 <div className="space-y-8">
@@ -2466,6 +2858,15 @@ const ProductForm = () => {
                                                         />
                                                      </div>
                                                      <div className="flex items-center gap-3">
+                                                         <button
+                                                            type="button"
+                                                            onClick={() => toggleBundleSorting(option.id)}
+                                                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-[11px] font-black uppercase transition-all ${isSortingBundle[option.id] ? 'bg-amber-500 text-white shadow-premium' : 'bg-gold/10 text-gold hover:bg-gold/20'}`}
+                                                            title="Sắp xếp thứ tự sản phẩm"
+                                                         >
+                                                            <span className="material-symbols-outlined text-[16px]">{isSortingBundle[option.id] ? 'done_all' : 'reorder'}</span>
+                                                            {isSortingBundle[option.id] ? 'Xong' : 'Sắp xếp'}
+                                                         </button>
                                                          <button
                                                             type="button"
                                                             onClick={() => setShowBundleSearch(showBundleSearch === option.id ? null : option.id)}
@@ -2511,7 +2912,7 @@ const ProductForm = () => {
                                                                                 <img src={(p.images?.find(i => i.is_primary) || p.images?.[0])?.image_url || 'https://placehold.co/100'} alt="" className="size-8 object-cover rounded shadow-sm border border-stone/5" />
                                                                                 <div className="flex-1">
                                                                                     <p className="text-[12px] font-bold text-primary truncate leading-tight group-hover:text-gold transition-colors">{p.name}</p>
-                                                                                    <p className="text-[9px] font-mono text-gold uppercase">{p.sku}</p>
+                                                                                    <p className="text-[10px] font-mono text-gold uppercase">{p.sku}</p>
                                                                                 </div>
                                                                                 <p className="text-[11px] font-black text-brick">{formatNumberOutput(p.price)}₫</p>
                                                                             </div>
@@ -2523,62 +2924,37 @@ const ProductForm = () => {
                                                     </div>
                                                 )}
 
-                                                <div className="bg-white">
+                                                 <div className="bg-white">
                                                     {option.items.length > 0 && (
                                                         <table className="w-full text-left text-[12px]">
                                                             <thead>
-                                                                <tr className="bg-stone/[0.02] text-stone/40 border-b border-stone/5">
-                                                                    <th className="pl-5 py-2 w-12 text-center uppercase font-black">Mặc định</th>
-                                                                    <th className="px-3 py-2 uppercase font-black">Sản phẩm</th>
-                                                                    <th className="px-3 py-2 uppercase font-black">Biến thể</th>
-                                                                    <th className="px-3 py-2 uppercase font-black text-center">Giá gốc</th>
-                                                                    <th className="px-3 py-2 uppercase font-black text-center">Số lượng</th>
+                                                                <tr className="bg-[#f2eddf]/20 text-black border-b border-gold/10">
+                                                                    <th className="pl-5 py-2.5 w-16 text-center uppercase font-black tracking-widest text-[10px]">
+                                                                        {isSortingBundle[option.id] ? 'Vị trí' : 'Default'}
+                                                                    </th>
+                                                                    <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px]">Sản phẩm</th>
+                                                                    <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px]">Biến thể</th>
+                                                                    <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px] text-center">Giá bán</th>
+                                                                    <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px] text-center">Số lượng</th>
                                                                     <th className="px-3 py-2 w-12"></th>
                                                                 </tr>
                                                             </thead>
                                                             <tbody>
-                                                                {option.items.map(item => (
-                                                                    <tr key={item.id} className="border-b border-stone/5 hover:bg-gold/[0.02]">
-                                                                        <td className="pl-5 py-2 text-center">
-                                                                            <div onClick={() => handleSetDefaultInOption(option.id, item.id)} className={`size-4 rounded-full border-2 mx-auto cursor-pointer flex items-center justify-center ${item.is_default ? 'border-gold bg-gold' : 'border-stone/20'}`}>
-                                                                                {item.is_default && <span className="material-symbols-outlined text-white text-[10px] font-black">check</span>}
-                                                                            </div>
-                                                                        </td>
-                                                                        <td className="px-3 py-2">
-                                                                            <div className="flex items-center gap-2">
-                                                                                <img src={item.image_url} alt="" className="size-8 object-cover rounded border" />
-                                                                                <div className="truncate max-w-[200px]">
-                                                                                    <p className="font-bold text-primary truncate" title={item.name}>{item.name}</p>
-                                                                                    <p className="text-[10px] text-gold uppercase font-mono">{item.sku}</p>
-                                                                                </div>
-                                                                            </div>
-                                                                        </td>
-                                                                        <td className="px-3 py-2">
-                                                                            {item.type === 'configurable' ? (
-                                                                                <select
-                                                                                    value={item.variant_id || ''}
-                                                                                    onChange={(e) => handleUpdateBundleItemVariant(option.id, item.id, e.target.value)}
-                                                                                    className="w-full bg-gold/5 border border-gold/10 rounded-sm px-2 py-1 text-[11px] font-bold text-primary focus:outline-none"
-                                                                                >
-                                                                                    <option value="">Chọn biến thể...</option>
-                                                                                    {(bundleItemVariants[item.id] || []).map(v => (
-                                                                                        <option key={v.id} value={v.id}>
-                                                                                            {v.name || (v.attribute_values || []).map(av => av.value).join(' / ')} - {v.sku}
-                                                                                        </option>
-                                                                                    ))}
-                                                                                </select>
-                                                                            ) : (
-                                                                                <span className="text-stone/30 italic">Không có biến thể</span>
-                                                                            )}
-                                                                        </td>
-                                                                        <td className="px-3 py-2 text-center font-bold text-stone/50">{formatNumberOutput(item.price)}₫</td>
-                                                                        <td className="px-3 py-2 text-center">
-                                                                            <input type="number" value={item.quantity} onChange={(e) => handleUpdateBundleItemQty(option.id, item.id, e.target.value)} className="w-12 text-center bg-stone/5 rounded border-none py-1 text-[11px] font-black" />
-                                                                        </td>
-                                                                        <td className="px-3 py-2 text-right pr-5">
-                                                                            <button type="button" onClick={() => handleRemoveItemFromOption(option.id, item.id)} className="text-stone/20 hover:text-brick"><span className="material-symbols-outlined text-[16px]">close</span></button>
-                                                                        </td>
-                                                                    </tr>
+                                                                {option.items.map((item, idx) => (
+                                                                    <DraggableBundleItem 
+                                                                        key={item.id}
+                                                                        index={idx}
+                                                                        optionId={option.id}
+                                                                        item={item}
+                                                                        moveBundleItem={moveBundleItem}
+                                                                        handleSetDefaultInOption={handleSetDefaultInOption}
+                                                                        handleUpdateBundleItemVariant={handleUpdateBundleItemVariant}
+                                                                        bundleItemVariants={bundleItemVariants}
+                                                                        handleUpdateBundleItemQty={handleUpdateBundleItemQty}
+                                                                        handleRemoveItemFromOption={handleRemoveItemFromOption}
+                                                                        formatNumberOutput={formatNumberOutput}
+                                                                        isSortingMode={isSortingBundle[option.id]}
+                                                                    />
                                                                 ))}
                                                             </tbody>
                                                         </table>
@@ -2617,8 +2993,38 @@ const ProductForm = () => {
                                 </div>
                             </div>
                             
+                            {/* Image Grid */}
+                            <div
+                                className="flex flex-nowrap overflow-x-auto gap-3 min-h-[140px] p-3 bg-stone/5 border-2 border-dashed border-gold/10 rounded-sm items-start custom-scrollbar"
+                                onMouseDown={(e) => {
+                                    if (e.target.closest('.image-item-card') || e.target.closest('button') || e.target.closest('input')) return;
+                                    setSelectedImages([]);
+                                    setIsDragSelecting(true);
+                                }}
+                            >
+                                {images.map((img, index) => (
+                                    <DraggableImage
+                                        key={img.id}
+                                        img={img}
+                                        index={index}
+                                        moveImage={moveImage}
+                                        handleSetPrimary={handleSetPrimary}
+                                        handleDeleteImage={handleDeleteImage}
+                                        isSelected={selectedImages.includes(img.id)}
+                                        toggleSelectImage={toggleSelectImage}
+                                        isDragSelecting={isDragSelecting}
+                                    />
+                                ))}
+                                {images.length === 0 && (
+                                    <div className="col-span-full flex flex-col items-center justify-center py-12 text-stone/30">
+                                        <span className="material-symbols-outlined text-5xl mb-2">collections</span>
+                                        <p className="font-bold italic text-sm">Chưa có hình ảnh nào cho tác phẩm này</p>
+                                    </div>
+                                )}
+                            </div>
+
                             {/* YouTube Video Link */}
-                            <div className="mb-6 px-1">
+                            <div className="mb-6 px-1 mt-6">
                                 <Field label="Link Video YouTube (Tùy chọn)" className="border-red-100 bg-red-50/10">
                                     <div className="flex items-center w-full gap-2 py-1">
                                         <span className="material-symbols-outlined text-red-600/40 text-[20px]">movie</span>
@@ -2639,37 +3045,6 @@ const ProductForm = () => {
                                 </Field>
                                 <p className="text-[10px] text-stone/40 mt-1.5 ml-1 italic">Dán link YouTube vào đây để hiển thị Tab Video trong Gallery sản phẩm ở ngoài trang chủ.</p>
                             </div>
-
-                            <DndProvider backend={HTML5Backend}>
-                                <div
-                                    className="flex flex-nowrap overflow-x-auto gap-3 min-h-[140px] p-3 bg-stone/5 border-2 border-dashed border-gold/10 rounded-sm items-start custom-scrollbar"
-                                    onMouseDown={(e) => {
-                                        if (e.target.closest('.image-item-card') || e.target.closest('button') || e.target.closest('input')) return;
-                                        setSelectedImages([]);
-                                        setIsDragSelecting(true);
-                                    }}
-                                >
-                                    {images.map((img, index) => (
-                                        <DraggableImage
-                                            key={img.id}
-                                            img={img}
-                                            index={index}
-                                            moveImage={moveImage}
-                                            handleSetPrimary={handleSetPrimary}
-                                            handleDeleteImage={handleDeleteImage}
-                                            isSelected={selectedImages.includes(img.id)}
-                                            toggleSelectImage={toggleSelectImage}
-                                            isDragSelecting={isDragSelecting}
-                                        />
-                                    ))}
-                                    {images.length === 0 && (
-                                        <div className="col-span-full flex flex-col items-center justify-center py-12 text-stone/30">
-                                            <span className="material-symbols-outlined text-5xl mb-2">collections</span>
-                                            <p className="font-bold italic text-sm">Chưa có hình ảnh nào cho tác phẩm này</p>
-                                        </div>
-                                    )}
-                                </div>
-                            </DndProvider>
                         </div>
 
                         {/* Description */}
@@ -3002,6 +3377,7 @@ const ProductForm = () => {
                     </div>
                 </form>
             </div>
+            </DndProvider>
 
             {/* Slug Management Modal */}
             <AnimatePresence>

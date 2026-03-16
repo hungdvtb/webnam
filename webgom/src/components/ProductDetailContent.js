@@ -55,23 +55,22 @@ export default function ProductDetailContent({ product }) {
     if (product?.type === 'bundle') {
       const items = product.bundle_items || product.grouped_items || [];
       if (items.length > 0) {
-        // Track seen groups to select at least one item per group
-        const seenGroups = new Set();
-        
-        setBundleItems(items.map(item => {
+        let firstConfigTitle = '';
+        const mappedItems = items.map(item => {
           const groupName = item.option_title || item.pivot?.option_title || '';
-          const isFirstInGroup = groupName && !seenGroups.has(groupName);
-          if (groupName) seenGroups.add(groupName);
-
-          const isSelected = !!item.pivot?.is_default || !groupName || isFirstInGroup;
-
+          if (!firstConfigTitle && groupName) firstConfigTitle = groupName;
+          
           return {
             ...item,
             qty: item.pivot?.quantity || 1,
-            selected: isSelected,
             option_title: groupName
           };
-        }));
+        });
+
+        setBundleItems(mappedItems.map(item => ({
+          ...item,
+          selected: !!item.pivot?.is_default || !item.option_title || item.option_title === firstConfigTitle
+        })));
       }
     }
   }, [product]);
@@ -127,6 +126,21 @@ export default function ProductDetailContent({ product }) {
       }
       return item;
     }));
+  };
+
+  const switchBundleConfiguration = (configName) => {
+    setBundleItems(prev => {
+      return prev.map(item => {
+        const itemConfig = item.option_title || item.pivot?.option_title || '';
+        if (itemConfig === configName) {
+          return { ...item, selected: true };
+        } else if (itemConfig && itemConfig !== configName) {
+          // Deselect items from other named configurations
+          return { ...item, selected: false };
+        }
+        return item; // Keep items without a configuration (general items)
+      });
+    });
   };
 
   const toggleBundleItem = (id) => {
@@ -293,7 +307,8 @@ export default function ProductDetailContent({ product }) {
         updateBundleItemQuantity={updateBundleItemQuantity}
         updateBundleItemProduct={updateBundleItemProduct}
         removeBundleItem={removeBundleItem}
-        toggleBundleItem={toggleBundleItem}
+        switchBundleConfiguration={switchBundleConfiguration}
+        handleAddToCart={handleAddToCart}
       />
     );
   }

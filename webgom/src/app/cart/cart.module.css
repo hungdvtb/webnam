@@ -1,16 +1,5 @@
-/* CSS variables already defined in globals.css, but we use local ones for scoping or overrides if needed */
-/* Following strictly C:\xampp\htdocs\webnam\design\thiet_ke_moi\gio_hang_va_thanh_toan\style.css */
-
 .cartPage {
-    background-color: #FDFBF7;
-    color: #1A1A1A;
-    font-family: 'EB Garamond', serif;
-    font-size: 18px;
-    line-height: 1.6;
-    overflow-x: hidden;
-    background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M11 18c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm48 25c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm-43-7c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm63 31c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM34 90c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm56-76c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM12 86c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zm66-3c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zm-40-39c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zm0-24c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2z' fill='%23c5a065' fill-opacity='0.03' fill-rule='evenodd'/%3E%3C/svg%3E");
     padding: 4rem 0;
-    min-height: 100vh;
 }
 
 .pageHeader {
@@ -19,16 +8,14 @@
 }
 
 .pageTitle {
-    font-family: 'Playfair Display', serif;
-    font-weight: 700;
-    color: #1B365D;
     font-size: 3rem;
     margin-bottom: 0.5rem;
+    color: var(--primary);
 }
 
 .pageSubtitle {
     font-style: italic;
-    color: #666666;
+    color: var(--text-muted);
 }
 
 .checkoutGrid {
@@ -44,25 +31,15 @@
     }
 }
 
+/* Section Styling */
 .sectionCard {
-    background: #FFFFFF;
-    border: 1px solid #E5E1D8;
+    background: var(--white);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 2.5rem;
     margin-bottom: 2rem;
-    box-shadow: 0 10px 30px -5px rgba(27, 54, 93, 0.1);
+    box-shadow: var(--shadow);
     animation: fadeInUp 0.6s ease forwards;
-}
-
-@keyframes fadeInUp {
-    from {
-        opacity: 0;
-        transform: translateY(20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
 }
 
 .sectionHead {
@@ -75,23 +52,22 @@
 .sectionNumber {
     width: 32px;
     height: 32px;
-    background: #1B365D;
-    color: #FFFFFF;
+    background: var(--primary);
+    color: var(--white);
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-family: 'Playfair Display', serif;
+    font-family: var(--font-display);
     font-weight: 700;
 }
 
 .sectionTitle {
-    font-family: 'Playfair Display', serif;
-    font-weight: 700;
-    color: #1B365D;
     font-size: 1.75rem;
+    color: var(--primary);
 }
 
+/* Cart Items */
 .cartList {
     display: flex;
     flex-direction: column;
@@ -100,7 +76,7 @@
 
 .cartItem {
     padding: 1.5rem;
-    border: 1px solid #E5E1D8;
+    border: 1px solid var(--border);
     border-radius: 6px;
     transition: border-color 0.3s ease;
     animation: fadeInUp 0.6s ease forwards;
@@ -108,7 +84,7 @@
 }
 
 .cartItem:hover {
-    border-color: #C5A065;
+    border-color: var(--accent);
 }
 
 .itemMain {
@@ -121,16 +97,9 @@
     height: 120px;
     border-radius: 4px;
     overflow: hidden;
-    background: #F5F1EA;
-    border: 1px solid #E5E1D8;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
     position: relative;
-    flex-shrink: 0;
-}
-
-.itemImage img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
 }
 
 .itemDetails {
@@ -146,17 +115,15 @@
 }
 
 .itemName {
-    font-family: 'Playfair Display', serif;
-    font-weight: 700;
-    color: #1B365D;
     font-size: 1.25rem;
     margin-bottom: 0.25rem;
+    color: var(--primary);
 }
 
 .itemMeta {
     font-size: 0.9rem;
     font-style: italic;
-    color: #666666;
+    color: var(--text-muted);
     margin-bottom: 1rem;
 }
 
@@ -170,41 +137,59 @@
 .quantityCtrl {
     display: flex;
     align-items: center;
-    border: 1px solid #E5E1D8;
+    border: 1px solid var(--border);
     border-radius: 4px;
 }
 
 .quantityCtrl button {
     padding: 0.25rem 0.75rem;
-    color: #1B365D;
+    color: var(--primary);
     font-weight: 700;
-    cursor: pointer;
     background: none;
     border: none;
+    cursor: pointer;
 }
 
 .quantityCtrl input {
     width: 40px;
     text-align: center;
     border: none;
-    border-left: 1px solid #E5E1D8;
-    border-right: 1px solid #E5E1D8;
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
     font-weight: 700;
     padding: 0.25rem 0;
     background: transparent;
 }
 
 .itemPrice {
-    font-family: 'EB Garamond', serif;
+    font-family: var(--font-body);
     font-weight: 800;
-    color: #1B365D;
+    color: var(--primary);
     font-size: 1.3rem;
 }
 
+.iconBtn {
+    position: relative;
+    padding: 0.5rem;
+    border-radius: 50%;
+    transition: background 0.3s ease;
+    background: none;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.iconBtn:hover {
+    background: rgba(197, 160, 101, 0.1);
+}
+
+/* Combo / Group Item Specifics */
 .itemGroup {
     margin-top: 1.5rem;
     padding-top: 1.5rem;
-    border-top: 1px dashed #E5E1D8;
+    border-top: 1px dashed var(--border);
 }
 
 .groupLabel {
@@ -212,7 +197,7 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    color: #C5A065;
+    color: var(--accent);
     margin-bottom: 1rem;
     display: block;
 }
@@ -228,7 +213,7 @@
     align-items: center;
     gap: 1rem;
     padding: 0.75rem;
-    background: #F5F1EA;
+    background: var(--bg-alt);
     border-radius: 4px;
     font-size: 0.9rem;
 }
@@ -236,12 +221,12 @@
 .childIcon {
     width: 40px;
     height: 40px;
-    background: #FFFFFF;
+    background: var(--white);
     border-radius: 4px;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #C5A065;
+    color: var(--accent);
 }
 
 .childName {
@@ -262,6 +247,7 @@
     opacity: 1;
 }
 
+/* Forms */
 .formGrid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -293,7 +279,7 @@
 .inputGroup label {
     font-size: 0.85rem;
     font-weight: 600;
-    color: #1B365D;
+    color: var(--primary);
     text-transform: uppercase;
     letter-spacing: 0.05em;
 }
@@ -301,18 +287,18 @@
 .inputField {
     width: 100%;
     padding: 0.85rem 1rem;
-    border: 1px solid #E5E1D8;
+    border: 1px solid var(--border);
     border-radius: 4px;
-    font-family: 'Inter', sans-serif;
+    font-family: var(--font-sans);
     font-size: 0.95rem;
-    background: #FDFBF7;
+    background: var(--bg-light);
     transition: all 0.3s ease;
 }
 
 .inputField:focus {
     outline: none;
-    border-color: #C5A065;
-    background: #FFFFFF;
+    border-color: var(--accent);
+    background: var(--white);
     box-shadow: 0 0 0 3px rgba(197, 160, 101, 0.1);
 }
 
@@ -327,60 +313,59 @@
     align-items: center;
     gap: 1.5rem;
     padding: 1.5rem;
-    border: 1.5px solid #E5E1D8;
+    border: 1.5px solid var(--border);
     border-radius: 8px;
     cursor: pointer;
     transition: all 0.3s ease;
 }
 
 .paymentOption:hover {
-    border-color: #C5A065;
+    border-color: var(--accent);
     background: rgba(197, 160, 101, 0.05);
 }
 
 .activeOption {
-    border-color: #1B365D;
+    border-color: var(--primary);
     background: rgba(27, 54, 93, 0.02);
 }
 
 .paymentOption input {
     width: 20px;
     height: 20px;
-    accent-color: #1B365D;
+    accent-color: var(--primary);
 }
 
-.optionText {
+.paymentDesc {
     flex: 1;
 }
 
-.optionTitle {
+.paymentTitle {
     display: block;
     font-weight: 700;
     font-size: 1.1rem;
-    color: #1B365D;
+    color: var(--primary);
 }
 
-.optionDesc {
+.paymentSubtext {
     display: block;
     font-size: 0.85rem;
-    color: #666666;
+    color: var(--text-muted);
     font-style: italic;
 }
 
+/* Sidebar Summary */
 .summaryCard {
     position: sticky;
     top: 120px;
-    background: #1B365D;
-    color: #FFFFFF;
+    background: var(--primary);
+    color: var(--white);
     padding: 3rem;
     border-radius: 8px;
     box-shadow: 0 20px 40px -10px rgba(27, 54, 93, 0.5);
 }
 
 .summaryCard h3 {
-    font-family: 'Playfair Display', serif;
-    font-weight: 700;
-    color: #C5A065;
+    color: var(--accent);
     text-align: center;
     border-bottom: 1px solid rgba(197, 160, 101, 0.3);
     padding-bottom: 1.5rem;
@@ -389,11 +374,16 @@
     text-transform: uppercase;
 }
 
+.summaryBody {
+    display: flex;
+    flex-direction: column;
+}
+
 .summaryRow {
     display: flex;
     justify-content: space-between;
     margin-bottom: 1rem;
-    font-family: 'Inter', sans-serif;
+    font-family: var(--font-sans);
     font-size: 0.95rem;
 }
 
@@ -401,22 +391,24 @@
     margin-top: 2rem;
     padding-top: 2rem;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
-    font-family: 'Playfair Display', serif;
+    font-family: var(--font-display);
     font-size: 1.5rem;
+    display: flex;
+    justify-content: space-between;
 }
 
 .totalPrice {
     font-size: 2.25rem;
-    color: #C5A065;
+    color: var(--accent);
 }
 
 .ctaButton {
     width: 100%;
-    background: #C5A065;
-    color: #FFFFFF;
+    background: var(--accent);
+    color: var(--white);
     padding: 1.25rem;
     border-radius: 4px;
-    font-family: 'Playfair Display', serif;
+    font-family: var(--font-display);
     font-weight: 700;
     font-size: 1.25rem;
     text-transform: uppercase;
@@ -429,7 +421,7 @@
 }
 
 .ctaButton:hover {
-    background: #A68249;
+    background: var(--accent-dark);
     transform: translateY(-2px);
     box-shadow: 0 8px 25px rgba(197, 160, 101, 0.4);
 }
@@ -449,39 +441,33 @@
 
 .badgeIcon {
     font-size: 1.5rem;
-    color: #C5A065;
+    color: var(--accent);
     margin-bottom: 0.5rem;
     display: block;
 }
 
-.iconBtn {
-    padding: 0.5rem;
-    border-radius: 50%;
-    transition: background 0.3s ease;
-    cursor: pointer;
-    background: none;
-    border: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.iconBtn:hover {
-    background: rgba(197, 160, 101, 0.1);
-}
-
-.textAccent { color: #C5A065; }
-.textPrimary { color: #1B365D; }
-.mt4 { margin-top: 1rem; }
-
 .emptyState {
     text-align: center;
-    padding: 10rem 2rem;
+    padding: 100px 0;
 }
 
 .emptyIcon {
-    font-size: 10rem;
-    color: #C5A065;
-    opacity: 0.3;
+    font-size: 80px;
+    color: var(--border);
     margin-bottom: 2rem;
 }
+
+/* Micro-animations */
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.textAccent { color: var(--accent); }
+.mt4 { margin-top: 1rem; }

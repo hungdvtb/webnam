@@ -264,29 +264,44 @@ class StorefrontController extends Controller
     {
         $product = Product::findOrFail($id);
         $accountId = $request->header('X-Account-Id');
-
-        $related = Product::query()
-            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+        
+        $limit = 8;
+        
+        // 1. Get explicitly linked related products first
+        $explicitRelated = $product->relatedProducts()
             ->where('status', true)
-            ->whereDoesntHave('parentConfigurable')
-            ->where('id', '!=', $id)
-            ->where('category_id', $product->category_id)
             ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')])
-            ->inRandomOrder()
-            ->limit(8)
-            ->get()
-            ->map(fn($p) => [
-                'id' => $p->id,
-                'name' => $p->name,
-                'slug' => $p->slug,
-                'price' => $p->price,
-                'current_price' => $p->current_price,
-                'main_image' => $p->main_image,
-                'average_rating' => round($p->average_rating, 1),
-                'primary_image' => $p->primary_image,
-            ]);
+            ->get();
+            
+        $relatedIds = $explicitRelated->pluck('id')->push($product->id)->toArray();
+        
+        // 2. If we need more, fill with random products from the same category
+        $fallback = collect([]);
+        if ($explicitRelated->count() < $limit) {
+            $fallback = Product::query()
+                ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+                ->where('status', true)
+                ->whereDoesntHave('parentConfigurable')
+                ->whereNotIn('id', $relatedIds)
+                ->where('category_id', $product->category_id)
+                ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')])
+                ->inRandomOrder()
+                ->limit($limit - $explicitRelated->count())
+                ->get();
+        }
 
-        return response()->json($related);
+        $result = $explicitRelated->concat($fallback)->shuffle()->map(fn($p) => [
+            'id' => $p->id,
+            'name' => $p->name,
+            'slug' => $p->slug,
+            'price' => $p->price,
+            'current_price' => $p->current_price,
+            'main_image' => $p->main_image,
+            'average_rating' => round($p->average_rating, 1),
+            'primary_image' => $p->primary_image,
+        ]);
+
+        return response()->json($result);
     }
 
     /**

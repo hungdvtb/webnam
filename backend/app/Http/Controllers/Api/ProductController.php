@@ -23,7 +23,7 @@ class ProductController extends Controller
         $query = Product::query()
             ->select([
             'id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity',
-            'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications'
+            'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url'
         ])
             ->with([
             'categories:id,name',
@@ -177,18 +177,22 @@ class ProductController extends Controller
         $sortBy = $request->input('sort_by', 'created_at');
         $sortOrder = $request->input('sort_order', 'desc');
 
-        $sortMapping = ['stock' => 'stock_quantity', 'category' => 'category_id'];
-        $validSortFields = ['id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'created_at', 'type', 'category_id'];
+        if ($sortBy === 'random') {
+            $query->inRandomOrder();
+        } else {
+            $sortMapping = ['stock' => 'stock_quantity', 'category' => 'category_id'];
+            $validSortFields = ['id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'created_at', 'type', 'category_id'];
 
-        $field = $sortMapping[$sortBy] ?? $sortBy;
-        if (!in_array($field, $validSortFields))
-            $field = 'created_at';
+            $field = $sortMapping[$sortBy] ?? $sortBy;
+            if (!in_array($field, $validSortFields))
+                $field = 'created_at';
 
-        $order = (strtolower($sortOrder) === 'asc') ? 'asc' : 'desc';
+            $order = (strtolower($sortOrder) === 'asc') ? 'asc' : 'desc';
 
-        // Ưu tiên đưa sản phẩm có biến thể lên đầu nếu cùng tiêu chí sắp xếp (giúp dễ quản lý)
-        $query->orderByRaw("CASE WHEN type = 'configurable' THEN 0 ELSE 1 END")
-            ->orderBy($field, $order);
+            // Ưu tiên đưa sản phẩm có biến thể lên đầu nếu cùng tiêu chí sắp xếp (giúp dễ quản lý)
+            $query->orderByRaw("CASE WHEN type = 'configurable' THEN 0 ELSE 1 END")
+                ->orderBy($field, $order);
+        }
 
         $perPage = (int)$request->get('per_page', 20);
         // Ensure perPage is reasonable
@@ -226,6 +230,8 @@ class ProductController extends Controller
             'meta_keywords' => 'nullable|string',
             'specifications' => 'nullable|string',
             'status' => 'nullable|boolean',
+            'video_url' => 'nullable|string',
+            'slug' => 'nullable|string|max:255|unique:products,slug',
             // linkages
             'linked_product_ids' => 'nullable|array',
             'linked_product_ids.*' => 'exists:products,id',
@@ -246,9 +252,22 @@ class ProductController extends Controller
             'type.required' => 'Vui lòng chọn loại sản phẩm.',
             'name.required' => 'Vui lòng nhập tên tác phẩm nghệ thuật.',
             'price.required' => 'Vui lòng nhập giá bán.',
-            'sku.unique' => 'Mã SKU này đã tồn tại, vui lòng chọn mã khác.',
             'stock_quantity.integer' => 'Số lượng tồn kho phải là số nguyên.',
+            'slug.unique' => 'Đường dẫn (slug) này đã tồn tại, vui lòng chọn tên khác.',
         ]);
+
+        if (empty($validated['slug'])) {
+            $validated['slug'] = Str::slug($validated['name']);
+            // Ensure unique slug if auto-generated
+            $baseSlug = $validated['slug'];
+            $counter = 1;
+            while (Product::where('slug', $validated['slug'])->exists()) {
+                $validated['slug'] = $baseSlug . '-' . $counter++;
+            }
+        } else {
+            // Force lowercase and slug format if manually entered
+            $validated['slug'] = Str::slug($validated['slug']);
+        }
 
         $product = Product::create(array_merge($validated, ['account_id' => $request->header('X-Account-Id')]));
 
@@ -443,8 +462,13 @@ class ProductController extends Controller
         ])->findOrFail($id);
 
         if ($product->type === 'configurable') {
-            // Get variations manually to find all used attribute values
-            $variations = $product->linkedProducts()->wherePivot('link_type', 'super_link')->with('attributeValues')->get();
+            // Get variations manually to find all used attribute values from IN-STOCK variations
+            $variations = $product->linkedProducts()
+                ->wherePivot('link_type', 'super_link')
+                ->where('stock_quantity', '>', 0) // Only count in-stock variations for initial attribute listing
+                ->with('attributeValues')
+                ->get();
+            
             $usedValuesByAttr = [];
             foreach ($variations as $v) {
                 foreach ($v->attributeValues as $av) {
@@ -452,16 +476,25 @@ class ProductController extends Controller
                 }
             }
 
-            // Filter the eager-loaded superAttributes' options
-            foreach ($product->superAttributes as $attribute) {
+            // Filter the eager-loaded superAttributes to only include those that have valid in-stock options
+            $filteredSuperAttributes = $product->superAttributes->filter(function($attribute) use ($usedValuesByAttr) {
                 $relevantValues = array_unique($usedValuesByAttr[$attribute->id] ?? []);
+                if (empty($relevantValues)) return false;
+
                 $filteredOptions = $attribute->options->filter(function($opt) use ($relevantValues) {
                     return in_array($opt->value, $relevantValues);
                 })->values();
-                $attribute->setRelation('options', $filteredOptions);
-            }
 
-            // Also expose variations more explicitly for frontend mapping
+                $attribute->setRelation('options', $filteredOptions);
+                return $filteredOptions->count() > 0;
+            })->values();
+
+            $product->setRelation('superAttributes', $filteredSuperAttributes);
+
+            // Also expose ALL variations (including out of stock ones if needed, 
+            // but for filtering we might want to know about them, or just keep what's returned by linkedProducts)
+            // Re-fetch all variations to ensure we have the full list for frontend logic if it needs to show "out of stock" instead of hiding
+            // But user said "không có hàng... phải ẩn hẳn", so let's stick to in-stock variations for selection logic.
             $product->setRelation('variations', $variations);
         }
 
@@ -498,6 +531,8 @@ class ProductController extends Controller
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
             'specifications' => 'nullable|string',
+            'video_url' => 'nullable|string',
+            'slug' => 'nullable|string|max:255|unique:products,slug,' . $id,
             'linked_product_ids' => 'nullable|array',
             'linked_product_ids.*' => 'exists:products,id',
             'link_type' => 'nullable|string',
@@ -513,11 +548,21 @@ class ProductController extends Controller
             'name.required' => 'Tên sản phẩm không được để trống.',
             'price.required' => 'Giá bán không được để trống.',
             'sku.unique' => 'Mã SKU này đã được sử dụng.',
+            'slug.unique' => 'Đường dẫn (slug) này đã tồn tại, vui lòng chọn tên khác.',
+            'slug.regex' => 'Đường dẫn chỉ được chứa chữ cái thường, số và dấu gạch ngang (VD: san-pham-1).',
         ]);
 
         // Capture which fields changed before saving
         $nameChanged = $product->isDirty('name');
         $skuChanged = $product->isDirty('sku');
+
+        if (isset($validated['slug'])) {
+            if (empty($validated['slug'])) {
+                $validated['slug'] = Str::slug($product->name);
+            } else {
+                $validated['slug'] = Str::slug($validated['slug']);
+            }
+        }
 
         $product->update($validated);
 

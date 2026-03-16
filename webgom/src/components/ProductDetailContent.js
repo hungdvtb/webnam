@@ -22,7 +22,22 @@ export default function ProductDetailContent({ product }) {
   useEffect(() => {
     if (product?.super_attributes?.length > 0) {
       const initialOptions = {};
+      // Preferred: pick values from the first available variation to ensure a valid combo
+      const firstVariant = product.variations?.[0];
+      
       product.super_attributes.forEach(attr => {
+        // Try to get value from first variant
+        if (firstVariant) {
+          const varVal = firstVariant.attribute_values?.find(av => 
+            (av.attribute?.code === attr.code || av.attribute_id === attr.id)
+          )?.value;
+          if (varVal) {
+            initialOptions[attr.code] = varVal;
+            return;
+          }
+        }
+
+        // Fallback to product default or first option
         const val = product.attribute_values?.find(av => av.attribute_id === attr.id)?.value;
         if (val) {
           initialOptions[attr.code] = val;
@@ -37,12 +52,15 @@ export default function ProductDetailContent({ product }) {
       setSelectedGroupItems(product.grouped_items.map(item => item.id));
     }
 
-    if (product?.type === 'bundle' && product.grouped_items?.length > 0) {
-      setBundleItems(product.grouped_items.map(item => ({
-        ...item,
-        qty: item.pivot?.quantity || 1,
-        selected: true
-      })));
+    if (product?.type === 'bundle') {
+      const items = product.bundle_items || product.grouped_items || [];
+      if (items.length > 0) {
+        setBundleItems(items.map(item => ({
+          ...item,
+          qty: item.pivot?.quantity || 1,
+          selected: !!item.pivot?.is_default
+        })));
+      }
     }
   }, [product]);
 
@@ -62,8 +80,9 @@ export default function ProductDetailContent({ product }) {
   const currentProduct = matchingVariant || product;
 
   const toggleGroupItem = (id) => {
-    const item = product.grouped_items?.find(i => i.id === id);
-    if (!item || item.is_required) return;
+    const items = product.bundle_items || product.grouped_items || [];
+    const item = items.find(i => i.id === id);
+    if (!item || item.pivot?.is_required) return;
     
     setSelectedGroupItems(prev => 
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
@@ -80,11 +99,28 @@ export default function ProductDetailContent({ product }) {
     setBundleItems(prev => prev.filter(item => item.id !== id));
   };
 
+  const toggleBundleItem = (id) => {
+    setBundleItems(prev => {
+      const itemToToggle = prev.find(it => it.id === id);
+      if (!itemToToggle) return prev;
+
+      const getGroupName = (it) => it.option_title || it.pivot?.option_title || it.category?.name || 'Thành phần mặc định';
+      const groupName = getGroupName(itemToToggle);
+
+      return prev.map(item => {
+        if (item.id === id) return { ...item, selected: true };
+        if (getGroupName(item) === groupName) return { ...item, selected: false };
+        return item;
+      });
+    });
+  };
+
   const displayPrice = useMemo(() => {
-    if (product?.type === 'grouped' && product.grouped_items?.length > 0) {
-      const sum = product.grouped_items
+    if (product?.type === 'grouped') {
+      const items = product.bundle_items || product.grouped_items || [];
+      const sum = items
         .filter(item => selectedGroupItems.includes(item.id))
-        .reduce((acc, item) => acc + (parseFloat(item.price) * (item.quantity || 1)), 0);
+        .reduce((acc, item) => acc + (parseFloat(item.price) * (item.pivot?.quantity || 1)), 0);
       return sum > 0 ? sum : product.price;
     }
     if (product?.type === 'bundle' && bundleItems.length > 0) {
@@ -122,19 +158,79 @@ export default function ProductDetailContent({ product }) {
   };
 
   const handleOptionSelect = (attrCode, value) => {
-    setSelectedOptions(prev => ({ ...prev, [attrCode]: value }));
+    setSelectedOptions(prev => {
+      const next = { ...prev, [attrCode]: value };
+      
+      // Auto-correct other attributes if they become invalid with the new selection
+      product.super_attributes?.forEach(attr => {
+        if (attr.code === attrCode) return;
+
+        const currentVal = next[attr.code];
+        const isPossible = product.variations?.some(variant => {
+          const othersMatch = Object.entries(next).every(([oCode, oVal]) => {
+            if (oCode === attr.code) return true;
+            return variant.attribute_values?.some(av => 
+              (av.attribute?.code === oCode || av.attribute_id === product.super_attributes.find(a => a.code === oCode)?.id) 
+              && av.value === oVal
+            );
+          });
+          const thisMatches = variant.attribute_values?.some(av => 
+            (av.attribute?.code === attr.code || av.attribute_id === attr.id) && av.value === currentVal
+          );
+          return othersMatch && thisMatches && variant.stock_quantity > 0;
+        });
+
+        if (!isPossible) {
+          // Find first valid option for this attribute given the current (new) state of NEXT
+          const firstValid = attr.options?.find(opt => {
+            return product.variations?.some(variant => {
+              const othersMatch = Object.entries(next).every(([oCode, oVal]) => {
+                if (oCode === attr.code) return true;
+                return variant.attribute_values?.some(av => 
+                  (av.attribute?.code === oCode || av.attribute_id === product.super_attributes.find(a => a.code === oCode)?.id) 
+                  && av.value === oVal
+                );
+              });
+              const thisMatches = variant.attribute_values?.some(av => 
+                (av.attribute?.code === attr.code || av.attribute_id === attr.id) && av.value === opt.value
+              );
+              return othersMatch && thisMatches && variant.stock_quantity > 0;
+            });
+          });
+          if (firstValid) next[attr.code] = firstValid.value;
+        }
+      });
+
+      return next;
+    });
     setActiveIndex(0);
   };
 
   const handleAddToCart = (e) => {
     if (e) e.preventDefault();
-    addToCart(product, quantity, selectedOptions, selectedGroupItems);
+    const itemsToCart = product.type === 'bundle' 
+      ? bundleItems.filter(it => it.selected).map(it => ({ 
+          id: it.id, 
+          name: it.name, 
+          qty: it.qty, 
+          price: it.price,
+          image: it.images?.[0]?.image_url || it.primary_image?.url
+        }))
+      : selectedGroupItems.map(id => {
+          const item = (product.bundle_items || product.grouped_items || []).find(i => i.id === id);
+          return { id, name: item?.name, qty: item?.pivot?.quantity || 1, price: item?.price };
+      });
+    
+    addToCart(product, quantity, selectedOptions, itemsToCart, displayPrice);
     alert('Đã thêm sản phẩm vào giỏ hàng!');
   };
 
   const handleBuyNow = (e) => {
     if (e) e.preventDefault();
-    addToCart(product, quantity, selectedOptions, selectedGroupItems);
+    const itemsToCart = product.type === 'bundle' 
+      ? bundleItems.filter(it => it.selected).map(it => ({ id: it.id, qty: it.qty }))
+      : selectedGroupItems;
+    addToCart(product, quantity, selectedOptions, itemsToCart);
     router.push('/cart');
   };
 
@@ -144,12 +240,19 @@ export default function ProductDetailContent({ product }) {
     formatPrice,
     getImageUrl,
     images,
+    videoUrl: currentProduct?.video_url || product.video_url,
     activeIndex,
     setActiveIndex,
     quantity,
     setQuantity,
     handleAddToCart,
-    handleBuyNow
+    handleBuyNow,
+    additionalInfo: (() => {
+      try {
+        if (!product.additional_info) return [];
+        return typeof product.additional_info === 'string' ? JSON.parse(product.additional_info) : product.additional_info;
+      } catch (e) { return []; }
+    })()
   };
 
   if (product?.type === 'bundle') {
@@ -159,6 +262,7 @@ export default function ProductDetailContent({ product }) {
         bundleItems={bundleItems}
         updateBundleItemQuantity={updateBundleItemQuantity}
         removeBundleItem={removeBundleItem}
+        toggleBundleItem={toggleBundleItem}
       />
     );
   }

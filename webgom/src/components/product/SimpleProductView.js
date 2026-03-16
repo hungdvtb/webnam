@@ -14,29 +14,34 @@ export default function SimpleProductView({
   formatPrice, 
   getImageUrl,
   images,
+  videoUrl,
   activeIndex,
   setActiveIndex,
   quantity,
   setQuantity,
   handleAddToCart,
-  handleBuyNow
+  handleBuyNow,
+  additionalInfo
 }) {
   return (
     <div className={styles.mainGrid}>
-      <ProductGallery 
-        images={images}
-        activeIndex={activeIndex}
-        setActiveIndex={setActiveIndex}
-        getImageUrl={getImageUrl}
-        productName={product.name}
-      />
+      <div className={styles.galleryColumn}>
+        <ProductGallery 
+          images={images}
+          videoUrl={videoUrl}
+          activeIndex={activeIndex}
+          setActiveIndex={setActiveIndex}
+          getImageUrl={getImageUrl}
+          productName={product.name}
+        />
+      </div>
 
       <div className={styles.infoColumn}>
         <div className={styles.infoWrapper}>
           <div>
             <span className={styles.badge}>Tuyệt Tác Nghệ Nhân</span>
             <h1 className={styles.title}>{product.name}</h1>
-            <p className={styles.artistTag}>Thiết kế bởi Nghệ nhân Ưu tú Trần Độ - Làng gốm Bát Tràng</p>
+
             <div className={styles.meta}>
               <span className={styles.sku}>SKU: <span className={styles.skuValue}>{product.sku}</span></span>
               <span className={styles.statusDot} style={{ backgroundColor: product.stock_quantity > 0 ? '#10b981' : '#ef4444' }}></span>
@@ -52,9 +57,13 @@ export default function SimpleProductView({
           </div>
 
           <SpecificationList product={product} />
-          <ActionLinks />
-          <QuantitySelector quantity={quantity} setQuantity={setQuantity} />
-          <BuyButtons onAddToCart={handleAddToCart} onBuyNow={handleBuyNow} />
+          <ActionLinks additionalInfo={additionalInfo} />
+
+          <div className={styles.actionSectionMB}>
+            <QuantitySelector quantity={quantity} setQuantity={setQuantity} />
+            <BuyButtons onAddToCart={handleAddToCart} onBuyNow={handleBuyNow} />
+          </div>
+
           <TrustBadges />
         </div>
       </div>

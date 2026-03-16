@@ -88,7 +88,7 @@ export default async function ProductDetailPage({ params }) {
           <div className={styles.relatedSection}>
             <div className={styles.relatedHeader}>
               <div>
-                <h3 className={styles.relatedTitle}>Vật phẩm tương tự</h3>
+                <h3 className={styles.relatedTitle}>Sản phẩm tương tự</h3>
                 <p className={styles.relatedSub}>Gợi ý những tác phẩm cùng phong cách dành cho bạn</p>
               </div>
               <Link href="/products" className={styles.viewAll}>

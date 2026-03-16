@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
-import { productApi, categoryApi, attributeApi, productImageApi, aiApi } from '../../services/api';
+import { productApi, categoryApi, attributeApi, productImageApi, aiApi, blogApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
@@ -202,11 +203,22 @@ const ProductForm = () => {
     const [aiRewriting, setAiRewriting] = useState(false);
     const [typeConfirmed, setTypeConfirmed] = useState(true);
     const [categories, setCategories] = useState([]);
-    const [allProducts, setAllProducts] = useState([]);
+    const [suggestedProducts, setSuggestedProducts] = useState([]);
+    const [suggestedBundleProducts, setSuggestedBundleProducts] = useState([]);
+    const [searchingRelated, setSearchingRelated] = useState(false);
+    const [searchingBundle, setSearchingBundle] = useState(false);
+    const [showRelatedFilters, setShowRelatedFilters] = useState(false);
     const [allAttributes, setAllAttributes] = useState([]);
     const [images, setImages] = useState([]);
     const [selectedImages, setSelectedImages] = useState([]);
     const [isDragSelecting, setIsDragSelecting] = useState(false);
+    const [showSlugModal, setShowSlugModal] = useState(false);
+    const [tempSlug, setTempSlug] = useState('');
+    const [slugError, setSlugError] = useState('');
+    const [allBlogPosts, setAllBlogPosts] = useState([]);
+    const [blogSearchQuery, setBlogSearchQuery] = useState({}); // { index: query }
+    const [isSearchingBlog, setIsSearchingBlog] = useState({}); // { index: loading }
+    const [blogResults, setBlogResults] = useState({}); // { index: results }
 
     const [searchHistory, setSearchHistory] = useState(() => {
         const saved = localStorage.getItem('product_search_history');
@@ -238,16 +250,22 @@ const ProductForm = () => {
         linked_product_ids: [],
         grouped_items: [], // [{id, name, sku, price, quantity, is_required, image_url}]
         super_attribute_ids: [],
-        custom_attributes: {}
+        custom_attributes: {},
+        video_url: '',
+        slug: '',
+        additional_info: [] // [{title, post_id, post_title}]
     });
 
     const [variants, setVariants] = useState([]);
     const [selectedSuperAttributes, setSelectedSuperAttributes] = useState([]);
     const [showVariantConfig, setShowVariantConfig] = useState(false);
     const [refreshingAttributes, setRefreshingAttributes] = useState(false);
+    const [bundleOptions, setBundleOptions] = useState([]); // [{ id, title, items: [] }]
+    const [showBundleSearch, setShowBundleSearch] = useState(null); // optionId
 
     // Filters for Related Products suggestions
     const [relatedQuery, setRelatedQuery] = useState('');
+    const [bundleQuery, setBundleQuery] = useState('');
     const [relatedCategory, setRelatedCategory] = useState('all');
     const [relatedAttrFilter, setRelatedAttrFilter] = useState({}); // { attr_id: value }
 
@@ -334,6 +352,7 @@ const ProductForm = () => {
         if (isEdit) {
             fetchProduct();
         }
+        fetchBlogPosts();
     }, [id, isEdit]);
     useEffect(() => {
         return () => {
@@ -385,16 +404,108 @@ const ProductForm = () => {
 
     const fetchRelatedData = async () => {
         try {
-            const [prodRes, attrRes] = await Promise.all([
-                productApi.getAll({ per_page: 500 }), // Increased to check SKU uniqueness better
-                attributeApi.getAll({ active_only: true })
-            ]);
-            setAllProducts(prodRes.data.data);
+            const attrRes = await attributeApi.getAll({ active_only: true });
             setAllAttributes(attrRes.data || []);
         } catch (error) {
             console.error("Error fetching related data", error);
         }
     };
+
+    const fetchBlogPosts = async () => {
+        try {
+            const response = await blogApi.getAll({ per_page: 50 });
+            setAllBlogPosts(response.data.data || []);
+        } catch (error) {
+            console.error("Error fetching blog posts", error);
+        }
+    };
+
+    const searchBlogPosts = async (index, query) => {
+        if (!query || query.trim().length < 2) {
+            setBlogResults(prev => ({ ...prev, [index]: [] }));
+            return;
+        }
+
+        setIsSearchingBlog(prev => ({ ...prev, [index]: true }));
+        try {
+            const response = await blogApi.getAll({ search: query, per_page: 10 });
+            setBlogResults(prev => ({ ...prev, [index]: response.data.data || [] }));
+        } catch (error) {
+            console.error("Error searching blog posts", error);
+        } finally {
+            setIsSearchingBlog(prev => ({ ...prev, [index]: false }));
+        }
+    };
+
+    // Lazy load related products on demand
+    const fetchSuggestedProducts = useCallback(async () => {
+        const isDefaultState = !relatedQuery && relatedCategory === 'all' && !Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '');
+        
+        setSearchingRelated(true);
+        try {
+            const params = {
+                per_page: 20, // Reduced to 20 for default/random list
+                search: relatedQuery,
+                category_id: relatedCategory !== 'all' ? relatedCategory : (isDefaultState ? formData.category_id : undefined),
+                attributes: {},
+                sort_by: isDefaultState ? 'random' : undefined
+            };
+
+            // Add attribute filters if any
+            Object.entries(relatedAttrFilter).forEach(([attrId, val]) => {
+                if (val !== 'all' && val !== '') {
+                    params.attributes[attrId] = val;
+                }
+            });
+
+            const response = await productApi.getAll(params);
+            // Filter out current product if it exists in results
+            const results = (response.data.data || []).filter(p => p.id != (id || formData.id));
+            setSuggestedProducts(results);
+        } catch (error) {
+            console.error("Error searching products", error);
+        } finally {
+            setSearchingRelated(false);
+        }
+    }, [relatedQuery, relatedCategory, relatedAttrFilter, id, formData.id, formData.category_id]);
+
+    // Lazy load bundle items on demand
+    const fetchBundleItems = useCallback(async () => {
+        if (!bundleQuery) {
+            setSuggestedBundleProducts([]);
+            return;
+        }
+
+        setSearchingBundle(true);
+        try {
+            const response = await productApi.getAll({
+                per_page: 20,
+                search: bundleQuery
+            });
+            const results = (response.data.data || []).filter(p => p.id != id);
+            setSuggestedBundleProducts(results);
+        } catch (error) {
+            console.error("Error searching bundle products", error);
+        } finally {
+            setSearchingBundle(false);
+        }
+    }, [bundleQuery, id]);
+
+    // Debounce suggested products search
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchSuggestedProducts();
+        }, 400);
+        return () => clearTimeout(timer);
+    }, [fetchSuggestedProducts]);
+
+    // Debounce bundle products search
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchBundleItems();
+        }, 400);
+        return () => clearTimeout(timer);
+    }, [fetchBundleItems]);
 
     const handleRefreshAttributes = async () => {
         setRefreshingAttributes(true);
@@ -419,42 +530,8 @@ const ProductForm = () => {
         }
     };
 
-    const filteredSuggestedProducts = useMemo(() => {
-        return allProducts.filter(p => {
-            // Exclude current product
-            if (p.id == id) return false;
-
-            // Search by name/SKU
-            if (relatedQuery) {
-                const q = removeAccents(relatedQuery.toLowerCase());
-                const name = removeAccents(p.name.toLowerCase());
-                const sku = removeAccents((p.sku || '').toLowerCase());
-                if (!name.includes(q) && !sku.includes(q)) return false;
-            }
-
-            // Category filter
-            if (relatedCategory !== 'all') {
-                if (p.category_id != relatedCategory) {
-                    // Also check additional categories
-                    const inExtra = (p.categories || []).some(c => c.id == relatedCategory);
-                    if (!inExtra) return false;
-                }
-            }
-
-            // Attribute filter
-            const hasAttrFilters = Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '');
-            if (hasAttrFilters) {
-                for (const [attrId, filterVal] of Object.entries(relatedAttrFilter)) {
-                    if (filterVal === 'all' || filterVal === '') continue;
-
-                    const pValue = (p.attribute_values || []).find(av => av.attribute_id == attrId);
-                    if (!pValue || pValue.value != filterVal) return false;
-                }
-            }
-
-            return true;
-        });
-    }, [allProducts, id, relatedQuery, relatedCategory, relatedAttrFilter]);
+    const filteredSuggestedProducts = useMemo(() => suggestedProducts, [suggestedProducts]);
+    const filteredBundleProducts = useMemo(() => suggestedBundleProducts, [suggestedBundleProducts]);
 
     const handleResetVariants = () => {
         setVariants([]);
@@ -517,13 +594,15 @@ const ProductForm = () => {
                 meta_description: data.meta_description || '',
                 meta_keywords: data.meta_keywords || '',
                 linked_product_ids: data.linked_products ? data.linked_products.map(p => p.id) : [],
-                grouped_items: (data.grouped_items || []).map(item => ({
+                grouped_items: (data.bundle_items || data.grouped_items || []).map(item => ({
                     id: item.id,
                     name: item.name,
                     sku: item.sku,
                     price: item.price,
                     quantity: item.pivot?.quantity || 1,
                     is_required: !!(item.pivot?.is_required),
+                    option_title: item.pivot?.option_title || '',
+                    is_default: !!(item.pivot?.is_default),
                     image_url: (item.images?.find(img => img.is_primary) || item.images?.[0])?.image_url
                 })),
                 super_attribute_ids: data.super_attributes ? data.super_attributes.map(a => a.id) : [],
@@ -536,9 +615,44 @@ const ProductForm = () => {
                     } catch (e) { }
                     acc[curr.attribute_id] = val;
                     return acc;
-                }, {})
+                }, {}),
+                video_url: data.video_url || '',
+                slug: data.slug || '',
+                additional_info: (() => {
+                    if (!data.additional_info) return [];
+                    try {
+                        return typeof data.additional_info === 'string' ? JSON.parse(data.additional_info) : data.additional_info;
+                    } catch (e) { return []; }
+                })()
             });
             setImages(data.images || []);
+
+            // Handle Bundle Options organization
+            if (data.type === 'bundle') {
+                const bItems = data.bundle_items || data.grouped_items || [];
+                const optionsMap = {};
+                bItems.forEach(item => {
+                    const title = item.pivot?.option_title || 'Tùy chọn';
+                    if (!optionsMap[title]) optionsMap[title] = [];
+                    optionsMap[title].push({
+                        id: item.id,
+                        name: item.name,
+                        sku: item.sku,
+                        price: item.price,
+                        quantity: item.pivot?.quantity || 1,
+                        is_required: !!item.pivot?.is_required,
+                        is_default: !!item.pivot?.is_default,
+                        image_url: (item.images?.find(img => img.is_primary) || item.images?.[0])?.image_url
+                    });
+                });
+                setBundleOptions(Object.entries(optionsMap).map(([title, its]) => ({
+                    id: Math.random().toString(36).substr(2, 9),
+                    title,
+                    items: its
+                })));
+            } else {
+                setBundleOptions([]);
+            }
 
             // Handle variants from linked_products with 'super_link' type
             const variantsData = (data.linked_products || []).filter(p => p.pivot?.link_type === 'super_link');
@@ -604,7 +718,9 @@ const ProductForm = () => {
         let counter = 1;
 
         // Ensure uniqueness against allProducts
-        while (allProducts.some(p => p.sku === finalSku && (!id || p.id != id))) {
+        // Since allProducts is no longer loaded on start, we rely on the fact that the backend will validate uniqueness anyway.
+        // Or if we really want to check here, we could call an API, but for simple auto-gen we'll just add a random suffix if name is too generic.
+        while (suggestedProducts.some(p => p.sku === finalSku && (!id || p.id != id))) {
             const suffix = counter < 10 ? `0${counter}` : counter;
             finalSku = `${baseSku}-${suffix}`;
             counter++;
@@ -748,6 +864,28 @@ const ProductForm = () => {
         });
     };
 
+    const addAdditionalInfoRow = () => {
+        setFormData(prev => ({
+            ...prev,
+            additional_info: [...prev.additional_info, { title: '', post_id: '', post_title: '' }]
+        }));
+    };
+
+    const removeAdditionalInfoRow = (index) => {
+        setFormData(prev => ({
+            ...prev,
+            additional_info: prev.additional_info.filter((_, i) => i !== index)
+        }));
+    };
+
+    const updateAdditionalInfoRow = (index, field, value, extra = {}) => {
+        setFormData(prev => {
+            const newInfo = [...prev.additional_info];
+            newInfo[index] = { ...newInfo[index], [field]: value, ...extra };
+            return { ...prev, additional_info: newInfo };
+        });
+    };
+
     const handleAIGenerate = async () => {
         if (!formData.name) {
             showModal({ title: 'Lưu ý', content: 'Vui lòng nhập Tên Sản Phẩm để AI có cơ sở viết mô tả.', type: 'warning' });
@@ -872,7 +1010,15 @@ const ProductForm = () => {
                     </div>
                 );
             case 'date':
-                return <input type="date" className={commonClass} value={value} onChange={(e) => handleCustomAttributeChange(attr.id, e.target.value)} />;
+                // Ensure value is in yyyy-MM-dd format for HTML5 date input
+                let formattedDate = value;
+                if (value && typeof value === 'string' && value.includes('/')) {
+                    const parts = value.split('/');
+                    if (parts.length === 3 && parts[2].length === 4) {
+                        formattedDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+                    }
+                }
+                return <input type="date" className={commonClass} value={formattedDate || ''} onChange={(e) => handleCustomAttributeChange(attr.id, e.target.value)} />;
             case 'price':
                 return <input type="number" className={`${commonClass} text-brick`} value={value} onChange={(e) => handleCustomAttributeChange(attr.id, e.target.value)} />;
             default:
@@ -1024,6 +1170,74 @@ const ProductForm = () => {
         }));
     };
 
+    // --- Bundle Specific Handlers ---
+    const handleAddBundleOption = () => {
+        setBundleOptions(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), title: 'Tùy chọn mới', items: [] }]);
+    };
+
+    const handleRemoveBundleOption = (optionId) => {
+        setBundleOptions(prev => prev.filter(o => o.id !== optionId));
+    };
+
+    const handleUpdateOptionTitle = (optionId, title) => {
+        setBundleOptions(prev => prev.map(o => o.id === optionId ? { ...o, title } : o));
+    };
+
+    const handleAddItemToOption = (optionId, product) => {
+        setBundleOptions(prev => prev.map(o => {
+            if (o.id !== optionId) return o;
+            if (o.items.some(it => it.id === product.id)) {
+                showToast({ message: 'Sản phẩm này đã có trong tùy chọn.', type: 'info' });
+                return o;
+            }
+            
+            const primaryImage = product.images?.find(img => img.is_primary) || product.images?.[0];
+            const newItem = {
+                id: product.id,
+                name: product.name,
+                sku: product.sku,
+                price: product.price,
+                quantity: 1,
+                is_required: true,
+                is_default: o.items.length === 0, // Mặc định nếu là sp đầu tiên
+                image_url: primaryImage?.image_url
+            };
+            return { ...o, items: [...o.items, newItem] };
+        }));
+    };
+
+    const handleRemoveItemFromOption = (optionId, productId) => {
+        setBundleOptions(prev => prev.map(o => {
+            if (o.id !== optionId) return o;
+            const newItems = o.items.filter(it => it.id !== productId);
+            // Nếu xóa trúng sp đang là default, đặt sp đầu tiên còn lại làm default
+            if (o.items.find(it => it.id === productId)?.is_default && newItems.length > 0) {
+                newItems[0].is_default = true;
+            }
+            return { ...o, items: newItems };
+        }));
+    };
+
+    const handleSetDefaultInOption = (optionId, productId) => {
+        setBundleOptions(prev => prev.map(o => {
+            if (o.id !== optionId) return o;
+            return {
+                ...o,
+                items: o.items.map(it => ({ ...it, is_default: it.id === productId }))
+            };
+        }));
+    };
+
+    const handleUpdateBundleItemQty = (optionId, productId, quantity) => {
+        setBundleOptions(prev => prev.map(o => {
+            if (o.id !== optionId) return o;
+            return {
+                ...o,
+                items: o.items.map(it => it.id === productId ? { ...it, quantity: Math.max(1, parseInt(quantity) || 1) } : it)
+            };
+        }));
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setIsSaving(true);
@@ -1043,19 +1257,32 @@ const ProductForm = () => {
                 } else if (key === 'super_attribute_ids') {
                     selectedSuperAttributes.forEach(attr => submitData.append('super_attribute_ids[]', attr.id));
                 } else if (key === 'linked_product_ids') {
-                    val.forEach(v => submitData.append('linked_product_ids[]', v));
+                    const uniqueIds = Array.from(new Set(val));
+                    uniqueIds.forEach(v => submitData.append('linked_product_ids[]', v));
                 } else if (key === 'grouped_items') {
-                    val.forEach((item, idx) => {
+                    let itemsToSubmit = val;
+                    if (formData.type === 'bundle' && bundleOptions.length > 0) {
+                        itemsToSubmit = bundleOptions.flatMap(opt => 
+                            opt.items.map(it => ({ ...it, option_title: opt.title }))
+                        );
+                    }
+                    itemsToSubmit.forEach((item, idx) => {
                         submitData.append(`grouped_items[${idx}][id]`, item.id);
                         submitData.append(`grouped_items[${idx}][quantity]`, item.quantity);
                         submitData.append(`grouped_items[${idx}][is_required]`, item.is_required ? '1' : '0');
+                        submitData.append(`grouped_items[${idx}][option_title]`, item.option_title || '');
+                        submitData.append(`grouped_items[${idx}][is_default]`, item.is_default ? '1' : '0');
                     });
+                } else if (key === 'specifications') {
+                    const validSpecs = val.filter(s => s.label.trim() || s.value.trim());
+                    submitData.append(key, JSON.stringify(validSpecs));
+                } else if (key === 'additional_info') {
+                    const validInfo = val.filter(i => i.title.trim() && i.post_id);
+                    submitData.append(key, JSON.stringify(validInfo));
                 } else if (Array.isArray(val)) {
                     val.forEach(v => submitData.append(`${key}[]`, v));
                 } else if (typeof val === 'boolean') {
                     submitData.append(key, val ? '1' : '0');
-                } else if (key === 'specifications') {
-                    submitData.append(key, JSON.stringify(val));
                 } else if (val !== '' && val !== null && val !== undefined) {
                     submitData.append(key, val);
                 }
@@ -1153,6 +1380,42 @@ const ProductForm = () => {
     };
 
 
+    const handleCopyLink = () => {
+        const slug = formData.slug;
+        if (!slug) {
+            showToast({ message: 'Sản phẩm chưa có đường dẫn link (slug).', type: 'warning' });
+            return;
+        }
+        
+        // Final frontend URL structure
+        const storefrontBase = "https://di-san.com/product";
+        const fullLink = `${storefrontBase}/${slug}`;
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(fullLink)
+                .then(() => {
+                    showToast({ message: 'Đã sao chép link sản phẩm thành công!', type: 'success' });
+                })
+                .catch(err => {
+                    console.error('Copy failed:', err);
+                    showToast({ message: 'Lỗi khi sao chép link.', type: 'error' });
+                });
+        } else {
+            // Fallback for older browsers
+            const textArea = document.createElement("textarea");
+            textArea.value = fullLink;
+            document.body.appendChild(textArea);
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                showToast({ message: 'Đã sao chép link sản phẩm!', type: 'success' });
+            } catch (err) {
+                showToast({ message: 'Trình duyệt không hỗ trợ sao chép tự động.', type: 'error' });
+            }
+            document.body.removeChild(textArea);
+        }
+    };
+
     return (
         <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full overflow-hidden">
             <style>
@@ -1192,9 +1455,39 @@ const ProductForm = () => {
                             <h1 className="text-2xl font-display font-bold text-primary italic uppercase tracking-wider leading-none mb-1">
                                 {isDuplicate ? 'Nhân bản sản phẩm' : (isEdit ? 'Chỉnh sửa sản phẩm' : 'Tạo sản phẩm mới')}
                             </h1>
-                            <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.2em] leading-none mt-1">
-                                {formData.sku ? `SKU: ${formData.sku}` : 'Cấu hình thông tin sản phẩm và thương mại'}
-                            </p>
+                            <div className="flex items-center gap-1 lg:gap-2 mt-1">
+                                <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.2em] leading-none">
+                                    {formData.sku ? `SKU: ${formData.sku}` : 'Cấu hình thông tin sản phẩm và thương mại'}
+                                </p>
+                                <div className="flex items-center gap-1">
+                                    <button 
+                                        type="button"
+                                        onClick={() => {
+                                            setTempSlug(formData.slug || (formData.name ? formData.name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-') : ''));
+                                            setSlugError('');
+                                            setShowSlugModal(true);
+                                        }}
+                                        className="flex items-center gap-1.5 px-2 py-0.5 bg-gold/10 text-gold rounded-full hover:bg-gold/20 transition-all border border-gold/10 group/slug"
+                                        title="Quản lý đường dẫn sản phẩm"
+                                    >
+                                        <span className="material-symbols-outlined text-[14px] group-hover/slug:rotate-12 transition-transform">link</span>
+                                        <span className="text-[9px] font-black uppercase tracking-wider">{formData.slug || (formData.name ? 'Tự động tạo...' : 'Thiết lập link')}</span>
+                                    </button>
+                                    {formData.slug && (
+                                        <button 
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleCopyLink();
+                                            }}
+                                            className="size-5 flex items-center justify-center bg-stone/5 text-stone/40 hover:bg-gold hover:text-white rounded-full transition-all group/copy"
+                                            title="Sao chép nhanh link sản phẩm"
+                                        >
+                                            <span className="material-symbols-outlined text-[12px] group-hover/copy:scale-110 transition-transform">content_copy</span>
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -1324,8 +1617,8 @@ const ProductForm = () => {
                                             <span className="font-bold text-brick opacity-40 ml-2">₫</span>
                                         </div>
                                     </Field>
-                                    {formData.type === 'grouped' && (
-                                        <Field label="Loại giá nhóm" className="border-gold/30 bg-gold/[0.02]">
+                                    {['grouped', 'bundle'].includes(formData.type) && (
+                                        <Field label={formData.type === 'bundle' ? "Loại giá bộ / combo" : "Loại giá nhóm"} className="border-gold/30 bg-gold/[0.02]">
                                             <select
                                                 name="price_type"
                                                 value={formData.price_type}
@@ -1406,6 +1699,106 @@ const ProductForm = () => {
                                                 <span className="material-symbols-outlined text-[32px] mb-1">table_rows</span>
                                                 <p className="text-[11px] font-bold uppercase tracking-widest">Chưa có thông số nào</p>
                                                 <button type="button" onClick={addSpecRow} className="mt-2 text-[10px] text-primary hover:text-gold font-black uppercase">Thêm ngay</button>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Bảng Thông tin bổ sung */}
+                                <div className="space-y-3 mt-8">
+                                    <div className="flex justify-between items-center bg-stone/5 p-2 rounded-sm border border-stone/10">
+                                        <div className="flex items-center gap-2">
+                                            <span className="material-symbols-outlined text-primary/40 text-[18px]">library_books</span>
+                                            <span className="text-[12px] font-bold text-primary uppercase">Thông tin bổ sung</span>
+                                        </div>
+                                        <button 
+                                            type="button" 
+                                            onClick={addAdditionalInfoRow}
+                                            className="size-8 bg-primary text-white flex items-center justify-center rounded-sm hover:bg-gold transition-colors shadow-sm"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px]">add</span>
+                                        </button>
+                                    </div>
+                                    <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1">
+                                        {formData.additional_info.map((info, idx) => (
+                                            <div key={idx} className="flex gap-2 items-start group animate-fade-in-up" style={{ animationDelay: `${idx * 0.05}s` }}>
+                                                <div className="flex-1 grid grid-cols-2 gap-2 border border-stone/15 rounded-sm p-1.5 bg-white shadow-sm transition-all hover:border-primary/30">
+                                                    <input 
+                                                        placeholder="Tiêu đề mục (VD: Hướng dẫn sử dụng)" 
+                                                        className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-[13px] font-bold text-primary border-r border-stone/10 placeholder:font-normal placeholder:opacity-30 pr-2"
+                                                        value={info.title}
+                                                        onChange={(e) => updateAdditionalInfoRow(idx, 'title', e.target.value)}
+                                                    />
+                                                    
+                                                    {/* Blog Post Selector */}
+                                                    <div className="relative">
+                                                        <div className="flex items-center gap-2 px-2 py-0.5 min-h-[28px]">
+                                                            {info.post_id ? (
+                                                                <div className="flex-1 flex items-center justify-between overflow-hidden">
+                                                                    <span className="text-[12px] font-bold text-gold truncate mr-2" title={info.post_title}>
+                                                                        {info.post_title}
+                                                                    </span>
+                                                                    <button 
+                                                                        type="button"
+                                                                        onClick={() => updateAdditionalInfoRow(idx, 'post_id', '', { post_title: '' })}
+                                                                        className="text-stone/40 hover:text-brick shrink-0"
+                                                                    >
+                                                                        <span className="material-symbols-outlined text-[14px]">cancel</span>
+                                                                    </button>
+                                                                </div>
+                                                            ) : (
+                                                                <div className="flex-1 relative">
+                                                                    <input 
+                                                                        placeholder="Tìm bài viết cẩm nang..." 
+                                                                        className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-[12px] text-stone italic placeholder:opacity-40"
+                                                                        value={blogSearchQuery[idx] || ''}
+                                                                        onChange={(e) => {
+                                                                            const q = e.target.value;
+                                                                            setBlogSearchQuery(prev => ({ ...prev, [idx]: q }));
+                                                                            searchBlogPosts(idx, q);
+                                                                        }}
+                                                                    />
+                                                                    {isSearchingBlog[idx] && (
+                                                                        <span className="absolute right-0 top-1/2 -translate-y-1/2 material-symbols-outlined text-[12px] animate-spin text-gold">refresh</span>
+                                                                    )}
+                                                                    
+                                                                    {blogResults[idx]?.length > 0 && !info.post_id && (
+                                                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-stone/15 shadow-xl rounded-sm z-[100] max-h-[200px] overflow-y-auto custom-scrollbar">
+                                                                            {blogResults[idx].map(post => (
+                                                                                <div 
+                                                                                    key={post.id}
+                                                                                    onClick={() => {
+                                                                                        updateAdditionalInfoRow(idx, 'post_id', post.id, { post_title: post.title });
+                                                                                        setBlogSearchQuery(prev => ({ ...prev, [idx]: '' }));
+                                                                                        setBlogResults(prev => ({ ...prev, [idx]: [] }));
+                                                                                    }}
+                                                                                    className="px-3 py-2 hover:bg-gold/5 cursor-pointer border-b border-stone/5 last:border-0 transition-colors"
+                                                                                >
+                                                                                    <p className="text-[11px] font-bold text-primary leading-tight">{post.title}</p>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                            <span className="material-symbols-outlined text-[16px] text-stone/20">search</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => removeAdditionalInfoRow(idx)}
+                                                    className="size-8 bg-brick/5 text-brick rounded-sm flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-brick hover:text-white transition-all shadow-sm shrink-0"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">close</span>
+                                                </button>
+                                            </div>
+                                        ))}
+                                        {formData.additional_info.length === 0 && (
+                                            <div className="py-8 border-2 border-dashed border-stone/10 rounded-sm flex flex-col items-center justify-center text-stone/30">
+                                                <span className="material-symbols-outlined text-[32px] mb-1">library_books</span>
+                                                <p className="text-[11px] font-bold uppercase tracking-widest">Chưa có thông tin bổ sung</p>
+                                                <button type="button" onClick={addAdditionalInfoRow} className="mt-2 text-[10px] text-primary hover:text-gold font-black uppercase">Thêm ngay</button>
                                             </div>
                                         )}
                                     </div>
@@ -1762,10 +2155,13 @@ const ProductForm = () => {
                             </div>
                         )}
 
-                        {/* Product Group Management - Only for Grouped Products */}
+                        {/* Grouped Product Management */}
                         {formData.type === 'grouped' && (
                             <div className="bg-white border border-gold/20 p-5 shadow-premium-sm rounded-sm animate-fade-in mb-8">
-                                <SectionTitle icon="group_work" title="Thiết lập nhóm sản phẩm thành phần" />
+                                <SectionTitle 
+                                    icon="group_work" 
+                                    title="Thiết lập nhóm sản phẩm thành phần" 
+                                />
 
                                 <div className="mb-6">
                                     <p className="text-[12px] text-stone/60 mb-4 italic">Tìm kiếm và chọn các sản phẩm đơn hoặc biến thể cụ thể để thêm vào bộ sưu tập này.</p>
@@ -1849,10 +2245,18 @@ const ProductForm = () => {
                                             </select>
                                         </div>
 
-                                        {relatedQuery.length > 1 && (
+                                        {(relatedQuery.length > 0 || relatedCategory !== 'all') && (
                                             <div className="absolute top-[calc(100%-8px)] left-0 right-0 max-h-[300px] overflow-y-auto bg-white border border-gold/10 shadow-xl rounded-sm z-[60] custom-scrollbar">
-                                                {filteredSuggestedProducts.length === 0 ? (
-                                                    <div className="p-4 text-center text-stone/40 italic">Không tìm thấy sản phẩm nào</div>
+                                                {searchingRelated ? (
+                                                    <div className="p-8 flex flex-col items-center justify-center text-stone/40">
+                                                        <div className="size-6 border-2 border-gold/20 border-t-gold rounded-full animate-spin mb-2"></div>
+                                                        <span className="text-[10px] font-bold uppercase tracking-widest">Đang tìm...</span>
+                                                    </div>
+                                                ) : filteredSuggestedProducts.length === 0 ? (
+                                                    <div className="p-8 text-center text-stone/40 italic text-[12px]">
+                                                        <span className="material-symbols-outlined block text-[24px] mb-1">sentiment_dissatisfied</span>
+                                                        Không tìm thấy sản phẩm nào
+                                                    </div>
                                                 ) : (
                                                     filteredSuggestedProducts.map(p => (
                                                         <div
@@ -1862,17 +2266,17 @@ const ProductForm = () => {
                                                                 setRelatedQuery('');
                                                                 addToSearchHistory(relatedQuery);
                                                             }}
-                                                            className="flex items-center gap-3 p-3 hover:bg-gold/5 cursor-pointer border-b border-stone/5 transition-colors"
+                                                            className="flex items-center gap-3 p-3 hover:bg-gold/5 cursor-pointer border-b border-stone/5 transition-colors group"
                                                         >
                                                             <div className="size-10 rounded border border-stone/10 bg-stone/5 overflow-hidden shrink-0">
                                                                 <img
-                                                                    src={(p.images?.find(img => img.is_primary) || p.images?.[0])?.image_url}
+                                                                    src={(p.images?.find(img => img.is_primary) || p.images?.[0])?.image_url || 'https://placehold.co/100'}
                                                                     alt=""
                                                                     className="w-full h-full object-cover"
                                                                 />
                                                             </div>
                                                             <div className="flex-1">
-                                                                <p className="text-[13px] font-bold text-primary leading-tight">{p.name}</p>
+                                                                <p className="text-[13px] font-bold text-primary leading-tight group-hover:text-gold transition-colors">{p.name}</p>
                                                                 <p className="text-[10px] font-mono text-gold uppercase">{p.sku}</p>
                                                             </div>
                                                             <div className="text-right">
@@ -1891,7 +2295,11 @@ const ProductForm = () => {
                                         <div className="col-span-1 text-[10px] font-black uppercase text-stone/40">Ảnh</div>
                                         <div className="col-span-4 text-[10px] font-black uppercase text-stone/40">Sản phẩm</div>
                                         <div className="col-span-2 text-[10px] font-black uppercase text-stone/40 text-center">Số lượng</div>
-                                        <div className="col-span-2 text-[10px] font-black uppercase text-stone/40 text-center">Bắt buộc?</div>
+                                        {formData.type === 'bundle' ? (
+                                            <div className="col-span-2 text-[10px] font-black uppercase text-stone/40 text-right">Tổng giá</div>
+                                        ) : (
+                                            <div className="col-span-2 text-[10px] font-black uppercase text-stone/40 text-center">Bắt buộc?</div>
+                                        )}
                                         <div className="col-span-2 text-[10px] font-black uppercase text-stone/40 text-right">Giá gốc</div>
                                         <div className="col-span-1"></div>
                                     </div>
@@ -1934,14 +2342,18 @@ const ProductForm = () => {
                                                         >add</button>
                                                     </div>
                                                 </div>
-                                                <div className="col-span-2 flex justify-center">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleGroupItemChange(item.id, 'is_required', !item.is_required)}
-                                                        className={`size-6 rounded-full flex items-center justify-center transition-all ${item.is_required ? 'bg-primary text-white' : 'bg-stone/10 text-stone/40 hover:bg-stone/20'}`}
-                                                    >
-                                                        <span className="material-symbols-outlined text-[16px]">{item.is_required ? 'check' : 'close'}</span>
-                                                    </button>
+                                                <div className="col-span-2 text-right">
+                                                    {formData.type === 'bundle' ? (
+                                                        <p className="text-[12px] font-black text-brick">{formatNumberOutput(item.price * item.quantity)}₫</p>
+                                                    ) : (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleGroupItemChange(item.id, 'is_required', !item.is_required)}
+                                                            className={`size-6 mx-auto rounded-full flex items-center justify-center transition-all ${item.is_required ? 'bg-primary text-white' : 'bg-stone/10 text-stone/40 hover:bg-stone/20'}`}
+                                                        >
+                                                            <span className="material-symbols-outlined text-[16px]">{item.is_required ? 'check' : 'close'}</span>
+                                                        </button>
+                                                    )}
                                                 </div>
                                                 <div className="col-span-2 text-right">
                                                     <p className="text-[12px] font-black text-primary/60">{formatNumberOutput(item.price)}₫</p>
@@ -1954,6 +2366,151 @@ const ProductForm = () => {
                                                     >
                                                         <span className="material-symbols-outlined text-[18px]">delete</span>
                                                     </button>
+                                                </div>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Bundle Product Management */}
+                        {formData.type === 'bundle' && (
+                            <div className="bg-white border border-gold/20 p-6 shadow-premium-sm rounded-sm animate-fade-in mb-8">
+                                <div className="flex justify-between items-center mb-6 pb-4 border-b border-gold/10">
+                                    <SectionTitle icon="inventory_2" title="Cấu hình tùy chọn Bộ / Combo" />
+                                    <button
+                                        type="button"
+                                        onClick={handleAddBundleOption}
+                                        className="flex items-center gap-2 bg-gold/10 hover:bg-gold/20 text-gold px-4 py-2 rounded-sm transition-all text-[13px] font-black uppercase tracking-widest"
+                                    >
+                                        <span className="material-symbols-outlined text-[20px]">add_circle</span>
+                                        Thêm Tùy chọn mới
+                                    </button>
+                                </div>
+
+                                <div className="space-y-8">
+                                    {bundleOptions.length === 0 ? (
+                                        <div className="py-20 flex flex-col items-center justify-center border-2 border-dashed border-gold/10 bg-gold/[0.02] rounded-sm">
+                                            <span className="material-symbols-outlined text-[64px] text-gold/20 mb-4 font-thin">grid_view</span>
+                                            <p className="text-[14px] font-bold text-gold/40 uppercase tracking-[0.2em] mb-2">Bắt đầu tạo bộ combo</p>
+                                            <p className="text-[11px] text-stone/40 italic max-w-sm text-center px-8">Nhấn nút "Thêm Tùy chọn mới" để bắt đầu nhóm các sản phẩm thành từng phần của bộ.</p>
+                                        </div>
+                                    ) : (
+                                        bundleOptions.map((option, optIdx) => (
+                                            <div key={option.id} className="border border-gold/15 rounded-sm overflow-hidden shadow-sm bg-[#fcfaf7]/30">
+                                                <div className="bg-[#f2eddf]/40 px-5 py-3 flex items-center gap-4 border-b border-gold/10">
+                                                     <div className="size-8 rounded-full bg-gold/10 flex items-center justify-center shrink-0">
+                                                        <span className="text-[13px] font-black text-gold">{optIdx + 1}</span>
+                                                     </div>
+                                                     <div className="flex-1">
+                                                        <input
+                                                            type="text"
+                                                            value={option.title}
+                                                            onChange={(e) => handleUpdateOptionTitle(option.id, e.target.value)}
+                                                            className="w-full bg-transparent border-none p-0 text-[15px] font-black text-primary focus:ring-0"
+                                                            placeholder="Nhập tên tùy chọn..."
+                                                        />
+                                                     </div>
+                                                     <div className="flex items-center gap-3">
+                                                         <button
+                                                            type="button"
+                                                            onClick={() => setShowBundleSearch(showBundleSearch === option.id ? null : option.id)}
+                                                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-[11px] font-black uppercase transition-all ${showBundleSearch === option.id ? 'bg-primary text-white' : 'bg-gold/10 text-gold hover:bg-gold/20'}`}
+                                                         >
+                                                            <span className="material-symbols-outlined text-[16px]">{showBundleSearch === option.id ? 'close' : 'add'}</span>
+                                                            {showBundleSearch === option.id ? 'Đóng tìm kiếm' : 'Thêm sản phẩm'}
+                                                         </button>
+                                                         <button
+                                                            type="button"
+                                                            onClick={() => handleRemoveBundleOption(option.id)}
+                                                            className="text-stone/20 hover:text-brick transition-all"
+                                                         >
+                                                            <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                         </button>
+                                                     </div>
+                                                </div>
+
+                                                {showBundleSearch === option.id && (
+                                                    <div className="px-5 py-4 bg-white border-b border-gold/10">
+                                                        <div className="relative">
+                                                            <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-stone/30 text-[18px]">search</span>
+                                                            <input
+                                                                type="text"
+                                                                placeholder="Tìm sản phẩm..."
+                                                                className="w-full pl-9 pr-4 py-2 bg-stone/[0.02] border border-stone/10 rounded text-[13px] font-bold"
+                                                                value={bundleQuery}
+                                                                onChange={(e) => setBundleQuery(e.target.value)}
+                                                                autoFocus
+                                                            />
+                                                            {bundleQuery.length > 0 && (
+                                                                <div className="absolute top-full left-0 right-0 mt-1 max-h-[200px] overflow-y-auto bg-white border border-gold/15 shadow-xl rounded-sm z-[75] custom-scrollbar">
+                                                                    {searchingBundle ? (
+                                                                        <div className="p-6 flex flex-col items-center justify-center text-stone/40">
+                                                                            <div className="size-5 border-2 border-gold/20 border-t-gold rounded-full animate-spin mb-2"></div>
+                                                                            <span className="text-[9px] font-bold uppercase tracking-widest">Đang tìm...</span>
+                                                                        </div>
+                                                                    ) : filteredBundleProducts.length === 0 ? (
+                                                                        <div className="p-6 text-center text-stone/30 italic text-[11px]">Không tìm thấy sản phẩm</div>
+                                                                    ) : (
+                                                                        filteredBundleProducts.map(p => (
+                                                                            <div key={p.id} onClick={() => { handleAddItemToOption(option.id, p); setBundleQuery(''); setShowBundleSearch(null); }} className="flex items-center gap-3 p-2 hover:bg-gold/5 cursor-pointer border-b border-stone/5 group transition-colors">
+                                                                                <img src={(p.images?.find(i => i.is_primary) || p.images?.[0])?.image_url || 'https://placehold.co/100'} alt="" className="size-8 object-cover rounded shadow-sm border border-stone/5" />
+                                                                                <div className="flex-1">
+                                                                                    <p className="text-[12px] font-bold text-primary truncate leading-tight group-hover:text-gold transition-colors">{p.name}</p>
+                                                                                    <p className="text-[9px] font-mono text-gold uppercase">{p.sku}</p>
+                                                                                </div>
+                                                                                <p className="text-[11px] font-black text-brick">{formatNumberOutput(p.price)}₫</p>
+                                                                            </div>
+                                                                        ))
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                <div className="bg-white">
+                                                    {option.items.length > 0 && (
+                                                        <table className="w-full text-left text-[12px]">
+                                                            <thead>
+                                                                <tr className="bg-stone/[0.02] text-stone/40 border-b border-stone/5">
+                                                                    <th className="pl-5 py-2 w-12 text-center uppercase font-black">Mặc định</th>
+                                                                    <th className="px-3 py-2 uppercase font-black">Sản phẩm</th>
+                                                                    <th className="px-3 py-2 uppercase font-black text-center">Giá gốc</th>
+                                                                    <th className="px-3 py-2 uppercase font-black text-center">Số lượng</th>
+                                                                    <th className="px-3 py-2 w-12"></th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                {option.items.map(item => (
+                                                                    <tr key={item.id} className="border-b border-stone/5 hover:bg-gold/[0.02]">
+                                                                        <td className="pl-5 py-2 text-center">
+                                                                            <div onClick={() => handleSetDefaultInOption(option.id, item.id)} className={`size-4 rounded-full border-2 mx-auto cursor-pointer flex items-center justify-center ${item.is_default ? 'border-gold bg-gold' : 'border-stone/20'}`}>
+                                                                                {item.is_default && <span className="material-symbols-outlined text-white text-[10px] font-black">check</span>}
+                                                                            </div>
+                                                                        </td>
+                                                                        <td className="px-3 py-2">
+                                                                            <div className="flex items-center gap-2">
+                                                                                <img src={item.image_url} alt="" className="size-8 object-cover rounded border" />
+                                                                                <div className="truncate max-w-[200px]">
+                                                                                    <p className="font-bold text-primary truncate" title={item.name}>{item.name}</p>
+                                                                                    <p className="text-[10px] text-gold uppercase font-mono">{item.sku}</p>
+                                                                                </div>
+                                                                            </div>
+                                                                        </td>
+                                                                        <td className="px-3 py-2 text-center font-bold text-stone/50">{formatNumberOutput(item.price)}₫</td>
+                                                                        <td className="px-3 py-2 text-center">
+                                                                            <input type="number" value={item.quantity} onChange={(e) => handleUpdateBundleItemQty(option.id, item.id, e.target.value)} className="w-12 text-center bg-stone/5 rounded border-none py-1 text-[11px] font-black" />
+                                                                        </td>
+                                                                        <td className="px-3 py-2 text-right pr-5">
+                                                                            <button type="button" onClick={() => handleRemoveItemFromOption(option.id, item.id)} className="text-stone/20 hover:text-brick"><span className="material-symbols-outlined text-[16px]">close</span></button>
+                                                                        </td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    )}
                                                 </div>
                                             </div>
                                         ))
@@ -1986,6 +2543,29 @@ const ProductForm = () => {
                                         <input type="file" multiple accept="image/*" onChange={handleImageUpload} className="hidden" />
                                     </label>
                                 </div>
+                            </div>
+                            
+                            {/* YouTube Video Link */}
+                            <div className="mb-6 px-1">
+                                <Field label="Link Video YouTube (Tùy chọn)" className="border-red-100 bg-red-50/10">
+                                    <div className="flex items-center w-full gap-2 py-1">
+                                        <span className="material-symbols-outlined text-red-600/40 text-[20px]">movie</span>
+                                        <input
+                                            name="video_url"
+                                            value={formData.video_url}
+                                            onChange={handleChange}
+                                            placeholder="VD: https://www.youtube.com/watch?v=..."
+                                            className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px] placeholder:text-stone/20"
+                                        />
+                                        {formData.video_url && (
+                                            <div className="flex items-center gap-1 bg-red-600 text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-widest shadow-sm">
+                                                <span className="material-symbols-outlined text-[12px]">verified</span>
+                                                Sẵn sàng
+                                            </div>
+                                        )}
+                                    </div>
+                                </Field>
+                                <p className="text-[10px] text-stone/40 mt-1.5 ml-1 italic">Dán link YouTube vào đây để hiển thị Tab Video trong Gallery sản phẩm ở ngoài trang chủ.</p>
                             </div>
 
                             <DndProvider backend={HTML5Backend}>
@@ -2118,128 +2698,185 @@ const ProductForm = () => {
                             <div className="space-y-4">
                                 {/* Search & Filters Area */}
                                 <div className="space-y-3 p-3 bg-stone/5 border border-stone/10 rounded-sm">
-                                    <div className="relative" ref={relatedSearchContainerRef}>
-                                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-[18px] text-stone/40 z-10">search</span>
-                                        <input
-                                            type="text"
-                                            autoComplete="off"
-                                            placeholder="Tìm theo tên hoặc mã SKU..."
-                                            value={relatedQuery}
-                                            onChange={(e) => setRelatedQuery(e.target.value)}
-                                            onFocus={() => setShowSearchHistory(true)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter') {
-                                                    setShowSearchHistory(false);
-                                                    addToSearchHistory(relatedQuery);
-                                                }
-                                            }}
-                                            className="w-full bg-white border border-stone/20 rounded-sm pl-9 pr-9 py-2 text-[12px] font-bold text-primary focus:outline-none focus:border-gold/30 transition-all shadow-sm relative z-0"
-                                        />
-                                        {relatedQuery && (
-                                            <button
-                                                onClick={() => { setRelatedQuery(''); setShowSearchHistory(false); }}
-                                                className="absolute right-2 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors z-10"
-                                            >
-                                                <span className="material-symbols-outlined text-[16px]">cancel</span>
-                                            </button>
-                                        )}
-
-                                        {showSearchHistory && searchHistory.length > 0 && (
-                                            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[70] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
-                                                <div className="flex justify-between items-center px-3 mb-1 border-b border-primary/10 pb-1">
-                                                    <span className="text-[9px] font-bold text-primary/40 uppercase tracking-widest">Gần đây</span>
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('product_search_history'); }}
-                                                        className="text-[9px] text-brick hover:underline font-bold"
-                                                    >Xóa</button>
-                                                </div>
-                                                <div className="max-h-48 overflow-y-auto custom-scrollbar">
-                                                    {searchHistory.map((item, idx) => (
-                                                        <div
-                                                            key={idx}
-                                                            className="group flex items-center justify-between px-3 py-1.5 hover:bg-primary/5 cursor-pointer transition-colors"
-                                                            onClick={() => {
-                                                                setRelatedQuery(item);
-                                                                setShowSearchHistory(false);
-                                                                addToSearchHistory(item);
-                                                            }}
-                                                        >
-                                                            <div className="flex items-center gap-2 overflow-hidden">
-                                                                <span className="material-symbols-outlined text-[16px] text-primary/30">history</span>
-                                                                <span className="text-[11px] text-primary truncate font-bold">{item}</span>
-                                                            </div>
-                                                            <button
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    const updated = searchHistory.filter(h => h !== item);
-                                                                    setSearchHistory(updated);
-                                                                    localStorage.setItem('product_search_history', JSON.stringify(updated));
-                                                                }}
-                                                                className="opacity-0 group-hover:opacity-100 p-1 hover:text-brick transition-all rounded-full hover:bg-primary/5 text-stone/40"
-                                                            >
-                                                                <span className="material-symbols-outlined text-[14px]">close</span>
-                                                            </button>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-3">
-                                        {/* Category Filter */}
-                                        <div className="space-y-1">
-                                            <span className="text-[9px] font-black uppercase text-stone/40 px-1">Danh mục</span>
-                                            <select
-                                                value={relatedCategory}
-                                                onChange={(e) => setRelatedCategory(e.target.value)}
-                                                className="w-full bg-white border border-stone/20 rounded-sm px-2 py-1.5 text-[11px] font-bold text-primary focus:outline-none"
-                                            >
-                                                <option value="all">Tất cả danh mục</option>
-                                                {categories.map(cat => (
-                                                    <option key={cat.id} value={cat.id}>{cat.name}</option>
-                                                ))}
-                                            </select>
-                                        </div>
-
-                                        {/* All Filterable Attributes */}
-                                        {allAttributes.filter(a => a.is_filterable || a.is_filterable_backend).map(attr => (
-                                            <div key={attr.id} className="space-y-1">
-                                                <span className="text-[9px] font-black uppercase text-stone/40 px-1">{attr.name}</span>
-                                                <select
-                                                    value={relatedAttrFilter[attr.id] || 'all'}
-                                                    onChange={(e) => setRelatedAttrFilter(prev => ({ ...prev, [attr.id]: e.target.value }))}
-                                                    className="w-full bg-white border border-stone/20 rounded-sm px-2 py-1.5 text-[11px] font-bold text-primary focus:outline-none"
+                                    <div className="flex gap-2">
+                                        <div className="relative flex-1" ref={relatedSearchContainerRef}>
+                                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-[18px] text-stone/40 z-10">search</span>
+                                            <input
+                                                type="text"
+                                                autoComplete="off"
+                                                placeholder="Tìm theo tên hoặc mã SKU..."
+                                                value={relatedQuery}
+                                                onChange={(e) => setRelatedQuery(e.target.value)}
+                                                onFocus={() => setShowSearchHistory(true)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                        setShowSearchHistory(false);
+                                                        addToSearchHistory(relatedQuery);
+                                                    }
+                                                }}
+                                                className="w-full bg-white border border-stone/20 rounded-sm pl-9 pr-9 py-2 text-[12px] font-bold text-primary focus:outline-none focus:border-gold/30 transition-all shadow-sm relative z-0"
+                                            />
+                                            {relatedQuery && (
+                                                <button
+                                                    onClick={() => { setRelatedQuery(''); setShowSearchHistory(false); }}
+                                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors z-10"
                                                 >
-                                                    <option value="all">Tất cả {attr.name}</option>
-                                                    {(attr.options || []).map(opt => (
-                                                        <option key={opt.id} value={opt.value}>{opt.value}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                        ))}
+                                                    <span className="material-symbols-outlined text-[16px]">cancel</span>
+                                                </button>
+                                            )}
+
+                                            {showSearchHistory && searchHistory.length > 0 && (
+                                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[70] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                                    <div className="flex justify-between items-center px-3 mb-1 border-b border-primary/10 pb-1">
+                                                        <span className="text-[9px] font-bold text-primary/40 uppercase tracking-widest">Gần đây</span>
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('product_search_history'); }}
+                                                            className="text-[9px] text-brick hover:underline font-bold"
+                                                        >Xóa</button>
+                                                    </div>
+                                                    <div className="max-h-48 overflow-y-auto custom-scrollbar">
+                                                        {searchHistory.map((item, idx) => (
+                                                            <div
+                                                                key={idx}
+                                                                className="group flex items-center justify-between px-3 py-1.5 hover:bg-primary/5 cursor-pointer transition-colors"
+                                                                onClick={() => {
+                                                                    setRelatedQuery(item);
+                                                                    setShowSearchHistory(false);
+                                                                    addToSearchHistory(item);
+                                                                }}
+                                                            >
+                                                                <div className="flex items-center gap-2 overflow-hidden">
+                                                                    <span className="material-symbols-outlined text-[16px] text-primary/30">history</span>
+                                                                    <span className="text-[11px] text-primary truncate font-bold">{item}</span>
+                                                                </div>
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        const updated = searchHistory.filter(h => h !== item);
+                                                                        setSearchHistory(updated);
+                                                                        localStorage.setItem('product_search_history', JSON.stringify(updated));
+                                                                    }}
+                                                                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-brick transition-all rounded-full hover:bg-primary/5 text-stone/40"
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[14px]">close</span>
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowRelatedFilters(!showRelatedFilters)}
+                                            className={`flex items-center gap-1.5 px-4 py-2 rounded-sm border font-black text-[11px] uppercase tracking-widest transition-all ${showRelatedFilters ? 'bg-primary text-white border-primary shadow-premium' : 'bg-white border-gold/20 text-gold hover:bg-gold/5'}`}
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">filter_list</span>
+                                            Lọc
+                                            {Object.values(relatedAttrFilter).concat([relatedCategory]).some(v => v !== 'all' && v !== '') && (
+                                                <span className="size-2 bg-brick rounded-full animate-pulse"></span>
+                                            )}
+                                        </button>
                                     </div>
+
+                                    {/* Filters Panel */}
+                                    {showRelatedFilters && (
+                                        <div className="grid grid-cols-1 gap-4 pt-3 mt-3 border-t border-stone/10 animate-in fade-in slide-in-from-top-2 duration-300">
+                                            <div className="grid grid-cols-2 gap-3">
+                                                {/* Category Filter */}
+                                                <div className="space-y-1">
+                                                    <span className="text-[9px] font-black uppercase text-stone/40 px-1">Danh mục</span>
+                                                    <select
+                                                        value={relatedCategory}
+                                                        onChange={(e) => setRelatedCategory(e.target.value)}
+                                                        className="w-full bg-white border border-stone/20 rounded-sm px-2 py-1.5 text-[11px] font-bold text-primary focus:outline-none"
+                                                    >
+                                                        <option value="all">Tất cả danh mục</option>
+                                                        {categories.map(cat => (
+                                                            <option key={cat.id} value={cat.id}>{cat.name}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+
+                                                {/* Filterable Attributes */}
+                                                {allAttributes
+                                                    .filter(a => [
+                                                        'Chứng chỉ chất lượng', 'Ngày ra lò', 'Đường kính', 
+                                                        'Giấy chứng nhận', 'Phí bảo hiểm vận chuyển', 
+                                                        'Hàng phi mậu dịch', 'Câu chuyện sản phẩm', 'Loại men'
+                                                    ].includes(a.name))
+                                                    .map(attr => (
+                                                        <div key={attr.id} className="space-y-1">
+                                                            <span className="text-[9px] font-black uppercase text-stone/40 px-1">{attr.name}</span>
+                                                            <select
+                                                                value={relatedAttrFilter[attr.id] || 'all'}
+                                                                onChange={(e) => setRelatedAttrFilter(prev => ({ ...prev, [attr.id]: e.target.value }))}
+                                                                className="w-full bg-white border border-stone/20 rounded-sm px-2 py-1.5 text-[11px] font-bold text-primary focus:outline-none"
+                                                            >
+                                                                <option value="all">Tất cả {attr.name}</option>
+                                                                {(attr.options || []).map(opt => (
+                                                                    <option key={opt.id} value={opt.value}>{opt.value}</option>
+                                                                ))}
+                                                            </select>
+                                                        </div>
+                                                ))}
+                                            </div>
+                                            <div className="flex justify-end">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setRelatedCategory('all');
+                                                        setRelatedAttrFilter({});
+                                                    }}
+                                                    className="text-[9px] font-black uppercase text-brick hover:underline px-2 py-1"
+                                                >
+                                                    Mặc định tất cả
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div className="max-h-[300px] overflow-y-auto custom-scrollbar space-y-2 pr-1 border-t border-stone/10 pt-4">
                                     <div className="flex justify-between items-center px-1 mb-2">
-                                        <span className="text-[10px] font-black uppercase tracking-widest text-stone/50">Kết quả ({filteredSuggestedProducts.length})</span>
-                                        {Object.values(relatedAttrFilter).concat([relatedQuery, relatedCategory]).some(v => v !== 'all' && v !== '') && (
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    setRelatedQuery('');
-                                                    setRelatedCategory('all');
-                                                    setRelatedAttrFilter({});
-                                                }}
-                                                className="text-[9px] font-bold text-brick hover:underline"
-                                            >
-                                                Xóa lọc
-                                            </button>
-                                        )}
+                                        <span className="text-[10px] font-black uppercase tracking-widest text-stone/50">
+                                            {!relatedQuery && relatedCategory === 'all' && !Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '') 
+                                                ? 'Gợi ý tương đương' 
+                                                : `Kết quả (${filteredSuggestedProducts.length})`}
+                                        </span>
+                                        <div className="flex items-center gap-3">
+                                            {!relatedQuery && relatedCategory === 'all' && !Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '') && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => fetchSuggestedProducts()}
+                                                    className="flex items-center gap-1 text-[9px] font-bold text-gold hover:underline"
+                                                >
+                                                    <span className="material-symbols-outlined text-[14px]">refresh</span>
+                                                    Làm mới
+                                                </button>
+                                            )}
+                                            {Object.values(relatedAttrFilter).concat([relatedQuery, relatedCategory]).some(v => v !== 'all' && v !== '') && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setRelatedQuery('');
+                                                        setRelatedCategory('all');
+                                                        setRelatedAttrFilter({});
+                                                    }}
+                                                    className="text-[9px] font-bold text-brick hover:underline"
+                                                >
+                                                    Xóa lọc
+                                                </button>
+                                            )}
+                                        </div>
                                     </div>
 
-                                    {filteredSuggestedProducts.length > 0 ? (
+                                    {searchingRelated ? (
+                                        <div className="py-12 flex flex-col items-center justify-center text-stone/40">
+                                            <div className="size-8 border-2 border-gold/20 border-t-gold rounded-full animate-spin mb-3"></div>
+                                            <span className="text-[11px] font-bold uppercase tracking-widest animate-pulse">Đang tải dữ liệu...</span>
+                                        </div>
+                                    ) : filteredSuggestedProducts.length > 0 ? (
                                         filteredSuggestedProducts.map(prod => (
                                             <label key={prod.id} className={`flex items-center gap-3 p-2 border rounded-sm cursor-pointer transition-all ${formData.linked_product_ids.includes(prod.id) ? 'bg-gold/10 border-gold/30 shadow-sm' : 'bg-white border-stone/10 hover:bg-gold/5 hover:border-gold/20'}`}>
                                                 <input
@@ -2247,7 +2884,7 @@ const ProductForm = () => {
                                                     checked={formData.linked_product_ids.includes(prod.id)}
                                                     onChange={(e) => {
                                                         const newVal = e.target.checked
-                                                            ? [...formData.linked_product_ids, prod.id]
+                                                            ? Array.from(new Set([...formData.linked_product_ids, prod.id]))
                                                             : formData.linked_product_ids.filter(id => id !== prod.id);
                                                         setFormData(prev => ({ ...prev, linked_product_ids: newVal }));
                                                     }}
@@ -2262,10 +2899,16 @@ const ProductForm = () => {
                                                 </div>
                                             </label>
                                         ))
-                                    ) : (
-                                        <div className="py-8 text-center text-stone/30 italic text-[11px]">
+                                    ) : (relatedQuery || relatedCategory !== 'all' || Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '')) ? (
+                                        <div className="py-12 text-center text-stone/30 italic text-[11px]">
                                             <span className="material-symbols-outlined block text-[24px] mb-1">sentiment_dissatisfied</span>
                                             Không tìm thấy sản phẩm phù hợp...
+                                        </div>
+                                    ) : (
+                                        <div className="py-12 flex flex-col items-center justify-center text-stone/30 italic text-[11px] border-2 border-dashed border-stone/5 rounded-sm">
+                                            <span className="material-symbols-outlined text-[32px] mb-2 opacity-50">Saved_Search</span>
+                                            <p className="font-bold uppercase tracking-tighter mb-1">Bắt đầu tìm kiếm</p>
+                                            <p className="max-w-[180px] leading-relaxed">Nhập từ khóa hoặc sử dụng bộ lọc để tìm sản phẩm đề xuất</p>
                                         </div>
                                     )}
                                 </div>
@@ -2287,6 +2930,103 @@ const ProductForm = () => {
                     </div>
                 </form>
             </div>
+
+            {/* Slug Management Modal */}
+            <AnimatePresence>
+                {showSlugModal && (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                        <motion.div 
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setShowSlugModal(false)}
+                            className="absolute inset-0 bg-primary/40 backdrop-blur-sm"
+                        />
+                        <motion.div 
+                            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                            className="relative w-full max-w-lg bg-white shadow-premium-lg rounded-sm overflow-hidden"
+                        >
+                            <div className="bg-[#fcfaf7] px-6 py-4 border-b border-gold/10 flex justify-between items-center">
+                                <div className="flex items-center gap-3">
+                                    <span className="material-symbols-outlined text-gold">link</span>
+                                    <h3 className="font-sans text-[16px] font-bold text-primary uppercase tracking-tight">Quản lý đường dẫn hiển thị</h3>
+                                </div>
+                                <button onClick={() => setShowSlugModal(false)} className="text-stone/30 hover:text-brick transition-colors">
+                                    <span className="material-symbols-outlined">close</span>
+                                </button>
+                            </div>
+                            <div className="p-6">
+                                <div className="mb-6">
+                                    <label className="block text-[11px] font-black uppercase text-stone/40 mb-2 tracking-widest">URL hiện tại của sản phẩm</label>
+                                    <div 
+                                    className="p-4 bg-stone/5 border border-gold/10 rounded-sm flex items-center justify-between group/link cursor-pointer hover:bg-gold/5 transition-all"
+                                    onClick={handleCopyLink}
+                                    title="Click để sao chép link"
+                                >
+                                    <div className="flex items-baseline gap-1 overflow-hidden">
+                                        <span className="text-[12px] text-stone/40 shrink-0 font-medium">di-san.com/product/</span>
+                                        <span className="text-[12px] text-primary font-bold truncate">{formData.slug || '...' }</span>
+                                    </div>
+                                    <span className="material-symbols-outlined text-[16px] text-stone/30 group-hover/link:text-gold transition-colors">content_copy</span>
+                                </div>
+                                <p className="text-[10px] text-stone/40 mt-2 italic">* Đây là đường dẫn tĩnh để khách hàng truy cập trực tiếp vào sản phẩm.</p>
+                                </div>
+
+                                <div className="space-y-4">
+                                    <div className="relative border border-stone/30 rounded-sm px-3 focus-within:border-primary/30 transition-colors flex flex-col justify-center min-h-[50px] bg-white mt-4">
+                                        <label className="absolute -top-3 left-2 bg-white px-1.5 font-sans text-[11px] font-black text-orange-700 tracking-widest leading-none uppercase">
+                                            Chỉnh sửa Slug
+                                        </label>
+                                        <div className="flex items-center gap-2 pt-2">
+                                            <input 
+                                                type="text"
+                                                value={tempSlug}
+                                                onChange={(e) => {
+                                                    const val = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+                                                    setTempSlug(val);
+                                                    setSlugError('');
+                                                }}
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]"
+                                                placeholder="VD: binh-hoa-chu-tinh-tinh-hoa"
+                                            />
+                                        </div>
+                                    </div>
+                                    {slugError && <p className="text-[11px] text-brick font-bold">{slugError}</p>}
+                                    <div className="bg-amber-50 border border-amber-100 p-3 rounded-sm">
+                                        <p className="text-[11px] text-amber-700 leading-relaxed">
+                                            <span className="font-bold">Lưu ý:</span> Việc đổi slug sẽ thay đổi URL của sản phẩm. Các link cũ đã chia sẻ hoặc được index bởi Google có thể bị lỗi 404 nếu không có redirect.
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="p-4 bg-stone/5 border-t border-stone/10 flex justify-end gap-3">
+                                <button 
+                                    onClick={() => setShowSlugModal(false)}
+                                    className="px-6 py-2 text-[11px] font-bold uppercase tracking-widest text-stone hover:text-primary transition-all"
+                                >
+                                    Hủy bỏ
+                                </button>
+                                <button 
+                                    onClick={() => {
+                                        if (!tempSlug.trim()) {
+                                            setSlugError('Đường dẫn không được để trống.');
+                                            return;
+                                        }
+                                        setFormData(prev => ({ ...prev, slug: tempSlug }));
+                                        setShowSlugModal(false);
+                                        showToast({ message: 'Đã cập nhật slug mới cho sản phẩm. Đừng quên nhấn "Lưu cập nhật"!', type: 'info' });
+                                    }}
+                                    className="px-8 py-2 bg-gold text-white text-[11px] font-bold uppercase tracking-widest rounded-sm hover:bg-gold/80 transition-all shadow-sm"
+                                >
+                                    Xác nhận thay đổi
+                                </button>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
         </div>
     );
 };

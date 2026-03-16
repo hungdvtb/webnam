@@ -17,29 +17,34 @@ export default function GroupedProductView({
   toggleGroupItem, 
   getImageUrl,
   images,
+  videoUrl,
   activeIndex,
   setActiveIndex,
   quantity,
   setQuantity,
   handleAddToCart,
-  handleBuyNow
+  handleBuyNow,
+  additionalInfo
 }) {
   return (
     <div className={styles.mainGrid}>
-      <ProductGallery 
-        images={images}
-        activeIndex={activeIndex}
-        setActiveIndex={setActiveIndex}
-        getImageUrl={getImageUrl}
-        productName={product.name}
-      />
+      <div className={styles.galleryColumn}>
+        <ProductGallery 
+          images={images}
+          videoUrl={videoUrl}
+          activeIndex={activeIndex}
+          setActiveIndex={setActiveIndex}
+          getImageUrl={getImageUrl}
+          productName={product.name}
+        />
+      </div>
 
       <div className={styles.infoColumn}>
         <div className={styles.infoWrapper}>
           <div>
             <span className={styles.badgeTag}>Product Group / Combo</span>
             <h1 className={styles.title}>{product.name}</h1>
-            <p className={styles.artistTag}>Thiết kế bởi Nghệ nhân Ưu tú Trần Độ - Làng gốm Bát Tràng</p>
+
 
             <div className={styles.priceContainer}>
               <div className={styles.currentPrice}>{formatPrice(displayPrice)}</div>
@@ -102,9 +107,13 @@ export default function GroupedProductView({
           </div>
 
           <SpecificationList product={product} />
-          <ActionLinks />
-          <QuantitySelector quantity={quantity} setQuantity={setQuantity} />
-          <BuyButtons onAddToCart={handleAddToCart} onBuyNow={handleBuyNow} />
+          <ActionLinks additionalInfo={additionalInfo} />
+
+          <div className={styles.actionSectionMB}>
+            <QuantitySelector quantity={quantity} setQuantity={setQuantity} />
+            <BuyButtons onAddToCart={handleAddToCart} onBuyNow={handleBuyNow} />
+          </div>
+
           <TrustBadges />
         </div>
       </div>

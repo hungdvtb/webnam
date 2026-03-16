@@ -318,17 +318,34 @@ class ProductController extends Controller
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->firstOrFail();
 
-        $related = Product::query()
-            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+        $limit = 8;
+        
+        // 1. Get explicitly linked related products first
+        $explicitRelated = $product->relatedProducts()
             ->where('status', true)
-            ->whereDoesntHave('parentConfigurable')
-            ->where('id', '!=', $product->id)
-            ->where('category_id', $product->category_id)
             ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->limit(1)])
-            ->inRandomOrder()
-            ->limit(4)
             ->get();
+            
+        $relatedIds = $explicitRelated->pluck('id')->push($product->id)->toArray();
+        
+        // 2. If we need more, fill with random products from the same category
+        $fallback = [];
+        if ($explicitRelated->count() < $limit) {
+            $fallback = Product::query()
+                ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+                ->where('status', true)
+                ->whereDoesntHave('parentConfigurable')
+                ->whereNotIn('id', $relatedIds)
+                ->where('category_id', $product->category_id)
+                ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->limit(1)])
+                ->inRandomOrder()
+                ->limit($limit - $explicitRelated->count())
+                ->get();
+        }
 
-        return response()->json($related);
+        // Combine and shuffle to keep it random
+        $result = $explicitRelated->concat($fallback)->shuffle();
+
+        return response()->json($result);
     }
 }

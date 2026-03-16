@@ -28,10 +28,10 @@ export function CartProvider({ children }) {
     }
   }, [cartItems, isInitialized]);
 
-  const addToCart = (product, quantity = 1, options = {}, groupedItems = []) => {
+  const addToCart = (product, quantity = 1, options = {}, groupedItems = [], finalPrice = null) => {
     setCartItems(prev => {
       // Create a unique key for the item based on product ID, options, and grouped items
-      const itemKey = `${product.id}-${JSON.stringify(options)}-${JSON.stringify(groupedItems.sort())}`;
+      const itemKey = `${product.id}-${JSON.stringify(options)}-${JSON.stringify(groupedItems.map(i => i.id).sort())}`;
       const existingItem = prev.find(item => item.cartKey === itemKey);
 
       if (existingItem) {
@@ -48,15 +48,11 @@ export function CartProvider({ children }) {
         name: product.name,
         slug: product.slug,
         sku: product.sku,
-        price: product.price,
+        price: finalPrice || product.price,
         image: product.primary_image || (product.images && product.images[0]),
         quantity,
         options,
-        groupedItems: groupedItems.map(giId => {
-           // If we have access to full grouped item data, we could store more here
-           // For now, just IDs or minimal info
-           return product.grouped_items?.find(i => i.id === giId);
-        }).filter(Boolean)
+        groupedItems: groupedItems
       }];
     });
   };
@@ -69,6 +65,12 @@ export function CartProvider({ children }) {
     if (newQuantity < 1) return;
     setCartItems(prev => prev.map(item => 
       item.cartKey === cartKey ? { ...item, quantity: newQuantity } : item
+    ));
+  };
+
+  const updateItem = (cartKey, updates) => {
+    setCartItems(prev => prev.map(item => 
+      item.cartKey === cartKey ? { ...item, ...updates } : item
     ));
   };
 
@@ -89,6 +91,7 @@ export function CartProvider({ children }) {
       addToCart, 
       removeFromCart, 
       updateQuantity, 
+      updateItem,
       clearCart, 
       cartCount, 
       cartTotal,

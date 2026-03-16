@@ -83,3 +83,10 @@ export async function getWebProductDetail(slug) {
 export async function getWebRelatedProducts(slug) {
     return fetchFromApi(`/web-api/products/${slug}/related`);
 }
+
+export async function placeWebOrder(orderData) {
+    return fetchFromApi('/storefront/order', {
+        method: 'POST',
+        body: JSON.stringify(orderData)
+    });
+}

@@ -17,29 +17,34 @@ export default function ConfigurableProductView({
   handleOptionSelect,
   getImageUrl,
   images,
+  videoUrl,
   activeIndex,
   setActiveIndex,
   quantity,
   setQuantity,
   handleAddToCart,
-  handleBuyNow
+  handleBuyNow,
+  additionalInfo
 }) {
   return (
     <div className={styles.mainGrid}>
-      <ProductGallery 
-        images={images}
-        activeIndex={activeIndex}
-        setActiveIndex={setActiveIndex}
-        getImageUrl={getImageUrl}
-        productName={currentProduct.name}
-      />
+      <div className={styles.galleryColumn}>
+        <ProductGallery 
+          images={images}
+          videoUrl={videoUrl}
+          activeIndex={activeIndex}
+          setActiveIndex={setActiveIndex}
+          getImageUrl={getImageUrl}
+          productName={currentProduct.name}
+        />
+      </div>
 
       <div className={styles.infoColumn}>
         <div className={styles.infoWrapper}>
           <div>
             <span className={styles.badge}>Tuyệt Tác Nghệ Nhân</span>
             <h1 className={styles.title}>{currentProduct.name}</h1>
-            <p className={styles.artistTag}>Thiết kế bởi Nghệ nhân Ưu tú Trần Độ - Làng gốm Bát Tràng</p>
+
             <div className={styles.meta}>
               <span className={styles.sku}>SKU: <span className={styles.skuValue}>{currentProduct.sku}</span></span>
               <span className={styles.statusDot} style={{ backgroundColor: currentProduct.stock_quantity > 0 ? '#10b981' : '#ef4444' }}></span>
@@ -57,73 +62,84 @@ export default function ConfigurableProductView({
           {/* Variants Selection */}
           {product.super_attributes?.length > 0 && (
             <div className={styles.variantsCard}>
-              {product.super_attributes.map((attr) => (
-                <div key={attr.id} className={styles.variantGroup}>
-                  <h4 className={styles.variantLabel}>
-                    {attr.name}
-                  </h4>
-                  <div className={styles.variantOptions}>
-                    {attr.options?.map((opt) => {
-                      const isActive = selectedOptions[attr.code] === opt.value;
-                      const isSwatch = attr.frontend_type === 'swatch' || opt.swatch_value;
-                      
-                      const isPossible = product.variations?.some(variant => {
-                        return Object.entries(selectedOptions).every(([otherCode, otherVal]) => {
-                          if (otherCode === attr.code) return true;
-                          return variant.attribute_values?.some(av => 
-                            (av.attribute?.code === otherCode || av.attribute_id === product.super_attributes.find(a => a.code === otherCode)?.id) 
-                            && av.value === otherVal
-                          );
-                        }) && variant.attribute_values?.some(av => 
-                          (av.attribute?.code === attr.code || av.attribute_id === attr.id) && av.value === opt.value
-                        );
-                      });
-
-                      if (isSwatch) {
-                        return (
-                          <div key={opt.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem', opacity: isPossible ? 1 : 0.3, cursor: isPossible ? 'pointer' : 'not-allowed' }}>
-                            <button
-                              onClick={() => isPossible && handleOptionSelect(attr.code, opt.value)}
-                              className={`${styles.swatchBtn} ${isActive ? styles.swatchActive : ''}`}
-                              title={opt.value}
-                              disabled={!isPossible}
-                            >
-                              <span 
-                                className={styles.swatchColor}
-                                style={{ backgroundColor: opt.swatch_value || '#ccc' }} 
-                              />
-                            </button>
-                            <span style={{ fontSize: '10px', fontWeight: isActive ? '700' : '500', opacity: isActive ? 1 : 0.6 }}>{opt.value}</span>
-                          </div>
-                        );
-                      }
-
-                      return (
-                        <button
-                          key={opt.id}
-                          onClick={() => isPossible && handleOptionSelect(attr.code, opt.value)}
-                          className={`${styles.optionBtn} ${isActive ? styles.optionActive : ''}`}
-                          disabled={!isPossible}
-                          style={{ 
-                            opacity: isPossible ? 1 : 0.4, 
-                            cursor: isPossible ? 'pointer' : 'not-allowed',
-                            textDecoration: isPossible ? 'none' : 'line-through'
-                          }}
-                        >
-                          {opt.value}
-                        </button>
+              {product.super_attributes.map((attr) => {
+                // Filter options that are possible with current selections of OTHER attributes
+                const validOptions = (attr.options || []).filter(opt => {
+                  return product.variations?.some(variant => {
+                    // Check if this variant matches all OTHER selected options and has stock
+                    const othersMatch = Object.entries(selectedOptions).every(([otherCode, otherValue]) => {
+                      if (otherCode === attr.code) return true;
+                      return variant.attribute_values?.some(av => 
+                        (av.attribute?.code === otherCode || av.attribute_id === product.super_attributes.find(a => a.code === otherCode)?.id) 
+                        && av.value === otherValue
                       );
-                    })}
+                    });
+
+                    // Check if this variant matches the option being filtered
+                    const thisMatches = variant.attribute_values?.some(av => 
+                      (av.attribute?.code === attr.code || av.attribute_id === attr.id) && av.value === opt.value
+                    );
+
+                    return othersMatch && thisMatches && variant.stock_quantity > 0;
+                  });
+                });
+
+                // If no valid options for this attribute group, don't render it at all
+                if (validOptions.length === 0) return null;
+
+                return (
+                  <div key={attr.id} className={styles.variantGroup}>
+                    <h4 className={styles.variantLabel}>
+                      {attr.name}
+                    </h4>
+                    <div className={styles.variantOptions}>
+                      {validOptions.map((opt) => {
+                        const isActive = selectedOptions[attr.code] === opt.value;
+                        const isSwatch = attr.frontend_type === 'swatch' || opt.swatch_value;
+                        
+                        if (isSwatch) {
+                          return (
+                            <div key={opt.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
+                              <button
+                                onClick={() => handleOptionSelect(attr.code, opt.value)}
+                                className={`${styles.swatchBtn} ${isActive ? styles.swatchActive : ''}`}
+                                title={opt.value}
+                              >
+                                <span 
+                                  className={styles.swatchColor}
+                                  style={{ backgroundColor: opt.swatch_value || '#ccc' }} 
+                                />
+                              </button>
+                              <span style={{ fontSize: '10px', fontWeight: isActive ? '700' : '500' }}>{opt.value}</span>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <button
+                            key={opt.id}
+                            onClick={() => handleOptionSelect(attr.code, opt.value)}
+                            className={`${styles.optionBtn} ${isActive ? styles.optionActive : ''}`}
+                          >
+                            {opt.value}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
           <SpecificationList product={product} currentProduct={currentProduct} />
-          <ActionLinks />
-          <QuantitySelector quantity={quantity} setQuantity={setQuantity} />
-          <BuyButtons onAddToCart={handleAddToCart} onBuyNow={handleBuyNow} />
+          <ActionLinks additionalInfo={additionalInfo} />
+
+          <div className={styles.actionSectionMB}>
+            <QuantitySelector quantity={quantity} setQuantity={setQuantity} />
+            <BuyButtons onAddToCart={handleAddToCart} onBuyNow={handleBuyNow} />
+          </div>
+
           <TrustBadges />
         </div>
       </div>

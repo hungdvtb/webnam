@@ -268,7 +268,7 @@ const AdminLayout = () => {
                                             className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/blog' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
                                         >
                                             <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/blog' ? 'text-gold' : 'group-hover:text-gold'}`}>book_2</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Bài viết cẩm nang</span>
+                                            <span className="font-sans text-xs font-medium tracking-wide">Bài viết trên web</span>
                                         </Link>
                                     )}
                                 </div>

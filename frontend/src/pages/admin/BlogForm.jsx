@@ -114,7 +114,7 @@ const BlogForm = () => {
                 excerpt: aiData.excerpt || prev.excerpt
             }));
 
-            showModal({ title: 'Thành công', content: 'AI đã hoàn thành bản thảo cẩm nang văn hóa!', type: 'success' });
+            showModal({ title: 'Thành công', content: 'AI đã hoàn thành bản thảo bài viết trên web!', type: 'success' });
         } catch (error) {
             showModal({ title: 'Lỗi AI', content: 'Không thể kết nối AI lúc này. Vui lòng thử lại sau.', type: 'error' });
         } finally {

@@ -1201,15 +1201,28 @@
 
 /* Bundle Summary Box */
 .summaryBox {
-  background: rgba(197, 160, 101, 0.05);
-  border: 1px solid rgba(197, 160, 101, 0.2);
-  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(197, 160, 101, 0.08) 0%, rgba(197, 160, 101, 0.02) 100%);
+  border: 1px solid rgba(197, 160, 101, 0.15);
+  border-radius: 24px;
   padding: 3rem;
   display: grid;
   grid-template-columns: 1fr;
   gap: 3rem;
   text-align: center;
-  margin-top: 3rem;
+  margin-top: 4rem;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 20px 40px -20px rgba(197, 160, 101, 0.2);
+}
+
+.summaryBox::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
 }
 
 @media (min-width: 768px) {
@@ -1234,9 +1247,10 @@
 }
 
 .summaryValue {
-  font-size: 1.75rem;
-  font-weight: 700;
-  color: #4A4A4A;
+  font-size: 2rem;
+  font-weight: 900;
+  color: #1b365d;
+  letter-spacing: -0.02em;
 }
 
 .summaryColAccent {
@@ -1478,4 +1492,58 @@
   position: sticky;
   bottom: 0;
   z-index: 10;
+}
+
+.btnBundle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  width: 100%;
+  padding: 1.5rem 2rem;
+  border-radius: 16px;
+  font-weight: 900;
+  font-size: 1.1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  cursor: pointer;
+  border: none;
+}
+
+.btnBundlePrimary {
+  background: #1b365d !important;
+  color: white !important;
+  box-shadow: 0 10px 30px rgba(27, 54, 93, 0.3);
+}
+
+.btnBundlePrimary:hover {
+  background: #c5a065 !important;
+  transform: translateY(-5px);
+  box-shadow: 0 20px 40px rgba(197, 160, 101, 0.4);
+}
+
+.btnBundleSecondary {
+  background: white !important;
+  color: #1b365d !important;
+  border: 2px solid #1b365d !important;
+}
+
+.btnBundleSecondary:hover {
+  background: #1b365d !important;
+  color: white !important;
+  transform: translateY(-5px);
+}
+
+.summaryValueTotal {
+  font-size: 3rem !important;
+  font-weight: 900 !important;
+  color: #1b365d !important;
+  font-family: 'Playfair Display', serif !important;
+  letter-spacing: -0.02em;
+}
+
+.summaryValueAccent {
+  color: #c5a065 !important;
+  font-weight: 900 !important;
 }

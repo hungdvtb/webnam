@@ -240,6 +240,9 @@ class ProductController extends Controller
             'grouped_items.*.id' => 'required|exists:products,id',
             'grouped_items.*.quantity' => 'required|integer|min:1',
             'grouped_items.*.is_required' => 'required|boolean',
+            'grouped_items.*.variant_id' => 'nullable|exists:products,id',
+            'grouped_items.*.option_title' => 'nullable|string',
+            'grouped_items.*.is_default' => 'nullable|boolean',
             'super_attribute_ids' => 'nullable|array',
             'super_attribute_ids.*' => 'exists:attributes,id',
             // EAV custom values
@@ -342,22 +345,31 @@ class ProductController extends Controller
         }
 
         if ($request->has('grouped_items') && in_array($product->type, ['grouped', 'bundle'])) {
-            $items = [];
+            $linkType = $product->type === 'bundle' ? 'bundle' : 'grouped';
+            
+            // We use detach + attach in a loop to support multiple variants of the same product
+            if ($product->type === 'bundle') {
+                $product->bundleItems()->detach();
+            } else {
+                $product->groupedItems()->detach();
+            }
+
             foreach ($request->grouped_items as $idx => $item) {
-                $linkType = $product->type === 'bundle' ? 'bundle' : 'grouped';
-                $items[$item['id']] = [
+                $pivotData = [
                     'quantity' => $item['quantity'],
                     'is_required' => $item['is_required'],
                     'link_type' => $linkType,
                     'position' => $idx,
                     'option_title' => $item['option_title'] ?? null,
                     'is_default' => $item['is_default'] ?? false,
+                    'variant_id' => $item['variant_id'] ?? null,
                 ];
-            }
-            if ($product->type === 'bundle') {
-                $product->bundleItems()->sync($items);
-            } else {
-                $product->groupedItems()->sync($items);
+
+                if ($product->type === 'bundle') {
+                    $product->bundleItems()->attach($item['id'], $pivotData);
+                } else {
+                    $product->groupedItems()->attach($item['id'], $pivotData);
+                }
             }
         }
 
@@ -452,7 +464,7 @@ class ProductController extends Controller
             },
             'bundleItems' => function ($q) {
                 $q->select(['products.id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'type', 'weight'])
-                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'is_default'])
+                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'is_default', 'variant_id'])
                     ->with([
                         'images:id,product_id,image_url,is_primary',
                         'attributeValues:id,product_id,attribute_id,value'
@@ -540,6 +552,9 @@ class ProductController extends Controller
             'grouped_items.*.id' => 'required|exists:products,id',
             'grouped_items.*.quantity' => 'required|integer|min:1',
             'grouped_items.*.is_required' => 'required|boolean',
+            'grouped_items.*.variant_id' => 'nullable|exists:products,id',
+            'grouped_items.*.option_title' => 'nullable|string',
+            'grouped_items.*.is_default' => 'nullable|boolean',
             'super_attribute_ids' => 'nullable|array',
             'super_attribute_ids.*' => 'exists:attributes,id',
             // EAV custom values
@@ -614,22 +629,30 @@ class ProductController extends Controller
         }
 
         if ($request->has('grouped_items') && in_array($product->type, ['grouped', 'bundle'])) {
-            $items = [];
+            $linkType = $product->type === 'bundle' ? 'bundle' : 'grouped';
+            
+            if ($product->type === 'bundle') {
+                $product->bundleItems()->detach();
+            } else {
+                $product->groupedItems()->detach();
+            }
+
             foreach ($request->grouped_items as $idx => $item) {
-                $linkType = $product->type === 'bundle' ? 'bundle' : 'grouped';
-                $items[$item['id']] = [
+                $pivotData = [
                     'quantity' => $item['quantity'],
                     'is_required' => $item['is_required'],
                     'link_type' => $linkType,
                     'position' => $idx,
                     'option_title' => $item['option_title'] ?? null,
                     'is_default' => $item['is_default'] ?? false,
+                    'variant_id' => $item['variant_id'] ?? null,
                 ];
-            }
-            if ($product->type === 'bundle') {
-                $product->bundleItems()->sync($items);
-            } else {
-                $product->groupedItems()->sync($items);
+
+                if ($product->type === 'bundle') {
+                    $product->bundleItems()->attach($item['id'], $pivotData);
+                } else {
+                    $product->groupedItems()->attach($item['id'], $pivotData);
+                }
             }
         }
 

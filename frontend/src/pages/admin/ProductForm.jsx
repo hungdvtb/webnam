@@ -262,6 +262,7 @@ const ProductForm = () => {
     const [refreshingAttributes, setRefreshingAttributes] = useState(false);
     const [bundleOptions, setBundleOptions] = useState([]); // [{ id, title, items: [] }]
     const [showBundleSearch, setShowBundleSearch] = useState(null); // optionId
+    const [bundleItemVariants, setBundleItemVariants] = useState({}); // { productId: [variants] }
 
     // Filters for Related Products suggestions
     const [relatedQuery, setRelatedQuery] = useState('');
@@ -642,8 +643,19 @@ const ProductForm = () => {
                         quantity: item.pivot?.quantity || 1,
                         is_required: !!item.pivot?.is_required,
                         is_default: !!item.pivot?.is_default,
-                        image_url: (item.images?.find(img => img.is_primary) || item.images?.[0])?.image_url
+                        image_url: (item.images?.find(img => img.is_primary) || item.images?.[0])?.image_url,
+                        type: item.type,
+                        variant_id: item.pivot?.variant_id || null,
+                        variant_label: ''
                     });
+
+                    // Fetch variants if configurable
+                    if (item.type === 'configurable') {
+                        productApi.getOne(item.id).then(res => {
+                            const vars = (res.data.linked_products || []).filter(p => p.pivot?.link_type === 'super_link');
+                            setBundleItemVariants(prev => ({ ...prev, [item.id]: vars }));
+                        }).catch(e => console.error(e));
+                    }
                 });
                 setBundleOptions(Object.entries(optionsMap).map(([title, its]) => ({
                     id: Math.random().toString(36).substr(2, 9),
@@ -1186,11 +1198,19 @@ const ProductForm = () => {
     const handleAddItemToOption = (optionId, product) => {
         setBundleOptions(prev => prev.map(o => {
             if (o.id !== optionId) return o;
-            if (o.items.some(it => it.id === product.id)) {
+            if (o.items.some(it => it.id === product.id && it.variant_id === null && product.type === 'simple')) {
                 showToast({ message: 'Sản phẩm này đã có trong tùy chọn.', type: 'info' });
                 return o;
             }
             
+            // Fetch variants if configurable
+            if (product.type === 'configurable' && !bundleItemVariants[product.id]) {
+                productApi.getOne(product.id).then(res => {
+                    const variants = (res.data.linked_products || []).filter(p => p.pivot?.link_type === 'super_link');
+                    setBundleItemVariants(prev => ({ ...prev, [product.id]: variants }));
+                }).catch(e => console.error("Error fetching variants for bundle item", e));
+            }
+
             const primaryImage = product.images?.find(img => img.is_primary) || product.images?.[0];
             const newItem = {
                 id: product.id,
@@ -1199,8 +1219,11 @@ const ProductForm = () => {
                 price: product.price,
                 quantity: 1,
                 is_required: true,
-                is_default: o.items.length === 0, // Mặc định nếu là sp đầu tiên
-                image_url: primaryImage?.image_url
+                is_default: o.items.length === 0,
+                image_url: primaryImage?.image_url,
+                type: product.type,
+                variant_id: null,
+                variant_label: ''
             };
             return { ...o, items: [...o.items, newItem] };
         }));
@@ -1234,6 +1257,33 @@ const ProductForm = () => {
             return {
                 ...o,
                 items: o.items.map(it => it.id === productId ? { ...it, quantity: Math.max(1, parseInt(quantity) || 1) } : it)
+            };
+        }));
+    };
+
+    const handleUpdateBundleItemVariant = (optionId, productId, variantId) => {
+        setBundleOptions(prev => prev.map(o => {
+            if (o.id !== optionId) return o;
+            
+            return {
+                ...o,
+                items: o.items.map(it => {
+                    if (it.id !== productId) return it;
+                    
+                    const variants = bundleItemVariants[productId] || [];
+                    const selectedVariant = variants.find(v => v.id === parseInt(variantId));
+                    
+                    if (!selectedVariant) return { ...it, variant_id: null, variant_label: '' };
+                    
+                    return {
+                        ...it,
+                        variant_id: selectedVariant.id,
+                        variant_label: selectedVariant.name || (selectedVariant.attribute_values || []).map(av => av.value).join(' / '),
+                        sku: selectedVariant.sku,
+                        price: selectedVariant.price,
+                        image_url: (selectedVariant.images?.find(img => img.is_primary) || selectedVariant.images?.[0])?.image_url || it.image_url
+                    };
+                })
             };
         }));
     };
@@ -1272,6 +1322,9 @@ const ProductForm = () => {
                         submitData.append(`grouped_items[${idx}][is_required]`, item.is_required ? '1' : '0');
                         submitData.append(`grouped_items[${idx}][option_title]`, item.option_title || '');
                         submitData.append(`grouped_items[${idx}][is_default]`, item.is_default ? '1' : '0');
+                        if (item.variant_id) {
+                            submitData.append(`grouped_items[${idx}][variant_id]`, item.variant_id);
+                        }
                     });
                 } else if (key === 'specifications') {
                     const validSpecs = val.filter(s => s.label.trim() || s.value.trim());
@@ -1749,7 +1802,7 @@ const ProductForm = () => {
                                                             ) : (
                                                                 <div className="flex-1 relative">
                                                                     <input 
-                                                                        placeholder="Tìm bài viết cẩm nang..." 
+                                                                        placeholder="Tìm bài viết trên web..." 
                                                                         className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-[12px] text-stone italic placeholder:opacity-40"
                                                                         value={blogSearchQuery[idx] || ''}
                                                                         onChange={(e) => {
@@ -2477,6 +2530,7 @@ const ProductForm = () => {
                                                                 <tr className="bg-stone/[0.02] text-stone/40 border-b border-stone/5">
                                                                     <th className="pl-5 py-2 w-12 text-center uppercase font-black">Mặc định</th>
                                                                     <th className="px-3 py-2 uppercase font-black">Sản phẩm</th>
+                                                                    <th className="px-3 py-2 uppercase font-black">Biến thể</th>
                                                                     <th className="px-3 py-2 uppercase font-black text-center">Giá gốc</th>
                                                                     <th className="px-3 py-2 uppercase font-black text-center">Số lượng</th>
                                                                     <th className="px-3 py-2 w-12"></th>
@@ -2498,6 +2552,24 @@ const ProductForm = () => {
                                                                                     <p className="text-[10px] text-gold uppercase font-mono">{item.sku}</p>
                                                                                 </div>
                                                                             </div>
+                                                                        </td>
+                                                                        <td className="px-3 py-2">
+                                                                            {item.type === 'configurable' ? (
+                                                                                <select
+                                                                                    value={item.variant_id || ''}
+                                                                                    onChange={(e) => handleUpdateBundleItemVariant(option.id, item.id, e.target.value)}
+                                                                                    className="w-full bg-gold/5 border border-gold/10 rounded-sm px-2 py-1 text-[11px] font-bold text-primary focus:outline-none"
+                                                                                >
+                                                                                    <option value="">Chọn biến thể...</option>
+                                                                                    {(bundleItemVariants[item.id] || []).map(v => (
+                                                                                        <option key={v.id} value={v.id}>
+                                                                                            {v.name || (v.attribute_values || []).map(av => av.value).join(' / ')} - {v.sku}
+                                                                                        </option>
+                                                                                    ))}
+                                                                                </select>
+                                                                            ) : (
+                                                                                <span className="text-stone/30 italic">Không có biến thể</span>
+                                                                            )}
                                                                         </td>
                                                                         <td className="px-3 py-2 text-center font-bold text-stone/50">{formatNumberOutput(item.price)}₫</td>
                                                                         <td className="px-3 py-2 text-center">

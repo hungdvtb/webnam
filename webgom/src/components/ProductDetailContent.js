@@ -55,11 +55,23 @@ export default function ProductDetailContent({ product }) {
     if (product?.type === 'bundle') {
       const items = product.bundle_items || product.grouped_items || [];
       if (items.length > 0) {
-        setBundleItems(items.map(item => ({
-          ...item,
-          qty: item.pivot?.quantity || 1,
-          selected: !!item.pivot?.is_default
-        })));
+        // Track seen groups to select at least one item per group
+        const seenGroups = new Set();
+        
+        setBundleItems(items.map(item => {
+          const groupName = item.option_title || item.pivot?.option_title || '';
+          const isFirstInGroup = groupName && !seenGroups.has(groupName);
+          if (groupName) seenGroups.add(groupName);
+
+          const isSelected = !!item.pivot?.is_default || !groupName || isFirstInGroup;
+
+          return {
+            ...item,
+            qty: item.pivot?.quantity || 1,
+            selected: isSelected,
+            option_title: groupName
+          };
+        }));
       }
     }
   }, [product]);
@@ -97,6 +109,24 @@ export default function ProductDetailContent({ product }) {
 
   const removeBundleItem = (id) => {
     setBundleItems(prev => prev.filter(item => item.id !== id));
+  };
+
+  const updateBundleItemProduct = (oldItemId, newProduct) => {
+    setBundleItems(prev => prev.map(item => {
+      if (item.id === oldItemId) {
+        return {
+          ...newProduct,
+          qty: item.qty || 1,
+          selected: true,
+          option_title: item.option_title,
+          pivot: {
+              ...item.pivot,
+              variant_id: newProduct.pivot?.link_type === 'super_link' ? newProduct.id : null
+          }
+        };
+      }
+      return item;
+    }));
   };
 
   const toggleBundleItem = (id) => {
@@ -261,6 +291,7 @@ export default function ProductDetailContent({ product }) {
         {...commonProps}
         bundleItems={bundleItems}
         updateBundleItemQuantity={updateBundleItemQuantity}
+        updateBundleItemProduct={updateBundleItemProduct}
         removeBundleItem={removeBundleItem}
         toggleBundleItem={toggleBundleItem}
       />

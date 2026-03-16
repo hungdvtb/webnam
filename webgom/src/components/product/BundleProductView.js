@@ -1,11 +1,16 @@
 'use client';
 
-import { useState } from 'react';
 import styles from '../../app/product/[slug]/product.module.css';
+import builderStyles from './builder.module.css';
 import Image from 'next/image';
-import Link from 'next/link';
+import ProductGallery from './common/ProductGallery';
+import TrustBadges from './common/TrustBadges';
+import QuantitySelector from './common/QuantitySelector';
+import BuyButtons from './common/BuyButtons';
 import SpecificationList from './common/SpecificationList';
 import ActionLinks from './common/ActionLinks';
+import ComponentSelectionModal from './common/ComponentSelectionModal';
+import { useState } from 'react';
 
 export default function BundleProductView({ 
   product, 
@@ -18,231 +23,231 @@ export default function BundleProductView({
   setActiveIndex,
   bundleItems,
   updateBundleItemQuantity,
+  updateBundleItemProduct,
   removeBundleItem,
-  toggleBundleItem,
   handleAddToCart,
   handleBuyNow,
+  quantity,
+  setQuantity,
   additionalInfo
 }) {
-  const [swappingGroup, setSwappingGroup] = useState(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [activeSlot, setActiveSlot] = useState(null);
 
-  // Group ALL items by option_title (for swapping)
-  const allGroups = bundleItems.reduce((acc, item) => {
-    const groupName = item.option_title || item.pivot?.option_title || item.category?.name || 'Thành phần mặc định';
-    if (!acc[groupName]) acc[groupName] = [];
-    acc[groupName].push(item);
-    return acc;
-  }, {});
+  const openSelectionModal = (slot) => {
+    setActiveSlot(slot);
+    setIsModalOpen(true);
+  };
 
-  // Selected items only
+  const handleSelectComponent = (newProduct) => {
+    if (activeSlot) {
+      updateBundleItemProduct(activeSlot.id, newProduct);
+    }
+    setIsModalOpen(false);
+  };
+
   const selectedItems = bundleItems.filter(item => item.selected);
-  
-  const subtotal = bundleItems.filter(it => it.selected).reduce((acc, it) => acc + (parseFloat(it.price) * (it.qty || 1)), 0);
+  const subtotal = selectedItems.reduce((acc, it) => acc + (parseFloat(it.price) * (it.qty || 1)), 0);
   const discount = subtotal - displayPrice;
 
   return (
-    <div className={styles.productDetail}>
-      {/* 1. HERO SECTION */}
-      <section className={styles.bundleHero}>
+    <div className="flex flex-col gap-12">
+      <div className={styles.mainGrid}>
         {/* Gallery Column */}
-        <div className={styles.bundleGallery}>
-          <div className={styles.mainDisplay}>
-            {images[activeIndex] ? (
-              <Image 
-                src={getImageUrl(images[activeIndex])}
-                alt={product.name}
-                fill
-                style={{ objectFit: 'cover' }}
-                className="transition-transform duration-700 hover:scale-110"
-                unoptimized
-              />
-            ) : (
-              <div className="w-full h-full bg-stone/5 flex items-center justify-center">
-                <span className="material-symbols-outlined text-4xl text-stone/20">image</span>
-              </div>
-            )}
-            <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-primary/40 to-transparent"></div>
-          </div>
-          
-          <div className={styles.bundleThumbs}>
-            {images.slice(0, 3).map((img, idx) => (
-              <div 
-                key={idx} 
-                className={`${styles.thumbItem} ${activeIndex === idx ? styles.thumbItemActive : ''}`}
-                onClick={() => setActiveIndex(idx)}
-              >
-                <Image 
-                  src={getImageUrl(img)}
-                  alt={`${product.name} ${idx + 1}`}
-                  fill
-                  style={{ objectFit: 'cover' }}
-                  unoptimized
-                />
-              </div>
-            ))}
-            {images.length > 3 && (
-              <div className={`${styles.thumbItem} ${styles.thumbMore}`}>
-                +{images.length - 3}
-              </div>
-            )}
-          </div>
+        <div className={styles.galleryColumn}>
+          <ProductGallery 
+            images={images}
+            videoUrl={videoUrl}
+            activeIndex={activeIndex}
+            setActiveIndex={setActiveIndex}
+            getImageUrl={getImageUrl}
+            productName={product.name}
+          />
         </div>
 
         {/* Info Column */}
-        <div className={`${styles.bundleInfo} flex flex-col gap-6`}>
-          <div>
-            <span className={styles.collectionBadge}>Imperial Artisan Collection</span>
-            <h1 className={styles.bundleTitle}>{product.name}</h1>
-            <div className={styles.bundlePriceRow}>
-              <p className={styles.bundlePrice}>Từ {formatPrice(displayPrice)}</p>
+        <div className={styles.infoColumn}>
+          <div className={styles.infoWrapper}>
+            <div>
+              <span className={styles.badgeTag}>Product Combo / Bộ đồ thờ</span>
+              <h1 className={styles.title}>{product.name}</h1>
+              
+              <div className={styles.meta}>
+                <span className={styles.sku}>Mã bộ: <span className={styles.skuValue}>{product.sku || `COMBO-${product.id}`}</span></span>
+                <span className={styles.statusDot} style={{ backgroundColor: '#10b981' }}></span>
+                <span className={styles.statusText} style={{ color: '#059669' }}>Sẵn sàng giao ngay</span>
+              </div>
+            </div>
+
+            <div className={styles.priceContainer}>
+              <div className="flex items-center gap-4">
+                <div className={styles.currentPrice}>{formatPrice(displayPrice)}</div>
+                {discount > 0 && (
+                  <span className={styles.originalPrice}>{formatPrice(subtotal)}</span>
+                )}
+              </div>
               {discount > 0 && (
-                <span className={styles.bundleOldPrice}>{formatPrice(subtotal)}</span>
+                <p className={styles.savingsText}>
+                  Tiết kiệm {formatPrice(discount)} khi mua trọn bộ
+                </p>
               )}
-            </div>
-            
-            <div className="mt-6 pt-4 border-t border-stone/10">
-              <h3 className="text-sm font-bold text-primary mb-3 flex items-center gap-2 tracking-wider">
-                <span className="material-symbols-outlined text-accent text-sm">description</span>
-                THÔNG SỐ KỸ THUẬT
-              </h3>
-              <SpecificationList product={product} />
+              <p className={styles.priceMeta}>Số lượng món: {selectedItems.length} | Đã bao gồm phí bảo hiểm vận chuyển</p>
             </div>
 
-            <div className={styles.bundleQuote}>
-              "Gói trọn tinh hoa gốm sứ Đại Việt, mang lại sự trang trọng và hưng thịnh cho không gian thờ tự của gia đình."
-            </div>
-          </div>
-
-          {/* Style Choice (Stubbed logic based on design) */}
-          <div className={styles.styleChoice}>
-            <p className={styles.choiceLabel}>
-              <span className="material-symbols-outlined text-accent">palette</span>
-              CHỌN PHONG CÁCH MEN:
-            </p>
-            <div className={styles.choiceGrid}>
-              <div className={`${styles.choiceItem} ${styles.choiceItemActive}`}>
-                <span className={styles.choiceTitle}>Bộ Men Rạn</span>
-                <span className={styles.choiceSub}>Cổ kính & Trang nghiêm</span>
+            {/* Bundle Components Preview (Compact) */}
+            <div className={styles.variantsCard}>
+              <h4 className={styles.variantLabel}>Tóm tắt thành phần bộ</h4>
+              <div className="flex flex-wrap gap-2 py-2">
+                {selectedItems.slice(0, 5).map(item => (
+                  <div key={item.id} className="text-[11px] bg-stone/5 px-2 py-1 rounded border border-stone/10 text-primary flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[12px] text-accent">check_circle</span>
+                    {item.name} (x{item.qty})
+                  </div>
+                ))}
+                {selectedItems.length > 5 && (
+                  <div className="text-[11px] bg-stone/5 px-2 py-1 rounded border border-stone/10 text-stone/40">
+                    +{selectedItems.length - 5} vật phẩm khác...
+                  </div>
+                )}
               </div>
-              <div className={styles.choiceItem}>
-                <span className={styles.choiceTitle}>Bộ Vẽ Vàng</span>
-                <span className={styles.choiceSub}>Sang trọng & Quyền quý</span>
-              </div>
+              <button 
+                onClick={() => document.getElementById('bundle-list')?.scrollIntoView({ behavior: 'smooth' })}
+                className="text-[11px] text-accent font-bold mt-2 hover:underline flex items-center gap-1"
+              >
+                <span className="material-symbols-outlined text-[14px]">visibility</span>
+                Xem chi tiết & tùy chỉnh thành phần bên dưới
+              </button>
             </div>
-          </div>
 
-          {/* Action Buttons */}
-          <div className={styles.actionGrid}>
-            <button className={`${styles.btnBundle} ${styles.btnBundlePrimary}`} onClick={handleAddToCart}>
-              <span className="material-symbols-outlined">add_shopping_cart</span>
-              Thêm cả bộ vào giỏ
-            </button>
-            <button className={`${styles.btnBundle} ${styles.btnBundleAccent}`} onClick={handleBuyNow}>
-              <span className="material-symbols-outlined">shopping_bag</span>
-              Đặt hàng ngay
-            </button>
-            <button className={`${styles.btnBundle} ${styles.btnBundleOutline}`} onClick={() => document.getElementById('bundle-list')?.scrollIntoView({ behavior: 'smooth' })}>
-              <span className="material-symbols-outlined">list_alt</span>
-              Xem thành phần bộ
-            </button>
-          </div>
+            <SpecificationList product={product} />
+            <ActionLinks additionalInfo={additionalInfo} />
 
-          {/* Trust Badges */}
-          <div className={styles.badgeGrid}>
-            <div className={styles.badgeItem}>
-              <span className="material-symbols-outlined text-accent">verified</span>
-              <span className={styles.badgeLabel}>BẢO HÀNH 30 NĂM</span>
+            <div className={styles.actionSectionMB}>
+              <QuantitySelector quantity={quantity} setQuantity={setQuantity} />
+              <BuyButtons onAddToCart={handleAddToCart} onBuyNow={handleBuyNow} />
             </div>
-            <div className={styles.badgeItem}>
-              <span className="material-symbols-outlined text-accent">local_shipping</span>
-              <span className={styles.badgeLabel}>MIỄN PHÍ GIAO HÀNG</span>
-            </div>
-            <div className={styles.badgeItem}>
-              <span className="material-symbols-outlined text-accent">eco</span>
-              <span className={styles.badgeLabel}>GỐM SẠCH 100%</span>
-            </div>
+
+            <TrustBadges />
           </div>
         </div>
-      </section>
-
-      {/* 2. KNOWLEDGE & GUIDANCE SECTION (ActionLinks) */}
-      <div className="mb-12">
-         <ActionLinks additionalInfo={additionalInfo} />
       </div>
 
-      {/* 3. COMPONENT LIST SECTION */}
+      {/* 2. COMPONENT LIST SECTION (The specific bundle part) */}
       <section id="bundle-list" className={styles.componentSection}>
         <div className={styles.sectionHeading}>
           <h3 className={styles.sectionTitle}>Chi Tiết Thành Phần Bộ</h3>
           <div className={styles.sectionLine}></div>
+          <p className="text-stone/50 mt-4 max-w-2xl mx-auto text-center">
+            Quý khách có thể tùy chỉnh số lượng hoặc thay đổi từng món trong bộ để phù hợp với nhu cầu.
+          </p>
         </div>
 
-        <div className={styles.componentGrid}>
-          {selectedItems.map((item) => (
-            <div key={item.id} className={styles.itemCard}>
-              <div className={styles.itemImage}>
-                <Image 
-                  src={getImageUrl(item.images?.[0] || item.primary_image)}
-                  alt={item.name}
-                  fill
-                  style={{ objectFit: 'cover' }}
-                  unoptimized
-                />
-              </div>
-              <div className={styles.itemDetails}>
-                <div>
-                  <h4 className={styles.itemName}>{item.name}</h4>
-                  <p className={styles.itemSku}>SKU: {item.sku || `DSGV-P-${item.id}`}</p>
+        <div className="max-w-5xl mx-auto flex flex-col gap-6 mt-12">
+          {selectedItems.length > 0 ? (
+            selectedItems.map((item, idx) => (
+              <div key={item.id} className={builderStyles.slotCard}>
+                <div className={builderStyles.slotIndex}>{idx + 1}</div>
+                
+                <div className={builderStyles.slotImg}>
+                   <Image 
+                      src={getImageUrl(item.images?.[0] || item.primary_image || { path: item.main_image })}
+                      alt={item.name}
+                      fill
+                      style={{ objectFit: 'cover' }}
+                      unoptimized
+                    />
                 </div>
-                <div className={styles.itemBottom}>
-                  <div className={styles.miniQty}>
-                    <button className={styles.miniBtn} onClick={() => updateBundleItemQuantity(item.id, (item.qty || 1) - 1)}>-</button>
-                    <input className={styles.miniInput} type="text" readOnly value={String(item.qty || 1).padStart(2, '0')} />
-                    <button className={styles.miniBtn} onClick={() => updateBundleItemQuantity(item.id, (item.qty || 1) + 1)}>+</button>
-                  </div>
-                  <p className={styles.itemPrice}>{formatPrice(item.price)}</p>
+
+                <div className={builderStyles.slotDetails}>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                       {item.option_title && (
+                          <span className="text-[9px] font-black uppercase tracking-widest text-[#c5a065] bg-[#c5a06512] px-2 py-0.5 rounded border border-[#c5a06533]">
+                            {item.option_title}
+                          </span>
+                       )}
+                       {item.type === 'configurable' && (
+                          <span className="text-[9px] font-black uppercase tracking-widest text-[#1b365d] bg-[#1b365d12] px-2 py-0.5 rounded border border-[#1b365d33]">
+                            Tùy chỉnh biến thể
+                          </span>
+                       )}
+                    </div>
+                    <h4>{item.name}</h4>
+                    <span className={builderStyles.slotPrice}>{formatPrice(item.price)}</span>
+                    <p className="text-[10px] text-stone/40 uppercase mt-2">SKU: {item.sku}</p>
+                </div>
+
+                <div className={builderStyles.slotActions}>
+                    <div className={builderStyles.qtyRow}>
+                       <button className={builderStyles.qtyBtn} onClick={() => updateBundleItemQuantity(item.id, (item.qty || 1) - 1)} disabled={(item.qty || 1) <= 1}>
+                          <span className="material-symbols-outlined text-[18px]">remove</span>
+                       </button>
+                       <input className={builderStyles.qtyInput} type="text" readOnly value={item.qty || 1} />
+                       <button className={builderStyles.qtyBtn} onClick={() => updateBundleItemQuantity(item.id, (item.qty || 1) + 1)}>
+                          <span className="material-symbols-outlined text-[18px]">add</span>
+                       </button>
+                    </div>
+
+                    <div className="flex gap-2">
+                       <button className={builderStyles.actionBtn} onClick={() => openSelectionModal(item)}>
+                          <span className="material-symbols-outlined text-[18px]">cached</span>
+                          Thay đổi
+                       </button>
+                       {!item.pivot?.is_required && (
+                          <button 
+                             onClick={() => removeBundleItem(item.id)}
+                             className="size-10 flex items-center justify-center rounded-xl border border-stone/10 text-stone/20 hover:text-red-500 transition-colors"
+                          >
+                             <span className="material-symbols-outlined">delete</span>
+                          </button>
+                        )}
+                    </div>
                 </div>
               </div>
+            ))
+          ) : (
+            <div className="py-20 text-center bg-white rounded-3xl border border-stone/10 border-dashed">
+               <span className="material-symbols-outlined text-stone/20 text-7xl mb-4">inventory_2</span>
+               <p className="text-stone/40 font-bold uppercase tracking-widest">Bộ sản phẩm trống</p>
             </div>
-          ))}
+          )}
         </div>
-        <p className="text-center text-stone/40 italic text-sm mt-8">
-          Bộ sản phẩm bao gồm đầy đủ {selectedItems.length} món vật phẩm thờ tự cao cấp cho ban thờ gia tiên.
-        </p>
-
-        {/* 3. DESCRIPTION SECTION */}
-        <div className="mt-20 bg-white rounded-xl p-8 border border-stone/10 shadow-sm">
-          <h4 className="text-2xl font-bold text-primary mb-6 flex items-center gap-2">
-            <span className="material-symbols-outlined text-accent">info</span>
-            Mô tả bộ sản phẩm
-          </h4>
-          <div 
-            className="prose max-w-none text-stone/80 leading-relaxed font-body"
-            dangerouslySetInnerHTML={{ __html: product.description || 'Đang cập nhật nội dung...' }}
-          />
-        </div>
-
-        {/* 4. SUMMARY BOX */}
+        
+        {/* SUMMARY BOX */}
         <div className={styles.summaryBox}>
           <div className={styles.summaryCol}>
-            <p className={styles.summaryLabel}>Tạm Tính</p>
+            <p className={styles.summaryLabel}>Tạm Tính Bộ</p>
             <p className={styles.summaryValue}>{formatPrice(subtotal)}</p>
           </div>
           <div className={`${styles.summaryCol} ${styles.summaryColAccent}`}>
-            <p className={styles.summaryLabel}>Ưu Đãi Combo</p>
+            <p className={styles.summaryLabel}>Ưu Đãi Đặc Biệt</p>
             <p className={`${styles.summaryValue} ${styles.summaryValueAccent}`}>
-              {discount > 0 ? `- ${formatPrice(discount)}` : 'Đã kèm ưu đãi'}
+              {discount > 0 ? `- ${formatPrice(discount)}` : 'Giá cực hấp dẫn'}
             </p>
           </div>
           <div className={styles.summaryCol}>
             <p className={styles.summaryLabel}>Tổng Cộng Bộ</p>
             <p className={styles.summaryValueTotal}>
-              {formatPrice(discount > 0 ? displayPrice : subtotal)}
+              {formatPrice(displayPrice)}
             </p>
           </div>
         </div>
+
+        <div className="mt-12 flex justify-center">
+             <button className={`${styles.btnBundle} ${styles.btnBundlePrimary}`} onClick={handleAddToCart} style={{ maxWidth: '440px' }}>
+                <span className="material-symbols-outlined">add_shopping_cart</span>
+                Thêm toàn bộ {selectedItems.length} món vào giỏ hàng
+             </button>
+        </div>
       </section>
 
+      <ComponentSelectionModal 
+            isOpen={isModalOpen}
+            onClose={() => setIsModalOpen(false)}
+            onSelect={handleSelectComponent}
+            currentSlot={activeSlot}
+            getImageUrl={getImageUrl}
+            formatPrice={formatPrice}
+      />
     </div>
   );
 }

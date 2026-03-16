@@ -81,7 +81,7 @@ const BlogList = () => {
             <div className="flex-none bg-[#fcfcfa] pb-4">
                 <div className="flex justify-between items-center mb-4">
                     <div className="flex flex-col">
-                        <h1 className="text-2xl font-display font-bold text-primary italic uppercase tracking-wider">Cẩm Nang & Tin Tức</h1>
+                        <h1 className="text-2xl font-display font-bold text-primary italic uppercase tracking-wider">Bài viết trên web</h1>
                         <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.2em] leading-none mt-1">Biên tập nội dung kiến thức và di sản gốm sứ</p>
                     </div>
                 </div>

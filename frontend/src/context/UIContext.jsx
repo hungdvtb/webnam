@@ -31,9 +31,21 @@ export const UIProvider = ({ children }) => {
         setModal(prev => ({ ...prev, show: false }));
     }, []);
 
-    const showToast = useCallback(({ message, type = 'info', duration = 5000 }) => {
+    const showToast = useCallback((args, secondArg) => {
+        let message, type = 'info', duration = 2000;
+        
+        if (typeof args === 'object' && args !== null && !React.isValidElement(args)) {
+            message = args.message;
+            type = args.type || 'info';
+            duration = args.duration || 2000;
+        } else {
+            message = args;
+            type = secondArg || 'info';
+        }
+
         const id = Date.now();
-        setToasts(prev => [...prev, { id, message, type }]);
+        // Clear previous toasts to avoid overlapping/stacking
+        setToasts([{ id, message, type }]);
         
         setTimeout(() => {
             setToasts(prev => prev.filter(t => t.id !== id));
@@ -88,7 +100,7 @@ export const UIProvider = ({ children }) => {
                                  toast.type === 'warning' ? 'warning' : 'info'}
                             </span>
                             <div className="flex-1">
-                                <p className="text-[13px] font-bold text-primary leading-tight">{toast.message}</p>
+                                <div className="text-[13px] font-bold text-primary leading-tight">{toast.message}</div>
                             </div>
                             <button onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))} className="text-stone/30 hover:text-primary transition-colors">
                                 <span className="material-symbols-outlined text-[18px]">close</span>

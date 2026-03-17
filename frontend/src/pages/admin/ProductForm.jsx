@@ -474,6 +474,10 @@ const ProductForm = () => {
     const [bundleQuery, setBundleQuery] = useState('');
     const [relatedCategory, setRelatedCategory] = useState('all');
     const [relatedAttrFilter, setRelatedAttrFilter] = useState({}); // { attr_id: value }
+    const [showSelectedRelated, setShowSelectedRelated] = useState(false);
+    const [selectedProductsData, setSelectedProductsData] = useState([]);
+    const [stagedRelatedIds, setStagedRelatedIds] = useState([]);
+    const [stagedRelatedData, setStagedRelatedData] = useState([]);
 
     const [variantTableWidths, setVariantTableWidths] = useState({
         image: 80,
@@ -898,28 +902,42 @@ const ProductForm = () => {
 
     // Lazy load related products on demand
     const fetchSuggestedProducts = useCallback(async () => {
-        const isDefaultState = !relatedQuery && relatedCategory === 'all' && !Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '');
+        const query = (relatedQuery || '').trim();
+        const hasSearch = query.length > 0;
+        const hasCategory = relatedCategory !== 'all';
+        const hasAttrs = Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '');
         
         setSearchingRelated(true);
         try {
+            // Sử dụng bộ tham số tối giản nhất tương tự OrderForm để đảm bảo tìm thấy sản phẩm
             const params = {
-                per_page: 20, // Reduced to 20 for default/random list
-                search: relatedQuery,
-                category_id: relatedCategory !== 'all' ? relatedCategory : (isDefaultState ? formData.category_id : undefined),
-                attributes: {},
-                sort_by: isDefaultState ? 'random' : undefined
+                per_page: 50
             };
 
-            // Add attribute filters if any
+            if (hasSearch) {
+                params.search = query;
+            }
+
+            if (hasCategory) {
+                params.category_ids = String(relatedCategory);
+            }
+
+            // Chỉ thêm lọc thuộc tính nếu có
             Object.entries(relatedAttrFilter).forEach(([attrId, val]) => {
-                if (val !== 'all' && val !== '') {
-                    params.attributes[attrId] = val;
+                if (val && val !== 'all' && val !== '') {
+                    params[`attributes[${attrId}]`] = val;
                 }
             });
 
+            // Nếu không có search/filter, dùng danh mục mặc định
+            if (!hasSearch && !hasCategory && !hasAttrs && formData.category_id) {
+                params.category_ids = String(formData.category_id);
+                params.sort_by = 'random';
+            }
+
             const response = await productApi.getAll(params);
-            // Filter out current product if it exists in results
-            const results = (response.data.data || []).filter(p => p.id != (id || formData.id));
+            const rawData = response.data?.data || response.data || [];
+            const results = (Array.isArray(rawData) ? rawData : []).filter(p => String(p.id) !== String(id || formData.id));
             setSuggestedProducts(results);
         } catch (error) {
             console.error("Error searching products", error);
@@ -938,7 +956,7 @@ const ProductForm = () => {
         setSearchingBundle(true);
         try {
             const response = await productApi.getAll({
-                per_page: 20,
+                per_page: 50,
                 search: bundleQuery
             });
             const results = (response.data.data || []).filter(p => p.id != id);
@@ -1129,10 +1147,16 @@ const ProductForm = () => {
             const variantsData = (data.linked_products || []).filter(p => p.pivot?.link_type === 'super_link');
             const regularLinks = (data.linked_products || []).filter(p => p.pivot?.link_type !== 'super_link');
 
+            const initialIds = Array.from(new Set((regularLinks || []).map(p => p.id)));
+            const initialData = Array.from(new Map((regularLinks || []).map(p => [p.id, p])).values());
+            
             setFormData(prev => ({
                 ...prev,
-                linked_product_ids: regularLinks.map(p => p.id)
+                linked_product_ids: initialIds
             }));
+            setSelectedProductsData(initialData);
+            setStagedRelatedIds(initialIds);
+            setStagedRelatedData(initialData);
 
             if (variantsData.length > 0) {
                 const loadedVariants = variantsData.map(v => {
@@ -1975,8 +1999,13 @@ const ProductForm = () => {
                 } else if (key === 'super_attribute_ids') {
                     selectedSuperAttributes.forEach(attr => submitData.append('super_attribute_ids[]', attr.id));
                 } else if (key === 'linked_product_ids') {
-                    const uniqueIds = Array.from(new Set(val));
-                    uniqueIds.forEach(v => submitData.append('linked_product_ids[]', v));
+                    const uniqueIds = Array.from(new Set(val)).filter(v => v !== null && v !== '');
+                    if (uniqueIds.length === 0) {
+                        // Gửi tham số tường minh để Backend thực hiện detach/sync
+                        submitData.append('linked_product_ids[]', ''); 
+                    } else {
+                        uniqueIds.forEach(v => submitData.append('linked_product_ids[]', v));
+                    }
                 } else if (key === 'grouped_items') {
                     let itemsToSubmit = val;
                     if (formData.type === 'bundle' && bundleOptions.length > 0) {
@@ -2088,7 +2117,7 @@ const ProductForm = () => {
                 }
             }
 
-            showModal({ title: 'Lỗi', content: message, type: 'error' });
+            showToast({ message, type: 'error' });
         } finally {
             setIsSaving(false);
         }
@@ -3280,6 +3309,12 @@ const ProductForm = () => {
                                                                 className="w-full pl-9 pr-4 py-2 bg-stone/[0.02] border border-stone/10 rounded text-[13px] font-bold"
                                                                 value={bundleQuery}
                                                                 onChange={(e) => setBundleQuery(e.target.value)}
+                                                                onKeyDown={(e) => {
+                                                                    if (e.key === 'Enter') {
+                                                                        e.preventDefault();
+                                                                        fetchBundleItems();
+                                                                    }
+                                                                }}
                                                                 autoFocus
                                                             />
                                                             {bundleQuery.length > 0 && (
@@ -3586,7 +3621,44 @@ const ProductForm = () => {
 
                         {/* Related Products */}
                         <div className="bg-white border border-gold/10 p-5 shadow-premium-sm rounded-sm">
-                            <SectionTitle icon="link" title="Đề xuất liên quan" />
+                            <div className="flex justify-between items-center mb-5">
+                                <SectionTitle icon="link" title="Đề xuất liên quan" />
+                                <div className="flex items-center gap-2">
+                                    {(stagedRelatedIds.length !== formData.linked_product_ids.length || !stagedRelatedIds.every(id => formData.linked_product_ids.includes(id))) && (
+                                        <div className="flex items-center gap-2 mr-2 animate-in fade-in slide-in-from-right-2 duration-300">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setStagedRelatedIds([...formData.linked_product_ids]);
+                                                    setStagedRelatedData([...selectedProductsData]);
+                                                }}
+                                                className="px-2 py-1.5 text-[9px] font-black uppercase text-stone/40 hover:text-brick transition-all"
+                                            >
+                                                Hủy thay đổi
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setFormData(prev => ({ ...prev, linked_product_ids: [...stagedRelatedIds] }));
+                                                    setSelectedProductsData([...stagedRelatedData]);
+                                                    showToast({ message: `Đã ghi nhận ${stagedRelatedIds.length} sản phẩm liên quan. Hãy nhấn "Lưu cập nhật" để hoàn tất.`, type: 'success' });
+                                                }}
+                                                className="bg-gold px-3 py-1.5 rounded-sm text-white text-[10px] font-black uppercase tracking-widest shadow-premium hover:bg-gold/80 transition-all"
+                                            >
+                                                Ghi nhận danh sách
+                                            </button>
+                                        </div>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowSelectedRelated(!showSelectedRelated)}
+                                        className={`flex items-center gap-2 px-3 py-1.5 rounded-sm transition-all text-[11px] font-bold uppercase tracking-widest ${showSelectedRelated ? 'bg-primary text-white shadow-lg' : 'bg-gold/5 text-gold border border-gold/10 hover:bg-gold/10'}`}
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">{showSelectedRelated ? 'visibility_off' : 'visibility'}</span>
+                                        {showSelectedRelated ? 'Đóng DS Đã Chọn' : `Đã chọn (${stagedRelatedIds.length})`}
+                                    </button>
+                                </div>
+                            </div>
                             <div className="space-y-4">
                                 {/* Search & Filters Area */}
                                 <div className="space-y-3 p-3 bg-stone/5 border border-stone/10 rounded-sm">
@@ -3602,14 +3674,17 @@ const ProductForm = () => {
                                                 onFocus={() => setShowSearchHistory(true)}
                                                 onKeyDown={(e) => {
                                                     if (e.key === 'Enter') {
+                                                        e.preventDefault(); // Tránh submit form chính
                                                         setShowSearchHistory(false);
                                                         addToSearchHistory(relatedQuery);
+                                                        fetchSuggestedProducts(); // Thực hiện tìm kiếm ngay lập tức
                                                     }
                                                 }}
                                                 className="w-full bg-white border border-stone/20 rounded-sm pl-9 pr-9 py-2 text-[12px] font-bold text-primary focus:outline-none focus:border-gold/30 transition-all shadow-sm relative z-0"
                                             />
                                             {relatedQuery && (
                                                 <button
+                                                    type="button"
                                                     onClick={() => { setRelatedQuery(''); setShowSearchHistory(false); }}
                                                     className="absolute right-2 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors z-10"
                                                 >
@@ -3622,6 +3697,7 @@ const ProductForm = () => {
                                                     <div className="flex justify-between items-center px-3 mb-1 border-b border-primary/10 pb-1">
                                                         <span className="text-[9px] font-bold text-primary/40 uppercase tracking-widest">Gần đây</span>
                                                         <button
+                                                            type="button"
                                                             onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('product_search_history'); }}
                                                             className="text-[9px] text-brick hover:underline font-bold"
                                                         >Xóa</button>
@@ -3642,6 +3718,7 @@ const ProductForm = () => {
                                                                     <span className="text-[11px] text-primary truncate font-bold">{item}</span>
                                                                 </div>
                                                                 <button
+                                                                    type="button"
                                                                     onClick={(e) => {
                                                                         e.stopPropagation();
                                                                         const updated = searchHistory.filter(h => h !== item);
@@ -3713,7 +3790,11 @@ const ProductForm = () => {
                                                         </div>
                                                 ))}
                                             </div>
-                                            <div className="flex justify-end">
+                                            <div className="flex justify-between items-center">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-[9px] font-black uppercase text-stone/30">Auto-search:</span>
+                                                    <div className="size-2 bg-gold/40 rounded-full animate-pulse"></div>
+                                                </div>
                                                 <button
                                                     type="button"
                                                     onClick={() => {
@@ -3729,79 +3810,140 @@ const ProductForm = () => {
                                     )}
                                 </div>
 
-                                <div className="max-h-[300px] overflow-y-auto custom-scrollbar space-y-2 pr-1 border-t border-stone/10 pt-4">
-                                    <div className="flex justify-between items-center px-1 mb-2">
-                                        <span className="text-[10px] font-black uppercase tracking-widest text-stone/50">
-                                            {!relatedQuery && relatedCategory === 'all' && !Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '') 
-                                                ? 'Gợi ý tương đương' 
-                                                : `Kết quả (${filteredSuggestedProducts.length})`}
-                                        </span>
-                                        <div className="flex items-center gap-3">
-                                            {!relatedQuery && relatedCategory === 'all' && !Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '') && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => fetchSuggestedProducts()}
-                                                    className="flex items-center gap-1 text-[9px] font-bold text-gold hover:underline"
-                                                >
-                                                    <span className="material-symbols-outlined text-[14px]">refresh</span>
-                                                    Làm mới
-                                                </button>
+                                <div className="max-h-[400px] overflow-y-auto custom-scrollbar space-y-2 pr-1 border-t border-stone/10 pt-4">
+                                    {showSelectedRelated ? (
+                                        <>
+                                            <div className="flex justify-between items-center px-1 mb-3">
+                                                <span className="text-[10px] font-black uppercase tracking-widest text-brick italic bg-brick/5 px-2 py-0.5 rounded-full">
+                                                    Danh sách đang chọn ({stagedRelatedIds.length})
+                                                </span>
+                                                {stagedRelatedIds.length > 0 && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setStagedRelatedIds([]);
+                                                            setStagedRelatedData([]);
+                                                        }}
+                                                        className="text-[9px] font-black uppercase text-brick hover:underline px-2 py-1"
+                                                    >
+                                                        Xóa toàn bộ
+                                                    </button>
+                                                )}
+                                            </div>
+                                            {stagedRelatedData.length === 0 ? (
+                                                <div className="py-12 text-center text-stone/30 italic text-[11px]">Chưa có sản phẩm nào được chọn.</div>
+                                            ) : (
+                                                stagedRelatedData.map((prod, idx) => (
+                                                    <div key={`${prod.id}-${idx}`} className="flex items-center gap-3 p-2 border rounded-sm bg-gold/5 border-gold/20 shadow-sm relative group">
+                                                        <div className="size-10 bg-white border border-stone/10 p-0.5 rounded shadow-sm overflow-hidden flex-shrink-0">
+                                                            <img src={(prod.images?.find(img => img.is_primary) || prod.images?.[0])?.image_url || 'https://placehold.co/100'} className="w-full h-full object-cover" alt="" />
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-[12px] font-bold text-primary truncate leading-tight">{prod.name}</p>
+                                                            <p className="text-[9px] font-black text-gold uppercase mt-0.5">{prod.sku}</p>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.preventDefault();
+                                                                e.stopPropagation();
+                                                                const prodIdStr = String(prod.id);
+                                                                setStagedRelatedIds(prev => prev.filter(id => String(id) !== prodIdStr));
+                                                                setStagedRelatedData(prev => prev.filter(p => String(p.id) !== prodIdStr));
+                                                            }}
+                                                            className="size-8 rounded-full flex items-center justify-center text-stone/20 hover:text-brick hover:bg-brick/5 transition-all"
+                                                            title="Gỡ bỏ khỏi danh sách đang chọn"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[18px]">close</span>
+                                                        </button>
+                                                    </div>
+                                                ))
                                             )}
-                                            {Object.values(relatedAttrFilter).concat([relatedQuery, relatedCategory]).some(v => v !== 'all' && v !== '') && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        setRelatedQuery('');
-                                                        setRelatedCategory('all');
-                                                        setRelatedAttrFilter({});
-                                                    }}
-                                                    className="text-[9px] font-bold text-brick hover:underline"
-                                                >
-                                                    Xóa lọc
-                                                </button>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {searchingRelated ? (
-                                        <div className="py-12 flex flex-col items-center justify-center text-stone/40">
-                                            <div className="size-8 border-2 border-gold/20 border-t-gold rounded-full animate-spin mb-3"></div>
-                                            <span className="text-[11px] font-bold uppercase tracking-widest animate-pulse">Đang tải dữ liệu...</span>
-                                        </div>
-                                    ) : filteredSuggestedProducts.length > 0 ? (
-                                        filteredSuggestedProducts.map(prod => (
-                                            <label key={prod.id} className={`flex items-center gap-3 p-2 border rounded-sm cursor-pointer transition-all ${formData.linked_product_ids.includes(prod.id) ? 'bg-gold/10 border-gold/30 shadow-sm' : 'bg-white border-stone/10 hover:bg-gold/5 hover:border-gold/20'}`}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={formData.linked_product_ids.includes(prod.id)}
-                                                    onChange={(e) => {
-                                                        const newVal = e.target.checked
-                                                            ? Array.from(new Set([...formData.linked_product_ids, prod.id]))
-                                                            : formData.linked_product_ids.filter(id => id !== prod.id);
-                                                        setFormData(prev => ({ ...prev, linked_product_ids: newVal }));
-                                                    }}
-                                                    className="size-4 accent-primary"
-                                                />
-                                                <div className="size-10 bg-white border border-stone/10 p-0.5 rounded shadow-sm overflow-hidden flex-shrink-0">
-                                                    <img src={prod.images?.[0]?.image_url || 'https://placehold.co/100'} className="w-full h-full object-cover" alt="" />
-                                                </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <p className="text-[12px] font-bold text-primary truncate leading-tight">{prod.name}</p>
-                                                    <p className="text-[9px] font-black text-gold uppercase mt-0.5">{prod.sku}</p>
-                                                </div>
-                                            </label>
-                                        ))
-                                    ) : (relatedQuery || relatedCategory !== 'all' || Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '')) ? (
-                                        <div className="py-12 text-center text-stone/30 italic text-[11px]">
-                                            <span className="material-symbols-outlined block text-[24px] mb-1">sentiment_dissatisfied</span>
-                                            Không tìm thấy sản phẩm phù hợp...
-                                        </div>
+                                        </>
                                     ) : (
-                                        <div className="py-12 flex flex-col items-center justify-center text-stone/30 italic text-[11px] border-2 border-dashed border-stone/5 rounded-sm">
-                                            <span className="material-symbols-outlined text-[32px] mb-2 opacity-50">Saved_Search</span>
-                                            <p className="font-bold uppercase tracking-tighter mb-1">Bắt đầu tìm kiếm</p>
-                                            <p className="max-w-[180px] leading-relaxed">Nhập từ khóa hoặc sử dụng bộ lọc để tìm sản phẩm đề xuất</p>
-                                        </div>
+                                        <>
+                                            <div className="flex justify-between items-center px-1 mb-2">
+                                                <span className="text-[10px] font-black uppercase tracking-widest text-stone/50">
+                                                    {!relatedQuery && relatedCategory === 'all' && !Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '') 
+                                                        ? 'Gợi ý tương đương' 
+                                                        : `Kết quả (${filteredSuggestedProducts.length})`}
+                                                </span>
+                                                <div className="flex items-center gap-3">
+                                                    {!relatedQuery && relatedCategory === 'all' && !Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '') && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => fetchSuggestedProducts()}
+                                                            className="flex items-center gap-1 text-[9px] font-bold text-gold hover:underline"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[14px]">refresh</span>
+                                                            Làm mới
+                                                        </button>
+                                                    )}
+                                                    {Object.values(relatedAttrFilter).concat([relatedQuery, relatedCategory]).some(v => v !== 'all' && v !== '') && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setRelatedQuery('');
+                                                                setRelatedCategory('all');
+                                                                setRelatedAttrFilter({});
+                                                            }}
+                                                            className="text-[9px] font-bold text-brick hover:underline"
+                                                        >
+                                                            Xóa lọc
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            {searchingRelated ? (
+                                                <div className="py-12 flex flex-col items-center justify-center text-stone/40">
+                                                    <div className="size-8 border-2 border-gold/20 border-t-gold rounded-full animate-spin mb-3"></div>
+                                                    <span className="text-[11px] font-bold uppercase tracking-widest animate-pulse">Đang tải dữ liệu...</span>
+                                                </div>
+                                            ) : filteredSuggestedProducts.length > 0 ? (
+                                                filteredSuggestedProducts.map(prod => (
+                                                    <label key={prod.id} className={`flex items-center gap-3 p-2 border rounded-sm cursor-pointer transition-all ${stagedRelatedIds.includes(prod.id) ? 'bg-gold/10 border-gold/30 shadow-sm' : 'bg-white border-stone/10 hover:bg-gold/5 hover:border-gold/20'}`}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={stagedRelatedIds.includes(prod.id)}
+                                                            onChange={(e) => {
+                                                                const prodId = prod.id;
+                                                                const prodIdStr = String(prodId);
+                                                                if (e.target.checked) {
+                                                                    setStagedRelatedIds(prev => Array.from(new Set([...prev, prodId])));
+                                                                    setStagedRelatedData(prev => {
+                                                                        if (prev.some(p => String(p.id) === prodIdStr)) return prev;
+                                                                        return [...prev, prod];
+                                                                    });
+                                                                } else {
+                                                                    setStagedRelatedIds(prev => prev.filter(id => String(id) !== prodIdStr));
+                                                                    setStagedRelatedData(prev => prev.filter(p => String(p.id) !== prodIdStr));
+                                                                }
+                                                            }}
+                                                            className="size-4 accent-primary"
+                                                        />
+                                                        <div className="size-10 bg-white border border-stone/10 p-0.5 rounded shadow-sm overflow-hidden flex-shrink-0">
+                                                            <img src={(prod.images?.find(img => img.is_primary) || prod.images?.[0])?.image_url || 'https://placehold.co/100'} className="w-full h-full object-cover" alt="" />
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-[12px] font-bold text-primary truncate leading-tight">{prod.name}</p>
+                                                            <p className="text-[9px] font-black text-gold uppercase mt-0.5">{prod.sku}</p>
+                                                        </div>
+                                                    </label>
+                                                ))
+                                            ) : (relatedQuery || relatedCategory !== 'all' || Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '')) ? (
+                                                <div className="py-12 text-center text-stone/30 italic text-[11px]">
+                                                    <span className="material-symbols-outlined block text-[24px] mb-1">sentiment_dissatisfied</span>
+                                                    Không tìm thấy sản phẩm phù hợp...
+                                                </div>
+                                            ) : (
+                                                <div className="py-12 flex flex-col items-center justify-center text-stone/30 italic text-[11px] border-2 border-dashed border-stone/5 rounded-sm">
+                                                    <span className="material-symbols-outlined text-[32px] mb-2 opacity-50">Saved_Search</span>
+                                                    <p className="font-bold uppercase tracking-tighter mb-1">Bắt đầu tìm kiếm</p>
+                                                    <p className="max-w-[180px] leading-relaxed">Nhập từ khóa hoặc sử dụng bộ lọc để tìm sản phẩm đề xuất</p>
+                                                </div>
+                                            )}
+                                        </>
                                     )}
                                 </div>
                             </div>

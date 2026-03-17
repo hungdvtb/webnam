@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
-import { productApi, categoryApi, attributeApi, productImageApi, aiApi, blogApi } from '../../services/api';
+import { productApi, categoryApi, attributeApi, productImageApi, aiApi, blogApi, mediaApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
+import ImageResize from 'quill-image-resize-module-react';
+
+ReactQuill.Quill.register('modules/imageResize', ImageResize);
+window.Quill = ReactQuill.Quill;
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { compressImage, formatBytes } from '../../utils/imageUtils';
@@ -166,6 +170,7 @@ const DraggableBundleItem = ({
     isSortingMode 
 }) => {
     const ref = useRef(null);
+    const { showToast } = useUI();
     const [, drop] = useDrop({
         accept: `bundle_item_${optionId}`,
         hover(draggedItem, monitor) {
@@ -200,7 +205,7 @@ const DraggableBundleItem = ({
             ref={ref}
             className={`border-b border-stone/5 transition-colors group/row ${isDragging ? 'opacity-30 bg-gold/5' : 'hover:bg-gold/[0.02]'} ${isSortingMode ? 'cursor-move' : ''}`}
         >
-            <td className="pl-5 py-3 text-center">
+            <td className="pl-5 py-3 text-center border-r border-gold/10">
                 {isSortingMode ? (
                     <div className="flex items-center justify-center gap-2">
                         <span className="material-symbols-outlined text-[18px] text-stone/40 group-hover/row:text-gold transition-colors">reorder</span>
@@ -212,22 +217,49 @@ const DraggableBundleItem = ({
                     <button
                         type="button"
                         onClick={() => handleSetDefaultInOption(optionId, item.id)}
-                        className={`size-6 mx-auto rounded-full flex items-center justify-center transition-all ${item.is_default ? 'bg-primary text-white' : 'bg-stone/10 text-black/40 hover:bg-stone/20'}`}
+                        className={`size-6 mx-auto rounded-full flex items-center justify-center transition-all ${item.is_default ? 'bg-primary text-white shadow-sm' : 'bg-stone/10 text-black/20 hover:bg-stone/20'}`}
+                        title={item.is_default ? "Sản phẩm mặc định" : "Đặt làm mặc định"}
                     >
-                        <span className="material-symbols-outlined text-[16px]">{item.is_default ? 'check' : 'close'}</span>
+                        <span className="material-symbols-outlined text-[16px]">{item.is_default ? 'radio_button_checked' : 'radio_button_unchecked'}</span>
                     </button>
                 )}
             </td>
-            <td className="px-3 py-3">
+            <td className="px-3 py-3 border-r border-gold/10">
                 <div className="flex items-center gap-3">
                     <img src={item.image_url || 'https://placehold.co/100'} alt="" className="size-10 object-cover rounded border border-stone/10 bg-white" />
                     <div className="flex-1 min-w-0">
-                        <p className="text-[13px] font-bold text-black truncate" title={item.name}>{item.name}</p>
-                        <p className="text-[10px] font-mono text-gold uppercase">{item.sku}</p>
+                        <div className="flex items-center gap-1 group/name">
+                            <p className="text-[13px] font-bold text-black truncate" title={item.name}>{item.name}</p>
+                            <button 
+                                type="button"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(item.name);
+                                    showToast('Đã sao chép tên sản phẩm', 'success');
+                                }}
+                                className="opacity-0 group-hover/name:opacity-100 p-0.5 text-stone/40 hover:text-gold transition-all"
+                                title="Sao chép tên"
+                            >
+                                <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                            </button>
+                        </div>
+                        <div className="flex items-center gap-1 group/sku">
+                            <p className="text-[10px] font-mono text-gold uppercase">{item.sku}</p>
+                            <button 
+                                type="button"
+                                onClick={() => {
+                                    navigator.clipboard.writeText(item.sku);
+                                    showToast('Đã sao chép mã sản phẩm', 'success');
+                                }}
+                                className="opacity-0 group-hover/sku:opacity-100 p-0.5 text-stone/40 hover:text-gold transition-all"
+                                title="Sao chép SKU"
+                            >
+                                <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </td>
-            <td className="px-3 py-3">
+            <td className="px-3 py-3 border-r border-gold/10">
                 {item.type === 'configurable' ? (
                     <select
                         value={item.variant_id || ''}
@@ -243,10 +275,10 @@ const DraggableBundleItem = ({
                     <span className="text-[11px] text-black/60 italic">Sản phẩm đơn</span>
                 )}
             </td>
-            <td className="px-3 py-3 text-center">
+            <td className="px-3 py-3 text-center border-r border-gold/10">
                 <p className="text-[12px] font-black text-black">{formatNumberOutput(item.price)}₫</p>
             </td>
-            <td className="px-3 py-3 text-center">
+            <td className="px-3 py-3 text-center border-r border-gold/10">
                 <div className="flex items-center justify-center gap-1 bg-white border border-stone/10 rounded-full px-2 py-0.5 mx-auto w-fit">
                     <button
                         type="button"
@@ -282,7 +314,9 @@ const DraggableBundleItem = ({
 
 const formatNumberOutput = (num) => {
     if (num === null || num === undefined || num === '') return '';
-    return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+    // Bỏ phần thập phân, giữ lại số nguyên
+    const intValue = Math.floor(Number(num));
+    return intValue.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 };
 
 const removeAccents = (str) => {
@@ -317,6 +351,32 @@ const SectionTitle = ({ icon, title }) => (
         <h3 className="font-sans text-[15px] font-bold text-primary uppercase tracking-tight">{title}</h3>
     </div>
 );
+
+// Quill configuration
+const quillFormats = [
+    'header', 'font', 'size',
+    'bold', 'italic', 'underline', 'strike', 'blockquote',
+    'list', 'bullet', 'indent',
+    'link', 'image', 'video',
+    'color', 'background',
+    'align', 'float', 'width'
+];
+
+const Parchment = ReactQuill.Quill.import('parchment');
+
+class WidthStyle extends Parchment.Attributor.Style {
+    add(node, value) {
+        if (value === 'initial') {
+            this.remove(node);
+        } else {
+            super.add(node, value);
+        }
+    }
+}
+const Width = new WidthStyle('width', 'width', {
+    scope: Parchment.Scope.INLINE_BLOT | Parchment.Scope.BLOCK_BLOT
+});
+ReactQuill.Quill.register(Width, true);
 
 const ProductForm = () => {
     const { id } = useParams();
@@ -412,6 +472,85 @@ const ProductForm = () => {
         stock: 100,
         actions: 60
     });
+
+    const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
+    const quillRef = useRef(null);
+
+    const imageHandler = useCallback(() => {
+        const input = document.createElement('input');
+        input.setAttribute('type', 'file');
+        input.setAttribute('accept', 'image/*');
+        input.click();
+
+        input.onchange = async () => {
+            const file = input.files[0];
+            if (file) {
+                const formData = new FormData();
+                formData.append('image', file);
+
+                try {
+                    const res = await mediaApi.upload(formData);
+                    const url = res.data.url;
+                    
+                    const quill = quillRef.current.getEditor();
+                    const range = quill.getSelection();
+                    quill.insertEmbed(range.index, 'image', url);
+                    
+                    // Set default width to 100% or allow resizing later
+                    quill.setSelection(range.index + 1);
+                } catch (error) {
+                    showToast('Lỗi khi tải ảnh lên', 'error');
+                }
+            }
+        };
+    }, [showToast]);
+
+    const videoHandler = useCallback(() => {
+        const url = prompt('Nhập link video (Facebook hoặc YouTube):');
+        if (!url) return;
+
+        let embedUrl = url;
+        
+        // Detect YouTube
+        const ytMatch = url.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]+)/);
+        if (ytMatch) {
+            embedUrl = `https://www.youtube.com/embed/${ytMatch[1]}`;
+        }
+        
+        // Detect Facebook
+        const fbMatch = url.match(/(?:https?:\/\/)?(?:www\.)?facebook\.com\/(?:watch\/\?v=|.*\/videos\/|video\.php\?v=)(\d+)/);
+        if (fbMatch || url.includes('facebook.com')) {
+            embedUrl = `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=0`;
+        }
+
+        const quill = quillRef.current.getEditor();
+        const range = quill.getSelection();
+        quill.insertEmbed(range.index, 'video', embedUrl);
+        quill.setSelection(range.index + 1);
+    }, []);
+
+    const quillModules = useMemo(() => ({
+        toolbar: {
+            container: [
+                [{ 'header': [1, 2, 3, 4, 5, 6, false] }],
+                ['bold', 'italic', 'underline', 'strike'],
+                [{ 'list': 'ordered' }, { 'list': 'bullet' }],
+                [{ 'align': [] }],
+                ['link', 'image', 'video'],
+                [{ 'width': ['25%', '50%', '75%', '100%', 'initial'] }],
+                ['clean']
+            ],
+            handlers: {
+                image: imageHandler,
+                video: videoHandler
+            }
+        },
+        imageResize: {
+            parchment: ReactQuill.Quill.import('parchment'),
+            modules: ['Resize', 'DisplaySize', 'Toolbar'],
+            video: true
+        }
+    }), [imageHandler, videoHandler]);
 
     const handleVariantColumnResize = useCallback((colId, e) => {
         e.preventDefault();
@@ -1423,7 +1562,7 @@ const ProductForm = () => {
 
     // --- Bundle Specific Handlers ---
     const handleAddBundleOption = () => {
-        setBundleOptions(prev => [...prev, { id: Math.random().toString(36).substr(2, 9), title: 'Tùy chọn mới', items: [] }]);
+        setBundleOptions(prev => [{ id: Math.random().toString(36).substr(2, 9), title: 'Tùy chọn mới', items: [] }, ...prev]);
     };
 
     const handleRemoveBundleOption = (optionId) => {
@@ -1607,6 +1746,29 @@ const ProductForm = () => {
         }
     };
 
+    const processVideoLinks = (html) => {
+        if (!html) return '';
+        // Comprehensive regex for YouTube and Facebook links
+        return html.replace(/(https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/|facebook\.com\/(?:watch\/\?v=|.*\/videos\/|video\.php\?v=))[^\s<"']+)/gi, (match, url, offset, fullString) => {
+            // Only skip if it's an attribute value (src, href)
+            const before = fullString.substring(Math.max(0, offset - 10), offset).toLowerCase();
+            if (before.includes('src=') || before.includes('href=')) {
+                return match;
+            }
+            
+            if (url.includes('youtube.com') || url.includes('youtu.be')) {
+                const idMatch = url.match(/(?:\/watch\?v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]+)/);
+                if (idMatch) {
+                    return `<div class="video-container" style="display:flex; justify-content:center; margin: 2.5rem 0;"><iframe class="ql-video" src="https://www.youtube.com/embed/${idMatch[1]}" allowfullscreen="true" frameborder="0" style="width:100%; max-width:100%; aspect-ratio:16/9; border-radius:12px; box-shadow: 0 15px 45px rgba(0,0,0,0.15);"></iframe></div>`;
+                }
+            } else if (url.includes('facebook.com')) {
+                const fbEmbed = `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=0`;
+                return `<div class="video-container" style="display:flex; justify-content:center; margin: 2.5rem 0;"><iframe class="ql-video" src="${fbEmbed}" allowfullscreen="true" frameborder="0" style="width:800px; max-width:100%; aspect-ratio:16/9; border-radius:12px; box-shadow: 0 15px 45px rgba(0,0,0,0.15);"></iframe></div>`;
+            }
+            return match;
+        });
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setIsSaving(true);
@@ -1656,7 +1818,11 @@ const ProductForm = () => {
                 } else if (typeof val === 'boolean') {
                     submitData.append(key, val ? '1' : '0');
                 } else if (val !== '' && val !== null && val !== undefined) {
-                    submitData.append(key, val);
+                    if (key === 'description') {
+                        submitData.append(key, processVideoLinks(val));
+                    } else {
+                        submitData.append(key, val);
+                    }
                 }
             });
 
@@ -2731,9 +2897,35 @@ const ProductForm = () => {
                                                         <img src={item.image_url} alt="" className="w-full h-full object-cover" />
                                                     </div>
                                                 </div>
-                                                <div className="col-span-4">
-                                                    <p className="text-[13px] font-bold text-primary truncate" title={item.name}>{item.name}</p>
-                                                    <p className="text-[10px] font-mono text-gold uppercase">{item.sku}</p>
+                                                <div className="col-span-4 min-w-0">
+                                                    <div className="flex items-center gap-1 group/name">
+                                                        <p className="text-[13px] font-bold text-primary truncate" title={item.name}>{item.name}</p>
+                                                        <button 
+                                                            type="button"
+                                                            onClick={() => {
+                                                                navigator.clipboard.writeText(item.name);
+                                                                showToast('Đã sao chép tên sản phẩm', 'success');
+                                                            }}
+                                                            className="opacity-0 group-hover/name:opacity-100 p-0.5 text-stone/40 hover:text-gold transition-all"
+                                                            title="Sao chép tên"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                                                        </button>
+                                                    </div>
+                                                    <div className="flex items-center gap-1 group/sku">
+                                                        <p className="text-[10px] font-mono text-gold uppercase">{item.sku}</p>
+                                                        <button 
+                                                            type="button"
+                                                            onClick={() => {
+                                                                navigator.clipboard.writeText(item.sku);
+                                                                showToast('Đã sao chép mã sản phẩm', 'success');
+                                                            }}
+                                                            className="opacity-0 group-hover/sku:opacity-100 p-0.5 text-stone/40 hover:text-gold transition-all"
+                                                            title="Sao chép SKU"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                                                        </button>
+                                                    </div>
                                                 </div>
                                                 <div className="col-span-2 flex justify-center">
                                                     <div className="flex items-center gap-1 bg-white border border-stone/10 rounded-full px-2 py-0.5">
@@ -2790,32 +2982,35 @@ const ProductForm = () => {
                         {/* Bundle Product Management */}
                         {formData.type === 'bundle' && (
                             <div className="bg-white border border-gold/20 p-6 shadow-premium-sm rounded-sm animate-fade-in mb-8">
-                                <div className="flex justify-between items-center mb-6 pb-4 border-b border-gold/10">
-                                    <SectionTitle icon="inventory_2" title="Cấu hình tùy chọn Bộ / Combo" />
+                                <div className="flex justify-between items-center mb-5 pb-3 border-b border-gold/10">
+                                    <div className="flex items-center gap-2.5">
+                                        <span className="material-symbols-outlined text-primary/40 p-1.5 bg-stone/5 rounded-full text-base">inventory_2</span>
+                                        <h3 className="font-sans text-[15px] font-bold text-primary uppercase tracking-tight">Cấu hình tùy chọn Bộ / Combo</h3>
+                                    </div>
                                     <div className="flex items-center gap-2">
                                         <button
                                             type="button"
                                             onClick={handleRefreshBundlePrices}
                                             disabled={isRefreshingPrices || bundleOptions.length === 0}
-                                            className={`flex items-center gap-2 px-4 py-2 rounded-sm transition-all text-[12px] font-bold uppercase tracking-widest ${isRefreshingPrices ? 'bg-stone/10 text-stone/40' : 'bg-primary/5 hover:bg-primary/10 text-primary border border-primary/20'}`}
+                                            className={`flex items-center gap-2 px-3 py-1.5 rounded-sm transition-all text-[11px] font-bold uppercase tracking-widest ${isRefreshingPrices ? 'bg-stone/10 text-stone/40' : 'bg-primary/5 hover:bg-primary/10 text-primary border border-primary/20'}`}
                                             title="Lấy giá mới nhất từ sản phẩm gốc"
                                         >
-                                            <span className={`material-symbols-outlined text-[18px] ${isRefreshingPrices ? 'animate-spin' : ''}`}>refresh</span>
+                                            <span className={`material-symbols-outlined text-[16px] ${isRefreshingPrices ? 'animate-spin' : ''}`}>refresh</span>
                                             {isRefreshingPrices ? 'Đang làm mới...' : 'Làm mới giá'}
                                         </button>
                                         <button
                                             type="button"
                                             onClick={handleAddBundleOption}
-                                            className="flex items-center gap-2 bg-gold/10 hover:bg-gold/20 text-gold px-4 py-2 rounded-sm transition-all text-[12px] font-black uppercase tracking-widest"
+                                            className="flex items-center gap-2 bg-gold/10 hover:bg-gold/20 text-gold px-3 py-1.5 rounded-sm transition-all text-[11px] font-black uppercase tracking-widest"
                                         >
-                                            <span className="material-symbols-outlined text-[20px]">add_circle</span>
+                                            <span className="material-symbols-outlined text-[18px]">add_circle</span>
                                             Thêm Tùy chọn mới
                                         </button>
                                     </div>
                                 </div>
 
                                 {/* Dynamic Bundle Header/Title */}
-                                <div className="mb-8 p-4 bg-primary/[0.02] border border-primary/5 rounded-sm">
+                                <div className="mb-4 p-4 bg-primary/[0.02] border border-primary/5 rounded-sm">
                                     <Field label="Tiêu đề hiển thị cho vùng chọn bộ (Frontend)" icon="title">
                                         <div className="flex items-center gap-2">
                                             <input
@@ -2834,7 +3029,7 @@ const ProductForm = () => {
                                     <p className="text-[10px] text-stone/40 mt-1.5 ml-1 italic">Văn bản này sẽ hiển thị ngay phía trên các nút chọn cấu hình ngoài trang chủ. Nếu để trống, tiêu đề sẽ tự động được ẩn.</p>
                                 </div>
 
-                                <div className="space-y-8">
+                                <div className="space-y-4">
                                     {bundleOptions.length === 0 ? (
                                         <div className="py-20 flex flex-col items-center justify-center border-2 border-dashed border-gold/10 bg-gold/[0.02] rounded-sm">
                                             <span className="material-symbols-outlined text-[64px] text-gold/20 mb-4 font-thin">grid_view</span>
@@ -2843,8 +3038,11 @@ const ProductForm = () => {
                                         </div>
                                     ) : (
                                         bundleOptions.map((option, optIdx) => (
-                                            <div key={option.id} className="border border-gold/15 rounded-sm overflow-hidden shadow-sm bg-[#fcfaf7]/30">
-                                                <div className="bg-[#f2eddf]/40 px-5 py-3 flex items-center gap-4 border-b border-gold/10">
+                                            <div 
+                                                key={option.id} 
+                                                className={`border border-gold/15 rounded-sm shadow-sm bg-[#fcfaf7]/30 ${showBundleSearch === option.id ? 'relative z-[80]' : 'relative z-10'}`}
+                                            >
+                                                <div className="bg-[#f2eddf]/40 px-5 py-3 flex items-center gap-4 border-b border-gold/10 rounded-t-sm">
                                                      <div className="size-8 rounded-full bg-gold/10 flex items-center justify-center shrink-0">
                                                         <span className="text-[13px] font-black text-gold">{optIdx + 1}</span>
                                                      </div>
@@ -2904,11 +3102,11 @@ const ProductForm = () => {
                                                                             <div className="size-5 border-2 border-gold/20 border-t-gold rounded-full animate-spin mb-2"></div>
                                                                             <span className="text-[9px] font-bold uppercase tracking-widest">Đang tìm...</span>
                                                                         </div>
-                                                                    ) : filteredBundleProducts.length === 0 ? (
+                                                                    ) : suggestedBundleProducts.length === 0 ? (
                                                                         <div className="p-6 text-center text-stone/30 italic text-[11px]">Không tìm thấy sản phẩm</div>
                                                                     ) : (
-                                                                        filteredBundleProducts.map(p => (
-                                                                            <div key={p.id} onClick={() => { handleAddItemToOption(option.id, p); setBundleQuery(''); setShowBundleSearch(null); }} className="flex items-center gap-3 p-2 hover:bg-gold/5 cursor-pointer border-b border-stone/5 group transition-colors">
+                                                                        suggestedBundleProducts.map(p => (
+                                                                            <div key={p.id} onClick={() => handleAddItemToOption(option.id, p)} className="flex items-center gap-3 p-2 hover:bg-gold/5 cursor-pointer border-b border-stone/5 group transition-colors">
                                                                                 <img src={(p.images?.find(i => i.is_primary) || p.images?.[0])?.image_url || 'https://placehold.co/100'} alt="" className="size-8 object-cover rounded shadow-sm border border-stone/5" />
                                                                                 <div className="flex-1">
                                                                                     <p className="text-[12px] font-bold text-primary truncate leading-tight group-hover:text-gold transition-colors">{p.name}</p>
@@ -2929,13 +3127,13 @@ const ProductForm = () => {
                                                         <table className="w-full text-left text-[12px]">
                                                             <thead>
                                                                 <tr className="bg-[#f2eddf]/20 text-black border-b border-gold/10">
-                                                                    <th className="pl-5 py-2.5 w-16 text-center uppercase font-black tracking-widest text-[10px]">
+                                                                    <th className="pl-5 py-2.5 w-16 text-center uppercase font-black tracking-widest text-[10px] border-r border-gold/10">
                                                                         {isSortingBundle[option.id] ? 'Vị trí' : 'Default'}
                                                                     </th>
-                                                                    <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px]">Sản phẩm</th>
-                                                                    <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px]">Biến thể</th>
-                                                                    <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px] text-center">Giá bán</th>
-                                                                    <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px] text-center">Số lượng</th>
+                                                                    <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px] border-r border-gold/10">Sản phẩm</th>
+                                                                    <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px] border-r border-gold/10">Biến thể</th>
+                                                                    <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px] text-center border-r border-gold/10">Giá bán</th>
+                                                                    <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px] text-center border-r border-gold/10">Số lượng</th>
                                                                     <th className="px-3 py-2 w-12"></th>
                                                                 </tr>
                                                             </thead>
@@ -3073,14 +3271,41 @@ const ProductForm = () => {
                                         <span className={`material-symbols-outlined text-[16px] ${aiGenerating ? 'animate-spin' : ''}`}>auto_awesome</span>
                                         {aiGenerating ? 'AI đang tạo...' : 'AI Viết mới'}
                                     </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsEditorFullscreen(!isEditorFullscreen)}
+                                        className={`flex items-center gap-2 px-4 py-1.5 rounded-sm border border-gold/30 text-gold font-bold text-[11px] uppercase tracking-widest transition-all shadow-sm hover:bg-primary hover:text-white hover:border-primary active:scale-95 ${isEditorFullscreen ? 'bg-primary text-white' : ''}`}
+                                        title={isEditorFullscreen ? "Thu nhỏ" : "Phóng to toàn màn hình"}
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">{isEditorFullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
+                                        {isEditorFullscreen ? 'Thu nhỏ' : 'Phóng to'}
+                                    </button>
                                 </div>
                             </div>
-                            <div className="p-1 min-h-[400px]">
+                            <div className={`p-1 ${isEditorFullscreen ? 'editor-fullscreen-container' : 'min-h-[400px]'}`}>
+                                {isEditorFullscreen && (
+                                    <div className="flex justify-between items-center p-3 bg-primary text-white shadow-md">
+                                        <div className="flex items-center gap-2">
+                                            <span className="material-symbols-outlined">edit_note</span>
+                                            <span className="font-bold uppercase tracking-tight text-sm">Chế độ soạn thảo toàn màn hình</span>
+                                        </div>
+                                        <button 
+                                            onClick={() => setIsEditorFullscreen(false)}
+                                            className="flex items-center gap-1 px-3 py-1 bg-white/10 hover:bg-white/20 rounded transition-all text-xs font-bold"
+                                        >
+                                            <span className="material-symbols-outlined text-sm">fullscreen_exit</span>
+                                            ĐÓNG PHÓNG TO
+                                        </button>
+                                    </div>
+                                )}
                                 <ReactQuill
+                                    ref={quillRef}
                                     theme="snow"
                                     value={formData.description}
                                     onChange={(content) => setFormData(prev => ({ ...prev, description: content }))}
-                                    className="h-[400px] mb-12 border-none"
+                                    modules={quillModules}
+                                    formats={quillFormats}
+                                    className={`${isEditorFullscreen ? '' : 'h-[400px] mb-12'} border-none`}
                                 />
                             </div>
                         </div>

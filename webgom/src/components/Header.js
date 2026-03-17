@@ -21,24 +21,33 @@ export default function Header({ menuItems = [] }) {
     <header className="site-header">
       <div className="container header-content">
         {/* Logo Section */}
-        <Link href="/" className="logo-section" style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '15px', textDecoration: 'none', flexWrap: 'nowrap' }}>
-          <div className="logo-img-box" style={{ width: '42px', height: '42px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-             <svg className="logo-icon" fill="#1B365D" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" style={{ width: '100%', height: '100%' }}>
-                <path clipRule="evenodd" d="M24 4H42V17.3333V30.6667H24V44H6V30.6667V17.3333H24V4Z" fillRule="evenodd"></path>
-             </svg>
+        <Link href="/" className="logo-section" style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '12px', textDecoration: 'none', flexWrap: 'nowrap' }}>
+          <div className="logo-img-box" style={{ width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+             <img src="/logo-dai-thanh.png" alt="Gốm Đại Thành" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
           </div>
-          <div className="logo-text" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', borderLeft: '1.5px solid rgba(197, 160, 89, 0.4)', paddingLeft: '15px', flexShrink: 0 }}>
-            <h1 className="logo-title" style={{ fontFamily: 'var(--font-display)', fontSize: '24px', fontWeight: '700', color: 'var(--primary)', margin: '0', whiteSpace: 'nowrap', textTransform: 'uppercase', lineHeight: '1', letterSpacing: '0.05em' }}>Di Sản Gốm Việt</h1>
-            <span className="logo-subtitle" style={{ fontFamily: 'var(--font-body)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.4em', color: 'var(--accent)', fontWeight: '600', marginTop: '4px', lineHeight: '1', whiteSpace: 'nowrap' }}>TINH HOA ĐẤT VIỆT</span>
+          <div className="logo-text" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', borderLeft: '1.5px solid rgba(197, 160, 89, 0.4)', paddingLeft: '12px', flexShrink: 0 }}>
+            <h1 className="logo-title" style={{ fontFamily: 'var(--font-display)', fontSize: '18px', fontWeight: '600', color: 'var(--primary)', margin: '0', whiteSpace: 'nowrap', textTransform: 'uppercase', lineHeight: '1.1', letterSpacing: '0.02em' }}>Gốm Đại Thành</h1>
+            <span className="logo-subtitle" style={{ fontFamily: 'var(--font-body)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3em', color: 'var(--accent)', fontWeight: '600', marginTop: '2px', lineHeight: '1', whiteSpace: 'nowrap' }}>TINH HOA ĐẤT VIỆT</span>
           </div>
         </Link>
 
         <nav className="main-nav">
           <ul className="nav-list">
-            <li className="nav-item"><Link href="/products" className="nav-link">SẢN PHẨM</Link></li>
-            <li className="nav-item"><Link href="/collections" className="nav-link">BỘ SƯU TẬP</Link></li>
-            <li className="nav-item"><Link href="/artists" className="nav-link">NGHỆ NHÂN</Link></li>
-            <li className="nav-item"><Link href="/stories" className="nav-link">CÂU CHUYỆN</Link></li>
+            {menuItems.length > 0 ? (
+              menuItems.map((item) => (
+                <li key={item.id} className="nav-item">
+                  <Link href={item.url || '#'} className="nav-link">
+                    {item.title}
+                  </Link>
+                </li>
+              ))
+            ) : (
+              <>
+                <li className="nav-item"><Link href="/products" className="nav-link">SẢN PHẨM</Link></li>
+                <li className="nav-item"><Link href="/collections" className="nav-link">BỘ SƯU TẬP</Link></li>
+                <li className="nav-item"><Link href="/blog" className="nav-link">TIN TỨC</Link></li>
+              </>
+            )}
           </ul>
         </nav>
 
@@ -71,11 +80,14 @@ export default function Header({ menuItems = [] }) {
 
       <style jsx>{`
         .site-header {
-          background: rgba(255, 255, 255, 0.7);
-          backdrop-filter: blur(10px);
+          background: rgba(255, 255, 255, 0.85);
+          backdrop-filter: blur(12px);
           border-bottom: 1px solid var(--border);
-          padding: 1.5rem 0;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.02);
+          height: 64px;
+          padding: 0 24px;
+          display: flex;
+          align-items: center;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.03);
           position: sticky;
           top: 0;
           z-index: 1000;
@@ -85,7 +97,9 @@ export default function Header({ menuItems = [] }) {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          gap: 2rem;
+          width: 100%;
+          height: 100%;
+          gap: 1.5rem;
         }
 
         .logo-section {
@@ -93,16 +107,15 @@ export default function Header({ menuItems = [] }) {
           flex-direction: row !important;
           flex-wrap: nowrap !important;
           align-items: center !important;
-          gap: 1.5rem !important;
+          gap: 12px !important;
           text-decoration: none;
           color: inherit;
-          padding: 8px 0;
-          min-width: max-content;
+          flex-shrink: 0;
         }
 
         .logo-img-box {
-          width: 65px;
-          height: 65px;
+          width: 40px;
+          height: 40px;
           display: flex !important;
           align-items: center;
           justify-content: center;
@@ -126,30 +139,30 @@ export default function Header({ menuItems = [] }) {
           flex-direction: column !important;
           justify-content: center;
           border-left: 2px solid rgba(197, 160, 89, 0.4);
-          padding-left: 1.5rem;
+          padding-left: 12px;
           flex-shrink: 0;
         }
 
         .logo-title {
           font-family: var(--font-display);
-          font-size: 28px;
-          font-weight: 700;
+          font-size: 18px;
+          font-weight: 600;
           color: var(--primary);
           margin: 0;
           white-space: nowrap;
           text-transform: uppercase;
           line-height: 1.1;
-          letter-spacing: 0.03em;
+          letter-spacing: 0.02em;
         }
 
         .logo-subtitle {
           font-family: var(--font-body);
-          font-size: 11px;
+          font-size: 10px;
           text-transform: uppercase;
-          letter-spacing: 0.45em;
+          letter-spacing: 0.3em;
           color: var(--accent);
           font-weight: 600;
-          margin-top: 4px;
+          margin-top: 2px;
           line-height: 1;
           white-space: nowrap;
         }
@@ -161,7 +174,7 @@ export default function Header({ menuItems = [] }) {
         .nav-list {
           display: flex;
           list-style: none;
-          gap: 2rem;
+          gap: 1.5rem;
           margin: 0;
           padding: 0;
         }
@@ -202,15 +215,15 @@ export default function Header({ menuItems = [] }) {
           background-color: #f1f5f9;
           border: none;
           border-radius: 20px;
-          padding: 8px 16px 8px 40px;
-          width: 280px;
-          font-size: 14px;
+          padding: 6px 16px 6px 36px;
+          width: 240px;
+          font-size: 13px;
           outline: none;
           transition: width 0.3s;
         }
 
         .search-input:focus {
-          width: 320px;
+          width: 280px;
           background-color: #e2e8f0;
         }
 

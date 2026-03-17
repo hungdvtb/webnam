@@ -69,7 +69,7 @@ const Navbar = () => {
                         <>
                             <Link className="text-umber hover:text-primary font-ui text-sm font-medium uppercase tracking-widest transition-colors relative after:absolute after:bottom-[-4px] after:left-0 after:h-[1px] after:w-0 after:bg-primary after:transition-all hover:after:w-full" to="/">Trang Chủ</Link>
                             <Link className="text-umber hover:text-primary font-ui text-sm font-medium uppercase tracking-widest transition-colors relative after:absolute after:bottom-[-4px] after:left-0 after:h-[1px] after:w-0 after:bg-primary after:transition-all hover:after:w-full" to="/shop">Cửa Hàng</Link>
-                            <Link className="text-umber hover:text-primary font-ui text-sm font-medium uppercase tracking-widest transition-colors relative after:absolute after:bottom-[-4px] after:left-0 after:h-[1px] after:w-0 after:bg-primary after:transition-all hover:after:w-full" to="/blog">Cẩm Nang</Link>
+                            <Link className="text-umber hover:text-primary font-ui text-sm font-medium uppercase tracking-widest transition-colors relative after:absolute after:bottom-[-4px] after:left-0 after:h-[1px] after:w-0 after:bg-primary after:transition-all hover:after:w-full" to="/blog">Tin tức</Link>
                             <Link className="text-umber hover:text-primary font-ui text-sm font-medium uppercase tracking-widest transition-colors relative after:absolute after:bottom-[-4px] after:left-0 after:h-[1px] after:w-0 after:bg-primary after:transition-all hover:after:w-full" to="/about">Cốt Cách</Link>
                         </>
                     )}
@@ -132,7 +132,7 @@ const Navbar = () => {
                         <>
                             <Link to="/" onClick={() => setIsMenuOpen(false)} className="text-2xl font-display font-bold text-primary">Trang Chủ</Link>
                             <Link to="/shop" onClick={() => setIsMenuOpen(false)} className="text-2xl font-display font-bold text-primary">Cửa Hàng</Link>
-                            <Link to="/blog" onClick={() => setIsMenuOpen(false)} className="text-2xl font-display font-bold text-primary">Cẩm Nang</Link>
+                            <Link to="/blog" onClick={() => setIsMenuOpen(false)} className="text-2xl font-display font-bold text-primary">Tin tức</Link>
                             <Link to="/about" onClick={() => setIsMenuOpen(false)} className="text-2xl font-display font-bold text-primary">Cốt Cách</Link>
                         </>
                     )}

@@ -4,13 +4,18 @@
   color: #1B365D;
 }
 
+.productsPage main {
+  padding-top: 0 !important;
+}
+
 .breadcrumbNav {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   font-size: 0.875rem;
   color: #1B365D99;
-  margin-bottom: 1.5rem;
+  margin-top: 10px;
+  margin-bottom: 10px;
 }
 
 .breadcrumbNav a {

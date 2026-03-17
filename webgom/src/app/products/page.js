@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export const metadata = {
-  title: "Sản Phẩm Gốm Sứ Bát Tràng | Di Sản Gốm Việt",
+  title: "Sản Phẩm Gốm Sứ Bát Tràng | GỐM ĐẠI THÀNH",
   description: "Khám phá bộ sưu tập gốm sứ nghệ thuật độc bản, từ gốm men lam truyền thống đến những tác phẩm hiện đại.",
 };
 

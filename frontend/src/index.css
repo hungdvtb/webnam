@@ -151,6 +151,36 @@
         padding: 1.5rem !important;
     }
 
+    .ql-editor iframe {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        pointer-events: none;
+    }
+
+    .ql-editor .ql-video {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+    }
+
+    .ql-editor .ql-align-center {
+        display: block;
+        text-align: center;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .ql-editor .ql-align-right {
+        display: block;
+        text-align: right;
+        margin-left: auto;
+    }
+
+    .ql-editor .ql-align-left {
+        display: block;
+        text-align: left;
+        margin-right: auto;
+    }
+
     .quill-view-styles h2 {
         font-weight: bold;
         font-size: 1.5rem;
@@ -197,4 +227,48 @@
         border-radius: 2px;
         margin: 2rem 0;
     }
+
+    /* Fullscreen Editor Mode */
+    .editor-fullscreen-container {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        z-index: 9999 !important;
+        background: white !important;
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .editor-fullscreen-container .quill {
+        flex: 1 !important;
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .editor-fullscreen-container .ql-container {
+        flex: 1 !important;
+        overflow-y: auto !important;
+    }
+
+    .editor-fullscreen-container .ql-editor {
+        min-height: calc(100vh - 100px) !important;
+    }
+
+    /* Quill custom width classes */
+    .ql-picker.ql-width .ql-picker-label::before,
+    .ql-picker.ql-width .ql-picker-item::before {
+        content: 'Rộng';
+    }
+    .ql-picker.ql-width .ql-picker-label[data-value="25%"]::before,
+    .ql-picker.ql-width .ql-picker-item[data-value="25%"]::before { content: '25%'; }
+    .ql-picker.ql-width .ql-picker-label[data-value="50%"]::before,
+    .ql-picker.ql-width .ql-picker-item[data-value="50%"]::before { content: '50%'; }
+    .ql-picker.ql-width .ql-picker-label[data-value="75%"]::before,
+    .ql-picker.ql-width .ql-picker-item[data-value="75%"]::before { content: '75%'; }
+    .ql-picker.ql-width .ql-picker-label[data-value="100%"]::before,
+    .ql-picker.ql-width .ql-picker-item[data-value="100%"]::before { content: '100%'; }
+    .ql-picker.ql-width .ql-picker-label[data-value="initial"]::before,
+    .ql-picker.ql-width .ql-picker-item[data-value="initial"]::before { content: 'Tự động'; }
 }

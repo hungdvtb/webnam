@@ -23,8 +23,8 @@ export async function resolveAccount() {
 }
 
 export async function getActiveMenu() {
-    // Revalidate every hour
-    return fetchFromApi('/menus/active', { next: { revalidate: 3600 } });
+    // Revalidate 0 to always get fresh data
+    return fetchFromApi('/menus/active', { next: { revalidate: 0 } });
 }
 
 export async function getStorefrontData() {

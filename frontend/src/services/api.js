@@ -239,4 +239,10 @@ export const userApi = {
     destroy: (id) => api.delete(`/users/${id}`),
 };
 
+export const mediaApi = {
+    upload: (formData) => api.post('/media/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+    }),
+};
+
 export default api;

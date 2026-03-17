@@ -25,7 +25,7 @@ export default async function RootLayout({ children }) {
     console.error("Failed to fetch menu:", error);
   }
 
-  const menuItems = menuData?.rootItems || [];
+  const menuItems = menuData?.root_items || [];
 
   return (
     <html lang="vi">

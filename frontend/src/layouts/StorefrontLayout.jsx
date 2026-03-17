@@ -85,7 +85,7 @@ const StorefrontHeader = ({ categories, siteInfo }) => {
                             )}
                         </div>
                         <Link to="/about" className="px-3 py-2 text-sm font-bold text-stone-700 hover:text-primary transition-colors rounded-lg hover:bg-primary/5">Giới thiệu</Link>
-                        <Link to="/blog" className="px-3 py-2 text-sm font-bold text-stone-700 hover:text-primary transition-colors rounded-lg hover:bg-primary/5">Blog</Link>
+                        <Link to="/blog" className="px-3 py-2 text-sm font-bold text-stone-700 hover:text-primary transition-colors rounded-lg hover:bg-primary/5">Tin tức</Link>
                     </nav>
 
                     {/* Right actions */}
@@ -131,7 +131,7 @@ const StorefrontHeader = ({ categories, siteInfo }) => {
                                 </Link>
                             ))}
                             <Link to="/about" className="block px-4 py-3 text-base font-bold text-stone-800 hover:bg-primary/5 rounded-xl transition-colors">📖 Giới thiệu</Link>
-                            <Link to="/blog" className="block px-4 py-3 text-base font-bold text-stone-800 hover:bg-primary/5 rounded-xl transition-colors">📝 Blog</Link>
+                            <Link to="/blog" className="block px-4 py-3 text-base font-bold text-stone-800 hover:bg-primary/5 rounded-xl transition-colors">📝 Tin tức</Link>
                             <div className="pt-3 border-t border-stone-100">
                                 <a href="tel:0123456789" className="flex items-center gap-3 px-4 py-3 bg-red-50 text-red-700 rounded-xl font-bold">
                                     <span className="material-symbols-outlined">call</span> Gọi tư vấn: 0123 456 789
@@ -171,7 +171,7 @@ const StorefrontFooter = ({ siteInfo }) => (
                         <Link to="/" className="block text-sm hover:text-white transition-colors">Trang chủ</Link>
                         <Link to="/san-pham" className="block text-sm hover:text-white transition-colors">Sản phẩm</Link>
                         <Link to="/about" className="block text-sm hover:text-white transition-colors">Giới thiệu</Link>
-                        <Link to="/blog" className="block text-sm hover:text-white transition-colors">Blog</Link>
+                        <Link to="/blog" className="block text-sm hover:text-white transition-colors">Tin tức</Link>
                     </div>
                 </div>
                 <div>

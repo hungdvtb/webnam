@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductGroupController;
 use App\Http\Controllers\Api\ProductImageController;
 use App\Http\Controllers\Api\AIController;
+use App\Http\Controllers\Api\MediaController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
@@ -236,7 +237,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Admin AI Tools
         Route::post('/ai/generate-product-description', [AIController::class , 'generateProductDescription']);
-        Route::post('/ai/rewrite-product-description', [AIController::class , 'rewriteProductDescription']);    });
+        Route::post('/ai/rewrite-product-description', [AIController::class , 'rewriteProductDescription']);
+        
+        // Media Upload for Editor
+        Route::post('/media/upload', [MediaController::class, 'upload']);
+    });
 
 // Public Routes for Reviews (Reading)
 Route::get('/products/{productId}/reviews', [\App\Http\Controllers\Api\ReviewController::class , 'index']);

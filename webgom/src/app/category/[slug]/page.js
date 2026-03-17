@@ -15,14 +15,14 @@ export async function generateMetadata({ params }) {
   
   if (!slug) {
     return {
-      title: 'Danh mục | Di Sản Gốm Việt'
+      title: 'Danh mục | GỐM ĐẠI THÀNH'
     };
   }
 
   const formattedSlug = slug.charAt(0).toUpperCase() + slug.slice(1).replace(/-/g, ' ');
 
   return {
-    title: `${formattedSlug} | Di Sản Gốm Việt`,
+    title: `${formattedSlug} | GỐM ĐẠI THÀNH`,
     description: `Khám phá bộ sưu tập ${slug.replace(/-/g, ' ')} tinh xảo từ làng gốm Bát Tràng.`
   };
 }

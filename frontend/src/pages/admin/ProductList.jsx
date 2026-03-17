@@ -641,10 +641,46 @@ const ProductList = () => {
         } finally { setLoading(false); }
     };
 
-    const handleCopy = (text, e) => {
+    const handleCopy = (text, message, e, copyId) => {
         if (e) e.stopPropagation();
         navigator.clipboard.writeText(text);
-        setCopiedText(text);
+        setCopiedText(copyId || text);
+        if (message) {
+            setNotification({ type: 'success', message: `Đã sao chép ${message}: ${text}` });
+            setTimeout(() => setNotification(null), 2000);
+        }
+        setTimeout(() => setCopiedText(null), 2000);
+    };
+
+    const handleCopyAll = (p, e) => {
+        if (e) e.stopPropagation();
+        
+        const typeLabel = TYPE_LABELS[p.type]?.label || p.type;
+        const catName = p.category?.name || '-';
+        const price = p.price ? `${new Intl.NumberFormat('vi-VN').format(p.price)}₫` : '0₫';
+        const costPrice = p.cost_price ? `${new Intl.NumberFormat('vi-VN').format(p.cost_price)}₫` : '0₫';
+        const stock = p.stock_quantity || 0;
+        
+        let attrsStr = '';
+        if (p.attribute_values && p.attribute_values.length > 0) {
+            attrsStr = '\n' + p.attribute_values.map(av => {
+                const attr = allAttributes.find(a => String(a.id) === String(av.attribute_id));
+                const label = attr ? attr.name : `Attr ${av.attribute_id}`;
+                let val = av.value;
+                try {
+                    const parsed = JSON.parse(val);
+                    val = Array.isArray(parsed) ? parsed.join(', ') : parsed;
+                } catch(e) {}
+                return `${label}: ${val}`;
+            }).join('\n');
+        }
+
+        const text = `Tên SP: ${p.name}\nMã SP: ${p.sku}\nLoại: ${typeLabel}\nDanh mục: ${catName}\nGiá bán: ${price}\nGiá nhập: ${costPrice}\nKho: ${stock}\nThông số: ${p.specifications || '-'}${attrsStr}`;
+        
+        navigator.clipboard.writeText(text);
+        setCopiedText('all_' + p.id);
+        setNotification({ type: 'success', message: 'Đã sao chép toàn bộ thuộc tính sản phẩm' });
+        setTimeout(() => setNotification(null), 2000);
         setTimeout(() => setCopiedText(null), 2000);
     };
 
@@ -731,6 +767,14 @@ const ProductList = () => {
                 }
                 .row-child:hover .sticky-col-0, .row-child:hover .sticky-col-1, .row-child:hover .sticky-col-2 { 
                     background-color: #e2e8f0 !important; 
+                }
+                
+                /* Standard row hover fixes for sticky columns */
+                tr:hover .sticky-col-0, tr:hover .sticky-col-1, tr:hover .sticky-col-2 {
+                    background-color: #FFFBF0 !important;
+                }
+                tr.bg-gold\/10 .sticky-col-0, tr.bg-gold\/10 .sticky-col-1, tr.bg-gold\/10 .sticky-col-2 {
+                    background-color: #fef3c7 !important;
                 }
                 
                 .row-child .child-indent { 
@@ -1354,18 +1398,18 @@ const ProductList = () => {
                                                 if (col.id === 'images') return <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 ${pIsChild ? 'bg-primary/[0.01]' : ''}`}><div className="size-10 bg-primary/5 border rounded overflow-hidden" onClick={(e) => { e.stopPropagation(); const url = getPrimaryImage(p); if (url) setPreviewImage({ url, name: p.name }); }}><img src={getPrimaryImage(p) || null} className="w-full h-full object-cover" alt="" /></div></td>;
                                                 
                                                 if (col.id === 'sku') return (
-                                                    <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-1 font-mono font-bold text-primary group ${pIsChild ? 'text-primary/60' : ''}`}>
+                                                    <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-1 font-mono font-bold text-primary group/cell ${pIsChild ? 'text-primary/60' : ''}`}>
                                                         <div className="flex items-center justify-between">
                                                             <span className="truncate">{p.sku}</span>
-                                                            <button onClick={(e) => handleCopy(p.sku, e)} className={`${copiedText === p.sku ? 'text-green-600' : 'text-primary/40 opacity-0 group-hover:opacity-100'} hover:text-primary p-0.5 rounded transition-all`}>
-                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === p.sku ? 'check' : 'content_copy'}</span>
+                                                            <button onClick={(e) => handleCopy(p.sku, 'mã sản phẩm', e, `${p.id}-sku`)} className={`${copiedText === `${p.id}-sku` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép mã SP">
+                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-sku` ? 'check' : 'content_copy'}</span>
                                                             </button>
                                                         </div>
                                                     </td>
                                                 );
                                                 
                                                 if (col.id === 'name') return (
-                                                    <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-2 font-bold group ${pIsParent ? 'text-primary' : 'text-[#111]'} ${pIsChild ? 'child-indent' : ''}`}>
+                                                    <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-2 font-bold group/cell ${pIsParent ? 'text-primary' : 'text-[#111]'} ${pIsChild ? 'child-indent' : ''}`}>
                                                         <div className="flex items-center gap-2 overflow-hidden">
                                                             <div className="flex flex-col gap-1 flex-1 overflow-hidden">
                                                                  <div className="flex items-center gap-2">
@@ -1378,9 +1422,11 @@ const ProductList = () => {
                                                                     )}
                                                                 </div>
                                                             </div>
-                                                            <button onClick={(e) => handleCopy(p.name, e)} className={`${copiedText === p.name ? 'text-green-600' : 'text-primary/40 opacity-0 group-hover:opacity-100'} hover:text-primary p-0.5 rounded transition-all`}>
-                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === p.name ? 'check' : 'content_copy'}</span>
-                                                            </button>
+                                                            <div className="flex items-center gap-1 shrink-0">
+                                                                <button onClick={(e) => handleCopy(p.name, 'tên sản phẩm', e, `${p.id}-name`)} className={`${copiedText === `${p.id}-name` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all`} title="Sao chép tên SP">
+                                                                    <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-name` ? 'check' : 'content_copy'}</span>
+                                                                </button>
+                                                            </div>
                                                         </div>
                                                     </td>
                                                 );
@@ -1388,26 +1434,31 @@ const ProductList = () => {
                                                 if (col.id === 'cost_price') {
                                                     const isEditing = editingProductId === p.id;
                                                     return (
-                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#334155] font-bold tracking-tight">
-                                                            <div className="flex items-center justify-between group/cell">
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#334155] font-bold tracking-tight group/cell">
+                                                            <div className="flex items-center justify-between">
                                                                 {isEditing ? (
-                                                                    <input 
-                                                                        type="number" 
-                                                                        className="quick-edit-input" 
-                                                                        value={editForm.cost_price} 
-                                                                        onChange={e => setEditForm({...editForm, cost_price: Math.floor(e.target.value)})}
-                                                                        onClick={e => e.stopPropagation()}
-                                                                        onDoubleClick={e => { e.stopPropagation(); e.target.select(); }}
-                                                                        autoFocus
-                                                                    />
+                                                                    <div className="flex flex-col gap-1">
+                                                                        <input type="number" className="w-24 border border-primary/20 rounded px-1.5 py-0.5 text-[11px] font-bold outline-none focus:border-primary" value={editForm.cost_price} onChange={(e) => setEditForm(prev => ({...prev, cost_price: e.target.value}))} onKeyDown={(e) => e.key === 'Enter' && handleSaveQuickEdit(e)} autoFocus />
+                                                                        <div className="flex gap-2">
+                                                                            <button onClick={handleSaveQuickEdit} className="text-green-600 text-[10px] font-bold uppercase">Lưu</button>
+                                                                            <button onClick={handleCancelQuickEdit} className="text-brick text-[10px] font-bold uppercase">Hủy</button>
+                                                                        </div>
+                                                                    </div>
                                                                 ) : (
                                                                     <React.Fragment>
                                                                         <span>{displayCostPrice ? new Intl.NumberFormat('vi-VN').format(Math.floor(displayCostPrice)) + '₫' : (pIsParent && pVariants.length > 0 ? '--' : (p.cost_price ? new Intl.NumberFormat('vi-VN').format(Math.floor(p.cost_price)) + '₫' : '--'))}</span>
-                                                                        {pIsChild && !isEditing && (
-                                                                            <button onClick={(e) => handleStartQuickEdit(p, e)} className="quick-edit-btn opacity-0 group-hover/cell:opacity-100" title="Sửa nhanh giá nhập">
-                                                                                <span className="material-symbols-outlined text-[16px]">edit</span>
-                                                                            </button>
-                                                                        )}
+                                                                        <div className="flex gap-1 shrink-0">
+                                                                            {pIsChild && !isEditing && (
+                                                                                <button onClick={(e) => handleStartQuickEdit(p, e)} className="quick-edit-btn opacity-0 group-hover/cell:opacity-100" title="Sửa nhanh giá nhập">
+                                                                                    <span className="material-symbols-outlined text-[16px]">edit</span>
+                                                                                </button>
+                                                                            )}
+                                                                            {p.cost_price && (
+                                                                                <button onClick={(e) => handleCopy(String(Math.floor(displayCostPrice || p.cost_price)), 'giá nhập', e, `${p.id}-cost`)} className={`${copiedText === `${p.id}-cost` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all ml-1`} title="Sao chép giá nhập">
+                                                                                    <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-cost` ? 'check' : 'content_copy'}</span>
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
                                                                     </React.Fragment>
                                                                 )}
                                                             </div>
@@ -1418,8 +1469,8 @@ const ProductList = () => {
                                                 if (col.id === 'price') {
                                                     const isEditing = editingProductId === p.id;
                                                     return (
-                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-brick font-black tracking-tight">
-                                                            <div className="flex items-center justify-between group/cell">
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-brick font-black tracking-tight group/cell">
+                                                            <div className="flex items-center justify-between">
                                                                 {isEditing ? (
                                                                     <div className="flex items-center gap-1 w-full">
                                                                         <input 
@@ -1451,11 +1502,18 @@ const ProductList = () => {
                                                                 ) : (
                                                                     <React.Fragment>
                                                                         <span>{displayPrice ? new Intl.NumberFormat('vi-VN').format(Math.floor(displayPrice)) + '₫' : (pIsParent && pVariants.length > 0 ? '--' : (p.price ? new Intl.NumberFormat('vi-VN').format(Math.floor(p.price)) + '₫' : '--'))}</span>
-                                                                        {pIsChild && !isEditing && (
-                                                                            <button onClick={(e) => handleStartQuickEdit(p, e)} className="quick-edit-btn opacity-0 group-hover/cell:opacity-100" title="Sửa nhanh giá bán">
-                                                                                <span className="material-symbols-outlined text-[16px]">edit</span>
-                                                                            </button>
-                                                                        )}
+                                                                        <div className="flex gap-1 shrink-0">
+                                                                            {pIsChild && !isEditing && (
+                                                                                <button onClick={(e) => handleStartQuickEdit(p, e)} className="quick-edit-btn opacity-0 group-hover/cell:opacity-100" title="Sửa nhanh giá bán">
+                                                                                    <span className="material-symbols-outlined text-[16px]">edit</span>
+                                                                                </button>
+                                                                            )}
+                                                                            {p.price && (
+                                                                                <button onClick={(e) => handleCopy(String(Math.floor(displayPrice || p.price)), 'giá bán', e, `${p.id}-price`)} className={`${copiedText === `${p.id}-price` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all ml-1`} title="Sao chép giá bán">
+                                                                                    <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-price` ? 'check' : 'content_copy'}</span>
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
                                                                     </React.Fragment>
                                                                 )}
                                                             </div>
@@ -1463,23 +1521,82 @@ const ProductList = () => {
                                                     );
                                                 }
 
-                                                if (col.id === 'stock') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 font-black text-primary">{p.stock_quantity || 0}</td>;
-                                                if (col.id === 'category') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#1e293b] font-medium truncate">{p.category?.name || '-'}</td>;
-                                                if (col.id === 'type') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20"><span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold border ${TYPE_LABELS[p.type]?.cls || ''}`}>{TYPE_LABELS[p.type]?.label || p.type}</span></td>;
-                                                if (col.id === 'specifications') return (
-                                                    <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-primary/70 italic group">
+                                                if (col.id === 'stock') return (
+                                                    <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 font-black text-primary group/cell">
                                                         <div className="flex items-center justify-between">
-                                                            <span className="truncate max-w-[150px]" title={p.specifications}>{p.specifications || '-'}</span>
-                                                            {p.specifications && (
-                                                                <button onClick={(e) => handleCopy(p.specifications, e)} className={`${copiedText === p.specifications ? 'text-green-600' : 'text-primary/40 opacity-0 group-hover:opacity-100'} hover:text-primary p-0.5 rounded transition-all`}>
-                                                                    <span className="material-symbols-outlined text-[14px]">{copiedText === p.specifications ? 'check' : 'content_copy'}</span>
+                                                            <span>{p.stock_quantity || 0}</span>
+                                                            <button onClick={(e) => handleCopy(String(p.stock_quantity || 0), 'số lượng tồn kho', e, `${p.id}-stock`)} className={`${copiedText === `${p.id}-stock` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép tồn kho">
+                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-stock` ? 'check' : 'content_copy'}</span>
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                );
+                                                if (col.id === 'category') return (
+                                                    <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#1e293b] font-medium truncate group/cell">
+                                                         <div className="flex items-center justify-between">
+                                                            <span className="truncate">{p.category?.name || '-'}</span>
+                                                            {p.category?.name && (
+                                                                <button onClick={(e) => handleCopy(p.category.name, 'danh mục', e, `${p.id}-cat`)} className={`${copiedText === `${p.id}-cat` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép danh mục">
+                                                                    <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-cat` ? 'check' : 'content_copy'}</span>
                                                                 </button>
                                                             )}
                                                         </div>
                                                     </td>
                                                 );
-                                                if (col.id === 'status') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-center"><span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold ${p.status ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{p.status ? 'Bật' : 'Tắt'}</span></td>;
-                                                if (col.id === 'is_featured' || col.id === 'is_new') return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-center">{p[col.id] ? <span className="material-symbols-outlined text-gold">check_circle</span> : <span className="material-symbols-outlined text-primary/30">circle</span>}</td>;
+                                                if (col.id === 'type') {
+                                                    const typeLabel = TYPE_LABELS[p.type]?.label || p.type;
+                                                    return (
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 group/cell">
+                                                            <div className="flex items-center justify-between">
+                                                                <span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold border ${TYPE_LABELS[p.type]?.cls || ''}`}>{typeLabel}</span>
+                                                                <button onClick={(e) => handleCopy(typeLabel, 'loại sản phẩm', e, `${p.id}-type`)} className={`${copiedText === `${p.id}-type` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép loại sản phẩm">
+                                                                    <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-type` ? 'check' : 'content_copy'}</span>
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                    );
+                                                }
+                                                if (col.id === 'specifications') return (
+                                                    <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-primary/70 italic group/cell">
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="truncate max-w-[150px]" title={p.specifications}>{p.specifications || '-'}</span>
+                                                            {p.specifications && (
+                                                                <button onClick={(e) => handleCopy(p.specifications, 'thông số kỹ thuật', e, `${p.id}-spec`)} className={`${copiedText === `${p.id}-spec` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`}>
+                                                                    <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-spec` ? 'check' : 'content_copy'}</span>
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                );
+                                                if (col.id === 'status') {
+                                                    const statusText = p.status ? 'Bật' : 'Tắt';
+                                                    return (
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-center group/cell">
+                                                            <div className="flex items-center justify-center gap-2">
+                                                                <span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold ${p.status ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{statusText}</span>
+                                                                <button onClick={(e) => handleCopy(statusText, 'trạng thái', e, `${p.id}-status`)} className={`${copiedText === `${p.id}-status` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép trạng thái">
+                                                                    <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-status` ? 'check' : 'content_copy'}</span>
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                    );
+                                                }
+                                                if (col.id === 'is_featured' || col.id === 'is_new') {
+                                                    const val = p[col.id];
+                                                    const text = val ? 'Có' : 'Không';
+                                                    const label = col.id === 'is_featured' ? 'nổi bật' : 'mới';
+                                                    const copyId = `${p.id}-${col.id}`;
+                                                    return (
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-center group/cell">
+                                                            <div className="flex items-center justify-center gap-2">
+                                                                {val ? <span className="material-symbols-outlined text-gold">check_circle</span> : <span className="material-symbols-outlined text-primary/30">circle</span>}
+                                                                <button onClick={(e) => handleCopy(text, label, e, copyId)} className={`${copiedText === copyId ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title={`Sao chép ${label}`}>
+                                                                    <span className="material-symbols-outlined text-[14px]">{copiedText === copyId ? 'check' : 'content_copy'}</span>
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                    );
+                                                }
                                                 if (col.id === 'actions') return (
                                                     <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-right">
                                                         <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1498,8 +1615,36 @@ const ProductList = () => {
                                                         </div>
                                                     </td>
                                                 );
-                                                if (col.isAttribute) return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#111] truncate">{getAttributeValue(p, col.attrId)}</td>;
-                                                return <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#111] truncate">{String(p[col.id] ?? '-')}</td>;
+                                                if (col.isAttribute) {
+                                                    const val = getAttributeValue(p, col.attrId);
+                                                    const copyId = `${p.id}-${col.id}`;
+                                                    return (
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#111] truncate group/cell">
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="truncate">{val}</span>
+                                                                {val && val !== '-' && (
+                                                                    <button onClick={(e) => handleCopy(val, col.label || 'thuộc tính', e, copyId)} className={`${copiedText === copyId ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title={`Sao chép ${col.label}`}>
+                                                                        <span className="material-symbols-outlined text-[14px]">{copiedText === copyId ? 'check' : 'content_copy'}</span>
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                    );
+                                                }
+                                                const defaultVal = String(p[col.id] ?? '-');
+                                                const copyId = `${p.id}-${col.id}`;
+                                                return (
+                                                    <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#111] truncate group/cell">
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="truncate">{defaultVal}</span>
+                                                            {defaultVal !== '-' && (
+                                                                <button onClick={(e) => handleCopy(defaultVal, col.label || 'dữ liệu', e, copyId)} className={`${copiedText === copyId ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title={`Sao chép ${col.label}`}>
+                                                                    <span className="material-symbols-outlined text-[14px]">{copiedText === copyId ? 'check' : 'content_copy'}</span>
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                );
                                             })}
                                         </motion.tr>
                                     );

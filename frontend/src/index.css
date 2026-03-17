@@ -163,22 +163,60 @@
     }
 
     .ql-editor .ql-align-center {
-        display: block;
         text-align: center;
-        margin-left: auto;
-        margin-right: auto;
+    }
+    .ql-editor .ql-align-right {
+        text-align: right;
+    }
+    .ql-editor .ql-align-left {
+        text-align: left;
+    }
+
+    /* Support for images with alignment */
+    .ql-editor img {
+        max-width: 100%;
+        height: auto;
+    }
+
+    .ql-editor .ql-align-center img {
+        margin-left: auto !important;
+        margin-right: auto !important;
+        display: block;
+    }
+
+    .ql-editor .ql-align-right img {
+        margin-left: auto !important;
+        margin-right: 0 !important;
+        display: block;
+    }
+
+    .ql-editor .ql-align-left img {
+        margin-right: auto !important;
+        margin-left: 0 !important;
+        display: block;
+    }
+
+    /* Float support */
+    .ql-editor img[style*="float: left"] {
+        float: left;
+        margin-right: 1.5rem;
+        margin-bottom: 1rem;
+        display: block;
+    }
+
+    .ql-editor img[style*="float: right"] {
+        float: right;
+        margin-left: 1.5rem;
+        margin-bottom: 1rem;
+        display: block;
     }
 
     .ql-editor .ql-align-right {
-        display: block;
         text-align: right;
-        margin-left: auto;
     }
 
     .ql-editor .ql-align-left {
-        display: block;
         text-align: left;
-        margin-right: auto;
     }
 
     .quill-view-styles h2 {
@@ -252,8 +290,58 @@
         overflow-y: auto !important;
     }
 
+    /* Fullscreen Editor Refinement */
+    .editor-fullscreen-container {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        z-index: 10000 !important;
+        background: #f8f9fa;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        animation: editorFadeIn 0.3s ease-out;
+    }
+
+    @keyframes editorFadeIn {
+        from { opacity: 0; transform: scale(0.98); }
+        to { opacity: 1; transform: scale(1); }
+    }
+
+    .editor-fullscreen-container .quill {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 50px);
+        background: white;
+    }
+
+    .editor-fullscreen-container .ql-toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 10001;
+        background: white;
+        border-left: none !important;
+        border-right: none !important;
+        border-top: none !important;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    }
+
+    .editor-fullscreen-container .ql-container {
+        flex: 1;
+        overflow-y: auto;
+        border: none !important;
+    }
+
     .editor-fullscreen-container .ql-editor {
-        min-height: calc(100vh - 100px) !important;
+        min-height: 100%;
+        padding: 3rem 10% !important;
+        max-width: 1200px;
+        margin: 0 auto;
+        background: white;
+        box-shadow: 0 0 50px rgba(0,0,0,0.03);
     }
 
     /* Quill custom width classes */
@@ -271,4 +359,61 @@
     .ql-picker.ql-width .ql-picker-item[data-value="100%"]::before { content: '100%'; }
     .ql-picker.ql-width .ql-picker-label[data-value="initial"]::before,
     .ql-picker.ql-width .ql-picker-item[data-value="initial"]::before { content: 'Tự động'; }
+
+    /* Fullscreen Toolbar Icon */
+    .ql-fullscreen::before {
+        content: '\e5d0';
+        font-family: 'Material Symbols Outlined';
+        font-size: 18px;
+        vertical-align: middle;
+    }
+    .ql-fullscreen:hover {
+        color: #bfa36a !important;
+    }
+    /* Image Actions Popup Styles */
+    .ql-image-actions-popup {
+        position: absolute;
+        background: white;
+        border: 1px solid rgba(197, 160, 101, 0.3);
+        border-radius: 6px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        padding: 4px;
+        display: flex;
+        gap: 4px;
+        z-index: 10005;
+        pointer-events: auto;
+    }
+
+    .ql-image-actions-popup button {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border-radius: 4px;
+        border: none;
+        background: transparent;
+        color: #2C3D40;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .ql-image-actions-popup button:hover {
+        background: rgba(197, 160, 101, 0.1);
+        color: #C5A065;
+    }
+
+    .ql-image-actions-popup button.delete {
+        color: #ef4444;
+    }
+
+    .ql-image-actions-popup button.delete:hover {
+        background: #fee2e2;
+        color: #dc2626;
+    }
+
+    .ql-image-actions-popup .material-symbols-outlined {
+        font-size: 18px;
+    }
 }

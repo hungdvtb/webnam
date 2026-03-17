@@ -686,35 +686,52 @@
   height: auto;
   border-radius: 8px;
   margin: 1rem 0;
-  display: block;
+  display: inline-block; /* Allow text-align: center to work on parent or handle via margin: auto if block */
 }
 
-/* Image Aligment */
+/* Image Aligment via parent classes */
 .descBody .ql-align-center {
   text-align: center;
+}
+.descBody .ql-align-center img {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .descBody .ql-align-right {
   text-align: right;
 }
+.descBody .ql-align-right img {
+  display: block;
+  margin-left: auto;
+  margin-right: 0;
+}
 
 .descBody .ql-align-left {
   text-align: left;
 }
+.descBody .ql-align-left img {
+  display: block;
+  margin-right: auto;
+  margin-left: 0;
+}
 
-/* Float support from Quill (if used) */
+/* Float support from Quill / ImageResize styles */
 .descBody img[style*="float: left"],
 .descBody .ql-float-left {
-  float: left;
-  margin-right: 1.5rem;
-  margin-bottom: 1rem;
+  float: left !important;
+  margin-right: 1.5rem !important;
+  margin-bottom: 1rem !important;
+  display: block;
 }
 
 .descBody img[style*="float: right"],
 .descBody .ql-float-right {
-  float: right;
-  margin-left: 1.5rem;
-  margin-bottom: 1rem;
+  float: right !important;
+  margin-left: 1.5rem !important;
+  margin-bottom: 1rem !important;
+  display: block;
 }
 
 /* Responsive Videos */

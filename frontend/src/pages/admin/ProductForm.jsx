@@ -4,6 +4,7 @@ import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { productApi, categoryApi, attributeApi, productImageApi, aiApi, blogApi, mediaApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 import ReactQuill from 'react-quill-new';
+import mammoth from 'mammoth';
 import 'react-quill-new/dist/quill.snow.css';
 import ImageResize from 'quill-image-resize-module-react';
 
@@ -228,7 +229,7 @@ const DraggableBundleItem = ({
                 <div className="flex items-center gap-3">
                     <img src={item.image_url || 'https://placehold.co/100'} alt="" className="size-10 object-cover rounded border border-stone/10 bg-white" />
                     <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1 group/name">
+                        <div className="flex items-center gap-1">
                             <p className="text-[13px] font-bold text-black truncate" title={item.name}>{item.name}</p>
                             <button 
                                 type="button"
@@ -236,13 +237,13 @@ const DraggableBundleItem = ({
                                     navigator.clipboard.writeText(item.name);
                                     showToast('Đã sao chép tên sản phẩm', 'success');
                                 }}
-                                className="opacity-0 group-hover/name:opacity-100 p-0.5 text-stone/40 hover:text-gold transition-all"
+                                className="opacity-0 group-hover/row:opacity-100 p-0.5 text-stone/40 hover:text-gold transition-all"
                                 title="Sao chép tên"
                             >
                                 <span className="material-symbols-outlined text-[14px]">content_copy</span>
                             </button>
                         </div>
-                        <div className="flex items-center gap-1 group/sku">
+                        <div className="flex items-center gap-1">
                             <p className="text-[10px] font-mono text-gold uppercase">{item.sku}</p>
                             <button 
                                 type="button"
@@ -250,7 +251,7 @@ const DraggableBundleItem = ({
                                     navigator.clipboard.writeText(item.sku);
                                     showToast('Đã sao chép mã sản phẩm', 'success');
                                 }}
-                                className="opacity-0 group-hover/sku:opacity-100 p-0.5 text-stone/40 hover:text-gold transition-all"
+                                className="opacity-0 group-hover/row:opacity-100 p-0.5 text-stone/40 hover:text-gold transition-all"
                                 title="Sao chép SKU"
                             >
                                 <span className="material-symbols-outlined text-[14px]">content_copy</span>
@@ -352,31 +353,43 @@ const SectionTitle = ({ icon, title }) => (
     </div>
 );
 
-// Quill configuration
+// Register Custom Attributors for Quill 2.0+
+const Quill = ReactQuill.Quill;
+const Parchment = Quill.import('parchment');
+
+// Define Attributors
+const Scope = Parchment.Scope;
+const StyleAttributor = Parchment.Attributor ? Parchment.Attributor.Style : Parchment.StyleAttributor;
+
+if (StyleAttributor) {
+    const width = new StyleAttributor('width', 'width', {
+        scope: Scope.BLOCK | Scope.INLINE
+    });
+    const float = new StyleAttributor('float', 'float', {
+        scope: Scope.BLOCK | Scope.INLINE
+    });
+    const display = new StyleAttributor('display', 'display', {
+        scope: Scope.BLOCK | Scope.INLINE
+    });
+    const margin = new StyleAttributor('margin', 'margin', {
+        scope: Scope.BLOCK | Scope.INLINE
+    });
+    
+    Quill.register(width, true);
+    Quill.register(float, true);
+    Quill.register(display, true);
+    Quill.register(margin, true);
+}
+
+// Quill configuration - use the registered names
 const quillFormats = [
     'header', 'font', 'size',
     'bold', 'italic', 'underline', 'strike', 'blockquote',
-    'list', 'bullet', 'indent',
+    'list', 'indent',
     'link', 'image', 'video',
     'color', 'background',
-    'align', 'float', 'width'
+    'align', 'width', 'float', 'display', 'margin'
 ];
-
-const Parchment = ReactQuill.Quill.import('parchment');
-
-class WidthStyle extends Parchment.Attributor.Style {
-    add(node, value) {
-        if (value === 'initial') {
-            this.remove(node);
-        } else {
-            super.add(node, value);
-        }
-    }
-}
-const Width = new WidthStyle('width', 'width', {
-    scope: Parchment.Scope.INLINE_BLOT | Parchment.Scope.BLOCK_BLOT
-});
-ReactQuill.Quill.register(Width, true);
 
 const ProductForm = () => {
     const { id } = useParams();
@@ -538,11 +551,13 @@ const ProductForm = () => {
                 [{ 'align': [] }],
                 ['link', 'image', 'video'],
                 [{ 'width': ['25%', '50%', '75%', '100%', 'initial'] }],
+                ['fullscreen'],
                 ['clean']
             ],
             handlers: {
                 image: imageHandler,
-                video: videoHandler
+                video: videoHandler,
+                fullscreen: () => setIsEditorFullscreen(prev => !prev)
             }
         },
         imageResize: {
@@ -574,6 +589,178 @@ const ProductForm = () => {
     const handleCancel = useCallback(() => {
         navigate('/admin/products');
     }, [navigate]);
+
+    const handleCopyContent = useCallback(() => {
+        const content = formData.description;
+        if (!content) {
+            showToast('Nội dung trống', 'warning');
+            return;
+        }
+        navigator.clipboard.writeText(content).then(() => {
+            showToast('Đã sao chép toàn bộ nội dung HTML!', 'success');
+        }).catch(err => {
+            showToast('Lỗi khi sao chép', 'error');
+        });
+    }, [formData.description, showToast]);
+
+    const handleWordImport = useCallback(async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (loadEvent) => {
+            const arrayBuffer = loadEvent.target.result;
+            try {
+                const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
+                const html = result.value;
+                setFormData(prev => ({ ...prev, description: prev.description + html }));
+                showToast('Import từ Word thành công!', 'success');
+            } catch (err) {
+                showToast('Lỗi khi đọc file Word', 'error');
+            }
+        };
+        reader.readAsArrayBuffer(file);
+        // Reset input
+        e.target.value = '';
+    }, [showToast]);
+
+    // Handle replacement and actions for images and videos
+    useEffect(() => {
+        if (!quillRef.current) return;
+        const quill = quillRef.current.getEditor();
+        const editorRoot = quill.root;
+        const editorContainer = editorRoot.closest('.quill');
+
+        const removeExistingPopups = () => {
+            const existing = document.querySelectorAll('.ql-image-actions-popup');
+            existing.forEach(el => el.remove());
+        };
+
+        const handleEditorClick = (e) => {
+            const target = e.target;
+            
+            // Remove popup if clicking elsewhere
+            if (target.tagName !== 'IMG' && !target.closest('.ql-image-actions-popup')) {
+                removeExistingPopups();
+                return;
+            }
+
+            if (target.tagName === 'IMG') {
+                e.preventDefault();
+                e.stopPropagation();
+                removeExistingPopups();
+                
+                const popup = document.createElement('div');
+                popup.className = 'ql-image-actions-popup';
+                
+                // Position relative to the editor container for better stability
+                const rect = target.getBoundingClientRect();
+                const containerRect = editorContainer.getBoundingClientRect();
+                
+                // Position calculations
+                const top = rect.top - containerRect.top - 50;
+                const left = rect.left - containerRect.left + (rect.width / 2);
+                
+                popup.style.top = `${top}px`;
+                popup.style.left = `${left}px`;
+                popup.style.position = 'absolute';
+                popup.style.transform = 'translateX(-50%)';
+                popup.style.zIndex = '10005';
+
+                // View
+                const btnView = document.createElement('button');
+                btnView.innerHTML = '<span class="material-symbols-outlined">visibility</span> Xem';
+                btnView.onclick = (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    window.open(target.src, '_blank');
+                };
+
+                // Edit/Replace - Keep dimensions
+                const btnEdit = document.createElement('button');
+                btnEdit.innerHTML = '<span class="material-symbols-outlined">edit</span> Thay ảnh';
+                btnEdit.onclick = (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.accept = 'image/*';
+                    input.onchange = async () => {
+                        const file = input.files[0];
+                        if (file) {
+                            const uploadData = new FormData();
+                            uploadData.append('image', file);
+                            try {
+                                const res = await mediaApi.upload(uploadData);
+                                // Replace src but keep existing width/height/style
+                                target.src = res.data.url;
+                                // Update form state
+                                setFormData(prev => ({ ...prev, description: editorRoot.innerHTML }));
+                                showToast('Đã cập nhật ảnh mới, giữ nguyên kích thước', 'success');
+                                removeExistingPopups();
+                            } catch (err) {
+                                showToast('Lỗi khi tải ảnh mới', 'error');
+                            }
+                        }
+                    };
+                    input.click();
+                };
+
+                // Delete
+                const btnDelete = document.createElement('button');
+                btnDelete.className = 'delete';
+                btnDelete.innerHTML = '<span class="material-symbols-outlined">delete</span> Xóa';
+                btnDelete.onclick = (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    if (confirm('Xóa ảnh này ra khỏi nội dung?')) {
+                        target.remove();
+                        setFormData(prev => ({ ...prev, description: editorRoot.innerHTML }));
+                        showToast('Đã xóa ảnh', 'success');
+                        removeExistingPopups();
+                    }
+                };
+
+                popup.appendChild(btnView);
+                popup.appendChild(btnEdit);
+                popup.appendChild(btnDelete);
+                
+                if (editorContainer) {
+                    editorContainer.style.position = 'relative';
+                    editorContainer.appendChild(popup);
+                }
+            }
+        };
+
+        const handleEditorDblClick = (e) => {
+            const target = e.target;
+            const iframe = target.closest('iframe');
+            if (iframe && iframe.classList.contains('ql-video')) {
+                const newUrl = prompt('Nhập link video mới:', iframe.src);
+                if (newUrl && newUrl !== iframe.src) {
+                    let finalUrl = newUrl;
+                    const ytMatch = newUrl.match(/(?:\/watch\?v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]+)/);
+                    if (ytMatch) {
+                        finalUrl = `https://www.youtube.com/embed/${ytMatch[1]}`;
+                    } else if (newUrl.includes('facebook.com')) {
+                        finalUrl = `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(newUrl)}&show_text=0`;
+                    }
+                    iframe.src = finalUrl;
+                    setFormData(prev => ({ ...prev, description: editorRoot.innerHTML }));
+                    showToast('Đã thay video mới', 'success');
+                }
+            }
+        };
+
+        editorRoot.addEventListener('click', handleEditorClick);
+        editorRoot.addEventListener('dblclick', handleEditorDblClick);
+        
+        return () => {
+            editorRoot.removeEventListener('click', handleEditorClick);
+            editorRoot.removeEventListener('dblclick', handleEditorDblClick);
+            removeExistingPopups();
+        };
+    }, [showToast, mediaApi]);
 
     useEffect(() => {
         const handleKeyDown = (e) => {
@@ -2898,7 +3085,7 @@ const ProductForm = () => {
                                                     </div>
                                                 </div>
                                                 <div className="col-span-4 min-w-0">
-                                                    <div className="flex items-center gap-1 group/name">
+                                                    <div className="flex items-center gap-1">
                                                         <p className="text-[13px] font-bold text-primary truncate" title={item.name}>{item.name}</p>
                                                         <button 
                                                             type="button"
@@ -2906,13 +3093,13 @@ const ProductForm = () => {
                                                                 navigator.clipboard.writeText(item.name);
                                                                 showToast('Đã sao chép tên sản phẩm', 'success');
                                                             }}
-                                                            className="opacity-0 group-hover/name:opacity-100 p-0.5 text-stone/40 hover:text-gold transition-all"
+                                                            className="opacity-0 group-hover/item:opacity-100 p-0.5 text-stone/40 hover:text-gold transition-all"
                                                             title="Sao chép tên"
                                                         >
                                                             <span className="material-symbols-outlined text-[14px]">content_copy</span>
                                                         </button>
                                                     </div>
-                                                    <div className="flex items-center gap-1 group/sku">
+                                                    <div className="flex items-center gap-1">
                                                         <p className="text-[10px] font-mono text-gold uppercase">{item.sku}</p>
                                                         <button 
                                                             type="button"
@@ -2920,7 +3107,7 @@ const ProductForm = () => {
                                                                 navigator.clipboard.writeText(item.sku);
                                                                 showToast('Đã sao chép mã sản phẩm', 'success');
                                                             }}
-                                                            className="opacity-0 group-hover/sku:opacity-100 p-0.5 text-stone/40 hover:text-gold transition-all"
+                                                            className="opacity-0 group-hover/item:opacity-100 p-0.5 text-stone/40 hover:text-gold transition-all"
                                                             title="Sao chép SKU"
                                                         >
                                                             <span className="material-symbols-outlined text-[14px]">content_copy</span>
@@ -3112,7 +3299,21 @@ const ProductForm = () => {
                                                                                     <p className="text-[12px] font-bold text-primary truncate leading-tight group-hover:text-gold transition-colors">{p.name}</p>
                                                                                     <p className="text-[10px] font-mono text-gold uppercase">{p.sku}</p>
                                                                                 </div>
-                                                                                <p className="text-[11px] font-black text-brick">{formatNumberOutput(p.price)}₫</p>
+                                                                                <div className="flex items-center gap-2">
+                                                                                    <p className="text-[11px] font-black text-brick">{formatNumberOutput(p.price)}₫</p>
+                                                                                    <button 
+                                                                                        type="button"
+                                                                                        onClick={(e) => {
+                                                                                            e.stopPropagation();
+                                                                                            navigator.clipboard.writeText(p.sku);
+                                                                                            showToast('Đã sao chép mã SP', 'success');
+                                                                                        }}
+                                                                                        className="opacity-0 group-hover:opacity-100 p-1 text-stone/40 hover:text-gold transition-all"
+                                                                                        title="Sao chép mã"
+                                                                                    >
+                                                                                        <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                                                                                    </button>
+                                                                                </div>
                                                                             </div>
                                                                         ))
                                                                     )}
@@ -3271,14 +3472,33 @@ const ProductForm = () => {
                                         <span className={`material-symbols-outlined text-[16px] ${aiGenerating ? 'animate-spin' : ''}`}>auto_awesome</span>
                                         {aiGenerating ? 'AI đang tạo...' : 'AI Viết mới'}
                                     </button>
+
+                                    <div className="h-6 w-px bg-gold/10 mx-1"></div>
+
+                                    <button
+                                        type="button"
+                                        onClick={handleCopyContent}
+                                        className="flex items-center gap-2 px-3 py-1.5 rounded-sm border border-gold/20 text-gold font-bold text-[11px] uppercase tracking-widest transition-all hover:bg-gold/5 active:scale-95"
+                                        title="Copy toàn bộ nội dung"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">content_copy</span>
+                                        Copy
+                                    </button>
+
+                                    <label className="flex items-center gap-2 px-3 py-1.5 rounded-sm border border-gold/20 text-gold font-bold text-[11px] uppercase tracking-widest transition-all hover:bg-gold/5 active:scale-95 cursor-pointer" title="Nhập từ file Word (.docx)">
+                                        <span className="material-symbols-outlined text-[16px]">description</span>
+                                        Import Word
+                                        <input type="file" accept=".docx" className="hidden" onChange={handleWordImport} />
+                                    </label>
+
                                     <button
                                         type="button"
                                         onClick={() => setIsEditorFullscreen(!isEditorFullscreen)}
-                                        className={`flex items-center gap-2 px-4 py-1.5 rounded-sm border border-gold/30 text-gold font-bold text-[11px] uppercase tracking-widest transition-all shadow-sm hover:bg-primary hover:text-white hover:border-primary active:scale-95 ${isEditorFullscreen ? 'bg-primary text-white' : ''}`}
+                                        className={`flex items-center gap-2 px-4 py-1.5 rounded-sm border-2 font-bold text-[11px] uppercase tracking-widest transition-all shadow-md active:scale-95 ${isEditorFullscreen ? 'bg-red-500 border-red-500 text-white' : 'border-primary text-primary hover:bg-primary hover:text-white'}`}
                                         title={isEditorFullscreen ? "Thu nhỏ" : "Phóng to toàn màn hình"}
                                     >
-                                        <span className="material-symbols-outlined text-[16px]">{isEditorFullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
-                                        {isEditorFullscreen ? 'Thu nhỏ' : 'Phóng to'}
+                                        <span className="material-symbols-outlined text-[18px]">{isEditorFullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
+                                        {isEditorFullscreen ? 'ĐÓNG PHÓNG TO' : 'PHÓNG TO EDITOR'}
                                     </button>
                                 </div>
                             </div>

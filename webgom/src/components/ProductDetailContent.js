@@ -252,17 +252,27 @@ export default function ProductDetailContent({ product }) {
 
   const handleAddToCart = (e) => {
     if (e) e.preventDefault();
-    const itemsToCart = product.type === 'bundle' 
-      ? bundleItems.filter(it => it.selected).map(it => ({ 
-          id: it.id, 
-          name: it.name, 
-          qty: it.qty, 
+    const items = (product.bundle_items?.length ? product.bundle_items : null)
+      || (product.grouped_items?.length ? product.grouped_items : []);
+
+    const itemsToCart = product.type === 'bundle'
+      ? bundleItems.filter(it => it.selected).map((it, idx) => ({
+          uid: `${it.id}_${it.pivot?.variant_id || idx}`,  // unique per slot
+          id: it.id,
+          name: it.name,
+          qty: it.qty,
           price: it.price,
           image: it.images?.[0]?.image_url || it.primary_image?.url
         }))
-      : selectedGroupItems.map(id => {
-          const item = (product.bundle_items || product.grouped_items || []).find(i => i.id === id);
-          return { id, name: item?.name, qty: item?.pivot?.quantity || 1, price: item?.price };
+      : selectedGroupItems.map((id, idx) => {
+          const item = items.find(i => i.id === id);
+          return {
+            uid: `${id}_${idx}`,
+            id,
+            name: item?.name,
+            qty: item?.pivot?.quantity || 1,
+            price: item?.price
+          };
       });
     
     addToCart(product, quantity, selectedOptions, itemsToCart, displayPrice);
@@ -271,9 +281,28 @@ export default function ProductDetailContent({ product }) {
 
   const handleBuyNow = (e) => {
     if (e) e.preventDefault();
-    const itemsToCart = product.type === 'bundle' 
-      ? bundleItems.filter(it => it.selected).map(it => ({ id: it.id, qty: it.qty }))
-      : selectedGroupItems;
+    const items = (product.bundle_items?.length ? product.bundle_items : null)
+      || (product.grouped_items?.length ? product.grouped_items : []);
+
+    const itemsToCart = product.type === 'bundle'
+      ? bundleItems.filter(it => it.selected).map((it, idx) => ({
+          uid: `${it.id}_${it.pivot?.variant_id || idx}`,
+          id: it.id,
+          name: it.name,
+          qty: it.qty,
+          price: it.price,
+          image: it.images?.[0]?.image_url || it.primary_image?.url
+        }))
+      : selectedGroupItems.map((id, idx) => {
+          const item = items.find(i => i.id === id);
+          return {
+            uid: `${id}_${idx}`,
+            id,
+            name: item?.name,
+            qty: item?.pivot?.quantity || 1,
+            price: item?.price
+          };
+      });
     addToCart(product, quantity, selectedOptions, itemsToCart);
     router.push('/cart');
   };

@@ -9,7 +9,7 @@ import { placeWebOrder } from '@/lib/api';
 import styles from './cart.module.css';
 
 export default function CartPage() {
-  const { cartItems, removeFromCart, updateQuantity, updateItem, cartCount, cartTotal, clearCart } = useCart();
+  const { cartItems, removeFromCart, updateQuantity, updateItem, restoreCombo, cartCount, cartTotal, clearCart } = useCart();
 
   const [formData, setFormData] = useState({
     customer_name: '',
@@ -46,22 +46,24 @@ export default function CartPage() {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  // ── Remove a sub-item from a bundle combo ───────────────────────────────────
-  // CartContext.cartTotal now dynamically sums sub-item prices, so no manual
-  // price recalculation is needed here.
-  const handleRemoveSubItem = (cartKey, subItemId) => {
+  // ── Remove a sub-item from a bundle combo (uid-aware) ──────────────────────
+  // Use uid when available (new items) to safely identify each slot even when
+  // the same product id appears multiple times in a combo (different variants).
+  const handleRemoveSubItem = (cartKey, uid) => {
     const item = cartItems.find(i => i.cartKey === cartKey);
     if (!item) return;
-    const newGroupedItems = item.groupedItems.filter(gi => gi.id !== subItemId);
+    const newGroupedItems = item.groupedItems.filter(
+      gi => (gi.uid ?? gi.id) !== uid
+    );
     updateItem(cartKey, { groupedItems: newGroupedItems });
   };
 
   // ── Change qty of a single sub-item inside a combo ─────────────────────────
-  const handleSubItemQty = (cartKey, subItemId, delta) => {
+  const handleSubItemQty = (cartKey, uid, delta) => {
     const item = cartItems.find(i => i.cartKey === cartKey);
     if (!item) return;
     const newGroupedItems = item.groupedItems.map(gi =>
-      gi.id === subItemId
+      (gi.uid ?? gi.id) === uid
         ? { ...gi, qty: Math.max(1, (gi.qty || 1) + delta) }
         : gi
     );
@@ -81,6 +83,10 @@ export default function CartPage() {
     );
     return acc + (subTotal * item.quantity * 0.1);
   }, 0);
+
+  // ── Hide "Thêm sản phẩm khác" when EVERY cart item is a combo/bundle ────────
+  const hasOnlyBundles = cartItems.length > 0 &&
+    cartItems.every(item => item.groupedItems?.length > 0);
 
   const totalAfterDiscount = cartTotal - discount;
 
@@ -343,37 +349,58 @@ export default function CartPage() {
                         <div className={styles.itemGroup}>
                           <span className={styles.groupLabel}>Sản phẩm trong combo</span>
                           <div className={styles.groupChildren}>
-                            {item.groupedItems.map((gi) => (
-                              <div key={gi.id} className={styles.childItem}>
-                                <div className={styles.childIcon}>
-                                  <span className="material-symbols-outlined">check_circle</span>
+                            {item.groupedItems.map((gi) => {
+                              const giUid = gi.uid ?? gi.id;
+                              return (
+                                <div key={giUid} className={styles.childItem}>
+                                  <div className={styles.childIcon}>
+                                    <span className="material-symbols-outlined">check_circle</span>
+                                  </div>
+                                  <span className={styles.childName} style={{ flex: 1 }}>
+                                    {gi.name || `Sản phẩm #${gi.id}`}
+                                  </span>
+                                  {/* Sub-item unit price */}
+                                  <span className={styles.childPrice}>
+                                    {formatPrice(parseFloat(gi.price || 0))}
+                                  </span>
+                                  {/* Sub-item qty controls */}
+                                  <div className={styles.subQtyCtrl}>
+                                    <button onClick={() => handleSubItemQty(item.cartKey, giUid, -1)}>−</button>
+                                    <span>{gi.qty || 1}</span>
+                                    <button onClick={() => handleSubItemQty(item.cartKey, giUid, 1)}>+</button>
+                                  </div>
+                                  <button
+                                    className={styles.childRemove}
+                                    onClick={() => handleRemoveSubItem(item.cartKey, giUid)}
+                                  >
+                                    Xóa
+                                  </button>
                                 </div>
-                                <span className={styles.childName} style={{ flex: 1 }}>
-                                  {gi.name || `Sản phẩm #${gi.id}`}
-                                </span>
-                                {/* Sub-item qty controls */}
-                                <div className={styles.subQtyCtrl}>
-                                  <button onClick={() => handleSubItemQty(item.cartKey, gi.id, -1)}>−</button>
-                                  <span>{gi.qty || 1}</span>
-                                  <button onClick={() => handleSubItemQty(item.cartKey, gi.id, 1)}>+</button>
-                                </div>
-                                <button className={styles.childRemove}
-                                  onClick={() => handleRemoveSubItem(item.cartKey, gi.id)}>
-                                  Xóa
-                                </button>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
-                          {/* Combo status */}
-                          {isFullCombo ? (
-                            <div className={styles.comboTag} style={{ color: '#2E7D32' }}>
-                              ✓ Combo đầy đủ — Ưu đãi 10% đang áp dụng
-                            </div>
-                          ) : (
-                            <div className={styles.comboTag} style={{ color: '#94A3B8' }}>
-                              Mua đủ {originalCount} sản phẩm để được ưu đãi 10%
-                            </div>
-                          )}
+
+                          {/* Combo status & restore — separated below the list */}
+                          <div className={styles.comboFooter}>
+                            {isFullCombo ? (
+                              <div className={styles.comboTag} style={{ color: '#2E7D32' }}>
+                                ✓ Combo đầy đủ — Ưu đãi 10% đang áp dụng
+                              </div>
+                            ) : (
+                              <>
+                                <div className={styles.comboTag} style={{ color: '#94A3B8' }}>
+                                  Mua đủ {originalCount} sản phẩm để được ưu đãi 10%
+                                </div>
+                                <button
+                                  className={styles.restoreComboBtn}
+                                  onClick={() => restoreCombo(item.cartKey)}
+                                  title="Khôi phục lại đầy đủ các món trong combo"
+                                >
+                                  ↩ Khôi phục combo
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -381,9 +408,11 @@ export default function CartPage() {
                 })}
               </div>
 
-              <Link href="/products" className={styles.addMoreBtn}>
-                + THÊM SẢN PHẨM KHÁC
-              </Link>
+              {!hasOnlyBundles && (
+                <Link href="/products" className={styles.addMoreBtn}>
+                  + THÊM SẢN PHẨM KHÁC
+                </Link>
+              )}
 
               <div className={styles.summaryBody}>
                 <div className={styles.summaryRow}>

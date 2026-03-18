@@ -54,6 +54,7 @@ export function CartProvider({ children }) {
         quantity,
         options,
         groupedItems: groupedItems,
+        originalGroupedItems: groupedItems.length > 0 ? [...groupedItems] : [], // snapshot for restore
         originalSubCount: groupedItems.length   // track full-combo size for discount logic
       }];
     });
@@ -80,6 +81,15 @@ export function CartProvider({ children }) {
     setCartItems([]);
   };
 
+  // Restore a bundle/combo back to its original sub-items
+  const restoreCombo = (cartKey) => {
+    setCartItems(prev => prev.map(item =>
+      item.cartKey === cartKey
+        ? { ...item, groupedItems: [...(item.originalGroupedItems || [])] }
+        : item
+    ));
+  };
+
   const cartCount = cartItems.reduce((acc, item) => acc + item.quantity, 0);
 
   // Dynamically compute from sub-items for bundle/combo items so that
@@ -102,7 +112,8 @@ export function CartProvider({ children }) {
       removeFromCart, 
       updateQuantity, 
       updateItem,
-      clearCart, 
+      clearCart,
+      restoreCombo,
       cartCount, 
       cartTotal,
       isInitialized

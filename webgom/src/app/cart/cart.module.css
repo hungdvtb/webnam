@@ -518,6 +518,16 @@
 
 .childRemove:hover { opacity: 1; }
 
+/* Sub-item unit price */
+.childPrice {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--accent, #C5A065);
+    white-space: nowrap;
+    flex-shrink: 0;
+    margin-right: 0.25rem;
+}
+
 /* Sub-item quantity controls */
 .subQtyCtrl {
     display: flex;
@@ -561,6 +571,59 @@
     font-size: 0.73rem;
     font-weight: 700;
     font-style: italic;
+}
+
+/* Combo footer: status tag + restore button – clearly separated from item list */
+.comboFooter {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-top: 0.6rem;
+    padding-top: 0.55rem;
+    border-top: 1px dashed rgba(197,160,101,0.25);
+    flex-wrap: wrap;
+}
+
+.comboFooter .comboTag {
+    margin-top: 0;
+}
+
+/* Keep .comboIncomplete for backwards compat */
+.comboIncomplete {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-top: 0.45rem;
+    flex-wrap: wrap;
+}
+
+/* Restore combo button */
+.restoreComboBtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: white;
+    background: var(--primary, #1B365D);
+    border: none;
+    border-radius: 4px;
+    padding: 0.3rem 0.65rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.2s, transform 0.15s;
+    flex-shrink: 0;
+}
+
+.restoreComboBtn:hover {
+    background: #0e2240;
+    transform: translateY(-1px);
+}
+
+.restoreComboBtn:active {
+    transform: translateY(0);
 }
 
 /* Add More Button */

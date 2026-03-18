@@ -9,7 +9,11 @@ export default function ProductGallery({ images = [], productName }) {
   // Determine which image should be default (primary one first, or just the first one)
   const getImageUrl = (img) => {
     if (!img) return null;
+    // Full URL stored directly in image_url field (most common from DB)
+    if (img.image_url && img.image_url.startsWith('http')) return img.image_url;
+    // Legacy url field
     if (img.url && img.url.startsWith('http')) return img.url;
+    // Relative path
     if (img.path && img.path !== 'undefined') {
       const cleanPath = img.path.startsWith('/') ? img.path.substring(1) : img.path;
       return `${config.storageUrl}/${cleanPath}`;

@@ -33,7 +33,11 @@ export default function CartPage() {
   const getImageUrl = (item) => {
     const img = item.image;
     if (!img) return null;
+    // Full URL stored directly in image_url field (DB standard)
+    if (img.image_url && img.image_url.startsWith('http')) return img.image_url;
+    // Legacy url field
     if (img.url && img.url.startsWith('http')) return img.url;
+    // Relative path
     if (img.path) {
       const cleanPath = img.path.startsWith('/') ? img.path.substring(1) : img.path;
       return `${config.storageUrl}/${cleanPath}`;

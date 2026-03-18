@@ -215,8 +215,11 @@ export default function ProductDetailContent({ product }) {
   const getImageUrl = (img) => {
     const fallback = 'https://placehold.co/800';
     if (!img) return fallback;
+    // Full URL stored directly in image_url field (most common from DB)
+    if (img.image_url && img.image_url.startsWith('http')) return img.image_url;
+    // Legacy: img.url field
     if (img.url && img.url.startsWith('http')) return img.url;
-    
+    // Path-based (relative path – prepend storageUrl)
     if (img.path && typeof img.path === 'string') {
       const cleanPath = img.path.trim().replace(/^[\/\\]+/, '');
       if (cleanPath && cleanPath !== 'undefined' && cleanPath !== 'null' && cleanPath !== '') {

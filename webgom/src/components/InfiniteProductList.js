@@ -103,7 +103,8 @@ export default function InfiniteProductList({ initialData, category = '', sort =
                 const img = product.primary_image;
                 let src = 'https://placehold.co/400';
                 if (img) {
-                  if (img.url && img.url.startsWith('http')) src = img.url;
+                  if (img.image_url && img.image_url.startsWith('http')) src = img.image_url;
+                  else if (img.url && img.url.startsWith('http')) src = img.url;
                   else if (img.path && img.path !== 'undefined' && img.path !== 'null') {
                     const cleanPath = img.path.startsWith('/') ? img.path.substring(1) : img.path;
                     src = `${config.storageUrl}/${cleanPath}`;

@@ -6,6 +6,7 @@ import Image from 'next/image';
 import config from '@/lib/config';
 import styles from '../app/products/layout2.module.css';
 import { useCart } from '@/context/CartContext';
+import { flyToCart } from '@/utils/flyToCart';
 
 export default function InfiniteProductListLayout2({ initialData, category = '', sort = 'popular', search = '', initialAttrs = {} }) {
   const [products, setProducts] = useState(initialData.data || []);
@@ -138,7 +139,9 @@ export default function InfiniteProductListLayout2({ initialData, category = '',
                     onClick={(e) => {
                       e.preventDefault();
                       addToCart(product, 1);
-                      alert('Đã thêm sản phẩm vào giỏ hàng!');
+                      const card = e.currentTarget.closest(`.${styles.productCard}`);
+                      const imgSrc = card?.querySelector('img')?.src || '/logo-dai-thanh.png';
+                      flyToCart(e, imgSrc);
                     }}
                   >
                     <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>add_shopping_cart</span>

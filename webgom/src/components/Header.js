@@ -1,13 +1,27 @@
 "use client";
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useCart } from '@/context/CartContext';
 
 export default function Header({ menuItems = [] }) {
   const [searchQuery, setSearchQuery] = useState('');
   const { cartCount } = useCart();
+  const [isBouncing, setIsBouncing] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const router = typeof window !== 'undefined' ? require('next/navigation').useRouter() : null;
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (cartCount > 0) {
+      setIsBouncing(true);
+      const timer = setTimeout(() => setIsBouncing(false), 300);
+      return () => clearTimeout(timer);
+    }
+  }, [cartCount]);
 
   const handleSearch = (e) => {
     if ((e.type === 'keydown' && e.key === 'Enter') || e.type === 'click') {
@@ -71,9 +85,14 @@ export default function Header({ menuItems = [] }) {
             />
           </div>
           
-          <Link href="/cart" className="cart-action">
-            <span className="material-symbols-outlined">shopping_bag</span>
-            {cartCount > 0 && <span className="cart-badge">{cartCount}</span>}
+          <Link href="/cart" className={`cart-action ${isBouncing ? 'bounce-cart' : ''}`}>
+            <span className="material-symbols-outlined cart-icon" style={{ fontSize: '32px', color: '#1a2c4e', marginRight: '8px' }}>shopping_cart</span>
+            <div className="cart-text">
+              <span style={{ display: 'block', color: '#3b82f6', fontWeight: '700', fontSize: '15px', lineHeight: '1.2' }}>Giỏ hàng</span>
+              <span style={{ display: 'block', color: '#64748b', fontSize: '13px', whiteSpace: 'nowrap', marginTop: '2px' }}>
+                Có <strong className={isBouncing ? 'bounce-text' : ''} style={{ color: '#ef4444', transition: 'all 0.3s' }}>{mounted ? cartCount : 0}</strong> sản phẩm
+              </span>
+            </div>
           </Link>
         </div>
       </div>
@@ -229,26 +248,32 @@ export default function Header({ menuItems = [] }) {
 
         .cart-action {
           position: relative;
-          color: #1a2c4e;
           text-decoration: none;
           display: flex;
           align-items: center;
         }
 
-        .cart-badge {
-          position: absolute;
-          top: 0;
-          right: 0;
-          background-color: var(--accent);
-          color: var(--white);
-          font-size: 10px;
-          font-weight: 700;
-          width: 18px;
-          height: 18px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          border-radius: 50%;
+        .bounce-text {
+          display: inline-block;
+          animation: badgeBounce 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        :global(.cart-action.bounce-cart span.cart-icon) {
+          animation: cartShake 0.4s ease-in-out;
+        }
+
+        @keyframes badgeBounce {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.4); background-color: #d4af37; }
+          100% { transform: scale(1); }
+        }
+
+        @keyframes cartShake {
+          0% { transform: rotate(0deg) scale(1); }
+          25% { transform: rotate(-15deg) scale(1.2); }
+          50% { transform: rotate(15deg) scale(1.2); }
+          75% { transform: rotate(-5deg) scale(1.1); }
+          100% { transform: rotate(0deg) scale(1); }
         }
 
         @media (max-width: 1024px) {

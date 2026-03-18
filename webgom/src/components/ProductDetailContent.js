@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/context/CartContext';
+import { flyToCart } from '@/utils/flyToCart';
 import config from '@/lib/config';
 import SimpleProductView from './product/SimpleProductView';
 import ConfigurableProductView from './product/ConfigurableProductView';
@@ -309,7 +310,7 @@ export default function ProductDetailContent({ product }) {
       });
     
     addToCart(product, quantity, selectedOptions, itemsToCart, displayPrice);
-    alert('Đã thêm sản phẩm vào giỏ hàng!');
+    flyToCart(e, images?.[0] ? getImageUrl(images[0]) : '/logo-dai-thanh.png');
   };
 
   const handleBuyNow = (e) => {

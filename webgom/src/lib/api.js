@@ -90,3 +90,7 @@ export async function placeWebOrder(orderData) {
         body: JSON.stringify(orderData)
     });
 }
+
+export async function getWebSiteSettings() {
+    return fetchFromApi('/site-settings', { next: { revalidate: 60 } });
+}

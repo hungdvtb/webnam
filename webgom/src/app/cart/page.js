@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useCart } from '@/context/CartContext';
 import config from '@/lib/config';
-import { placeWebOrder } from '@/lib/api';
+import { placeWebOrder, getWebSiteSettings } from '@/lib/api';
+import SearchableSelect from '@/components/ui/SearchableSelect';
 import styles from './cart.module.css';
 
 export default function CartPage() {
@@ -26,6 +27,100 @@ export default function CartPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isOrderSuccess, setIsOrderSuccess] = useState(false);
   const [orderNumber, setOrderNumber] = useState('');
+  
+  const [bankSettings, setBankSettings] = useState(null);
+
+  useEffect(() => {
+    getWebSiteSettings().then(res => setBankSettings(res)).catch(e => console.error("Error fetching settings:", e));
+  }, []);
+
+  // Location logic
+  const [useNewAddress, setUseNewAddress] = useState(true);
+  const [provinces, setProvinces] = useState([]);
+  const [districts, setDistricts] = useState([]);
+  const [wards, setWards] = useState([]);
+
+  useEffect(() => {
+    const fetchProvinces = async () => {
+      try {
+        if (useNewAddress) {
+          const res = await fetch('https://partner.viettelpost.vn/v2/categories/listProvinceNew');
+          const data = await res.json();
+          setProvinces(data.data || []);
+        } else {
+          const res = await fetch('https://provinces.open-api.vn/api/p/');
+          const data = await res.json();
+          setProvinces(data.map(p => ({ PROVINCE_ID: p.code, PROVINCE_NAME: p.name })));
+        }
+      } catch (e) {
+        console.error('Failed to fetch provinces', e);
+      }
+    };
+    fetchProvinces();
+    // Reset selections on switch
+    setDistricts([]);
+    setWards([]);
+    setFormData(prev => ({ ...prev, province: '', district: '', ward: '' }));
+  }, [useNewAddress]);
+
+  const [isWardsLoading, setIsWardsLoading] = useState(false);
+
+  const handleProvinceChange = async (e) => {
+    const pName = e.target.value;
+    setFormData(prev => ({ ...prev, province: pName, district: '', ward: '' }));
+    setDistricts([]);
+    setWards([]);
+    if (!pName) return;
+    
+    const provinceObj = provinces.find(p => p.PROVINCE_NAME === pName);
+    if (!provinceObj) return;
+
+    try {
+      if (useNewAddress) {
+        setIsWardsLoading(true);
+        // Lấy đúng danh sách Phường/Xã cho 34 Tỉnh từ API mới nhất
+        const res = await fetch(`https://partner.viettelpost.vn/v2/categories/listWardsNew?provinceId=${provinceObj.PROVINCE_ID}`);
+        const data = await res.json();
+        // Viettel Post trả về WARDS_ID, WARDS_NAME
+        const newWards = (data.data || []).map(w => ({ WARD_ID: w.WARDS_ID, WARD_NAME: w.WARDS_NAME }));
+        setWards(newWards);
+        setDistricts([]);
+        setIsWardsLoading(false);
+      } else {
+        const res = await fetch(`https://provinces.open-api.vn/api/p/${provinceObj.PROVINCE_ID}?depth=2`);
+        const data = await res.json();
+        if (data.districts) setDistricts(data.districts.map(d => ({ DISTRICT_ID: d.code, DISTRICT_NAME: d.name })));
+      }
+    } catch (e) {
+      console.error('Failed to fetch address data', e);
+      setIsWardsLoading(false);
+    }
+  };
+
+  const handleDistrictChange = async (e) => {
+    const dName = e.target.value;
+    setFormData(prev => ({ ...prev, district: dName, ward: '' }));
+    setWards([]);
+    if (!dName) return;
+    
+    const districtObj = districts.find(d => d.DISTRICT_NAME === dName);
+    if (!districtObj) return;
+
+    try {
+      if (useNewAddress) {
+        const res = await fetch(`https://partner.viettelpost.vn/v2/categories/listWards?districtId=${districtObj.DISTRICT_ID}`);
+        const data = await res.json();
+        setWards(data.data || []);
+      } else {
+        const res = await fetch(`https://provinces.open-api.vn/api/d/${districtObj.DISTRICT_ID}?depth=2`);
+        const data = await res.json();
+        if (data.wards) setWards(data.wards.map(w => ({ WARD_ID: w.code, WARD_NAME: w.name })));
+      }
+    } catch (e) {
+      console.error('Failed to fetch wards', e);
+    }
+  };
+
 
   const formatPrice = (price) =>
     new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
@@ -97,10 +192,34 @@ export default function CartPage() {
   // ── Submit order ────────────────────────────────────────────────────────────
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
-    if (!formData.customer_name || !formData.phone || !formData.address) {
-      alert('Vui lòng điền các thông tin bắt buộc.');
+    
+    // Validate required fields
+    if (!formData.customer_name?.trim()) {
+      alert('Vui lòng nhập Họ và tên người nhận.');
       return;
     }
+    const phoneRegex = /^(0)[0-9]{9}$/;
+    if (!formData.phone?.trim() || !phoneRegex.test(formData.phone)) {
+      alert("Số điện thoại không hợp lệ. Vui lòng nhập đúng 10 số, bắt đầu bằng số 0 (ví dụ: 0987654321).");
+      return;
+    }
+    if (!formData.province) {
+      alert('Vui lòng chọn Tỉnh/Thành phố.');
+      return;
+    }
+    if (!useNewAddress && !formData.district) {
+      alert('Vui lòng chọn Quận/Huyện.');
+      return;
+    }
+    if (!formData.ward) {
+      alert('Vui lòng chọn Phường/Xã.');
+      return;
+    }
+    if (!formData.address?.trim()) {
+      alert('Vui lòng nhập Địa chỉ chi tiết.');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const fullAddress = [formData.address, formData.ward, formData.district, formData.province]
@@ -199,48 +318,79 @@ export default function CartPage() {
 
               <div className={styles.formGrid}>
                 <div className={styles.inputGroup}>
-                  <label>Họ và tên người nhận</label>
+                  <label>Họ và tên người nhận <span style={{color: '#ef4444'}}>*</span></label>
                   <input className={styles.inputField} type="text" name="customer_name"
                     placeholder="Nhập họ và tên" value={formData.customer_name}
                     onChange={handleInputChange} required />
                 </div>
                 <div className={styles.inputGroup}>
-                  <label>Số điện thoại</label>
+                  <label>Số điện thoại <span style={{color: '#ef4444'}}>*</span></label>
                   <input className={styles.inputField} type="tel" name="phone"
                     placeholder="Nhập số điện thoại" value={formData.phone}
                     onChange={handleInputChange} required />
                 </div>
 
-                <div className={styles.threeCol}>
+                {/* Chuyển đổi địa chỉ hành chính mới */}
+                <div style={{ gridColumn: '1 / -1', padding: '0.25rem 0', display: 'flex', alignItems: 'center' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '13px', color: '#b68f54', fontWeight: 'bold', userSelect: 'none' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={useNewAddress} 
+                      onChange={(e) => setUseNewAddress(e.target.checked)}
+                      style={{ marginRight: '8px', cursor: 'pointer', width: '16px', height: '16px', accentColor: '#C5A059' }}
+                    />
+                    Sử dụng đơn vị hành chính mới (Chỉ gồm 2 cấp: Tỉnh/Thành phố và Phường/Xã)
+                  </label>
+                </div>
+
+                <div className={styles.threeCol} style={useNewAddress ? { gridTemplateColumns: '1fr 1fr' } : {}}>
                   <div className={styles.inputGroup}>
-                    <label>Tỉnh / Thành phố</label>
-                    <select className={styles.inputField} name="province"
-                      value={formData.province} onChange={handleInputChange}>
-                      <option value="">Chọn Tỉnh/Thành</option>
-                      <option>Hà Nội</option><option>TP. Hồ Chí Minh</option>
-                      <option>Đà Nẵng</option><option>Bắc Ninh</option>
-                      <option>Hải Dương</option><option>Hưng Yên</option>
-                    </select>
+                    <label>Tỉnh / Thành phố <span style={{color: '#ef4444'}}>*</span></label>
+                    <SearchableSelect
+                      name="province"
+                      className={styles.inputField}
+                      value={formData.province}
+                      onChange={handleProvinceChange}
+                      required
+                      placeholder="Chọn Tỉnh/Thành phố"
+                      options={provinces.map(p => ({ value: p.PROVINCE_NAME, label: p.PROVINCE_NAME }))}
+                    />
                   </div>
+                  
+                  {!useNewAddress && (
+                    <div className={styles.inputGroup}>
+                      <label>Quận / Huyện <span style={{color: '#ef4444'}}>*</span></label>
+                      <SearchableSelect
+                        name="district"
+                        className={styles.inputField}
+                        value={formData.district}
+                        onChange={handleDistrictChange}
+                        required
+                        disabled={!formData.province || districts.length === 0}
+                        placeholder="Chọn Quận/Huyện"
+                        options={districts.map(d => ({ value: d.DISTRICT_NAME, label: d.DISTRICT_NAME }))}
+                      />
+                    </div>
+                  )}
+
                   <div className={styles.inputGroup}>
-                    <label>Quận / Huyện</label>
-                    <select className={styles.inputField} name="district"
-                      value={formData.district} onChange={handleInputChange}>
-                      <option value="">Chọn Quận/Huyện</option>
-                    </select>
-                  </div>
-                  <div className={styles.inputGroup}>
-                    <label>Phường / Xã</label>
-                    <select className={styles.inputField} name="ward"
-                      value={formData.ward} onChange={handleInputChange}>
-                      <option value="">Chọn Phường/Xã</option>
-                    </select>
+                    <label>Phường / Xã <span style={{color: '#ef4444'}}>*</span></label>
+                    <SearchableSelect
+                      name="ward"
+                      className={styles.inputField}
+                      value={formData.ward}
+                      onChange={handleInputChange}
+                      required
+                      disabled={useNewAddress ? (isWardsLoading || !formData.province) : (!formData.district || wards.length === 0)}
+                      placeholder={isWardsLoading ? 'Đang tải...' : 'Chọn Phường/Xã'}
+                      options={wards.map(w => ({ value: w.WARD_NAME, label: w.WARD_NAME }))}
+                    />
                   </div>
                 </div>
 
                 <div className={styles.fullWidth}>
                   <div className={styles.inputGroup}>
-                    <label>Địa chỉ chi tiết</label>
+                    <label>Địa chỉ chi tiết <span style={{color: '#ef4444'}}>*</span></label>
                     <input className={styles.inputField} type="text" name="address"
                       placeholder="Ví dụ: 123 Đường Lê Lợi" value={formData.address}
                       onChange={handleInputChange} required />
@@ -257,17 +407,6 @@ export default function CartPage() {
 
               <div className={styles.paymentOptions}>
                 <div
-                  className={`${styles.paymentOption} ${formData.paymentMethod === 'bank' ? styles.activeOption : ''}`}
-                  onClick={() => setFormData(p => ({ ...p, paymentMethod: 'bank' }))}
-                >
-                  <input type="radio" name="paymentOption" readOnly checked={formData.paymentMethod === 'bank'} />
-                  <span className={`material-symbols-outlined ${styles.paymentIcon}`}>account_balance</span>
-                  <div className={styles.paymentDesc}>
-                    <span className={styles.paymentTitle}>Chuyển khoản qua ngân hàng</span>
-                    <span className={styles.paymentSubtext}>Thông tin tài khoản xuất hiện sau khi đặt hàng.</span>
-                  </div>
-                </div>
-                <div
                   className={`${styles.paymentOption} ${formData.paymentMethod === 'cod' ? styles.activeOption : ''}`}
                   onClick={() => setFormData(p => ({ ...p, paymentMethod: 'cod' }))}
                 >
@@ -278,7 +417,37 @@ export default function CartPage() {
                     <span className={styles.paymentSubtext}>Thanh toán khi nhận được hàng.</span>
                   </div>
                 </div>
+                <div
+                  className={`${styles.paymentOption} ${formData.paymentMethod === 'bank' ? styles.activeOption : ''}`}
+                  onClick={() => setFormData(p => ({ ...p, paymentMethod: 'bank' }))}
+                >
+                  <input type="radio" name="paymentOption" readOnly checked={formData.paymentMethod === 'bank'} />
+                  <span className={`material-symbols-outlined ${styles.paymentIcon}`}>account_balance</span>
+                  <div className={styles.paymentDesc}>
+                    <span className={styles.paymentTitle}>Chuyển khoản qua ngân hàng</span>
+                    <span className={styles.paymentSubtext}>Thông tin tài khoản để chuyển khoản.</span>
+                  </div>
+                </div>
               </div>
+
+              {formData.paymentMethod === 'bank' && bankSettings && (
+                <div style={{ marginTop: '1rem', padding: '1.25rem', backgroundColor: '#faf9f5', border: '1px solid #e5e7eb', borderRadius: '4px' }} className="animate-fade-in">
+                  <h4 style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>Thông tin chuyển khoản:</h4>
+                  <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+                    <div style={{ flex: '1', minWidth: '200px' }}>
+                      <p style={{ margin: '0 0 0.5rem 0', fontSize: '13px' }}><strong>Ngân hàng:</strong> {bankSettings.bank_name}</p>
+                      <p style={{ margin: '0 0 0.5rem 0', fontSize: '13px' }}><strong>Số tài khoản:</strong> <span style={{ color: '#b68f54', fontWeight: 'bold', fontSize: '15px' }}>{bankSettings.bank_account_number}</span></p>
+                      <p style={{ margin: '0 0 0.5rem 0', fontSize: '13px' }}><strong>Chủ tài khoản:</strong> {bankSettings.bank_account_name}</p>
+                      <p style={{ margin: '0 0 0.5rem 0', fontSize: '13px' }}><strong>Nội dung:</strong> <i style={{ color: '#4b5563' }}>{bankSettings.bank_transfer_template?.replace('{order_number}', 'DHXXXXX') || 'DHXXXXX'}</i></p>
+                    </div>
+                    {bankSettings.bank_qr_code && (
+                      <div style={{ width: '120px', height: '120px', flexShrink: 0, backgroundColor: '#fff', padding: '4px', border: '1px solid #e5e7eb', borderRadius: '4px' }}>
+                        <img src={bankSettings.bank_qr_code} alt="QR Code" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <button className={styles.ctaButton} onClick={handleSubmit}
                 disabled={isSubmitting} id="checkout-submit-btn">
@@ -293,7 +462,10 @@ export default function CartPage() {
           {/* ════ RIGHT: Order Summary ════ */}
           <aside className={styles.sidebar}>
             <div className={styles.summaryCard}>
-              <h3>Tóm Tắt Đơn Hàng</h3>
+              <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                Tóm Tắt Đơn Hàng 
+                <span style={{ fontSize: '0.8rem', fontWeight: 'normal', color: '#64748b', textTransform: 'none' }}>({cartCount} sản phẩm)</span>
+              </h3>
 
               <div className={styles.cartList}>
                 {cartItems.map((item) => {

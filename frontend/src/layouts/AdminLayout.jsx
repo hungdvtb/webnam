@@ -111,21 +111,30 @@ const AdminLayout = () => {
                             
                             {isSettingsOpen && (
                                 <div className="pl-4 space-y-1 animate-in slide-in-from-top-2 duration-200">
+                                    {canAccess('settings') && (
+                                        <Link 
+                                            to="/admin/settings" 
+                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/settings' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
+                                        >
+                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/settings' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>web</span>
+                                            <span className="font-sans text-xs font-medium tracking-wide">Cài đặt web</span>
+                                        </Link>
+                                    )}
                                     {canAccess('attributes') && (
                                         <Link 
                                             to="/admin/attributes" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/attributes' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
+                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/attributes' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
                                         >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/attributes' ? 'text-gold' : 'group-hover:text-gold'}`}>list_alt</span>
+                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/attributes' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>list_alt</span>
                                             <span className="font-sans text-xs font-medium tracking-wide">Thuộc tính sản phẩm</span>
                                         </Link>
                                     )}
                                     {canAccess('users') && (
                                         <Link 
                                             to="/admin/users" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/users' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
+                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/users' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
                                         >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/users' ? 'text-gold' : 'group-hover:text-gold'}`}>manage_accounts</span>
+                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/users' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>manage_accounts</span>
                                             <span className="font-sans text-xs font-medium tracking-wide">Quản lý nhân sự</span>
                                         </Link>
                                     )}
@@ -182,23 +191,23 @@ const AdminLayout = () => {
                                         <>
                                             <Link 
                                                 to="/admin/pending-orders" 
-                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/pending-orders' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
+                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/pending-orders' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
                                             >
-                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/pending-orders' ? 'text-gold' : 'group-hover:text-gold'}`}>pending_actions</span>
+                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/pending-orders' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>pending_actions</span>
                                                 <span className="font-sans text-xs font-medium tracking-wide">Xử lý lead</span>
                                             </Link>
                                             <Link 
                                                 to="/admin/orders" 
-                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/orders' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
+                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/orders' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
                                             >
-                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/orders' ? 'text-gold' : 'group-hover:text-gold'}`}>receipt_long</span>
+                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/orders' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>receipt_long</span>
                                                 <span className="font-sans text-xs font-medium tracking-wide">Đơn hàng</span>
                                             </Link>
                                             <Link 
                                                 to="/admin/shipments" 
-                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/shipments' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
+                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/shipments' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
                                             >
-                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/shipments' ? 'text-gold' : 'group-hover:text-gold'}`}>local_shipping</span>
+                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/shipments' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>local_shipping</span>
                                                 <span className="font-sans text-xs font-medium tracking-wide">Vận đơn</span>
                                             </Link>
                                         </>
@@ -207,16 +216,16 @@ const AdminLayout = () => {
                                         <>
                                             <Link 
                                                 to="/admin/customers" 
-                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/customers' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
+                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/customers' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
                                             >
-                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/customers' ? 'text-gold' : 'group-hover:text-gold'}`}>group</span>
+                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/customers' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>group</span>
                                                 <span className="font-sans text-xs font-medium tracking-wide">Khách hàng</span>
                                             </Link>
                                             <Link 
                                                 to="/admin/leads" 
-                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/leads' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
+                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/leads' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
                                             >
-                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/leads' ? 'text-gold' : 'group-hover:text-gold'}`}>support_agent</span>
+                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/leads' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>support_agent</span>
                                                 <span className="font-sans text-xs font-medium tracking-wide">Khách liên hệ</span>
                                             </Link>
                                         </>
@@ -247,27 +256,27 @@ const AdminLayout = () => {
                                     {canAccess('categories') && (
                                         <Link 
                                             to="/admin/categories" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/categories' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
+                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/categories' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
                                         >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/categories' ? 'text-gold' : 'group-hover:text-gold'}`}>category</span>
+                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/categories' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>category</span>
                                             <span className="font-sans text-xs font-medium tracking-wide">Danh mục sản phẩm</span>
                                         </Link>
                                     )}
                                     {canAccess('banners') && (
                                         <Link 
                                             to="/admin/banners" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/banners' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
+                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/banners' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
                                         >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/banners' ? 'text-gold' : 'group-hover:text-gold'}`}>gallery_thumbnail</span>
+                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/banners' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>gallery_thumbnail</span>
                                             <span className="font-sans text-xs font-medium tracking-wide">Quản lý Banners</span>
                                         </Link>
                                     )}
                                     {canAccess('blog') && (
                                         <Link 
                                             to="/admin/blog" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/blog' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
+                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/blog' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
                                         >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/blog' ? 'text-gold' : 'group-hover:text-gold'}`}>book_2</span>
+                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/blog' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>book_2</span>
                                             <span className="font-sans text-xs font-medium tracking-wide">Bài viết trên web</span>
                                         </Link>
                                     )}

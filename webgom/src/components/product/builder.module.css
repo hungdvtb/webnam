@@ -736,6 +736,210 @@
   background: #c5a065;
 }
 
+/* ===== Tab bar ===== */
+
+.tabBar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.tabBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  border-radius: 10px;
+  border: 1.5px solid rgba(27, 54, 93, 0.12);
+  background: white;
+  color: rgba(27, 54, 93, 0.6);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.25s;
+  position: relative;
+}
+
+.tabBtn:hover {
+  border-color: #c5a065;
+  color: #c5a065;
+  background: rgba(197, 160, 101, 0.04);
+}
+
+.tabBtnActive {
+  background: #1b365d;
+  color: white;
+  border-color: #1b365d;
+  box-shadow: 0 4px 12px rgba(27, 54, 93, 0.2);
+}
+
+.tabBtnActive:hover {
+  background: #1b365d;
+  color: white;
+}
+
+.tabFullDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+  display: inline-block;
+  margin-left: 2px;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+}
+
+/* ===== Discount banners ===== */
+
+.discountBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(16, 185, 129, 0.04));
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #059669;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.discountBanner span:first-child {
+  font-size: 20px;
+  color: #059669;
+  flex-shrink: 0;
+}
+
+.discountHint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: rgba(197, 160, 101, 0.06);
+  border: 1px solid rgba(197, 160, 101, 0.2);
+  color: rgba(27, 54, 93, 0.6);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.discountHint span:first-child {
+  font-size: 18px;
+  color: #c5a065;
+  flex-shrink: 0;
+}
+
+/* ===== Removed / placeholder row ===== */
+
+.tableRowRemoved {
+  background: #fafafa;
+  opacity: 0.85;
+}
+
+.tableRowRemoved:hover {
+  background: #f5f5f5;
+}
+
+.tableImgEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+}
+
+.removedLabel {
+  font-size: 13px;
+  font-weight: 700;
+  color: #aaa;
+  margin: 0;
+  font-style: italic;
+}
+
+.restoreBtn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(27, 54, 93, 0.5);
+  border: 1px solid rgba(27, 54, 93, 0.15);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.restoreBtn:hover {
+  border-color: #c5a065;
+  color: #c5a065;
+  background: rgba(197, 160, 101, 0.05);
+}
+
+.selectSlotBtn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  background: rgba(27, 54, 93, 0.06);
+  color: #1b365d;
+  border: 1px dashed rgba(27, 54, 93, 0.25);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.selectSlotBtn:hover {
+  background: #1b365d;
+  color: white;
+  border-style: solid;
+}
+
+/* ===== Inline change button (inside name column) ===== */
+
+.nameRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.nameRow .itemName {
+  flex: 1;
+  min-width: 0;
+}
+
+.inlineChangeBtn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: rgba(197, 160, 101, 0.1);
+  color: #c5a065;
+  border: 1px solid rgba(197, 160, 101, 0.25);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  transition: all 0.2s;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+.inlineChangeBtn:hover {
+  background: #c5a065;
+  color: white;
+  border-color: #c5a065;
+}
+
 @media (max-width: 768px) {
   .tableHeader {
     display: none;

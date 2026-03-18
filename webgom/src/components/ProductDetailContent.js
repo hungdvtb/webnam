@@ -107,7 +107,15 @@ export default function ProductDetailContent({ product }) {
   };
 
   const removeBundleItem = (id) => {
-    setBundleItems(prev => prev.filter(item => item.id !== id));
+    setBundleItems(prev => prev.map(item =>
+      item.id === id ? { ...item, removed: true, selected: false } : item
+    ));
+  };
+
+  const restoreBundleItem = (id) => {
+    setBundleItems(prev => prev.map(item =>
+      item.id === id ? { ...item, removed: false, selected: true } : item
+    ));
   };
 
   const updateBundleItemProduct = (oldItemId, newProduct) => {
@@ -189,7 +197,7 @@ export default function ProductDetailContent({ product }) {
     }
     if (product?.type === 'bundle' && bundleItems.length > 0) {
       const sum = bundleItems
-        .filter(item => item.selected)
+        .filter(item => item.selected && !item.removed)
         .reduce((acc, item) => acc + (parseFloat(item.price) * item.qty), 0);
       return sum;
     }
@@ -356,6 +364,7 @@ export default function ProductDetailContent({ product }) {
         updateBundleItemQuantity={updateBundleItemQuantity}
         updateBundleItemProduct={updateBundleItemProduct}
         removeBundleItem={removeBundleItem}
+        restoreBundleItem={restoreBundleItem}
         switchBundleConfiguration={switchBundleConfiguration}
         resetBundleItems={resetBundleItems}
         handleAddToCart={handleAddToCart}

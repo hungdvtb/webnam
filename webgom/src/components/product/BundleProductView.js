@@ -481,19 +481,19 @@ export default function BundleProductView({
 
                 {/* Summary footer */}
                 <div className={builderStyles.tableFooter}>
-                  <div className={builderStyles.footerLeft}>
-                    {resetBundleItems && (
-                      <button className={builderStyles.resetBtn} onClick={resetBundleItems}>
-                        <span className="material-symbols-outlined" style={{ fontSize: 16 }}>restart_alt</span>
-                        Khôi phục mặc định
-                      </button>
-                    )}
-                  </div>
-                  <div className={builderStyles.footerRight}>
+                  <div className={builderStyles.footerRight} style={{ width: '100%' }}>
                     <div className={builderStyles.summaryRow}>
-                      <span className={builderStyles.summaryLabel}>
-                        Tổng {tabItems.filter(i => !i.removed).length} món ({activeTab || 'bộ hiện tại'}):
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <span className={builderStyles.summaryLabel}>
+                          Tổng {tabItems.filter(i => !i.removed).length} món ({activeTab || 'bộ hiện tại'}):
+                        </span>
+                        {resetBundleItems && (
+                          <button className={builderStyles.resetBtn} onClick={resetBundleItems}>
+                            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>restart_alt</span>
+                            Khôi phục mặc định
+                          </button>
+                        )}
+                      </div>
                       <span className={builderStyles.summarySubtotal}>{formatPrice(tabSubtotal)}</span>
                     </div>
                     {isFullCombo && tabDiscountAmount > 0 && (

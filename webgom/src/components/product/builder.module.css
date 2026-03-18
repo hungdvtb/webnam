@@ -747,22 +747,22 @@
 .resetBtn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: 1px solid rgba(27, 54, 93, 0.15);
+  gap: 4px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1.5px solid rgba(27, 54, 93, 0.25);
   background: white;
-  color: rgba(27, 54, 93, 0.6);
+  color: #1b365d;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 800;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .resetBtn:hover {
   border-color: #c5a065;
-  color: #c5a065;
-  background: rgba(197, 160, 101, 0.04);
+  color: white;
+  background: #c5a065;
 }
 
 .summaryRow {

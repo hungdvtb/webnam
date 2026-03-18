@@ -8,7 +8,9 @@ const SearchableSelect = ({
     label,
     name,
     disabled = false,
-    required = false
+    required = false,
+    compact = false,
+    className = ""
 }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
@@ -51,7 +53,7 @@ const SearchableSelect = ({
     };
 
     return (
-        <div className="space-y-2 relative" ref={containerRef}>
+        <div className={`space-y-2 relative ${className}`} ref={containerRef}>
             {label && (
                 <label className="font-ui text-xs font-bold uppercase tracking-widest text-primary block">
                     {label} {required && <span className="text-red-500">*</span>}
@@ -59,22 +61,22 @@ const SearchableSelect = ({
             )}
 
             <div
-                className={`w-full bg-white border border-gold/20 p-4 font-body cursor-pointer flex justify-between items-center transition-all ${disabled ? 'bg-stone/5 opacity-50 cursor-not-allowed' : 'hover:border-primary'} ${isOpen ? 'border-primary shadow-lg ring-1 ring-primary/10' : ''}`}
+                className={`w-full bg-white flex justify-between items-center transition-all ${disabled ? 'bg-stone/5 opacity-50 cursor-not-allowed' : 'hover:border-primary'} ${isOpen ? 'border-primary shadow-lg ring-1 ring-primary/10' : ''} ${compact ? 'border-none p-0 font-display text-[11.5px] font-bold' : 'border border-gold/20 p-4 font-body cursor-pointer'}`}
                 onClick={() => !disabled && setIsOpen(!isOpen)}
             >
-                <span className={!value ? 'text-stone/50 italic' : 'text-primary uppercase font-bold text-sm tracking-tight'}>
+                <span className={`${compact ? '' : 'text-sm tracking-tight'} ${!value ? 'text-stone/50 italic' : 'text-primary uppercase font-bold'}`}>
                     {value || placeholder}
                 </span>
-                <span className={`material-symbols-outlined text-gold transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>
+                <span className={`material-symbols-outlined text-gold transition-transform duration-300 ${isOpen ? 'rotate-180' : ''} ${compact ? 'text-[16px]' : ''}`}>
                     expand_more
                 </span>
             </div>
 
             {/* Dropdown Menu */}
             {isOpen && !disabled && (
-                <div className="absolute z-[100] top-full left-0 right-0 mt-2 bg-white border-2 border-primary shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+                <div className={`absolute z-[105] top-full left-0 right-0 mt-2 bg-white border-2 border-primary shadow-2xl animate-in fade-in zoom-in-95 duration-200 ${compact ? 'min-w-[200px]' : ''}`}>
                     {/* Decorative gold line */}
-                    <div className="h-0.5 bg-gradient-to-r from-gold/0 via-gold to-gold/0 w-full mb-2"></div>
+                    {!compact && <div className="h-0.5 bg-gradient-to-r from-gold/0 via-gold to-gold/0 w-full mb-2"></div>}
 
                     <div className="p-3 border-b border-gold/10 sticky top-0 bg-white">
                         <div className="flex items-center gap-2 bg-stone/5 p-2 border border-gold/10">

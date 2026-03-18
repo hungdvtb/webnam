@@ -12,6 +12,8 @@ import SortIndicator from '../../components/SortIndicator';
 const DEFAULT_COLUMNS = [
     { id: 'order_number', label: 'Mã Đơn', minWidth: '140px', fixed: true },
     { id: 'customer', label: 'Khách Hàng', minWidth: '180px' },
+    { id: 'province', label: 'Thành phố', minWidth: '130px' },
+    { id: 'ward', label: 'Phường', minWidth: '130px' },
     { id: 'shipping_address', label: 'Địa Chỉ', minWidth: '220px' },
     { id: 'items', label: 'Sản Phẩm', minWidth: '250px' },
     { id: 'total_price', label: 'Tổng Tiền', minWidth: '130px' },
@@ -845,6 +847,26 @@ const OrderList = () => {
                                                             <span className="material-symbols-outlined text-[12px]">{copiedText === o.customer_phone ? 'check' : 'content_copy'}</span>
                                                         </button>
                                                     </div>
+                                                </div>
+                                            </td>
+                                        );
+                                        if (c.id === 'province') return (
+                                            <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 group/province_cell relative text-primary font-bold">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="truncate">{o.province || '-'}</span>
+                                                    {o.province && <button onClick={(e) => { e.stopPropagation(); handleCopy(o.province, e); }} className={`opacity-0 group-hover/province_cell:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === o.province ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
+                                                        <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                                                    </button>}
+                                                </div>
+                                            </td>
+                                        );
+                                        if (c.id === 'ward') return (
+                                            <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 group/ward_cell relative text-primary font-bold">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="truncate">{o.ward || '-'}</span>
+                                                    {o.ward && <button onClick={(e) => { e.stopPropagation(); handleCopy(o.ward, e); }} className={`opacity-0 group-hover/ward_cell:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === o.ward ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
+                                                        <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                                                    </button>}
                                                 </div>
                                             </td>
                                         );

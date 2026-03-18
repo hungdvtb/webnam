@@ -12,8 +12,13 @@ class Product extends Model
     protected $fillable = [
         'type', 'name', 'slug', 'description', 'specifications', 'price', 'price_type', 'cost_price', 'special_price', 'special_price_from', 'special_price_to', 
         'category_id', 'stock_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
-        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'video_url', 'additional_info', 'bundle_title'
+        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'video_url', 'additional_info', 'bundle_title', 'site_domain_id'
     ];
+
+    public function siteDomain()
+    {
+        return $this->belongsTo(SiteDomain::class);
+    }
 
     protected $attributes = [
         'status' => true,

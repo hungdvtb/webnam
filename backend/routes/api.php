@@ -212,6 +212,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/banners/{id}', [\App\Http\Controllers\Api\BannerController::class , 'destroy']);
         Route::post('/site-settings', [\App\Http\Controllers\Api\SiteSettingController::class , 'store']);
 
+        // Admin Domain routes
+        Route::get('/site-domains', [\App\Http\Controllers\Api\SiteDomainController::class , 'index']);
+        Route::post('/site-domains', [\App\Http\Controllers\Api\SiteDomainController::class , 'store']);
+        Route::put('/site-domains/{id}', [\App\Http\Controllers\Api\SiteDomainController::class , 'update']);
+        Route::delete('/site-domains/{id}', [\App\Http\Controllers\Api\SiteDomainController::class , 'destroy']);
+
         // Menus
         Route::get('/menus', [\App\Http\Controllers\Api\MenuController::class , 'index']);
         Route::get('/menus/{id}', [\App\Http\Controllers\Api\MenuController::class , 'show']);

@@ -28,6 +28,7 @@ class ProductController extends Controller
             ->with([
             'categories:id,name',
             'category:id,name',
+            'siteDomain:id,domain',
             'images:id,product_id,image_url,is_primary',
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
@@ -233,6 +234,7 @@ class ProductController extends Controller
             'video_url' => 'nullable|string',
             'slug' => 'nullable|string|max:255|unique:products,slug',
             'bundle_title' => 'nullable|string|max:255',
+            'site_domain_id' => 'nullable|exists:site_domains,id',
             // linkages
             'linked_product_ids' => 'nullable|array',
             'link_type' => 'nullable|string',
@@ -454,6 +456,7 @@ class ProductController extends Controller
         $product = Product::with([
             'category:id,name',
             'categories:id,name',
+            'siteDomain:id,domain,is_active,is_default',
             'images:id,product_id,image_url,is_primary,file_name,file_size',
             'superAttributes:id,name,code,frontend_type',
             'superAttributes.options:id,attribute_id,value,swatch_value,order',
@@ -560,6 +563,7 @@ class ProductController extends Controller
             'video_url' => 'nullable|string',
             'slug' => 'nullable|string|max:255|unique:products,slug,' . $id,
             'bundle_title' => 'nullable|string|max:255',
+            'site_domain_id' => 'nullable|exists:site_domains,id',
             'linked_product_ids' => 'nullable|array',
             'link_type' => 'nullable|string',
             'grouped_items' => 'nullable|array',

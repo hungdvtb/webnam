@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+
+<html lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&amp;family=EB+Garamond:wght@400;500;600&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              colors: {
+                "primary": "#1B365D", // Men Lam
+                "accent": "#C5A059",  // Vàng Kim
+                "background-light": "#F9F5F0", // Giấy Dó
+                "background-dark": "#0D1B2E",
+              },
+              fontFamily: {
+                "display": ["Playfair Display", "serif"],
+                "body": ["EB Garamond", "serif"]
+              },
+              borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "9999px"},
+            },
+          },
+        }
+    </script>
+<style>
+        body {
+            font-family: 'EB Garamond', serif;
+            background-color: #F9F5F0;
+        }
+        h1, h2, h3, .font-display {
+            font-family: 'Playfair Display', serif;
+        }
+        .border-gold {
+            border-color: #C5A059;
+        }
+        .text-men-lam {
+            color: #1B365D;
+        }
+        .bg-men-lam {
+            background-color: #1B365D;
+        }
+    </style>
+</head>
+<body class="bg-background-light text-primary">
+<div class="relative flex min-h-screen w-full flex-col overflow-x-hidden">
+<!-- Navigation -->
+<header class="flex items-center justify-between border-b border-accent/30 px-6 py-4 lg:px-20 bg-background-light">
+<div class="flex items-center gap-8">
+<div class="flex items-center gap-3 text-primary">
+<span class="material-symbols-outlined text-accent text-3xl">grid_view</span>
+<h2 class="text-xl font-display font-bold tracking-tight uppercase">Di Sản Gốm Việt</h2>
+</div>
+<nav class="hidden md:flex items-center gap-8 font-body text-lg italic">
+<a class="hover:text-accent transition-colors" href="#">Sản phẩm</a>
+<a class="hover:text-accent transition-colors" href="#">Nghệ nhân</a>
+<a class="hover:text-accent transition-colors" href="#">Câu chuyện</a>
+</nav>
+</div>
+<div class="flex items-center gap-6">
+<span class="material-symbols-outlined cursor-pointer hover:text-accent">search</span>
+<span class="material-symbols-outlined cursor-pointer hover:text-accent">shopping_bag</span>
+<div class="size-10 rounded-full border border-accent p-0.5">
+<div class="w-full h-full rounded-full bg-cover bg-center" data-alt="Ảnh đại diện người dùng" style='background-image: url("https://lh3.googleusercontent.com/aida-public/AB6AXuBigfNMmqQjXbEwrulUAyn4z0EVRxk6LLdoAqNoQvCJ7x_S26PrjlweAHnVhBNnUzZf8vGOSJtqw_4o9oeREFWs11vbK4qjLggQo5b0AQTajZd_EWgnWd2gaekHV49dyfQoFxeAOhLbOI96gvU_hI2rL0Km2_yKQDQattQdaRUzVuRuUb7ivU4w4bwp1WyJzKU4nIF9maWfbN-0p7I4fgAWsZ4PbYMlLHnZqZ553l6Baf9kmwvl-JmGT0frMGP8G6XLLKA0_BZmZ9Q")'></div>
+</div>
+</div>
+</header>
+<main class="flex-1 flex flex-col items-center justify-center px-4 py-12">
+<!-- Success Banner -->
+<div class="max-w-4xl w-full bg-white border border-accent/20 shadow-xl rounded-lg overflow-hidden">
+<div class="h-48 bg-men-lam relative flex items-center justify-center overflow-hidden">
+<div class="absolute inset-0 opacity-20" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuAUG8D2G2oL2f9CXdAdoY6QVhdez7_HyrHyVgy8-xsQfEthYIbomYVx3xcGT6HzOuj3k3fL3a1YeIZ1gqST-93iPqeQxLdfrOPIyRUquH-SR-Da7IOkZu5nGvT-ORnQnrOALFF4wF56Zxty3_2mNJjN0SbtWVv7eGhFgeZvC80fvac_PW5SafWeXPf9KIlkwmyMI4JxEVsm4jmm35wDbd9tiJzB0MymJ_uglDdB2tOKhtX2Tz4Tfg1K5W6S0PcpHrwZeZTpJvc_9Fk');"></div>
+<!-- Decorative border pattern -->
+<div class="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-accent via-accent/50 to-accent"></div>
+<div class="absolute bottom-0 left-0 w-full h-2 bg-gradient-to-r from-accent via-accent/50 to-accent"></div>
+<div class="z-10 text-center">
+<div class="inline-flex items-center justify-center size-16 rounded-full bg-accent text-white mb-4 shadow-lg">
+<span class="material-symbols-outlined text-4xl">check_circle</span>
+</div>
+<h1 class="text-white text-3xl md:text-4xl font-display font-bold tracking-wide italic">Giao dịch Hoàn tất</h1>
+</div>
+</div>
+<div class="p-8 md:p-12">
+<div class="text-center mb-10">
+<h2 class="text-2xl md:text-3xl font-display text-primary mb-4 italic">Cảm ơn Quý khách đã trân trọng di sản!</h2>
+<p class="text-lg text-slate-700 leading-relaxed font-body max-w-2xl mx-auto">
+                        Đơn hàng của Quý khách đã được tiếp nhận và đang được các nghệ nhân chuẩn bị kỹ lưỡng tại làng nghề. Một thư xác nhận chi tiết đã được gửi đến địa chỉ email của Quý khách.
+                    </p>
+</div>
+<div class="grid md:grid-cols-2 gap-8 mb-10">
+<!-- Order Info -->
+<div class="bg-background-light/50 border border-accent/20 p-6 rounded-lg">
+<h3 class="font-display text-xl border-b border-accent/20 pb-3 mb-4 flex items-center gap-2">
+<span class="material-symbols-outlined text-accent">receipt_long</span>
+                            Chi tiết Đơn hàng
+                        </h3>
+<div class="space-y-3 font-body">
+<div class="flex justify-between">
+<span class="text-slate-600">Mã số đơn hàng:</span>
+<span class="font-bold text-primary">#DSGV-102938</span>
+</div>
+<div class="flex justify-between">
+<span class="text-slate-600">Ngày đặt:</span>
+<span>24 Tháng 5, 2024</span>
+</div>
+<div class="flex justify-between">
+<span class="text-slate-600">Phương thức:</span>
+<span>Chuyển khoản Ngân hàng</span>
+</div>
+<div class="flex justify-between border-t border-accent/10 pt-3 mt-3">
+<span class="text-slate-600 font-bold uppercase text-sm tracking-wider">Tổng cộng:</span>
+<span class="text-xl font-bold text-primary">3.250.000đ</span>
+</div>
+</div>
+</div>
+<!-- Shipping Info -->
+<div class="bg-background-light/50 border border-accent/20 p-6 rounded-lg">
+<h3 class="font-display text-xl border-b border-accent/20 pb-3 mb-4 flex items-center gap-2">
+<span class="material-symbols-outlined text-accent">local_shipping</span>
+                            Thông tin Giao nhận
+                        </h3>
+<div class="font-body space-y-2">
+<p class="font-bold text-primary">Nguyễn Minh Anh</p>
+<p class="text-slate-700">090 123 4567</p>
+<p class="text-slate-700">123 Đường Lê Lợi, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh</p>
+<p class="italic text-sm text-accent mt-4">Dự kiến giao hàng: 3-5 ngày làm việc</p>
+</div>
+</div>
+</div>
+<!-- Product Summary -->
+<div class="mb-12">
+<h3 class="font-display text-xl mb-6 flex items-center gap-2">
+<span class="material-symbols-outlined text-accent">inventory_2</span>
+                        Sản phẩm đã chọn
+                    </h3>
+<div class="space-y-4">
+<div class="flex items-center gap-4 py-4 border-b border-accent/10">
+<div class="size-20 bg-slate-200 rounded overflow-hidden flex-shrink-0 border border-accent/20">
+<img alt="Bình gốm Men Lam" class="w-full h-full object-cover" data-alt="Bình gốm sứ họa tiết men lam truyền thống" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC0F5qvWh0cFfkP_yU8-6JpHNDoyAW3hT3wJ0VSUmoAuTHSe_TREC3zCE0mrU7h-_Itdu0w-k-IFrENNMxcrZ9_T651oYjFgROF8jNJ0ek6JMPuc-mNeGTwRGrjIYKTZNnOs8YDPv3t0JwvDbMKpEwcOW_Bv2yX4piU0yOrmnggGHrEMaqLK7YeG0rpkxbieAYnuDpir7_MMHtdEOxN4qHtHIm9hdNMX6U_WD-J3PcHxQALlG7ax01ux6dZcwp6aUI5Dmdh5df3SxE"/>
+</div>
+<div class="flex-1">
+<h4 class="font-display text-lg">Bình Tỳ Bà Men Lam Họa Tiết Liên Hoa</h4>
+<p class="text-sm text-slate-500 font-body">Kích thước: 35cm - Nghệ nhân: Trần Độ</p>
+</div>
+<div class="text-right">
+<p class="font-bold">2.450.000đ</p>
+<p class="text-sm text-slate-500 font-body">Số lượng: 01</p>
+</div>
+</div>
+<div class="flex items-center gap-4 py-4 border-b border-accent/10">
+<div class="size-20 bg-slate-200 rounded overflow-hidden flex-shrink-0 border border-accent/20">
+<img alt="Chén trà gốm" class="w-full h-full object-cover" data-alt="Bộ chén trà gốm mộc tinh xảo" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCDIeU_kdm3SIS8DZ2oKhAiLrBoVkIfWzzuHBavOChzVPDbyGjK43TOLDTekuMr2ARvvgQZQjzPeRZGtqIUdSx4981b2UAgMYBI0sh5D8ZbjQnX_8YHkkU_QVp_g6a596JRhZAiX5gI1sCpx5T1rXlRZwbpunFzskKWfeYuYS11FOKODijMpj7gBrWyhrSuQqW0Tc3gd7RwoikJiiDYcXT6zOupJbgr7EGp3YieJ2aYg8ug7lRWHAbgHeao2-t7ObSTUenGQDALbpY"/>
+</div>
+<div class="flex-1">
+<h4 class="font-display text-lg">Bộ Chén Trà Men Ngọc Khảm Tam Khí</h4>
+<p class="text-sm text-slate-500 font-body">Bộ 6 chén - Nghệ nhân: Phạm Anh Đạo</p>
+</div>
+<div class="text-right">
+<p class="font-bold">800.000đ</p>
+<p class="text-sm text-slate-500 font-body">Số lượng: 01</p>
+</div>
+</div>
+</div>
+</div>
+<!-- Actions -->
+<div class="flex flex-col sm:flex-row items-center justify-center gap-4 pt-6">
+<a class="w-full sm:w-auto px-8 py-3 bg-men-lam text-white font-display font-bold tracking-wide rounded-lg hover:bg-slate-800 transition-all shadow-md text-center" href="#">
+                        TIẾP TỤC MUA SẮM
+                    </a>
+<a class="w-full sm:w-auto px-8 py-3 border-2 border-accent text-accent font-display font-bold tracking-wide rounded-lg hover:bg-accent hover:text-white transition-all text-center" href="#">
+                        XEM LỊCH SỬ ĐƠN HÀNG
+                    </a>
+</div>
+</div>
+<!-- Footer Decorative -->
+<div class="bg-background-light p-6 text-center border-t border-accent/10">
+<p class="italic font-body text-slate-500">Mọi thắc mắc vui lòng liên hệ: <span class="text-accent">1900 1234</span> hoặc <span class="text-accent">hotro@disangomviet.vn</span></p>
+</div>
+</div>
+</main>
+<footer class="py-8 px-6 text-center text-slate-400 font-body">
+<p>© 2024 Di Sản Gốm Việt. Bảo tồn nét đẹp truyền thống.</p>
+</footer>
+</div>
+</body></html>

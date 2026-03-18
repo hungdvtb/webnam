@@ -28,7 +28,7 @@ class OrderController extends Controller
             ->first();
 
         $nextNumber = 10000;
-        if ($lastOrder && preg_match('/OR(\d+)A0/', $lastOrder->order_number, $matches)) {
+        if ($lastOrder && isset($lastOrder->order_number) && preg_match('/OR(\d+)A0/', $lastOrder->order_number, $matches)) {
             $nextNumber = intval($matches[1]) + 1;
         }
         return "OR{$nextNumber}A0";
@@ -43,7 +43,7 @@ class OrderController extends Controller
             ->where('account_id', $accountId)
             ->select([
                 'id', 'order_number', 'total_price', 'status', 'customer_name', 
-                'customer_phone', 'shipping_address', 'created_at', 'notes'
+                'customer_phone', 'shipping_address', 'province', 'district', 'ward', 'created_at', 'notes'
             ]);
 
         // Eager load only what is needed for the table
@@ -174,18 +174,19 @@ class OrderController extends Controller
                 }
             } else {
                 $cart = Cart::with('items.product')->where('user_id', Auth::id())->first();
-                if (!$cart || $cart->items->isEmpty()) {
+                if (!$cart || !isset($cart->items) || $cart->items->isEmpty()) {
                     return response()->json(['message' => 'Cart is empty'], 400);
                 }
                 foreach ($cart->items as $item) {
-                    $price = $item->product ? ($item->product->current_price ?? $item->price) : $item->price;
+                    $product = $item->product;
+                    $price = $product ? ($product->current_price ?? $item->price) : $item->price;
                     $items[] = [
                         'product_id' => $item->product_id,
-                        'product_name_snapshot' => $item->product?->name,
-                        'product_sku_snapshot' => $item->product?->sku,
+                        'product_name_snapshot' => $product ? $product->name : null,
+                        'product_sku_snapshot' => $product ? $product->sku : null,
                         'quantity' => $item->quantity,
                         'price' => $price,
-                        'cost_price' => $item->product?->cost_price ?? 0,
+                        'cost_price' => $product ? ($product->cost_price ?? 0) : 0,
                     ];
                     $totalPrice += ($price * $item->quantity);
                 }
@@ -209,6 +210,7 @@ class OrderController extends Controller
                 'customer_email' => $request->customer_email,
                 'customer_phone' => $request->customer_phone,
                 'shipping_address' => $request->shipping_address,
+                'province' => $request->province,
                 'district' => $request->district,
                 'ward' => $request->ward,
                 'notes' => $request->notes,
@@ -305,6 +307,8 @@ class OrderController extends Controller
             'customer_email' => 'nullable|max:255',
             'customer_phone' => 'nullable|string|max:20',
             'shipping_address' => 'nullable|string',
+            'province' => 'nullable|string',
+            'ward' => 'nullable|string',
             'notes' => 'nullable|string',
             'custom_attributes' => 'nullable|array',
         ]);
@@ -336,7 +340,7 @@ class OrderController extends Controller
         return DB::transaction(function () use ($request, $order) {
             $data = $request->only([
                 'order_number', 'customer_name', 'customer_email', 'customer_phone', 
-                'shipping_address', 'district', 'ward', 'notes', 'source', 
+                'shipping_address', 'province', 'district', 'ward', 'notes', 'source', 
                 'type', 'shipment_status', 'shipping_fee', 'discount', 'cost_total', 'status'
             ]);
             

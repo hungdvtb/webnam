@@ -1,8 +1,9 @@
 import "./globals.css";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
-import { getActiveMenu } from "@/lib/api";
+import { getActiveMenu, getWebSiteSettings } from "@/lib/api";
 import { CartProvider } from "@/context/CartContext";
+import TrackingScripts from "@/components/common/TrackingScripts";
 
 export const metadata = {
   title: "GÔM ĐẠI THÀNH - Tinh Hoa Đất Việt | Gốm Sứ Bát Tràng Cao Cấp",
@@ -19,10 +20,17 @@ export const metadata = {
 
 export default async function RootLayout({ children }) {
   let menuData = null;
+  let settings = null;
+  
   try {
-    menuData = await getActiveMenu();
+    const [menuRes, settingsRes] = await Promise.all([
+      getActiveMenu(),
+      getWebSiteSettings()
+    ]);
+    menuData = menuRes;
+    settings = settingsRes;
   } catch (error) {
-    console.error("Failed to fetch menu:", error);
+    console.error("Failed to fetch layout data:", error);
   }
 
   const menuItems = menuData?.root_items || [];
@@ -31,6 +39,7 @@ export default async function RootLayout({ children }) {
     <html lang="vi">
       <head>
         <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" />
+        <TrackingScripts settings={settings} />
       </head>
       <body>
         <div className="top-promotion-bar">

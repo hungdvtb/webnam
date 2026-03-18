@@ -8,6 +8,7 @@ import config from '@/lib/config';
 import { placeWebOrder, getWebSiteSettings } from '@/lib/api';
 import SearchableSelect from '@/components/ui/SearchableSelect';
 import styles from './cart.module.css';
+import ThankYouView from '@/components/common/ThankYouView';
 
 export default function CartPage() {
   const { cartItems, removeFromCart, updateQuantity, updateItem, restoreCombo, cartCount, cartTotal, clearCart } = useCart();
@@ -29,6 +30,7 @@ export default function CartPage() {
   const [orderNumber, setOrderNumber] = useState('');
   
   const [bankSettings, setBankSettings] = useState(null);
+  const [successOrderData, setSuccessOrderData] = useState(null);
 
   useEffect(() => {
     getWebSiteSettings().then(res => setBankSettings(res)).catch(e => console.error("Error fetching settings:", e));
@@ -238,6 +240,13 @@ export default function CartPage() {
       };
       const response = await placeWebOrder(orderData);
       setOrderNumber(response.order_number);
+      // Cache details for thank you page
+      setSuccessOrderData({
+        cartItems: [...cartItems],
+        cartTotal,
+        discount,
+        formData: { ...formData }
+      });
       setIsOrderSuccess(true);
       clearCart();
       window.scrollTo(0, 0);
@@ -253,22 +262,15 @@ export default function CartPage() {
   if (isOrderSuccess) {
     return (
       <div className={styles.cartPage}>
-        <div className="container">
-          <div className={styles.emptyState}>
-            <span className={`material-symbols-outlined ${styles.textAccent}`}
-              style={{ fontSize: 90, marginBottom: '1.5rem', display: 'block' }}>
-              verified_user
-            </span>
-            <h2 className={styles.pageTitle}>ĐẶT HÀNG THÀNH CÔNG</h2>
-            <p className={styles.pageSubtitle} style={{ margin: '1rem 0 2.5rem' }}>
-              Mã đơn hàng của bạn là <strong>{orderNumber}</strong>.<br />
-              Chúng tôi sẽ liên hệ bạn sớm nhất để xác nhận đơn hàng.
-            </p>
-            <Link href="/" className={styles.ctaButton}
-              style={{ width: 'auto', padding: '1rem 3rem', display: 'inline-block' }}>
-              QUAY LẠI CỬA HÀNG
-            </Link>
-          </div>
+        <div className="container" style={{ padding: '2rem 1rem' }}>
+          <ThankYouView 
+            orderNumber={orderNumber}
+            formData={successOrderData?.formData || formData}
+            cartItems={successOrderData?.cartItems || []}
+            cartTotal={successOrderData?.cartTotal || 0}
+            discount={successOrderData?.discount || 0}
+            bankSettings={bankSettings}
+          />
         </div>
       </div>
     );

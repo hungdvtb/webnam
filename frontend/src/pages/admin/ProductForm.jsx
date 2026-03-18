@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
-import { productApi, categoryApi, attributeApi, productImageApi, aiApi, blogApi, mediaApi } from '../../services/api';
+import { productApi, categoryApi, attributeApi, productImageApi, aiApi, blogApi, mediaApi, cmsApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 import ReactQuill from 'react-quill-new';
 import mammoth from 'mammoth';
@@ -421,6 +421,7 @@ const ProductForm = () => {
     const [blogSearchQuery, setBlogSearchQuery] = useState({}); // { index: query }
     const [isSearchingBlog, setIsSearchingBlog] = useState({}); // { index: loading }
     const [blogResults, setBlogResults] = useState({}); // { index: results }
+    const [domains, setDomains] = useState([]);
 
     const [searchHistory, setSearchHistory] = useState(() => {
         const saved = localStorage.getItem('product_search_history');
@@ -456,7 +457,8 @@ const ProductForm = () => {
         video_url: '',
         slug: '',
         additional_info: [], // [{title, post_id, post_title}]
-        bundle_title: ''
+        bundle_title: '',
+        site_domain_id: ''
     });
 
     const [variants, setVariants] = useState([]);
@@ -816,6 +818,7 @@ const ProductForm = () => {
             fetchProduct();
         }
         fetchBlogPosts();
+        fetchDomains();
     }, [id, isEdit]);
     useEffect(() => {
         return () => {
@@ -897,6 +900,15 @@ const ProductForm = () => {
             console.error("Error searching blog posts", error);
         } finally {
             setIsSearchingBlog(prev => ({ ...prev, [index]: false }));
+        }
+    };
+
+    const fetchDomains = async () => {
+        try {
+            const response = await cmsApi.domains.getAll();
+            setDomains(response.data.filter(d => d.is_active));
+        } catch (error) {
+            console.error("Error fetching domains", error);
         }
     };
 
@@ -1102,7 +1114,8 @@ const ProductForm = () => {
                         return typeof data.additional_info === 'string' ? JSON.parse(data.additional_info) : data.additional_info;
                     } catch (e) { return []; }
                 })(),
-                bundle_title: data.bundle_title || ''
+                bundle_title: data.bundle_title || '',
+                site_domain_id: data.site_domain_id || ''
             });
             setImages(data.images || []);
 
@@ -2155,9 +2168,8 @@ const ProductForm = () => {
             return;
         }
         
-        // Final frontend URL structure
-        const storefrontBase = "https://di-san.com/product";
-        const fullLink = `${storefrontBase}/${slug}`;
+        const selectedDomain = domains.find(d => String(d.id) === String(formData.site_domain_id)) || domains.find(d => d.is_default) || { domain: 'di-san.com' };
+        const fullLink = `https://${selectedDomain.domain}/product/${slug}`;
 
         if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(fullLink)
@@ -4036,24 +4048,43 @@ const ProductForm = () => {
                             </div>
                             <div className="p-6">
                                 <div className="mb-6">
-                                    <label className="block text-[11px] font-black uppercase text-stone/40 mb-2 tracking-widest">URL hiện tại của sản phẩm</label>
+                                    <label className="block text-[11px] font-black uppercase text-stone/40 mb-2 tracking-widest">Xem trước URL sản phẩm</label>
                                     <div 
-                                    className="p-4 bg-stone/5 border border-gold/10 rounded-sm flex items-center justify-between group/link cursor-pointer hover:bg-gold/5 transition-all"
-                                    onClick={handleCopyLink}
-                                    title="Click để sao chép link"
-                                >
-                                    <div className="flex items-baseline gap-1 overflow-hidden">
-                                        <span className="text-[12px] text-stone/40 shrink-0 font-medium">di-san.com/product/</span>
-                                        <span className="text-[12px] text-primary font-bold truncate">{formData.slug || '...' }</span>
+                                        className="p-4 bg-stone/5 border border-gold/10 rounded-sm flex items-center justify-between group/link cursor-pointer hover:bg-gold/5 transition-all"
+                                        onClick={handleCopyLink}
+                                        title="Click để sao chép link"
+                                    >
+                                        <div className="flex items-baseline gap-1 overflow-hidden">
+                                            <span className="text-[12px] text-stone/40 shrink-0 font-medium">
+                                                {domains.find(d => String(d.id) === String(formData.site_domain_id))?.domain || domains.find(d => d.is_default)?.domain || 'di-san.com'}/product/
+                                            </span>
+                                            <span className="text-[12px] text-primary font-bold truncate">{tempSlug || '...' }</span>
+                                        </div>
+                                        <span className="material-symbols-outlined text-[16px] text-stone/30 group-hover/link:text-gold transition-colors">content_copy</span>
                                     </div>
-                                    <span className="material-symbols-outlined text-[16px] text-stone/30 group-hover/link:text-gold transition-colors">content_copy</span>
-                                </div>
-                                <p className="text-[10px] text-stone/40 mt-2 italic">* Đây là đường dẫn tĩnh để khách hàng truy cập trực tiếp vào sản phẩm.</p>
+                                    <p className="text-[10px] text-stone/40 mt-2 italic">* Đây là đường dẫn tĩnh để khách hàng truy cập trực tiếp vào sản phẩm.</p>
                                 </div>
 
-                                <div className="space-y-4">
-                                    <div className="relative border border-stone/30 rounded-sm px-3 focus-within:border-primary/30 transition-colors flex flex-col justify-center min-h-[50px] bg-white mt-4">
-                                        <label className="absolute -top-3 left-2 bg-white px-1.5 font-sans text-[11px] font-black text-orange-700 tracking-widest leading-none uppercase">
+                                <div className="space-y-6">
+                                    <div className="relative border border-stone/30 rounded-sm px-3 focus-within:border-primary/30 transition-colors flex flex-col justify-center min-h-[50px] bg-white">
+                                        <label className="absolute -top-3 left-2 bg-white px-1.5 font-sans text-[11px] font-black text-gold tracking-widest leading-none uppercase">
+                                            Chọn Tên Miền Hiển Thị
+                                        </label>
+                                        <select 
+                                            name="site_domain_id"
+                                            value={formData.site_domain_id || ''}
+                                            onChange={(e) => setFormData(prev => ({ ...prev, site_domain_id: e.target.value }))}
+                                            className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[13px] pt-1"
+                                        >
+                                            <option value="">Sử dụng tên miền mặc định</option>
+                                            {domains.map(d => (
+                                                <option key={d.id} value={d.id}>{d.domain} {d.is_default ? '(Mặc định)' : ''}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div className="relative border border-stone/30 rounded-sm px-3 focus-within:border-primary/30 transition-colors flex flex-col justify-center min-h-[50px] bg-white">
+                                        <label className="absolute -top-3 left-2 bg-white px-1.5 font-sans text-[11px] font-black text-brick tracking-widest leading-none uppercase">
                                             Chỉnh sửa Slug
                                         </label>
                                         <div className="flex items-center gap-2 pt-2">

@@ -218,6 +218,12 @@ export const cmsApi = {
     settings: {
         get: (params) => api.get('/site-settings', { params }),
         update: (data) => api.post('/site-settings', data),
+    },
+    domains: {
+        getAll: () => api.get('/site-domains'),
+        store: (data) => api.post('/site-domains', data),
+        update: (id, data) => api.put(`/site-domains/${id}`, data),
+        destroy: (id) => api.delete(`/site-domains/${id}`),
     }
 };
 

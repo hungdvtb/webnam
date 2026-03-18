@@ -5,13 +5,14 @@ import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
 import { toPng, toBlob } from 'html-to-image';
+import SearchableSelect from '../../components/SearchableSelect';
 
-const Field = ({ label, children, className = "" }) => (
-    <div className={`relative border border-primary/5 rounded-sm px-4 py-2.5 mb-4 focus-within:border-primary/20 focus-within:bg-white shadow-sm transition-all flex flex-col justify-center min-h-[56px] bg-primary/[0.03] group ${className}`}>
-        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-none mb-2 pointer-events-none group-focus-within:text-primary transition-colors">
+const Field = ({ label, children, className = "", labelClassName = "" }) => (
+    <div className={`relative border border-stone/30 rounded-sm px-3 focus-within:border-primary/30 transition-colors flex items-center min-h-[40px] bg-white ${className}`}>
+        <label className={`absolute -top-3 left-2 bg-white px-1.5 font-sans text-[13px] font-bold text-orange-700 tracking-tight leading-none ${labelClassName}`}>
             {label}
-        </span>
-        <div className="w-full flex items-center">
+        </label>
+        <div className="w-full flex items-center pt-0.5 text-[14px]">
             {children}
         </div>
     </div>
@@ -96,8 +97,17 @@ const OrderForm = () => {
         shipping_fee: 0,
         discount: 0,
         cost_total: 0,
-        status: 'new'
+        status: 'new',
+        province: ''
     });
+
+    const [provinces, setProvinces] = useState([]);
+    const [districts, setDistricts] = useState([]);
+    const [wards, setWards] = useState([]);
+    const [isWardsLoading, setIsWardsLoading] = useState(false);
+    const [isDistrictsLoading, setIsDistrictsLoading] = useState(false);
+    const [useNewAddress, setUseNewAddress] = useState(true);
+    const [didLoadInitialLocation, setDidLoadInitialLocation] = useState(false);
 
     useEffect(() => {
         fetchInitialData();
@@ -107,6 +117,153 @@ const OrderForm = () => {
             fetchOrder(duplicateFromId, true);
         }
     }, [id, duplicateFromId]);
+
+    // Fetch provinces when mode changes, WITHOUT resetting the entire formData
+    useEffect(() => {
+        const fetchProvinces = async () => {
+            try {
+                if (useNewAddress) {
+                    const res = await fetch('https://partner.viettelpost.vn/v2/categories/listProvinceNew');
+                    const data = await res.json();
+                    setProvinces((data.data || []).sort((a, b) => a.PROVINCE_NAME.localeCompare(b.PROVINCE_NAME)));
+                } else {
+                    const res = await fetch('https://provinces.open-api.vn/api/p/');
+                    const data = await res.json();
+                    setProvinces(data.map(p => ({ PROVINCE_ID: p.code, PROVINCE_NAME: p.name })).sort((a, b) => a.PROVINCE_NAME.localeCompare(b.PROVINCE_NAME)));
+                }
+            } catch (e) {
+                console.error('Failed to fetch provinces', e);
+            }
+        };
+        fetchProvinces();
+    }, [useNewAddress]);
+
+    const handleProvinceChange = async (e) => {
+        const pName = e.target.value;
+        setFormData(prev => ({ ...prev, province: pName, district: '', ward: '' }));
+        setDistricts([]);
+        setWards([]);
+        if (!pName) return;
+        
+        const provinceObj = provinces.find(p => p.PROVINCE_NAME === pName);
+        if (!provinceObj) return;
+
+        try {
+            if (useNewAddress) {
+                setIsWardsLoading(true);
+                const res = await fetch(`https://partner.viettelpost.vn/v2/categories/listWardsNew?provinceId=${provinceObj.PROVINCE_ID}`);
+                const data = await res.json();
+                const newWards = (data.data || []).map(w => ({ WARD_ID: w.WARDS_ID, WARD_NAME: w.WARDS_NAME }))
+                    .sort((a, b) => a.WARD_NAME.localeCompare(b.WARD_NAME));
+                setWards(newWards);
+                setIsWardsLoading(false);
+            } else {
+                setIsDistrictsLoading(true);
+                const res = await fetch(`https://provinces.open-api.vn/api/p/${provinceObj.PROVINCE_ID}?depth=2`);
+                const data = await res.json();
+                if (data.districts) {
+                    setDistricts(data.districts.map(d => ({ DISTRICT_ID: d.code, DISTRICT_NAME: d.name }))
+                        .sort((a, b) => a.DISTRICT_NAME.localeCompare(b.DISTRICT_NAME)));
+                }
+                setIsDistrictsLoading(false);
+            }
+        } catch (e) {
+            console.error('Failed to fetch address data', e);
+            setIsWardsLoading(false);
+            setIsDistrictsLoading(false);
+        }
+    };
+
+    const handleDistrictChange = async (e) => {
+        const dName = e.target.value;
+        setFormData(prev => ({ ...prev, district: dName, ward: '' }));
+        setWards([]);
+        if (!dName) return;
+        
+        const districtObj = districts.find(d => d.DISTRICT_NAME === dName);
+        if (!districtObj) return;
+
+        try {
+            setIsWardsLoading(true);
+            const res = await fetch(`https://provinces.open-api.vn/api/d/${districtObj.DISTRICT_ID}?depth=2`);
+            const data = await res.json();
+            if (data.wards) {
+                setWards(data.wards.map(w => ({ WARD_ID: w.code, WARD_NAME: w.name }))
+                    .sort((a, b) => a.WARD_NAME.localeCompare(b.WARD_NAME)));
+            }
+            setIsWardsLoading(false);
+        } catch (e) {
+            console.error('Failed to fetch wards', e);
+            setIsWardsLoading(false);
+        }
+    };
+
+    const handleWardChange = (e) => {
+        const wName = e.target.value;
+        setFormData(prev => {
+            const newData = { ...prev, ward: wName };
+            // Auto fill address
+            if (prev.province && wName) {
+                const baseAddr = prev.shipping_address.split(',')[0].trim();
+                let fullAddr = baseAddr;
+                if (wName) fullAddr += (fullAddr ? ', ' : '') + wName;
+                if (!useNewAddress && prev.district) fullAddr += (fullAddr ? ', ' : '') + prev.district;
+                if (prev.province) fullAddr += (fullAddr ? ', ' : '') + prev.province;
+                newData.shipping_address = fullAddr;
+            }
+            return newData;
+        });
+    };
+
+    useEffect(() => {
+        if (provinces.length > 0 && formData.province && !didLoadInitialLocation) {
+            const provinceObj = provinces.find(p => p.PROVINCE_NAME === formData.province);
+            if (!provinceObj) return;
+
+            // Trigger switch to basic mode if district exists
+            if (formData.district && useNewAddress) {
+                setUseNewAddress(false);
+                return; 
+            }
+
+            const loadData = async () => {
+                try {
+                    setDidLoadInitialLocation(true); // Prevent further auto-runs
+                    if (useNewAddress) {
+                        setIsWardsLoading(true);
+                        const res = await fetch(`https://partner.viettelpost.vn/v2/categories/listWardsNew?provinceId=${provinceObj.PROVINCE_ID}`);
+                        const data = await res.json();
+                        setWards((data.data || []).map(w => ({ WARD_ID: w.WARDS_ID, WARD_NAME: w.WARDS_NAME }))
+                            .sort((a, b) => a.WARD_NAME.localeCompare(b.WARD_NAME)));
+                        setIsWardsLoading(false);
+                    } else {
+                        setIsDistrictsLoading(true);
+                        const res = await fetch(`https://provinces.open-api.vn/api/p/${provinceObj.PROVINCE_ID}?depth=2`);
+                        const data = await res.json();
+                        const newDistricts = (data.districts || []).map(d => ({ DISTRICT_ID: d.code, DISTRICT_NAME: d.name }))
+                            .sort((a, b) => a.DISTRICT_NAME.localeCompare(b.DISTRICT_NAME));
+                        setDistricts(newDistricts);
+                        setIsDistrictsLoading(false);
+
+                        if (formData.district) {
+                            const districtObj = newDistricts.find(d => d.DISTRICT_NAME === formData.district);
+                            if (districtObj) {
+                                setIsWardsLoading(true);
+                                const wRes = await fetch(`https://provinces.open-api.vn/api/d/${districtObj.DISTRICT_ID}?depth=2`);
+                                const wData = await wRes.json();
+                                setWards((wData.wards || []).map(w => ({ WARD_ID: w.code, WARD_NAME: w.name }))
+                                    .sort((a, b) => a.WARD_NAME.localeCompare(b.WARD_NAME)));
+                                setIsWardsLoading(false);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error loading saved location data", e);
+                }
+            };
+            loadData();
+        }
+    }, [provinces, formData.province, formData.district, useNewAddress, didLoadInitialLocation]);
 
     const handleCancel = useCallback(() => {
         navigate('/admin/orders');
@@ -260,8 +417,12 @@ const OrderForm = () => {
                 status: isDuplicating ? 'new' : (order.status || 'new'),
                 source: order.source || 'Website',
                 type: order.type || 'Lẻ',
-                shipment_status: isDuplicating ? 'Chưa giao' : (order.shipment_status || 'Chưa giao')
+                shipment_status: isDuplicating ? 'Chưa giao' : (order.shipment_status || 'Chưa giao'),
+                province: order.province || '',
+                district: order.district || '',
+                ward: order.ward || ''
             });
+
         } catch (error) {
             console.error("Error fetching order", error);
             if (error.response?.status === 404) {
@@ -437,6 +598,17 @@ const OrderForm = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        
+        // Validate location
+        const isLocValid = useNewAddress 
+            ? (formData.province && formData.ward)
+            : (formData.province && formData.district && formData.ward);
+
+        if (!isLocValid) {
+            alert(useNewAddress ? 'Vui lòng chọn Tỉnh/Thành phố và Phường/Xã.' : 'Vui lòng chọn đầy đủ Tỉnh, Quận và Phường.');
+            return;
+        }
+
         setSaving(true);
         try {
             if (isEdit) {
@@ -485,10 +657,10 @@ const OrderForm = () => {
                         <span className="material-symbols-outlined text-lg">arrow_back</span>
                     </button>
                     <div>
-                        <h1 className="font-display text-[16px] font-bold text-primary leading-none mb-1">
+                        <h1 className="font-sans text-[18px] font-bold text-primary leading-none mb-1">
                             {isEdit ? "Chỉnh sửa đơn hàng" : "Tạo đơn hàng mới"}
                         </h1>
-                        <p className="font-display text-[11px] font-medium text-primary/40">Trang quản trị / Đơn hàng / {isEdit ? `Chi tiết #${id}` : "Thêm mới"}</p>
+                        <p className="font-sans text-[12px] font-medium text-primary/40">Trang quản trị / Đơn hàng / {isEdit ? `Chi tiết #${id}` : "Thêm mới"}</p>
                     </div>
                 </div>
 
@@ -515,9 +687,9 @@ const OrderForm = () => {
                 </div>
             </div>
 
-            <form id="order-form" onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-12 gap-8 max-w-[1800px] mx-auto">
+            <form id="order-form" onSubmit={handleSubmit} className="flex flex-col lg:flex-row gap-[10px] max-w-[1800px] mx-auto">
                 {/* Left Section: Product Management & Custom Attributes */}
-                <div className="lg:col-span-8 space-y-8">
+                <div className="flex-1 flex flex-col gap-[10px] max-w-full min-w-0">
                     <div className="bg-white border border-primary/10 px-8 pb-8 pt-1 shadow-xl rounded-md">
                         {/* Title & Product Selector Tags */}
                         <div className="flex items-center gap-4 mb-6 pt-4 border-b border-primary/5 pb-4">
@@ -578,7 +750,7 @@ const OrderForm = () => {
                                                         key={p.id}
                                                         type="button"
                                                         onClick={() => addProductById(p.id)}
-                                                        className="w-full p-3 text-left hover:bg-primary/5 border-b border-primary/5 flex items-center gap-3 transition-colors"
+                                                        className="w-full p-3 text-left hover:bg-primary/5 border-b border-primary/5 flex items-center gap-3 transition-colors group relative"
                                                     >
                                                         <div className="size-8 bg-primary/5 rounded-sm flex items-center justify-center text-primary/10 overflow-hidden shrink-0">
                                                             {p.main_image ? <img src={p.main_image} alt="" className="size-full object-cover" /> : <span className="material-symbols-outlined text-sm">image</span>}
@@ -588,7 +760,14 @@ const OrderForm = () => {
                                                                 <span className="text-[13px] font-bold text-primary truncate tracking-wider">{p.sku || '---'}</span>
                                                                  <span className="text-[14px] font-extrabold text-blue-600 shrink-0 ml-4">{new Intl.NumberFormat('vi-VN').format(p.price)}₫</span>
                                                             </div>
-                                                            <p className="text-[12px] text-primary/50 truncate font-medium">{p.name}</p>
+                                                            <p className="text-[12px] text-primary/50 truncate font-medium">{p.name || '---'}</p>
+                                                        </div>
+
+                                                        {/* Tooltip for full details */}
+                                                        <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 bg-slate-900/95 text-white p-3 rounded-sm shadow-2xl opacity-0 group-hover:opacity-100 pointer-events-none transition-all z-[200] w-72 backdrop-blur-md border border-white/10 scale-95 group-hover:scale-100 origin-left">
+                                                            <div className="text-[10px] text-blue-400 font-bold uppercase tracking-widest mb-1 pb-1 border-b border-white/10">{p.sku || 'N/A'}</div>
+                                                            <div className="text-[13px] font-bold leading-relaxed">{p.name}</div>
+                                                            <div className="absolute right-full top-1/2 -translate-y-1/2 w-0 h-0 border-t-[6px] border-t-transparent border-b-[6px] border-b-transparent border-r-[6px] border-r-slate-900/95"></div>
                                                         </div>
                                                     </button>
                                                 ))}
@@ -631,7 +810,7 @@ const OrderForm = () => {
                         <div ref={captureRef} className="bg-white px-12 pb-12 pt-6 -mx-12 rounded-sm shadow-sm border border-primary/5">
                             <div className="relative min-h-[400px]">
                                 <table className="w-full text-left border-collapse table-fixed lg:table-auto">
-                                    <thead className="font-display text-[11px] font-extrabold text-blue-600 bg-blue-50 sticky top-0 z-30 shadow-sm border-b border-blue-100">
+                                    <thead className="font-sans text-[11px] font-extrabold text-blue-600 bg-blue-50 sticky top-0 z-30 shadow-sm border-b border-blue-100">
                                         <tr>
                                             {/* Column Config Header */}
                                             <th className="w-12 border border-blue-100 bg-blue-50 shrink-0 relative text-center sticky top-0 z-30">
@@ -655,7 +834,7 @@ const OrderForm = () => {
                                                                     exit={{ opacity: 0, x: -10 }}
                                                                     className="absolute top-10 left-0 bg-white border border-primary/10 shadow-2xl rounded-sm p-4 z-[200] w-64 normal-case text-left"
                                                                 >
-                                                                    <h4 className="font-display text-sm font-bold text-primary/50 mb-4">Cấu hình cột hiển thị</h4>
+                                                                    <h4 className="font-sans text-sm font-bold text-primary/50 mb-4">Cấu hình cột hiển thị</h4>
                                                                     <div className="space-y-1">
                                                                         <Reorder.Group axis="y" values={columnOrder} onReorder={setColumnOrder} className="space-y-1">
                                                                             {columnOrder.map(colId => (
@@ -713,7 +892,7 @@ const OrderForm = () => {
                                                         className={`py-4 px-4 border border-blue-100 text-${def.align} relative group/header sticky top-0 z-30 bg-blue-50`}
                                                         style={width ? { width: `${width}px` } : { width: 'auto' }}
                                                     >
-                                                          <span className="block whitespace-nowrap font-display text-[10px] font-black text-blue-600/60 uppercase tracking-[0.15em]">{def.label}</span>
+                                                          <span className="block whitespace-nowrap font-sans text-[10px] font-black text-blue-600/60 uppercase tracking-[0.15em]">{def.label}</span>
                                                         {/* Resize Handle */}
                                                         <div
                                                             className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/30 z-20 transition-colors opacity-0 group-hover/header:opacity-100"
@@ -738,18 +917,28 @@ const OrderForm = () => {
                                                 {columnOrder.filter(id => visibleColumns.includes(id)).map(colId => {
                                                     switch (colId) {
                                                         case 'stt':
-                                                            return <td key={colId} className="py-2.5 text-center text-primary/30 font-display text-[12px] font-bold border border-primary/10">{index + 1}</td>;
+                                                            return <td key={colId} className="py-2.5 text-center text-primary/30 font-sans text-[12px] font-bold border border-primary/10">{index + 1}</td>;
                                                         case 'sku':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-4 border border-primary/10">
-                                                                    <p className="font-display text-[13px] text-primary font-bold leading-none">{item.sku || '---'}</p>
-                                                                </td>
+                                                <td key={colId} className="py-2.5 px-4 border border-primary/10 relative group/cell">
+                                                    <p className="font-sans text-[13px] text-primary font-bold leading-none truncate max-w-[120px]">{item.sku || '---'}</p>
+                                                    {/* Tooltip */}
+                                                    <div className="absolute bottom-full left-4 mb-2 bg-slate-900 text-white p-2 rounded shadow-2xl opacity-0 group-hover/cell:opacity-100 pointer-events-none transition-all z-50 whitespace-nowrap text-[11px] font-bold border border-white/10 scale-90 group-hover/cell:scale-100 origin-bottom-left">
+                                                        Mã: {item.sku || 'N/A'}
+                                                        <div className="absolute top-full left-2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-slate-900"></div>
+                                                    </div>
+                                                </td>
                                                             );
                                                         case 'name':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-4 border border-primary/10">
-                                                                    <p className="text-primary font-bold text-[13px] leading-tight">{item.name}</p>
-                                                                </td>
+                                               <td key={colId} className="py-2.5 px-4 border border-primary/10 relative group/cell">
+                                                    <p className="text-primary font-bold text-[13px] leading-tight truncate max-w-[300px]">{item.name}</p>
+                                                    {/* Tooltip */}
+                                                    <div className="absolute bottom-full left-4 mb-2 bg-slate-900 text-white p-3 rounded shadow-2xl opacity-0 group-hover/cell:opacity-100 pointer-events-none transition-all z-50 w-80 text-[12px] font-bold border border-white/10 scale-95 group-hover/cell:scale-100 origin-bottom-left leading-relaxed">
+                                                        {item.name}
+                                                        <div className="absolute top-full left-4 w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-t-[5px] border-t-slate-900"></div>
+                                                    </div>
+                                                </td>
                                                             );
                                                         case 'quantity':
                                                             return (
@@ -773,7 +962,7 @@ const OrderForm = () => {
                                                                                 const val = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
                                                                                 updateItem(index, 'price', parseInt(val) || 0);
                                                                             }}
-                                                                             className="w-full h-8 bg-transparent border-none text-right font-display text-[13px] font-bold text-slate-900 border-b border-blue-100 focus:border-blue-300 transition-all rounded-none px-1"
+                                                                             className="w-full h-8 bg-transparent border-none text-right font-sans text-[13px] font-bold text-slate-900 border-b border-blue-100 focus:border-blue-300 transition-all rounded-none px-1"
                                                                         />
                                                                         <span className="font-bold text-slate-900/30 text-[11px] ml-1">₫</span>
                                                                     </div>
@@ -790,7 +979,7 @@ const OrderForm = () => {
                                                                                 const val = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
                                                                                 updateItem(index, 'cost_price', parseInt(val) || 0);
                                                                             }}
-                                                                            className="w-full bg-transparent border-none text-right font-display text-[13px] font-bold text-primary/30 border-b border-primary/5 focus:border-primary/10 transition-all rounded-none px-1"
+                                                                            className="w-full bg-transparent border-none text-right font-sans text-[13px] font-bold text-primary/30 border-b border-primary/5 focus:border-primary/10 transition-all rounded-none px-1"
                                                                         />
                                                                         <span className="font-bold text-primary text-[10px] ml-1 opacity-10">₫</span>
                                                                     </div>
@@ -799,7 +988,7 @@ const OrderForm = () => {
                                                         case 'total':
                                                             return (
                                                                 <td key={colId} className="py-2.5 px-6 border border-primary/10 text-right bg-blue-50/30">
-                                                                    <p className="font-display text-[13px] font-extrabold text-slate-900 tracking-tight">
+                                                                    <p className="font-sans text-[13px] font-extrabold text-slate-900 tracking-tight">
                                                                         {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(item.price * item.quantity)}<span className="text-[11px] ml-0.5 opacity-40">₫</span>
                                                                     </p>
                                                                 </td>
@@ -829,8 +1018,8 @@ const OrderForm = () => {
 
                             <div className="flex justify-end pt-8 border-t-2 border-primary/10 mt-2">
                                 <div className="flex items-baseline gap-4">
-                                    <span className="font-display font-bold text-brick/60 text-[12px]">Tổng thanh toán:</span>
-                                    <span className="font-display font-black text-brick text-[32px] leading-none tracking-tighter">
+                                    <span className="font-sans font-bold text-brick/60 text-[12px]">Tổng thanh toán:</span>
+                                    <span className="font-sans font-black text-brick text-[32px] leading-none tracking-tighter">
                                         {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(calculateTotal())}<span className="text-[16px] ml-1 opacity-40 font-bold">₫</span>
                                     </span>
                                 </div>
@@ -839,7 +1028,7 @@ const OrderForm = () => {
 
                         <div className="flex justify-end pt-4 border-t border-primary/10 section-summary bg-primary/5 -mx-12 px-12 pb-8 rounded-b-md">
                             {/* Right: Totals */}
-                            <div className="space-y-4 font-display min-w-[340px]">
+                            <div className="space-y-4 font-sans min-w-[340px]">
                                 <div className="flex justify-between items-center" data-screenshot-hide="true">
                                     <span className="font-bold text-blue-600/40 text-[12px]">Tổng tiền sản phẩm:</span>
                                     <span className="font-bold text-blue-600 text-[16px] leading-none">
@@ -891,21 +1080,20 @@ const OrderForm = () => {
                 </div>
 
                 {/* Right Section: Sidebar Metadata */}
-                <div className="lg:col-span-4">
-                    <div className="bg-white border border-primary/10 p-6 shadow-22xl rounded-sm sticky top-6">
-                        <div className="flex items-center gap-3 mb-8 pb-4 border-b border-primary/5">
-                            <div className="size-8 bg-primary/5 rounded-sm flex items-center justify-center">
-                                <span className="material-symbols-outlined text-primary text-[20px]">assignment</span>
-                            </div>
-                            <h3 className="font-display text-[15px] font-bold text-primary">Thông tin đơn hàng</h3>
+                <div className="w-full lg:w-[450px] shrink-0 flex flex-col gap-[10px]">
+                    <div className="bg-white border border-stone/10 p-5 shadow-sm rounded-sm">
+                        <div className="flex items-center gap-2.5 mb-6 border-b border-stone/10 pb-2">
+                            <span className="material-symbols-outlined text-primary/40 p-1.5 bg-stone/5 rounded-full text-base">assignment</span>
+                            <h3 className="font-sans text-[15px] font-bold text-primary uppercase tracking-tight">Thông tin đơn hàng</h3>
                         </div>
 
-                        <Field label="Trạng thái">
+                        <div className="space-y-5">
+                            <Field label="Trạng thái">
                             <select
                                 name="status"
                                 value={formData.status}
                                 onChange={handleInputChange}
-                                className="w-full bg-transparent focus:outline-none font-display text-[13px] font-bold text-primary appearance-none cursor-pointer"
+                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px] min-h-[30px] pt-1 appearance-none cursor-pointer"
                             >
                                 {orderStatuses.filter(s => s.is_active || (formData.status && s.code.toLowerCase() === formData.status.toLowerCase())).map(s => (
                                     <option key={s.id} value={s.code}>{s.name || s.code}</option>
@@ -917,7 +1105,7 @@ const OrderForm = () => {
                         </Field>
 
                         <Field label="Nhân viên xử lý">
-                            <p className="font-display text-[13px] font-bold text-primary/60 leading-none">{user?.name || "Super Admin"}</p>
+                            <p className="w-full bg-transparent text-primary/60 font-bold text-[14px] min-h-[30px] pt-1 leading-none">{user?.name || "Super Admin"}</p>
                         </Field>
 
                         <Field label="Tên khách hàng">
@@ -926,7 +1114,7 @@ const OrderForm = () => {
                                 name="customer_name"
                                 value={formData.customer_name}
                                 onChange={handleInputChange}
-                                className="w-full bg-transparent focus:outline-none font-display font-bold text-[13px] text-primary"
+                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px] min-h-[30px] pt-1"
                                 placeholder="..."
                             />
                         </Field>
@@ -937,18 +1125,76 @@ const OrderForm = () => {
                                 name="customer_phone"
                                 value={formData.customer_phone}
                                 onChange={handleInputChange}
-                                className="w-full bg-transparent focus:outline-none font-display font-bold text-[13px] text-primary"
+                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px] min-h-[30px] pt-1"
                                 placeholder="..."
                             />
                         </Field>
 
-                        <Field label="Địa chỉ giao hàng" className="min-h-[100px] items-start pt-3">
+                        {/* Administrative Selection */}
+                        <div className="flex items-center justify-between mb-2">
+                            <span className="text-[11px] font-black text-primary/40 uppercase tracking-widest leading-none">Đơn vị hành chính</span>
+                            <div 
+                                className="flex items-center gap-1 cursor-pointer p-0.5 bg-primary/5 rounded-full border border-primary/10"
+                                onClick={() => setUseNewAddress(!useNewAddress)}
+                            >
+                                <div className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase transition-all ${useNewAddress ? 'bg-primary text-white shadow-sm' : 'text-primary/40'}`}>Mới nhất</div>
+                                <div className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase transition-all ${!useNewAddress ? 'bg-orange-600 text-white shadow-sm' : 'text-primary/40'}`}>Cũ</div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-1.5 mb-4">
+                            <div className="relative border border-primary/5 rounded-sm px-2 py-1 focus-within:border-primary/20 focus-within:bg-white shadow-sm transition-all flex flex-col justify-center min-h-[42px] bg-primary/[0.03] group">
+                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1 pointer-events-none group-focus-within:text-primary transition-colors">
+                                    Tỉnh / Thành phố
+                                </span>
+                                <SearchableSelect
+                                    options={(provinces || []).map(p => p.PROVINCE_NAME)}
+                                    value={formData.province}
+                                    name="province"
+                                    onChange={handleProvinceChange}
+                                    placeholder="Tỉnh..."
+                                    compact={true}
+                                />
+                            </div>
+
+                            <div className={`relative border border-primary/5 rounded-sm px-2 py-1 focus-within:border-primary/20 focus-within:bg-white shadow-sm transition-all flex flex-col justify-center min-h-[42px] bg-primary/[0.03] group ${(!useNewAddress && isDistrictsLoading) ? 'opacity-50' : ''} ${useNewAddress ? 'opacity-30 grayscale cursor-not-allowed' : ''}`}>
+                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1 pointer-events-none group-focus-within:text-primary transition-colors">
+                                    Quận / Huyện
+                                </span>
+                                <SearchableSelect
+                                    options={districts.map(d => d.DISTRICT_NAME)}
+                                    value={formData.district}
+                                    name="district"
+                                    onChange={handleDistrictChange}
+                                    placeholder={useNewAddress ? "-" : (isDistrictsLoading ? "..." : "Quận...")}
+                                    disabled={useNewAddress || !formData.province || isDistrictsLoading}
+                                    compact={true}
+                                />
+                            </div>
+
+                            <div className={`relative border border-primary/5 rounded-sm px-2 py-1 focus-within:border-primary/20 focus-within:bg-white shadow-sm transition-all flex flex-col justify-center min-h-[42px] bg-primary/[0.03] group ${isWardsLoading ? 'opacity-50' : ''}`}>
+                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1 pointer-events-none group-focus-within:text-primary transition-colors">
+                                    Phường / Xã
+                                </span>
+                                <SearchableSelect
+                                    options={wards.map(w => w.WARD_NAME)}
+                                    value={formData.ward}
+                                    name="ward"
+                                    onChange={handleWardChange}
+                                    placeholder={isWardsLoading ? "..." : "Phường..."}
+                                    disabled={(!useNewAddress && !formData.district) || (useNewAddress && !formData.province) || isWardsLoading}
+                                    compact={true}
+                                />
+                            </div>
+                        </div>
+
+                        <Field label="Địa chỉ giao hàng (Số nhà, tên đường...)" className="min-h-[100px] items-start pt-3">
                             <textarea
                                 name="shipping_address"
                                 value={formData.shipping_address}
                                 onChange={handleInputChange}
                                 rows="3"
-                                className="w-full bg-transparent focus:outline-none font-display font-bold text-[13px] resize-none leading-relaxed text-primary/80"
+                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[13px] resize-none leading-relaxed mt-2"
                                 placeholder="..."
                             />
                         </Field>
@@ -959,13 +1205,13 @@ const OrderForm = () => {
                                 value={formData.notes}
                                 onChange={handleInputChange}
                                 rows="3"
-                                    className="w-full bg-transparent focus:outline-none font-display font-bold text-[13px] leading-relaxed text-primary"
+                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[13px] resize-none leading-relaxed mt-2"
                                 placeholder="..."
                             />
                         </Field>
 
                         <div className="pt-2 pb-2">
-                            <h4 className="font-display text-[15px] font-bold text-primary mb-6 flex items-center justify-center gap-2 uppercase tracking-[0.1em]">
+                            <h4 className="font-sans text-[15px] font-bold text-primary mb-6 flex items-center justify-center gap-2 uppercase tracking-[0.1em]">
                                 <span className="h-px bg-primary/10 flex-1"></span>
                                 Thông tin bổ sung
                                 <span className="h-px bg-primary/10 flex-1"></span>
@@ -977,7 +1223,7 @@ const OrderForm = () => {
                                             type="text"
                                             value={formData.custom_attributes[attr.code] || ''}
                                             onChange={(e) => handleAttributeChange(attr.code, e.target.value)}
-                                            className="w-full bg-transparent focus:outline-none font-display font-bold text-[13px] text-primary"
+                                            className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px] min-h-[30px] pt-1"
                                             placeholder={`...`}
                                         />
                                     </Field>
@@ -989,10 +1235,11 @@ const OrderForm = () => {
                             <button
                                 type="button"
                                 onClick={() => navigate('/admin/orders')}
-                                className="w-full bg-primary/5 text-primary/40 font-display font-bold text-[12px] py-4 hover:bg-primary/10 transition-all border border-primary/10 rounded-sm"
+                                className="w-full bg-primary/5 text-primary/40 font-sans font-bold text-[12px] py-4 hover:bg-primary/10 transition-all border border-primary/10 rounded-sm uppercase tracking-widest"
                             >
                                 Quay về danh sách
                             </button>
+                        </div>
                         </div>
                     </div>
                 </div>

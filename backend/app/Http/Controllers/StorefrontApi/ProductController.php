@@ -274,19 +274,30 @@ class ProductController extends Controller
                 // Collect all variant IDs to fetch them in one query
                 $variantIds = $product->bundleItems->pluck('pivot.variant_id')->filter()->unique()->toArray();
                 
+                $variants = [];
                 if (!empty($variantIds)) {
                     $variants = Product::whereIn('id', $variantIds)
                         ->with(['images', 'attributeValues.attribute'])
                         ->get()
                         ->keyBy('id');
+                }
                         
-                    foreach ($product->bundleItems as $item) {
-                        $vId = $item->pivot->variant_id;
-                        if ($vId && isset($variants[$vId])) {
-                            $v = $variants[$vId];
-                            // Merge variant data into item
-                            $item->price = $v->price;
-                            $item->sku = $v->sku;
+                foreach ($product->bundleItems as $item) {
+                    // 1. Apply pivot price if set (this is the refreshed/saved price for this specific combo)
+                    if ($item->pivot->price !== null) {
+                        $item->price = $item->pivot->price;
+                    }
+                    if ($item->pivot->cost_price !== null) {
+                        $item->cost_price = $item->pivot->cost_price;
+                    }
+
+                    $vId = $item->pivot->variant_id;
+                    if ($vId && isset($variants[$vId])) {
+                        $v = $variants[$vId];
+                        // Merge variant data into item. Fallback to variant price if pivot price was missing
+                        if ($item->pivot->price === null) $item->price = $v->price;
+                        if ($item->pivot->cost_price === null) $item->cost_price = $v->cost_price;
+                        $item->sku = $v->sku;
                             $item->name = $v->name; 
                             
                             // Merge images if variant has images
@@ -300,7 +311,6 @@ class ProductController extends Controller
                             }
                         }
                     }
-                }
             }
 
             if ($product->type === 'configurable') {

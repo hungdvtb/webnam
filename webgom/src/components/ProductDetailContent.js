@@ -69,7 +69,7 @@ export default function ProductDetailContent({ product }) {
 
         setBundleItems(mappedItems.map(item => ({
           ...item,
-          selected: !!item.pivot?.is_default || !item.option_title || item.option_title === firstConfigTitle
+          selected: !item.option_title || item.option_title === firstConfigTitle
         })));
       }
     }
@@ -171,7 +171,7 @@ export default function ProductDetailContent({ product }) {
       const sum = bundleItems
         .filter(item => item.selected)
         .reduce((acc, item) => acc + (parseFloat(item.price) * item.qty), 0);
-      return sum > 0 ? sum : product.price;
+      return sum;
     }
     return currentProduct.price;
   }, [product, currentProduct, selectedGroupItems, bundleItems]);

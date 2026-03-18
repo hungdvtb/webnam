@@ -263,7 +263,337 @@
   color: #1b365d;
 }
 
-/* Response List Styles for Bundle Page */
+/* ===== Bundle Detail Table ===== */
+
+.tableHeader {
+  display: grid;
+  grid-template-columns: 40px 56px 1fr 110px 120px 130px 120px;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: #1b365d;
+  border-radius: 12px 12px 0 0;
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  align-items: center;
+}
+
+.tableBody {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(27, 54, 93, 0.08);
+  border-top: none;
+  border-radius: 0 0 0 0;
+  overflow: hidden;
+}
+
+.tableRow {
+  display: grid;
+  grid-template-columns: 40px 56px 1fr 110px 120px 130px 120px;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  align-items: center;
+  border-bottom: 1px solid rgba(27, 54, 93, 0.06);
+  background: white;
+  transition: background 0.2s;
+}
+
+.tableRow:last-child {
+  border-bottom: none;
+}
+
+.tableRow:hover {
+  background: #fdfcf8;
+}
+
+.colStt {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.colImg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.colName {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.colPrice {
+  text-align: right;
+}
+
+.colQty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.colTotal {
+  text-align: right;
+}
+
+.colActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.sttBadge {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: rgba(197, 160, 101, 0.1);
+  color: #c5a065;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.tableImgWrap {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  background: #f8f8f8;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  flex-shrink: 0;
+}
+
+.itemName {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1b365d;
+  margin: 0;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.variantHint {
+  font-size: 11px;
+  color: #999;
+  font-family: 'Inter', monospace;
+}
+
+.configBadge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #8e5229;
+  background: rgba(142, 82, 41, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+  width: fit-content;
+}
+
+.unitPrice {
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(27, 54, 93, 0.6);
+}
+
+.qtyControl {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #f4f4f4;
+  border-radius: 8px;
+  padding: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.qtyBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  color: #1b365d;
+}
+
+.qtyBtn:hover:not(:disabled) {
+  background: white;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+  color: #c5a065;
+}
+
+.qtyBtn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.qtyDisplay {
+  min-width: 28px;
+  text-align: center;
+  font-weight: 900;
+  font-size: 14px;
+  color: #1b365d;
+  user-select: none;
+}
+
+.lineTotal {
+  font-size: 14px;
+  font-weight: 900;
+  color: #c5a065;
+}
+
+.changeBtn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  background: #1b365d;
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.changeBtn:hover {
+  background: #c5a065;
+}
+
+.deleteBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  background: transparent;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: rgba(239, 68, 68, 0.5);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.deleteBtn:hover {
+  background: rgba(239, 68, 68, 0.05);
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+/* Table summary footer */
+.tableFooter {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 1.25rem 1rem;
+  border: 1px solid rgba(27, 54, 93, 0.08);
+  border-top: 2px solid rgba(27, 54, 93, 0.08);
+  border-radius: 0 0 12px 12px;
+  background: #fafaf8;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.footerLeft {
+  display: flex;
+  align-items: center;
+}
+
+.footerRight {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 280px;
+}
+
+.resetBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(27, 54, 93, 0.15);
+  background: white;
+  color: rgba(27, 54, 93, 0.6);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.resetBtn:hover {
+  border-color: #c5a065;
+  color: #c5a065;
+  background: rgba(197, 160, 101, 0.04);
+}
+
+.summaryRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.summaryLabel {
+  font-size: 13px;
+  color: rgba(27, 54, 93, 0.6);
+  font-weight: 600;
+}
+
+.summarySubtotal {
+  font-size: 14px;
+  font-weight: 700;
+  color: rgba(27, 54, 93, 0.7);
+}
+
+.summaryLabelDiscount {
+  font-size: 13px;
+  color: #16a34a;
+  font-weight: 600;
+}
+
+.summaryDiscount {
+  font-size: 14px;
+  font-weight: 700;
+  color: #16a34a;
+}
+
+.grandTotalRow {
+  padding-top: 8px;
+  border-top: 1px solid rgba(27, 54, 93, 0.1);
+  margin-top: 4px;
+}
+
+.grandTotalLabel {
+  font-size: 15px;
+  font-weight: 800;
+  color: #1b365d;
+}
+
+.grandTotal {
+  font-size: 20px;
+  font-weight: 900;
+  color: #c5a065;
+}
+
+/* Legacy slot card styles kept for backward compat */
 .slotCard {
   background: white;
   border-radius: 12px;
@@ -375,24 +705,6 @@
   border: 1px solid rgba(0, 0, 0, 0.02);
 }
 
-.qtyBtn {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s;
-}
-
-.qtyBtn:hover {
-  background: white;
-  box-shadow: 0 4px 8px rgba(0,0,0,0.05);
-}
-
 .qtyInput {
   width: 32px;
   text-align: center;
@@ -425,10 +737,39 @@
 }
 
 @media (max-width: 768px) {
+  .tableHeader {
+    display: none;
+  }
+
+  .tableRow {
+    grid-template-columns: 32px 44px 1fr;
+    grid-template-rows: auto auto;
+  }
+
+  .colPrice, .colQty, .colTotal, .colActions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .colPrice { display: flex; align-items: center; gap: 8px; }
+  .colPrice::before { content: 'Đơn giá:'; font-size: 12px; color: #999; }
+  .colTotal { display: flex; align-items: center; gap: 8px; }
+  .colTotal::before { content: 'Thành tiền:'; font-size: 12px; color: #999; }
+
+  .tableFooter {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .footerRight {
+    min-width: unset;
+  }
+
   .slotCard {
     flex-direction: column;
     text-align: center;
   }
+
   .slotActions {
     align-items: center;
     width: 100%;

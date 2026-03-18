@@ -12,7 +12,6 @@ import SpecificationList from './common/SpecificationList';
 import ActionLinks from './common/ActionLinks';
 import ComponentSelectionModal from './common/ComponentSelectionModal';
 import { useState, useMemo } from 'react';
-
 import Breadcrumb from './common/Breadcrumb';
 
 export default function BundleProductView({
@@ -29,6 +28,7 @@ export default function BundleProductView({
   updateBundleItemProduct,
   removeBundleItem,
   switchBundleConfiguration,
+  resetBundleItems,
   handleAddToCart,
   handleBuyNow,
   quantity,
@@ -51,7 +51,7 @@ export default function BundleProductView({
   };
 
   const selectedItems = bundleItems.filter(item => item.selected);
-  const subtotal = selectedItems.reduce((acc, it) => acc + (parseFloat(it.price) * (it.qty || 1)), 0);
+  const subtotal = selectedItems.reduce((acc, it) => acc + (parseFloat(it.price || 0) * (it.qty || 1)), 0);
   const discount = subtotal - displayPrice;
 
   // Extract unique configurations
@@ -63,7 +63,6 @@ export default function BundleProductView({
   }, [bundleItems]);
 
   const activeConfig = useMemo(() => {
-    // A config is "active" if all items in it are selected
     for (const config of configurations) {
       const itemsInConfig = bundleItems.filter(item => (item.option_title || item.pivot?.option_title) === config);
       if (itemsInConfig.every(item => item.selected)) return config;
@@ -92,9 +91,7 @@ export default function BundleProductView({
           <div className={styles.infoColumn}>
             <div className={styles.infoWrapper}>
               <div className={styles.titleSection}>
-
                 <h1 className={styles.title}>{product.name}</h1>
-
                 <div className={styles.meta}>
                   <span className={styles.sku}>Mã bộ: <span className={styles.skuValue}>{product.sku || `COMBO-${product.id}`}</span></span>
                   <span className={styles.statusDot} style={{ backgroundColor: '#10b981' }}></span>
@@ -102,12 +99,11 @@ export default function BundleProductView({
                 </div>
               </div>
 
-              {/* Related Bundles / Choose another Option (Added per request) */}
+              {/* Related Bundles */}
               {(() => {
                 const relatedLinks = product.related_products || product.linked_products || [];
                 const related = relatedLinks.filter(p => p.pivot?.link_type === 'related' || p.pivot === undefined || !p.pivot);
                 const uniqueOptions = Array.from(new Map(related.map(b => [b.id, b])).values());
-                
                 if (uniqueOptions.length > 0) {
                   return (
                     <div className={styles.relatedOptionsCard}>
@@ -118,33 +114,21 @@ export default function BundleProductView({
                       <div className={styles.relatedOptionsGrid}>
                         {uniqueOptions.map(bundle => {
                           const isSelected = bundle.id === product.id;
-                          const txt = bundle.pivot?.option_title || bundle.option_title || bundle.bundle_title || bundle.name.replace(/Bộ đồ thờ men lam Bát Tràng - Demo Bundle|Bộ đồ thờ|Combo /i, '').replace(/ - Demo Bundle/i, '').replace(/ - Demo/i, '').trim() || bundle.name;
+                          const txt = bundle.pivot?.option_title || bundle.option_title || bundle.bundle_title || bundle.name;
                           const displayImg = bundle.primary_image || bundle.images?.[0] || (bundle.main_image ? { path: bundle.main_image } : null);
-                          
                           return (
-                            <Link 
-                              href={`/product/${bundle.slug}`} 
-                              key={bundle.id}
+                            <Link href={`/product/${bundle.slug}`} key={bundle.id}
                               className={`${styles.relatedOptionBtn} ${isSelected ? styles.relatedOptionBtnActive : ''}`}
                               title={bundle.name}
                             >
                               <div className={styles.relatedOptionImgWrap}>
                                 {displayImg ? (
-                                  <Image
-                                    src={getImageUrl(displayImg)}
-                                    alt={txt}
-                                    fill
-                                    sizes="30px"
-                                    unoptimized
-                                    style={{ objectFit: 'cover' }}
-                                  />
+                                  <Image src={getImageUrl(displayImg)} alt={txt} fill sizes="30px" unoptimized style={{ objectFit: 'cover' }} />
                                 ) : (
                                   <span className={`material-symbols-outlined ${styles.relatedOptionFallback}`}>image</span>
                                 )}
                               </div>
-                              <span className={`${styles.relatedOptionText} ${isSelected ? styles.relatedOptionTextActive : ''}`}>
-                                {txt}
-                              </span>
+                              <span className={`${styles.relatedOptionText} ${isSelected ? styles.relatedOptionTextActive : ''}`}>{txt}</span>
                             </Link>
                           );
                         })}
@@ -166,9 +150,7 @@ export default function BundleProductView({
                   )}
                   <div className={styles.configOptionsGrid}>
                     {configurations.map(config => (
-                      <button
-                        key={config}
-                        onClick={() => switchBundleConfiguration(config)}
+                      <button key={config} onClick={() => switchBundleConfiguration(config)}
                         className={`${styles.configOptionBtn} ${activeConfig === config ? styles.configOptionBtnActive : ''}`}
                       >
                         {config}
@@ -178,22 +160,17 @@ export default function BundleProductView({
                 </div>
               )}
 
+              {/* Price */}
               <div className={styles.priceContainer}>
                 <div className="flex items-center gap-4">
                   <div className={styles.currentPrice}>{formatPrice(displayPrice)}</div>
-                  {discount > 0 && (
-                    <span className={styles.originalPrice}>{formatPrice(subtotal)}</span>
-                  )}
+                  {discount > 0 && <span className={styles.originalPrice}>{formatPrice(subtotal)}</span>}
                 </div>
-                {discount > 0 && (
-                  <p className={styles.savingsText}>
-                    Tiết kiệm {formatPrice(discount)} khi mua trọn bộ
-                  </p>
-                )}
+                {discount > 0 && <p className={styles.savingsText}>Tiết kiệm {formatPrice(discount)} khi mua trọn bộ</p>}
                 <p className={styles.priceMeta}>Số lượng món: {selectedItems.length} | Đã bao gồm phí bảo hiểm vận chuyển</p>
               </div>
 
-              {/* Bundle Components Preview (Compact) */}
+              {/* Bundle Summary Card */}
               <div className={styles.specCard}>
                 <h4 className={styles.specTitle}>
                   <span className="material-symbols-outlined">view_list</span>
@@ -223,9 +200,9 @@ export default function BundleProductView({
           </div>
         </div>
 
-        {/* Slots Section */}
+        {/* ===== Chi tiết thành phần bộ ===== */}
         <div id="bundle-list" className="mt-16 pt-16 border-t border-stone/10">
-          <div className="text-center mb-12">
+          <div className="text-center mb-10">
             <h2 className="text-3xl font-display font-bold text-primary mb-4 italic">Chi tiết thành phần bộ</h2>
             <div className="w-20 h-1 bg-accent mx-auto rounded-full"></div>
             <p className="text-stone/50 mt-4 max-w-2xl mx-auto text-center">
@@ -233,71 +210,136 @@ export default function BundleProductView({
             </p>
           </div>
 
-          <div className="max-w-5xl mx-auto flex flex-col gap-6 mt-12">
+          <div className="max-w-5xl mx-auto mt-8">
             {selectedItems.length > 0 ? (
-              selectedItems.map((item, idx) => (
-                <div key={item.id} className={builderStyles.slotCard}>
-                  <div className={builderStyles.slotIndex}>{idx + 1}</div>
+              <>
+                {/* Table header */}
+                <div className={builderStyles.tableHeader}>
+                  <div className={builderStyles.colStt}>STT</div>
+                  <div className={builderStyles.colImg}></div>
+                  <div className={builderStyles.colName}>Sản phẩm</div>
+                  <div className={builderStyles.colPrice}>Đơn giá</div>
+                  <div className={builderStyles.colQty}>Số lượng</div>
+                  <div className={builderStyles.colTotal}>Thành tiền</div>
+                  <div className={builderStyles.colActions}></div>
+                </div>
 
-                  <div className={builderStyles.slotImg}>
-                    <Image
-                      src={getImageUrl(item.images?.[0] || item.primary_image || { path: item.main_image })}
-                      alt={item.name}
-                      fill
-                      style={{ objectFit: 'cover' }}
-                      unoptimized
-                    />
-                  </div>
+                {/* Table rows */}
+                <div className={builderStyles.tableBody}>
+                  {selectedItems.map((item, idx) => {
+                    const lineTotal = parseFloat(item.price || 0) * (item.qty || 1);
+                    return (
+                      <div key={item.id} className={builderStyles.tableRow}>
+                        {/* STT */}
+                        <div className={builderStyles.colStt}>
+                          <span className={builderStyles.sttBadge}>{idx + 1}</span>
+                        </div>
 
-                  <div className={builderStyles.slotDetails}>
-                    <h4>{item.name}</h4>
-                  </div>
+                        {/* Image */}
+                        <div className={builderStyles.colImg}>
+                          <div className={builderStyles.tableImgWrap}>
+                            <Image
+                              src={getImageUrl(item.images?.[0] || item.primary_image || { path: item.main_image })}
+                              alt={item.name}
+                              fill
+                              style={{ objectFit: 'cover' }}
+                              unoptimized
+                            />
+                          </div>
+                        </div>
 
-                  <div className={builderStyles.slotPriceFormula}>
-                    <div className="flex items-center flex-nowrap whitespace-nowrap gap-1.5">
-                      <span className="text-[15px] font-black text-stone/40">
-                        {formatPrice(item.price)}
-                      </span>
-                      <span className="text-[14px] font-black text-stone/20">×</span>
-                      <input
-                        type="number"
-                        min="1"
-                        value={item.qty || 1}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value) || 1;
-                          updateBundleItemQuantity(item.id, Math.max(1, val));
-                        }}
-                        className={builderStyles.qtyFormulaInput}
-                      />
-                      <span className="text-[15px] font-black text-stone/40">=</span>
-                      <span className="text-[15px] font-black text-[#c5a065]">
-                        {formatPrice(parseFloat(item.price) * (item.qty || 1))}
-                      </span>
-                    </div>
-                  </div>
+                        {/* Name */}
+                        <div className={builderStyles.colName}>
+                          <p className={builderStyles.itemName}>{item.name}</p>
+                          {item.sku && <span className={builderStyles.variantHint}>SKU: {item.sku}</span>}
+                          {item.option_title && <span className={builderStyles.configBadge}>{item.option_title}</span>}
+                        </div>
 
-                  <div className={builderStyles.slotActions}>
-                    <div className="flex gap-2">
-                      <button className={builderStyles.actionBtn} onClick={() => openSelectionModal(item)}>
-                        <span className="material-symbols-outlined text-[18px]">cached</span>
-                        Thay đổi
+                        {/* Unit price */}
+                        <div className={builderStyles.colPrice}>
+                          <span className={builderStyles.unitPrice}>{formatPrice(item.price)}</span>
+                        </div>
+
+                        {/* Qty +/- */}
+                        <div className={builderStyles.colQty}>
+                          <div className={builderStyles.qtyControl}>
+                            <button
+                              className={builderStyles.qtyBtn}
+                              onClick={() => updateBundleItemQuantity(item.id, (item.qty || 1) - 1)}
+                              disabled={(item.qty || 1) <= 1}
+                            >
+                              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>remove</span>
+                            </button>
+                            <span className={builderStyles.qtyDisplay}>{item.qty || 1}</span>
+                            <button
+                              className={builderStyles.qtyBtn}
+                              onClick={() => updateBundleItemQuantity(item.id, (item.qty || 1) + 1)}
+                            >
+                              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Line total */}
+                        <div className={builderStyles.colTotal}>
+                          <span className={builderStyles.lineTotal}>{formatPrice(lineTotal)}</span>
+                        </div>
+
+                        {/* Actions */}
+                        <div className={builderStyles.colActions}>
+                          <button className={builderStyles.changeBtn} onClick={() => openSelectionModal(item)} title="Thay đổi sản phẩm">
+                            <span className="material-symbols-outlined" style={{ fontSize: 15 }}>swap_horiz</span>
+                            Thay đổi
+                          </button>
+                          {!item.pivot?.is_required && (
+                            <button className={builderStyles.deleteBtn} onClick={() => removeBundleItem(item.id)} title="Xóa khỏi combo">
+                              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Summary footer */}
+                <div className={builderStyles.tableFooter}>
+                  <div className={builderStyles.footerLeft}>
+                    {resetBundleItems && (
+                      <button className={builderStyles.resetBtn} onClick={resetBundleItems}>
+                        <span className="material-symbols-outlined" style={{ fontSize: 16 }}>restart_alt</span>
+                        Khôi phục mặc định
                       </button>
-                      {!item.pivot?.is_required && (
-                        <button
-                          onClick={() => removeBundleItem(item.id)}
-                          className="size-10 flex items-center justify-center rounded-xl border border-stone/10 text-stone/20 hover:text-red-500 transition-colors"
-                        >
-                          <span className="material-symbols-outlined">delete</span>
-                        </button>
-                      )}
+                    )}
+                  </div>
+                  <div className={builderStyles.footerRight}>
+                    <div className={builderStyles.summaryRow}>
+                      <span className={builderStyles.summaryLabel}>Tổng {selectedItems.length} món:</span>
+                      <span className={builderStyles.summarySubtotal}>{formatPrice(subtotal)}</span>
+                    </div>
+                    {discount > 0 && (
+                      <div className={builderStyles.summaryRow}>
+                        <span className={builderStyles.summaryLabelDiscount}>Giảm giá combo:</span>
+                        <span className={builderStyles.summaryDiscount}>- {formatPrice(discount)}</span>
+                      </div>
+                    )}
+                    <div className={`${builderStyles.summaryRow} ${builderStyles.grandTotalRow}`}>
+                      <span className={builderStyles.grandTotalLabel}>Tổng thanh toán:</span>
+                      <span className={builderStyles.grandTotal}>{formatPrice(displayPrice)}</span>
                     </div>
                   </div>
                 </div>
-              ))
+              </>
             ) : (
               <div className="text-center py-20 bg-stone/5 rounded-3xl border border-dashed border-stone/20">
                 <span className="material-symbols-outlined text-4xl text-stone/20 mb-4">inventory_2</span>
-                <p className="text-stone/40 italic">Chưa có thành phần nào được chọn trong bộ.</p>
+                <p className="text-stone/40 italic mb-4">Chưa có thành phần nào được chọn trong bộ.</p>
+                {resetBundleItems && (
+                  <button className={builderStyles.resetBtn} onClick={resetBundleItems}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 16 }}>restart_alt</span>
+                    Khôi phục mặc định
+                  </button>
+                )}
               </div>
             )}
           </div>

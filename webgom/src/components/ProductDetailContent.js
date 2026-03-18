@@ -143,6 +143,26 @@ export default function ProductDetailContent({ product }) {
     });
   };
 
+  // Reset bundle to original configuration from product data
+  const resetBundleItems = () => {
+    const items = product.bundle_items || product.grouped_items || [];
+    if (items.length === 0) return;
+    let firstConfigTitle = '';
+    const mappedItems = items.map(item => {
+      const groupName = item.option_title || item.pivot?.option_title || '';
+      if (!firstConfigTitle && groupName) firstConfigTitle = groupName;
+      return {
+        ...item,
+        qty: item.pivot?.quantity || 1,
+        option_title: groupName
+      };
+    });
+    setBundleItems(mappedItems.map(item => ({
+      ...item,
+      selected: !item.option_title || item.option_title === firstConfigTitle
+    })));
+  };
+
   const toggleBundleItem = (id) => {
     setBundleItems(prev => {
       const itemToToggle = prev.find(it => it.id === id);
@@ -337,6 +357,7 @@ export default function ProductDetailContent({ product }) {
         updateBundleItemProduct={updateBundleItemProduct}
         removeBundleItem={removeBundleItem}
         switchBundleConfiguration={switchBundleConfiguration}
+        resetBundleItems={resetBundleItems}
         handleAddToCart={handleAddToCart}
       />
     );

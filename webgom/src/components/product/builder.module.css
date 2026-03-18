@@ -1201,17 +1201,49 @@
   }
 }
 
-/* Quick Summary Top */
-.quickSummaryTop {
+/* ===== Top Action Bar ===== */
+.topActionBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: white;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(197, 160, 101, 0.3);
+  box-shadow: 0 4px 12px rgba(197, 160, 101, 0.05);
+}
+
+.discountBannerInline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: rgba(16, 185, 129, 0.08);
+  color: #059669;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.discountHintInline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: rgba(197, 160, 101, 0.06);
+  color: rgba(27, 54, 93, 0.6);
+  font-size: 13px;
+}
+
+.quickSummaryTopInline {
   display: flex;
   justify-content: flex-end;
   align-items: center;
   gap: 16px;
-  background: white;
-  padding: 12px 16px;
-  border-radius: 8px;
-  border: 1px solid rgba(197, 160, 101, 0.3);
-  box-shadow: 0 4px 12px rgba(197, 160, 101, 0.05);
+  flex-wrap: wrap;
 }
 
 .quickSummaryPrice {

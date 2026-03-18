@@ -309,35 +309,36 @@ export default function BundleProductView({
               </div>
             )}
 
-            {/* === Discount banner === */}
-            {isFullCombo ? (
-              <div className={builderStyles.discountBanner}>
-                <span className="material-symbols-outlined">local_offer</span>
-                <span>Bạn đang mua <strong>trọn bộ {activeTab}</strong> — Ưu đãi giảm <strong>{(DISCOUNT_RATE * 100).toFixed(0)}%</strong> đã được áp dụng!</span>
-              </div>
-            ) : tabItems.length > 0 ? (
-              <div className={builderStyles.discountHint}>
-                <span className="material-symbols-outlined">info</span>
-                <span>Mua đủ <strong>{tabItems.length} món</strong> của bộ <strong>{activeTab}</strong> để nhận ưu đãi giảm {(DISCOUNT_RATE * 100).toFixed(0)}%</span>
-              </div>
-            ) : null}
-
-            {/* === Quick Summary (Top) === */}
+            {/* === Top Action Bar === */}
             {tabItems.length > 0 && (
-              <div className={builderStyles.quickSummaryTop}>
-                <div className={builderStyles.quickSummaryPrice}>
-                  <span className={builderStyles.quickSummaryLabel}>Bộ này thanh toán:</span>
-                  <span className={builderStyles.quickSummaryValue}>{formatPrice(tabFinalPrice)}</span>
-                </div>
-                {handleBuyTabConfig && tabItems.some(i => !i.removed) && (
-                  <button
-                    className={builderStyles.buyTabBtnSmall}
-                    onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
-                  >
-                    <span className="material-symbols-outlined" style={{ fontSize: 18 }}>shopping_cart_checkout</span>
-                    Mua ngay
-                  </button>
+              <div className={builderStyles.topActionBar}>
+                {isFullCombo ? (
+                  <div className={builderStyles.discountBannerInline}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 18 }}>local_offer</span>
+                    <span>Bạn đang mua trọn bộ — Ưu đãi giảm <strong>{(DISCOUNT_RATE * 100).toFixed(0)}%</strong>!</span>
+                  </div>
+                ) : (
+                  <div className={builderStyles.discountHintInline}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 18 }}>info</span>
+                    <span>Mua đủ <strong>{tabItems.length} món</strong> nhận ưu đãi giảm {(DISCOUNT_RATE * 100).toFixed(0)}%</span>
+                  </div>
                 )}
+
+                <div className={builderStyles.quickSummaryTopInline}>
+                  <div className={builderStyles.quickSummaryPrice}>
+                    <span className={builderStyles.quickSummaryLabel}>Thanh toán:</span>
+                    <span className={builderStyles.quickSummaryValue}>{formatPrice(tabFinalPrice)}</span>
+                  </div>
+                  {handleBuyTabConfig && tabItems.some(i => !i.removed) && (
+                    <button
+                      className={builderStyles.buyTabBtnSmall}
+                      onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
+                    >
+                      <span className="material-symbols-outlined" style={{ fontSize: 18 }}>shopping_cart_checkout</span>
+                      Mua ngay
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 

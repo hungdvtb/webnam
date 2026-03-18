@@ -159,7 +159,10 @@ export default function BundleProductView({
               {configurations.length > 0 && (
                 <div className={styles.configOptionsCard}>
                   {product.bundle_title && (
-                    <h4 className={styles.configOptionsTitle}>{product.bundle_title}</h4>
+                    <h4 className={styles.configOptionsTitle}>
+                      <span className={`material-symbols-outlined ${styles.relatedOptionsIcon}`}>tune</span>
+                      {product.bundle_title}
+                    </h4>
                   )}
                   <div className={styles.configOptionsGrid}>
                     {configurations.map(config => (

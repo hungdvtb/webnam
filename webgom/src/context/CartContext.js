@@ -49,10 +49,12 @@ export function CartProvider({ children }) {
         slug: product.slug,
         sku: product.sku,
         price: finalPrice || product.price,
+        originalPrice: finalPrice || product.price,
         image: product.primary_image || (product.images && product.images[0]),
         quantity,
         options,
-        groupedItems: groupedItems
+        groupedItems: groupedItems,
+        originalSubCount: groupedItems.length   // track full-combo size for discount logic
       }];
     });
   };
@@ -79,9 +81,17 @@ export function CartProvider({ children }) {
   };
 
   const cartCount = cartItems.reduce((acc, item) => acc + item.quantity, 0);
+
+  // Dynamically compute from sub-items for bundle/combo items so that
+  // removing or changing qty of a sub-item is instantly reflected.
   const cartTotal = cartItems.reduce((acc, item) => {
-    // For grouped products, the price might be dynamic. 
-    // If we store the final price at add-to-cart time, it's safer.
+    if (item.groupedItems?.length > 0) {
+      const subTotal = item.groupedItems.reduce(
+        (s, gi) => s + (parseFloat(gi.price || 0) * (gi.qty || 1)),
+        0
+      );
+      return acc + (subTotal * item.quantity);
+    }
     return acc + (item.price * item.quantity);
   }, 0);
 

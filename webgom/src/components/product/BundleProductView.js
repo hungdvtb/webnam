@@ -113,7 +113,7 @@ export default function BundleProductView({
                     <div className={styles.relatedOptionsCard}>
                       <h4 className={styles.relatedOptionsTitle}>
                         <span className={`material-symbols-outlined ${styles.relatedOptionsIcon}`}>view_cozy</span>
-                        Lựa Chọn Khác
+                        Lựa Chọn Mẫu Khác
                       </h4>
                       <div className={styles.relatedOptionsGrid}>
                         {uniqueOptions.map(bundle => {

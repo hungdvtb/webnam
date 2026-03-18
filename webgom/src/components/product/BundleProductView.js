@@ -322,6 +322,25 @@ export default function BundleProductView({
               </div>
             ) : null}
 
+            {/* === Quick Summary (Top) === */}
+            {tabItems.length > 0 && (
+              <div className={builderStyles.quickSummaryTop}>
+                <div className={builderStyles.quickSummaryPrice}>
+                  <span className={builderStyles.quickSummaryLabel}>Bộ này thanh toán:</span>
+                  <span className={builderStyles.quickSummaryValue}>{formatPrice(tabFinalPrice)}</span>
+                </div>
+                {handleBuyTabConfig && tabItems.some(i => !i.removed) && (
+                  <button
+                    className={builderStyles.buyTabBtnSmall}
+                    onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: 18 }}>shopping_cart_checkout</span>
+                    Mua ngay
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* === Table === */}
             {tabItems.length > 0 ? (
               <>

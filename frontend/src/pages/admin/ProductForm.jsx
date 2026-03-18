@@ -1075,7 +1075,8 @@ const ProductForm = () => {
                     id: item.id,
                     name: item.name,
                     sku: item.sku,
-                    price: item.price,
+                    price: item.pivot?.price || item.price,
+                    cost_price: item.pivot?.cost_price || item.cost_price,
                     quantity: item.pivot?.quantity || 1,
                     is_required: !!(item.pivot?.is_required),
                     option_title: item.pivot?.option_title || '',
@@ -1116,7 +1117,8 @@ const ProductForm = () => {
                         id: item.id,
                         name: item.name,
                         sku: item.sku,
-                        price: item.price,
+                        price: item.pivot?.price || item.price,
+                        cost_price: item.pivot?.cost_price || item.cost_price,
                         quantity: item.pivot?.quantity || 1,
                         is_required: !!item.pivot?.is_required,
                         is_default: !!item.pivot?.is_default,
@@ -1806,6 +1808,7 @@ const ProductForm = () => {
                 name: product.name,
                 sku: product.sku,
                 price: product.price,
+                cost_price: product.cost_price,
                 quantity: 1,
                 is_required: true,
                 is_default: o.items.length === 0,
@@ -1870,6 +1873,7 @@ const ProductForm = () => {
                         variant_label: selectedVariant.name || (selectedVariant.attribute_values || []).map(av => av.value).join(' / '),
                         sku: selectedVariant.sku,
                         price: selectedVariant.price,
+                        cost_price: selectedVariant.cost_price,
                         image_url: (selectedVariant.images?.find(img => img.is_primary) || selectedVariant.images?.[0])?.image_url || it.image_url
                     };
                 })
@@ -1917,6 +1921,7 @@ const ProductForm = () => {
                     // Root product price
                     updatedItemsMap[pId] = {
                         price: product.price,
+                        cost_price: product.cost_price,
                         sku: product.sku
                     };
 
@@ -1926,6 +1931,7 @@ const ProductForm = () => {
                         variants.forEach(v => {
                             updatedItemsMap[`${pId}_${v.id}`] = {
                                 price: v.price,
+                                cost_price: v.cost_price,
                                 sku: v.sku
                             };
                         });
@@ -2023,6 +2029,10 @@ const ProductForm = () => {
                         submitData.append(`grouped_items[${idx}][is_required]`, item.is_required ? '1' : '0');
                         submitData.append(`grouped_items[${idx}][option_title]`, item.option_title || '');
                         submitData.append(`grouped_items[${idx}][is_default]`, item.is_default ? '1' : '0');
+                        submitData.append(`grouped_items[${idx}][price]`, item.price || 0);
+                        if (item.cost_price !== undefined && item.cost_price !== null) {
+                            submitData.append(`grouped_items[${idx}][cost_price]`, item.cost_price);
+                        }
                         if (item.variant_id) {
                             submitData.append(`grouped_items[${idx}][variant_id]`, item.variant_id);
                         }

@@ -243,6 +243,8 @@ class ProductController extends Controller
             'grouped_items.*.variant_id' => 'nullable|exists:products,id',
             'grouped_items.*.option_title' => 'nullable|string',
             'grouped_items.*.is_default' => 'nullable|boolean',
+            'grouped_items.*.price' => 'nullable|numeric|min:0',
+            'grouped_items.*.cost_price' => 'nullable|numeric|min:0',
             'super_attribute_ids' => 'nullable|array',
             'super_attribute_ids.*' => 'exists:attributes,id',
             // EAV custom values
@@ -373,6 +375,8 @@ class ProductController extends Controller
                     'option_title' => $item['option_title'] ?? null,
                     'is_default' => $item['is_default'] ?? false,
                     'variant_id' => $item['variant_id'] ?? null,
+                    'price' => $item['price'] ?? null,
+                    'cost_price' => $item['cost_price'] ?? null,
                 ];
 
                 if ($product->type === 'bundle') {
@@ -456,7 +460,7 @@ class ProductController extends Controller
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:id,name,code,frontend_type',
             'linkedProducts' => function ($q) {
-            $q->select(['products.id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'type', 'weight'])
+            $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
                 ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
                 ->with([
                     'images:id,product_id,image_url,is_primary',
@@ -465,16 +469,16 @@ class ProductController extends Controller
                 ]);
         },
             'groupedItems' => function ($q) {
-                $q->select(['products.id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'type', 'weight'])
-                    ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
+                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
+                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'price', 'cost_price'])
                     ->with([
                         'images:id,product_id,image_url,is_primary',
                         'attributeValues:id,product_id,attribute_id,value'
                     ]);
             },
             'bundleItems' => function ($q) {
-                $q->select(['products.id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'type', 'weight'])
-                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'is_default', 'variant_id'])
+                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
+                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'images:id,product_id,image_url,is_primary',
                         'attributeValues:id,product_id,attribute_id,value'
@@ -565,6 +569,8 @@ class ProductController extends Controller
             'grouped_items.*.variant_id' => 'nullable|exists:products,id',
             'grouped_items.*.option_title' => 'nullable|string',
             'grouped_items.*.is_default' => 'nullable|boolean',
+            'grouped_items.*.price' => 'nullable|numeric|min:0',
+            'grouped_items.*.cost_price' => 'nullable|numeric|min:0',
             'super_attribute_ids' => 'nullable|array',
             'super_attribute_ids.*' => 'exists:attributes,id',
             // EAV custom values
@@ -676,6 +682,8 @@ class ProductController extends Controller
                     'option_title' => $item['option_title'] ?? null,
                     'is_default' => $item['is_default'] ?? false,
                     'variant_id' => $item['variant_id'] ?? null,
+                    'price' => $item['price'] ?? null,
+                    'cost_price' => $item['cost_price'] ?? null,
                 ];
 
                 if ($product->type === 'bundle') {

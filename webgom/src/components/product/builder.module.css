@@ -240,27 +240,247 @@
 }
 
 .modalFooter {
-  padding: 1.5rem;
-  background: #fbfaf8;
-  border-top: 1px solid rgba(27, 54, 93, 0.05);
+  padding: 1.25rem 1.5rem;
+  background: #f8f7f4;
+  border-top: 1px solid rgba(27, 54, 93, 0.08);
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .footerBtn {
-  padding: 0.75rem 2rem;
-  border-radius: 12px;
-  border: 1px solid rgba(27, 54, 93, 0.1);
+  padding: 0.6rem 1.75rem;
+  border-radius: 10px;
+  border: 1.5px solid rgba(27, 54, 93, 0.15);
   background: white;
-  font-weight: 700;
-  color: #666;
+  font-weight: 800;
+  color: #1b365d;
   cursor: pointer;
-  transition: all 0.3s;
+  transition: all 0.25s;
+  font-size: 13px;
 }
 
 .footerBtn:hover {
-  background: #f0f0f0;
+  background: #1b365d;
+  color: white;
+  border-color: #1b365d;
+}
+
+/* ===== Modal mode tabs ===== */
+
+.modalTabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid rgba(27, 54, 93, 0.08);
+  background: #fafaf8;
+}
+
+.modalTab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 16px;
+  border: none;
+  background: transparent;
+  color: #555;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: all 0.2s;
+}
+
+.modalTab:hover {
   color: #1b365d;
+  background: rgba(27, 54, 93, 0.03);
+}
+
+.modalTabActive {
+  color: #1b365d;
+  border-bottom-color: #c5a065;
+  background: white;
+}
+
+/* ===== Product Card Grid (in modal) ===== */
+
+.productGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.productCard {
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  border: 1.5px solid rgba(27, 54, 93, 0.08);
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  background: white;
+  position: relative;
+}
+
+.productCard:hover {
+  border-color: #c5a065;
+  box-shadow: 0 8px 24px rgba(197, 160, 101, 0.15);
+  transform: translateY(-3px);
+}
+
+.productCardActive {
+  border-color: #1b365d;
+  box-shadow: 0 0 0 2px rgba(27, 54, 93, 0.15);
+}
+
+.currentBadge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  background: #1b365d;
+  color: white;
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.productCardImg {
+  width: 100%;
+  aspect-ratio: 1;
+  position: relative;
+  background: #f4f2ee;
+  overflow: hidden;
+}
+
+.productCardInfo {
+  padding: 10px 10px 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.productCardName {
+  font-size: 12px;
+  font-weight: 800;
+  color: #1b365d;
+  margin: 0;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.productCardSku {
+  font-size: 10px;
+  color: #666;
+  font-weight: 700;
+  font-family: 'Inter', monospace;
+  margin: 0;
+}
+
+.productCardPrice {
+  font-size: 14px;
+  font-weight: 900;
+  color: #c5a065;
+  margin: 2px 0 0;
+}
+
+.inStock {
+  font-size: 10px;
+  font-weight: 700;
+  color: #059669;
+}
+
+.outStock {
+  font-size: 10px;
+  font-weight: 700;
+  color: #dc2626;
+}
+
+.productCardSelectBtn {
+  margin: 8px 10px 10px;
+  padding: 7px 0;
+  border-radius: 8px;
+  border: none;
+  background: #1b365d;
+  color: white;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.productCardSelectBtn:hover {
+  background: #c5a065;
+}
+
+.productCardActive .productCardSelectBtn {
+  background: #059669;
+}
+
+.switchModeBtn {
+  margin-top: 16px;
+  padding: 8px 20px;
+  border-radius: 8px;
+  border: 1.5px solid #c5a065;
+  background: transparent;
+  color: #c5a065;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.switchModeBtn:hover {
+  background: #c5a065;
+  color: white;
+}
+
+/* ===== Mua bộ này button ===== */
+
+.buyTabBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 24px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #c5a065 0%, #a07840 100%);
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 16px rgba(197, 160, 101, 0.35);
+  text-transform: uppercase;
+  width: 100%;
+}
+
+.buyTabBtn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(197, 160, 101, 0.45);
+  background: linear-gradient(135deg, #d4af75 0%, #b08850 100%);
+}
+
+.buyTabBtn:active {
+  transform: translateY(0);
 }
 
 /* ===== Bundle Detail Table ===== */
@@ -374,7 +594,7 @@
 
 .itemName {
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 800;
   color: #1b365d;
   margin: 0;
   line-height: 1.3;
@@ -385,15 +605,16 @@
 
 .variantHint {
   font-size: 11px;
-  color: #999;
+  color: #555;
   font-family: 'Inter', monospace;
+  font-weight: 600;
 }
 
 .configBadge {
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 800;
   color: #8e5229;
-  background: rgba(142, 82, 41, 0.08);
+  background: rgba(142, 82, 41, 0.1);
   padding: 2px 6px;
   border-radius: 4px;
   width: fit-content;
@@ -401,8 +622,8 @@
 
 .unitPrice {
   font-size: 13px;
-  font-weight: 700;
-  color: rgba(27, 54, 93, 0.6);
+  font-weight: 800;
+  color: #1b365d;
 }
 
 .qtyControl {
@@ -444,13 +665,13 @@
   min-width: 28px;
   text-align: center;
   font-weight: 900;
-  font-size: 14px;
+  font-size: 15px;
   color: #1b365d;
   user-select: none;
 }
 
 .lineTotal {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 900;
   color: #c5a065;
 }
@@ -553,14 +774,14 @@
 
 .summaryLabel {
   font-size: 13px;
-  color: rgba(27, 54, 93, 0.6);
-  font-weight: 600;
+  color: #1b365d;
+  font-weight: 700;
 }
 
 .summarySubtotal {
   font-size: 14px;
-  font-weight: 700;
-  color: rgba(27, 54, 93, 0.7);
+  font-weight: 800;
+  color: #1b365d;
 }
 
 .summaryLabelDiscount {

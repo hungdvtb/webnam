@@ -335,6 +335,22 @@ export default function ProductDetailContent({ product }) {
     router.push('/cart');
   };
 
+  // Buy only the items in a specific tab config (called from BundleProductView)
+  const handleBuyTabConfig = (tabItems, finalPrice) => {
+    const itemsToCart = tabItems
+      .filter(it => !it.removed)
+      .map((it, idx) => ({
+        uid: `${it.id}_${it.pivot?.variant_id || idx}`,
+        id: it.id,
+        name: it.name,
+        qty: it.qty || 1,
+        price: it.price,
+        image: it.images?.[0]?.image_url || it.primary_image?.url
+      }));
+    addToCart(product, 1, {}, itemsToCart, finalPrice);
+    router.push('/cart');
+  };
+
   const commonProps = {
     product,
     displayPrice,
@@ -368,6 +384,7 @@ export default function ProductDetailContent({ product }) {
         switchBundleConfiguration={switchBundleConfiguration}
         resetBundleItems={resetBundleItems}
         handleAddToCart={handleAddToCart}
+        handleBuyTabConfig={handleBuyTabConfig}
       />
     );
   }

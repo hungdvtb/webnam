@@ -32,6 +32,7 @@ export default function BundleProductView({
   resetBundleItems,
   handleAddToCart,
   handleBuyNow,
+  handleBuyTabConfig,
   quantity,
   setQuantity,
   additionalInfo
@@ -487,6 +488,16 @@ export default function BundleProductView({
                       <span className={builderStyles.grandTotalLabel}>Bộ này thanh toán:</span>
                       <span className={builderStyles.grandTotal}>{formatPrice(tabFinalPrice)}</span>
                     </div>
+                    {/* Mua bộ này */}
+                    {handleBuyTabConfig && tabItems.some(i => !i.removed) && (
+                      <button
+                        className={builderStyles.buyTabBtn}
+                        onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: 20 }}>shopping_cart_checkout</span>
+                        Mua bộ {activeTab || 'này'} ngay
+                      </button>
+                    )}
                   </div>
                 </div>
               </>

@@ -735,6 +735,8 @@
 .footerLeft {
   display: flex;
   align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .footerRight {
@@ -773,6 +775,12 @@
 }
 
 .summaryLabel {
+  font-size: 13px;
+  color: #1b365d;
+  font-weight: 800;
+}
+
+.summaryLabelSub {
   font-size: 13px;
   color: #1b365d;
   font-weight: 700;

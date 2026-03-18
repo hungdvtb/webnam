@@ -481,19 +481,23 @@ export default function BundleProductView({
 
                 {/* Summary footer */}
                 <div className={builderStyles.tableFooter}>
-                  <div className={builderStyles.footerRight} style={{ width: '100%' }}>
+                  {/* Left: Tổng món + nút Khôi phục cùng hàng */}
+                  <div className={builderStyles.footerLeft}>
+                    <span className={builderStyles.summaryLabel}>
+                      Tổng {tabItems.filter(i => !i.removed).length} món ({activeTab || 'bộ hiện tại'})
+                    </span>
+                    {resetBundleItems && (
+                      <button className={builderStyles.resetBtn} onClick={resetBundleItems}>
+                        <span className="material-symbols-outlined" style={{ fontSize: 15 }}>restart_alt</span>
+                        Khôi phục mặc định
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Right: giá, discount, nút mua */}
+                  <div className={builderStyles.footerRight}>
                     <div className={builderStyles.summaryRow}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <span className={builderStyles.summaryLabel}>
-                          Tổng {tabItems.filter(i => !i.removed).length} món ({activeTab || 'bộ hiện tại'}):
-                        </span>
-                        {resetBundleItems && (
-                          <button className={builderStyles.resetBtn} onClick={resetBundleItems}>
-                            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>restart_alt</span>
-                            Khôi phục mặc định
-                          </button>
-                        )}
-                      </div>
+                      <span className={builderStyles.summaryLabelSub}>Tạm tính:</span>
                       <span className={builderStyles.summarySubtotal}>{formatPrice(tabSubtotal)}</span>
                     </div>
                     {isFullCombo && tabDiscountAmount > 0 && (

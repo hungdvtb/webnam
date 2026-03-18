@@ -576,6 +576,45 @@
   display: none;
 }
 
+.customizeBundleBtn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.875rem 1rem;
+  background-color: rgba(197, 160, 101, 0.08);
+  color: var(--accent);
+  border: 1px solid rgba(197, 160, 101, 0.3);
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+}
+
+.customizeBundleBtn:hover {
+  background-color: var(--accent);
+  color: white;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(197, 160, 101, 0.25);
+  border-color: var(--accent);
+}
+
+.customizeBundleBtn:active {
+  transform: translateY(0);
+}
+
+.customizeBundleBtn span {
+  font-size: 1.25rem;
+  transition: transform 0.3s ease;
+}
+
+.customizeBundleBtn:hover span {
+  transform: scale(1.1);
+}
+
 /* Buttons */
 .quantitySection {
   display: flex;

@@ -194,15 +194,20 @@ export default function BundleProductView({
               </div>
 
               {/* Bundle Components Preview (Compact) */}
-              <div className={styles.variantsCard}>
-                <h4 className={styles.variantLabel}>Tóm tắt thành phần bộ</h4>
-                <button
-                  onClick={() => document.getElementById('bundle-list')?.scrollIntoView({ behavior: 'smooth' })}
-                  className="text-[11px] text-accent font-bold mt-2 hover:underline flex items-center gap-1"
-                >
-                  <span className="material-symbols-outlined text-[14px]">visibility</span>
-                  Xem chi tiết & tùy chỉnh thành phần bên dưới
-                </button>
+              <div className={styles.specCard}>
+                <h4 className={styles.specTitle}>
+                  <span className="material-symbols-outlined">view_list</span>
+                  Tóm tắt thành phần bộ
+                </h4>
+                <div className="mt-3">
+                  <button
+                    onClick={() => document.getElementById('bundle-list')?.scrollIntoView({ behavior: 'smooth' })}
+                    className={styles.customizeBundleBtn}
+                  >
+                    <span className="material-symbols-outlined">tune</span>
+                    Xem chi tiết & tùy chỉnh thành phần bên dưới
+                  </button>
+                </div>
               </div>
 
               <SpecificationList product={product} />

@@ -266,16 +266,16 @@ export default function BundleProductView({
         </div>
 
         {/* ===== Chi tiết thành phần bộ ===== */}
-        <div id="bundle-list" className="pt-16 border-t border-stone/10" style={{ marginTop: '15px' }}>
-          <div className="text-center" style={{ marginBottom: '15px' }}>
-            <h2 className="text-3xl font-display font-bold text-primary italic" style={{ marginBottom: '15px' }}>Chi tiết thành phần bộ</h2>
+        <div id="bundle-list" className="pt-16 border-t border-stone/10" style={{ marginTop: '12px' }}>
+          <div className="text-center" style={{ marginBottom: '12px' }}>
+            <h2 className="text-3xl font-display font-bold text-primary italic" style={{ marginBottom: '12px' }}>Chi tiết thành phần bộ</h2>
             <div className="w-20 h-1 bg-accent mx-auto rounded-full"></div>
-            <p className="text-stone/50 max-w-2xl mx-auto" style={{ marginTop: '15px' }}>
+            <p className="text-stone/50 max-w-2xl mx-auto" style={{ marginTop: '12px' }}>
               Tùy chỉnh số lượng hoặc thay đổi từng món theo từng cấu hình để phù hợp nhu cầu của Quý khách.
             </p>
           </div>
 
-          <div className="max-w-5xl mx-auto" style={{ marginTop: '15px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+          <div className="max-w-5xl mx-auto" style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
             {/* === Tab bar === */}
             {configurations.length > 0 && (

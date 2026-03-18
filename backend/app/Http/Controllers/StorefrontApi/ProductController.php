@@ -248,7 +248,12 @@ class ProductController extends Controller
             $product = Product::query()
                 ->when($accountId, fn($q) => $q->where('account_id', $accountId))
                 ->where('status', true)
-                ->where('slug', $slug)
+                ->where(function($q) use ($slug) {
+                    $q->where('slug', $slug);
+                    if (is_numeric($slug)) {
+                        $q->orWhere('id', (int)$slug);
+                    }
+                })
                 ->with([
                     'images', 
                     'category', 

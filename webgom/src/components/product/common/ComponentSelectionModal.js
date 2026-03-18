@@ -25,13 +25,16 @@ export default function ComponentSelectionModal({
   const [variants, setVariants] = useState([]);
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState(null);
 
   // Load variants of current slot's parent product
   const fetchVariants = useCallback(async () => {
-    if (!isOpen || !currentSlot?.slug) return;
+    const identifier = currentSlot?.slug || currentSlot?.id;
+    if (!isOpen || !identifier) return;
     setLoading(true);
+    setErrorMsg(null);
     try {
-      const res = await fetchFromApi(`/web-api/products/${currentSlot.slug}`);
+      const res = await fetchFromApi(`/web-api/products/${identifier}`);
       const data = res || {};
       // For configurable products: linked_products with super_link
       const linked = (data.linked_products || []).filter(p => p.pivot?.link_type === 'super_link');
@@ -40,12 +43,16 @@ export default function ComponentSelectionModal({
       } else if (data.variations?.length > 0) {
         // Already has variations array
         setVariants(data.variations);
-      } else {
+      } else if (data.id) {
         // Simple product — show itself as only option
         setVariants([data]);
+      } else {
+        setErrorMsg("API không trả về thông tin sản phẩm: " + JSON.stringify(data));
+        setVariants([]);
       }
     } catch (e) {
       console.error(e);
+      setErrorMsg("Lỗi khi gọi API biến thể: " + e.message + " | slug: " + currentSlot.slug);
       setVariants([]);
     } finally {
       setLoading(false);
@@ -56,12 +63,14 @@ export default function ComponentSelectionModal({
   const fetchSearch = useCallback(async () => {
     if (!isOpen) return;
     setLoading(true);
+    setErrorMsg(null);
     try {
       const params = { search: searchTerm || currentSlot?.name || '', per_page: 12, allow_variants: 1 };
       const res = await getWebProducts(params);
-      setSearchResults(res.data || []);
+      setSearchResults(Array.isArray(res.data) ? res.data : (res.data?.data || []));
     } catch (e) {
       console.error(e);
+      setErrorMsg("Lỗi khi tìm kiếm: " + e.message);
       setSearchResults([]);
     } finally {
       setLoading(false);
@@ -199,12 +208,18 @@ export default function ComponentSelectionModal({
           ) : (
             <div className={styles.emptyState}>
               <span className="material-symbols-outlined">inventory_2</span>
-              <p style={{ color: '#555', fontWeight: 600 }}>
-                {mode === 'variants'
-                  ? 'Không có biến thể nào khác cho sản phẩm này.'
-                  : 'Không tìm thấy sản phẩm phù hợp.'}
-              </p>
-              {mode === 'variants' && (
+              {errorMsg ? (
+                <p style={{ color: '#dc2626', fontWeight: 600, padding: 10, background: '#fee2e2', borderRadius: 8 }}>
+                  {errorMsg}
+                </p>
+              ) : (
+                <p style={{ color: '#555', fontWeight: 600 }}>
+                  {mode === 'variants'
+                    ? 'Không có biến thể nào khác cho sản phẩm này.'
+                    : 'Không tìm thấy sản phẩm phù hợp.'}
+                </p>
+              )}
+              {mode === 'variants' && !errorMsg && (
                 <button
                   className={styles.switchModeBtn}
                   onClick={() => setMode('search')}

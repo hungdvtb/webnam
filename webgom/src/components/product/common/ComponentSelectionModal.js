@@ -32,7 +32,7 @@ export default function ComponentSelectionModal({
     setLoading(true);
     try {
       const res = await fetchFromApi(`/web-api/products/${currentSlot.slug}`);
-      const data = res.data || {};
+      const data = res || {};
       // For configurable products: linked_products with super_link
       const linked = (data.linked_products || []).filter(p => p.pivot?.link_type === 'super_link');
       if (linked.length > 0) {
@@ -57,7 +57,7 @@ export default function ComponentSelectionModal({
     if (!isOpen) return;
     setLoading(true);
     try {
-      const params = { q: searchTerm || currentSlot?.name || '', per_page: 12 };
+      const params = { search: searchTerm || currentSlot?.name || '', per_page: 12, allow_variants: 1 };
       const res = await getWebProducts(params);
       setSearchResults(res.data || []);
     } catch (e) {

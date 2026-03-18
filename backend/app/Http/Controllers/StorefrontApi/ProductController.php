@@ -53,7 +53,9 @@ class ProductController extends Controller
         $query = Product::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
-            ->whereDoesntHave('parentConfigurable'); // Đảm bảo không hiển thị sản phẩm con (biến thể) ra danh sách chính
+            ->when(!$request->boolean('allow_variants'), function($q) {
+                $q->whereDoesntHave('parentConfigurable'); // Hide variants by default
+            });
 
         // Filter by category slug
         if ($request->filled('category')) {

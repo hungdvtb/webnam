@@ -123,12 +123,14 @@ export default function ProductDetailContent({ product }) {
       if (item.id === oldItemId) {
         return {
           ...newProduct,
+          id: newProduct.id,
           qty: item.qty || 1,
           selected: true,
-          option_title: item.option_title,
+          removed: false,
+          option_title: item.option_title || item.pivot?.option_title,
           pivot: {
               ...item.pivot,
-              variant_id: newProduct.pivot?.link_type === 'super_link' ? newProduct.id : null
+              variant_id: (newProduct.pivot?.link_type === 'super_link') ? newProduct.id : (item.pivot?.variant_id || null)
           }
         };
       }

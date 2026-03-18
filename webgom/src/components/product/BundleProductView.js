@@ -481,11 +481,8 @@ export default function BundleProductView({
 
                 {/* Summary footer */}
                 <div className={builderStyles.tableFooter}>
-                  {/* Left: Tổng món + nút Khôi phục cùng hàng */}
+                  {/* Left part: Reset button only (aligned to the top row) */}
                   <div className={builderStyles.footerLeft}>
-                    <span className={builderStyles.summaryLabel}>
-                      Tổng {tabItems.filter(i => !i.removed).length} món ({activeTab || 'bộ hiện tại'})
-                    </span>
                     {resetBundleItems && (
                       <button className={builderStyles.resetBtn} onClick={resetBundleItems}>
                         <span className="material-symbols-outlined" style={{ fontSize: 15 }}>restart_alt</span>
@@ -494,8 +491,15 @@ export default function BundleProductView({
                     )}
                   </div>
 
-                  {/* Right: giá, discount, nút mua */}
+                  {/* Right part: Summary rows starting with total items count */}
                   <div className={builderStyles.footerRight}>
+                    <div className={builderStyles.summaryRow}>
+                      <span className={builderStyles.summaryLabelSub}>
+                        Tổng {tabItems.filter(i => !i.removed).length} món ({activeTab || 'bộ hiện tại'}):
+                      </span>
+                      {/* Empty span to satisfy space-between row layout */}
+                      <span></span>
+                    </div>
                     <div className={builderStyles.summaryRow}>
                       <span className={builderStyles.summaryLabelSub}>Tạm tính:</span>
                       <span className={builderStyles.summarySubtotal}>{formatPrice(tabSubtotal)}</span>

@@ -90,7 +90,7 @@ class Product extends Model
     public function linkedProducts()
     {
         return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
-                    ->withPivot(['link_type', 'position'])
+                    ->withPivot(['link_type', 'position', 'option_title'])
                     ->orderByPivot('position', 'asc')
                     ->withTimestamps();
     }
@@ -102,7 +102,7 @@ class Product extends Model
     {
         return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
                     ->wherePivot('link_type', 'related')
-                    ->withPivot(['link_type', 'position'])
+                    ->withPivot(['link_type', 'position', 'option_title'])
                     ->orderByPivot('position', 'asc')
                     ->withTimestamps();
     }

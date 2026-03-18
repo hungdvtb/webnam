@@ -145,6 +145,70 @@ const StorefrontProductDetail = () => {
                             </Link>
                         )}
                         <h1 className="text-xl md:text-2xl font-black text-stone-900 uppercase tracking-tight leading-tight">{product.name}</h1>
+                        
+                        {/* SKU & Stock Status (Newly Added per request) */}
+                        <div className="flex items-center gap-3 text-xs md:text-sm font-medium text-stone-600 flex-wrap">
+                            <span>
+                                Mã {product?.type === 'bundle' || product?.type === 'grouped' ? 'bộ' : 'SP'}: <strong className="text-stone-800 tracking-wider uppercase">{product?.sku || 'N/A'}</strong>
+                            </span>
+                            <span className="w-1 h-1 rounded-full bg-stone-300"></span>
+                            <span className={`flex items-center gap-1.5 ${product?.stock_quantity > 0 || product?.type === 'bundle' || product?.type === 'grouped' ? 'text-green-600' : 'text-red-500'}`}>
+                                <span className="w-1.5 h-1.5 rounded-full bg-current shadow-[0_0_4px_currentColor]"></span>
+                                {product?.stock_quantity > 0 || product?.type === 'bundle' || product?.type === 'grouped' ? 'Sẵn sàng giao ngay' : 'Hết hàng'}
+                            </span>
+                        </div>
+
+                        {/* Bundle Quick Selection */}
+                        {product?.type === 'bundle' && (
+                            (() => {
+                                const allOptions = [product, ...(product.related_products || [])];
+                                const uniqueOptions = Array.from(new Map(allOptions.map(b => [b.id, b])).values());
+                                
+                                if (uniqueOptions.length <= 1) return null;
+                                return (
+                                    <div className="mt-4 pt-4 border-t border-stone-100">
+                                        <div className="grid grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-2">
+                                            {uniqueOptions.map(bundle => {
+                                                const isSelected = bundle.id === product.id;
+                                                const imgUrl = bundle.images?.find(img => img.is_primary)?.image_url || bundle.images?.[0]?.image_url || bundle.images?.[0]?.url || 'https://placehold.co/100';
+                                                
+                                                return isSelected ? (
+                                                    <div
+                                                        key={bundle.id}
+                                                        className="relative flex items-center gap-2 p-1.5 border transition-all text-left overflow-hidden border-primary ring-1 ring-primary/20 bg-primary/5 cursor-default rounded-lg"
+                                                        title={bundle.name}
+                                                    >
+                                                        <div className="w-10 h-10 bg-white border border-stone-100 p-0.5 overflow-hidden flex-shrink-0 rounded-md">
+                                                            <img src={imgUrl} className="w-full h-full object-cover rounded-sm" alt="" />
+                                                        </div>
+                                                        <div className="flex-1 min-w-0 pr-1">
+                                                            <p className="text-[11px] font-bold line-clamp-2 leading-tight text-primary">{bundle.name}</p>
+                                                        </div>
+                                                        <div className="absolute top-1 right-1 text-primary bg-white rounded-full leading-none shadow-sm">
+                                                            <span className="material-symbols-outlined text-[12px]">check_circle</span>
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <Link
+                                                        key={bundle.id}
+                                                        to={`/san-pham/${bundle.slug || bundle.id}`}
+                                                        className="relative flex items-center gap-2 p-1.5 border transition-all text-left overflow-hidden border-stone-200 bg-white hover:border-primary/40 hover:-translate-y-0.5 cursor-pointer shadow-sm hover:shadow-md rounded-lg"
+                                                        title={bundle.name}
+                                                    >
+                                                        <div className="w-10 h-10 bg-white border border-stone-100 p-0.5 overflow-hidden flex-shrink-0 rounded-md">
+                                                            <img src={imgUrl} className="w-full h-full object-cover rounded-sm" alt="" />
+                                                        </div>
+                                                        <div className="flex-1 min-w-0 pr-1">
+                                                            <p className="text-[11px] font-bold line-clamp-2 leading-tight text-stone-700">{bundle.name}</p>
+                                                        </div>
+                                                    </Link>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                );
+                            })()
+                        )}
 
                         {/* Rating */}
                         {product.review_count > 0 && (
@@ -167,11 +231,7 @@ const StorefrontProductDetail = () => {
                             )}
                         </div>
 
-                        {/* Stock */}
-                        <div className="flex items-center gap-2">
-                            <span className={`w-2 h-2 rounded-full ${product.stock_quantity > 0 ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                            <span className="text-xs font-bold text-stone-600">{product.stock_quantity > 0 ? `Còn hàng (${product.stock_quantity})` : 'Hết hàng'}</span>
-                        </div>
+
 
                         {/* Attributes */}
                         {product.attributes?.length > 0 && (

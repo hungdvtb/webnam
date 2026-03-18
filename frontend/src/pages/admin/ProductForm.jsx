@@ -1145,7 +1145,7 @@ const ProductForm = () => {
 
             // Handle variants from linked_products with 'super_link' type
             const variantsData = (data.linked_products || []).filter(p => p.pivot?.link_type === 'super_link');
-            const regularLinks = (data.linked_products || []).filter(p => p.pivot?.link_type !== 'super_link');
+            const regularLinks = (data.linked_products || []).filter(p => p.pivot?.link_type === 'related');
 
             const initialIds = Array.from(new Set((regularLinks || []).map(p => p.id)));
             const initialData = Array.from(new Map((regularLinks || []).map(p => [p.id, p])).values());
@@ -1999,12 +1999,16 @@ const ProductForm = () => {
                 } else if (key === 'super_attribute_ids') {
                     selectedSuperAttributes.forEach(attr => submitData.append('super_attribute_ids[]', attr.id));
                 } else if (key === 'linked_product_ids') {
-                    const uniqueIds = Array.from(new Set(val)).filter(v => v !== null && v !== '');
-                    if (uniqueIds.length === 0) {
+                    if (selectedProductsData.length === 0) {
                         // Gửi tham số tường minh để Backend thực hiện detach/sync
-                        submitData.append('linked_product_ids[]', ''); 
+                        submitData.append('clear_linked_products', '1'); 
                     } else {
-                        uniqueIds.forEach(v => submitData.append('linked_product_ids[]', v));
+                        selectedProductsData.forEach((v, idx) => {
+                            submitData.append(`linked_product_ids[${idx}][id]`, v.id);
+                            if (v.option_title || (v.pivot && v.pivot.option_title)) {
+                                submitData.append(`linked_product_ids[${idx}][option_title]`, v.option_title || v.pivot.option_title);
+                            }
+                        });
                     }
                 } else if (key === 'grouped_items') {
                     let itemsToSubmit = val;
@@ -3624,7 +3628,9 @@ const ProductForm = () => {
                             <div className="flex justify-between items-center mb-5">
                                 <SectionTitle icon="link" title="Đề xuất liên quan" />
                                 <div className="flex items-center gap-2">
-                                    {(stagedRelatedIds.length !== formData.linked_product_ids.length || !stagedRelatedIds.every(id => formData.linked_product_ids.includes(id))) && (
+                                    {(() => {
+                                        const hasRelatedChanges = (stagedRelatedIds.length !== formData.linked_product_ids.length || !stagedRelatedIds.every(id => formData.linked_product_ids.includes(id))) || (JSON.stringify(stagedRelatedData.map(p => ({id: p.id, t: p.option_title || ''}))) !== JSON.stringify(selectedProductsData.map(p => ({id: p.id, t: p.option_title || p.pivot?.option_title || ''}))));
+                                        return hasRelatedChanges && (
                                         <div className="flex items-center gap-2 mr-2 animate-in fade-in slide-in-from-right-2 duration-300">
                                             <button
                                                 type="button"
@@ -3648,7 +3654,8 @@ const ProductForm = () => {
                                                 Ghi nhận danh sách
                                             </button>
                                         </div>
-                                    )}
+                                        );
+                                    })()}
                                     <button
                                         type="button"
                                         onClick={() => setShowSelectedRelated(!showSelectedRelated)}
@@ -3818,16 +3825,30 @@ const ProductForm = () => {
                                                     Danh sách đang chọn ({stagedRelatedIds.length})
                                                 </span>
                                                 {stagedRelatedIds.length > 0 && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => {
-                                                            setStagedRelatedIds([]);
-                                                            setStagedRelatedData([]);
-                                                        }}
-                                                        className="text-[9px] font-black uppercase text-brick hover:underline px-2 py-1"
-                                                    >
-                                                        Xóa toàn bộ
-                                                    </button>
+                                                    <div className="flex items-center gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setFormData(prev => ({ ...prev, linked_product_ids: [...stagedRelatedIds] }));
+                                                                setSelectedProductsData(stagedRelatedData.map(p => ({...p})));
+                                                                showToast({ message: `Đã ghi nhận thay đổi! Đừng quên bấm nút "Lưu cập nhật" ở trên cùng để lưu lại.`, type: 'success' });
+                                                            }}
+                                                            className="bg-gold/10 text-gold hover:bg-gold/20 hover:text-gold-dark px-3 py-1 rounded-[4px] text-[10px] font-bold uppercase transition-all flex items-center gap-1.5"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[14px]">save</span>
+                                                            Lưu thay đổi
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setStagedRelatedIds([]);
+                                                                setStagedRelatedData([]);
+                                                            }}
+                                                            className="text-[9px] font-black uppercase text-brick hover:underline px-2 py-1"
+                                                        >
+                                                            Xóa toàn bộ
+                                                        </button>
+                                                    </div>
                                                 )}
                                             </div>
                                             {stagedRelatedData.length === 0 ? (
@@ -3840,7 +3861,18 @@ const ProductForm = () => {
                                                         </div>
                                                         <div className="flex-1 min-w-0">
                                                             <p className="text-[12px] font-bold text-primary truncate leading-tight">{prod.name}</p>
-                                                            <p className="text-[9px] font-black text-gold uppercase mt-0.5">{prod.sku}</p>
+                                                            <p className="text-[9px] font-black text-gold uppercase mt-0.5 mb-1">{prod.sku}</p>
+                                                            <input
+                                                                type="text"
+                                                                placeholder="Tên hiển thị frontend (Tùy chỉnh)"
+                                                                value={prod.option_title || prod.pivot?.option_title || ''}
+                                                                onChange={(e) => {
+                                                                    const val = e.target.value;
+                                                                    setStagedRelatedData(prev => prev.map(p => String(p.id) === String(prod.id) ? { ...p, option_title: val } : p));
+                                                                }}
+                                                                className="w-full bg-white border border-stone/20 rounded-sm px-2 py-1 text-[10px] text-primary focus:border-primary/50 focus:outline-none placeholder:text-stone/30"
+                                                                title="Nhập tên này để ưu tiên hiển thị trên frontend thay vì tên gốc"
+                                                            />
                                                         </div>
                                                         <button
                                                             type="button"

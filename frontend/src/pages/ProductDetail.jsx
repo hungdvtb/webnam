@@ -266,8 +266,55 @@ const ProductDetail = () => {
                                     {parseFloat(product.average_rating || 0).toFixed(1)} ({reviews.length})
                                 </div>
                             </div>
-                            <h1 className="text-primary font-display text-4xl lg:text-5xl font-bold leading-tight">{product.name}</h1>
-                            {currentVariant && <p className="text-[10px] font-bold text-stone uppercase tracking-widest">SKU: {currentVariant.sku}</p>}
+                            <h1 className="text-primary font-display text-4xl lg:text-5xl font-bold leading-tight mb-2">{product.name}</h1>
+                            
+                            {/* SKU & Stock Row */}
+                            <div className="flex items-center gap-2 text-[11px] font-ui uppercase tracking-widest text-stone mb-6">
+                                <span>Mã {product.type === 'bundle' || product.type === 'group' ? 'bộ' : 'sản phẩm'}: <strong>{currentVariant ? currentVariant.sku : product.sku || 'N/A'}</strong></span>
+                                <span className="size-1 rounded-full bg-gold/50 mx-1"></span>
+                                <span className="text-[#00A381] font-bold flex items-center gap-1.5">
+                                    <span className="size-1.5 bg-[#00A381] rounded-full"></span>
+                                    Sẵn sàng giao ngay
+                                </span>
+                            </div>
+
+                            {/* Bundle / Option Quick Selection moved exactly under SKU */}
+                            {product?.type === 'bundle' && (
+                                (() => {
+                                    const relatedFromLinks = (product.linked_products || []).filter(p => p.pivot?.link_type === 'related');
+                                    const allOptions = [product, ...relatedFromLinks];
+                                    const uniqueOptions = Array.from(new Map(allOptions.map(b => [b.id, b])).values());
+                                    
+                                    if (uniqueOptions.length <= 1) return null;
+                                    return (
+                                        <div className="mb-8">
+                                            <div className="flex flex-wrap gap-2">
+                                                {uniqueOptions.map(bundle => {
+                                                    const isSelected = bundle.id === product.id;
+                                                    return (
+                                                        <button
+                                                            key={bundle.id}
+                                                            onClick={() => {
+                                                                if (!isSelected) {
+                                                                    navigate(`/product/${bundle.slug}`);
+                                                                }
+                                                            }}
+                                                            className={`px-4 py-2 border transition-all text-sm font-bold shadow-sm ${
+                                                                isSelected 
+                                                                    ? 'border-[#8e5229] bg-[#8e5229]/5 text-[#8e5229] shadow-inner' 
+                                                                    : 'border-stone-300 bg-white hover:border-[#8e5229] hover:bg-stone-50 cursor-pointer text-stone-700'
+                                                            }`}
+                                                            title={bundle.name}
+                                                        >
+                                                            {bundle.name.replace(/Bộ đồ thờ men lam Bát Tràng - Demo Bundle|Bộ đồ thờ|Combo /i, '').trim() || bundle.name}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    );
+                                })()
+                            )}
                         </div>
 
                         <div className="flex items-center gap-4">

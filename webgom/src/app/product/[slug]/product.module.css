@@ -216,6 +216,162 @@
   font-weight: 500;
 }
 
+/* Related Bundles / Chooser Options block */
+.relatedOptionsCard {
+  background-color: rgba(27, 54, 93, 0.03);
+  padding: 1rem;
+  border-radius: 16px;
+  border: 1px solid rgba(27, 54, 93, 0.1);
+  margin-top: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.relatedOptionsTitle {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8e5229;
+  margin-bottom: 10px; 
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.relatedOptionsIcon {
+  font-size: 16px;
+}
+
+.relatedOptionsGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.relatedOptionBtn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+  min-width: 70px;
+  max-width: 90px;
+  border-radius: 12px;
+  border: 1px solid rgba(27, 54, 93, 0.1);
+  background-color: #ffffff;
+  color: #1A1A1A;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  user-select: none;
+}
+
+.relatedOptionBtn:hover {
+  border-color: rgba(197, 160, 101, 0.4);
+  background-color: rgba(27, 54, 93, 0.02);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+}
+
+.relatedOptionBtn:active {
+  transform: scale(0.96);
+}
+
+.relatedOptionBtnActive {
+  background-color: #C5A065;
+  border-color: #C5A065;
+  color: #ffffff;
+  box-shadow: 0 4px 10px rgba(197, 160, 101, 0.3);
+}
+
+.relatedOptionImgWrap {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(27, 54, 93, 0.1);
+  background-color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: transform 0.3s ease;
+  flex-shrink: 0;
+}
+
+.relatedOptionBtn:hover .relatedOptionImgWrap {
+  transform: scale(1.1);
+}
+
+.relatedOptionBtnActive .relatedOptionImgWrap {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.relatedOptionFallback {
+  color: rgba(27, 54, 93, 0.3);
+  font-size: 16px;
+}
+
+.relatedOptionText {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Config Selector buttons */
+.configOptionsCard {
+  background-color: rgba(27, 54, 93, 0.03);
+  padding: 1rem;
+  border-radius: 16px;
+  border: 1px solid rgba(27, 54, 93, 0.1);
+  margin-bottom: 1.25rem;
+}
+
+.configOptionsTitle {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(27, 54, 93, 0.6);
+  margin-bottom: 10px;
+}
+
+.configOptionsGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.configOptionBtn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(27, 54, 93, 0.1);
+  background-color: #ffffff;
+  color: #1A1A1A;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.configOptionBtn:hover {
+  border-color: rgba(197, 160, 101, 0.4);
+  background-color: rgba(27, 54, 93, 0.02);
+}
+
+.configOptionBtnActive {
+  background-color: #C5A065;
+  border-color: #C5A065;
+  color: #ffffff;
+  box-shadow: 0 4px 10px rgba(197, 160, 101, 0.3);
+}
+
 .artistTag {
   font-style: italic;
   color: #666;

@@ -264,7 +264,8 @@ class ProductController extends Controller
                     'bundleItems.images',
                     'bundleItems.attributeValues.attribute',
                     'groupedItems.images',
-                    'groupedItems.attributeValues.attribute'
+                    'groupedItems.attributeValues.attribute',
+                    'relatedProducts.images'
                 ])
                 ->firstOrFail();
 
@@ -354,32 +355,12 @@ class ProductController extends Controller
 
         $limit = 8;
         
-        // 1. Get explicitly linked related products first
+        // Return ONLY explicitly linked related products to ensure WYSIWYG sync with Admin setup
         $explicitRelated = $product->relatedProducts()
             ->where('status', true)
             ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->limit(1)])
             ->get();
             
-        $relatedIds = $explicitRelated->pluck('id')->push($product->id)->toArray();
-        
-        // 2. If we need more, fill with random products from the same category
-        $fallback = [];
-        if ($explicitRelated->count() < $limit) {
-            $fallback = Product::query()
-                ->when($accountId, fn($q) => $q->where('account_id', $accountId))
-                ->where('status', true)
-                ->whereDoesntHave('parentConfigurable')
-                ->whereNotIn('id', $relatedIds)
-                ->where('category_id', $product->category_id)
-                ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->limit(1)])
-                ->inRandomOrder()
-                ->limit($limit - $explicitRelated->count())
-                ->get();
-        }
-
-        // Combine and shuffle to keep it random
-        $result = $explicitRelated->concat($fallback)->shuffle();
-
-        return response()->json($result);
+        return response()->json($explicitRelated);
     }
 }

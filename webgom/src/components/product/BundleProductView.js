@@ -3,6 +3,7 @@
 import styles from '../../app/product/[slug]/product.module.css';
 import builderStyles from './builder.module.css';
 import Image from 'next/image';
+import Link from 'next/link';
 import ProductGallery from './common/ProductGallery';
 import TrustBadges from './common/TrustBadges';
 import QuantitySelector from './common/QuantitySelector';
@@ -101,21 +102,71 @@ export default function BundleProductView({
                 </div>
               </div>
 
+              {/* Related Bundles / Choose another Option (Added per request) */}
+              {(() => {
+                const relatedLinks = product.related_products || product.linked_products || [];
+                const related = relatedLinks.filter(p => p.pivot?.link_type === 'related' || p.pivot === undefined || !p.pivot);
+                const uniqueOptions = Array.from(new Map(related.map(b => [b.id, b])).values());
+                
+                if (uniqueOptions.length > 0) {
+                  return (
+                    <div className={styles.relatedOptionsCard}>
+                      <h4 className={styles.relatedOptionsTitle}>
+                        <span className={`material-symbols-outlined ${styles.relatedOptionsIcon}`}>view_cozy</span>
+                        Lựa Chọn Khác
+                      </h4>
+                      <div className={styles.relatedOptionsGrid}>
+                        {uniqueOptions.map(bundle => {
+                          const isSelected = bundle.id === product.id;
+                          const txt = bundle.pivot?.option_title || bundle.option_title || bundle.bundle_title || bundle.name.replace(/Bộ đồ thờ men lam Bát Tràng - Demo Bundle|Bộ đồ thờ|Combo /i, '').replace(/ - Demo Bundle/i, '').replace(/ - Demo/i, '').trim() || bundle.name;
+                          const displayImg = bundle.primary_image || bundle.images?.[0] || (bundle.main_image ? { path: bundle.main_image } : null);
+                          
+                          return (
+                            <Link 
+                              href={`/product/${bundle.slug}`} 
+                              key={bundle.id}
+                              className={`${styles.relatedOptionBtn} ${isSelected ? styles.relatedOptionBtnActive : ''}`}
+                              title={bundle.name}
+                            >
+                              <div className={styles.relatedOptionImgWrap}>
+                                {displayImg ? (
+                                  <Image
+                                    src={getImageUrl(displayImg)}
+                                    alt={txt}
+                                    fill
+                                    sizes="30px"
+                                    unoptimized
+                                    style={{ objectFit: 'cover' }}
+                                  />
+                                ) : (
+                                  <span className={`material-symbols-outlined ${styles.relatedOptionFallback}`}>image</span>
+                                )}
+                              </div>
+                              <span className={`${styles.relatedOptionText} ${isSelected ? styles.relatedOptionTextActive : ''}`}>
+                                {txt}
+                              </span>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
               {/* Configuration Selector */}
               {configurations.length > 0 && (
-                <div className="bg-stone/5 p-4 rounded-2xl border border-stone/10">
+                <div className={styles.configOptionsCard}>
                   {product.bundle_title && (
-                    <h4 className="text-[10px] font-black uppercase tracking-widest text-stone/40 mb-3">{product.bundle_title}</h4>
+                    <h4 className={styles.configOptionsTitle}>{product.bundle_title}</h4>
                   )}
-                  <div className="flex flex-wrap gap-2">
+                  <div className={styles.configOptionsGrid}>
                     {configurations.map(config => (
                       <button
                         key={config}
                         onClick={() => switchBundleConfiguration(config)}
-                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all border ${activeConfig === config
-                          ? 'bg-accent border-accent text-white shadow-lg shadow-accent/20 scale-105'
-                          : 'bg-white border-stone/10 text-stone hover:border-accent/30'
-                          }`}
+                        className={`${styles.configOptionBtn} ${activeConfig === config ? styles.configOptionBtnActive : ''}`}
                       >
                         {config}
                       </button>

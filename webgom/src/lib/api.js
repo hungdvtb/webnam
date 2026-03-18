@@ -77,7 +77,7 @@ export async function getWebCategory(slug) {
 }
 
 export async function getWebProductDetail(slug) {
-    return fetchFromApi(`/web-api/products/${slug}`);
+    return fetchFromApi(`/web-api/products/${slug}`, { next: { revalidate: 0 } });
 }
 
 export async function getWebRelatedProducts(slug) {

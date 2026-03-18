@@ -235,7 +235,6 @@ class ProductController extends Controller
             'bundle_title' => 'nullable|string|max:255',
             // linkages
             'linked_product_ids' => 'nullable|array',
-            'linked_product_ids.*' => 'exists:products,id',
             'link_type' => 'nullable|string',
             'grouped_items' => 'nullable|array', // For product groups
             'grouped_items.*.id' => 'required|exists:products,id',
@@ -339,10 +338,20 @@ class ProductController extends Controller
         if ($request->has('linked_product_ids')) {
             $type = $request->get('link_type', 'related');
             $links = [];
-            foreach ($request->linked_product_ids as $idx => $id) {
-                $links[$id] = ['link_type' => $type, 'position' => $idx];
+            foreach ($request->linked_product_ids as $idx => $idOrObj) {
+                if (is_array($idOrObj)) {
+                    if (!empty($idOrObj['id'])) {
+                        $links[$idOrObj['id']] = ['link_type' => $type, 'position' => $idx, 'option_title' => $idOrObj['option_title'] ?? null];
+                    }
+                } else {
+                    if (!empty($idOrObj)) {
+                        $links[$idOrObj] = ['link_type' => $type, 'position' => $idx];
+                    }
+                }
             }
-            $product->linkedProducts()->syncWithoutDetaching($links);
+            if (!empty($links)) {
+                $product->linkedProducts()->syncWithoutDetaching($links);
+            }
         }
 
         if ($request->has('grouped_items') && in_array($product->type, ['grouped', 'bundle'])) {
@@ -548,7 +557,6 @@ class ProductController extends Controller
             'slug' => 'nullable|string|max:255|unique:products,slug,' . $id,
             'bundle_title' => 'nullable|string|max:255',
             'linked_product_ids' => 'nullable|array',
-            'linked_product_ids.*' => 'exists:products,id',
             'link_type' => 'nullable|string',
             'grouped_items' => 'nullable|array',
             'grouped_items.*.id' => 'required|exists:products,id',
@@ -623,11 +631,31 @@ class ProductController extends Controller
 
         if ($request->has('linked_product_ids')) {
             $links = [];
-            foreach ($request->linked_product_ids as $idx => $id) {
-                $links[$id] = ['link_type' => 'related', 'position' => $idx];
+            foreach (array_values($request->linked_product_ids) as $idx => $idOrObj) {
+                if (is_array($idOrObj)) {
+                    if (!empty($idOrObj['id'])) {
+                        $links[$idOrObj['id']] = ['link_type' => 'related', 'position' => $idx, 'option_title' => $idOrObj['option_title'] ?? null];
+                    }
+                } else {
+                    if (!empty($idOrObj)) {
+                        $links[$idOrObj] = ['link_type' => 'related', 'position' => $idx];
+                    }
+                }
             }
 
-            $product->relatedProducts()->sync($links);
+            \Illuminate\Support\Facades\DB::table('product_links')
+                ->where('product_id', $product->id)
+                ->where('link_type', 'related')
+                ->delete();
+
+            if (!empty($links)) {
+                $product->relatedProducts()->attach($links);
+            }
+        } elseif ($request->get('clear_linked_products') == '1') {
+            \Illuminate\Support\Facades\DB::table('product_links')
+                ->where('product_id', $product->id)
+                ->where('link_type', 'related')
+                ->delete();
         }
 
         if ($request->has('grouped_items') && in_array($product->type, ['grouped', 'bundle'])) {

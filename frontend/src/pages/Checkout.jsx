@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
-import { useUI } from '../context/UIContext';
 import { orderApi, couponApi } from '../services/api';
 import { VN_REGIONS } from '../data/regions';
 import SearchableSelect from '../components/SearchableSelect';
@@ -17,7 +16,6 @@ import {
 const Checkout = () => {
     const { cart, cartTotal, refreshCart } = useCart();
     const { user } = useAuth();
-    const { showModal } = useUI();
     const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
     const [couponCode, setCouponCode] = useState('');
@@ -151,13 +149,38 @@ const Checkout = () => {
                     })
                 }
             };
+            const orderItems = cart.items.map(item => ({
+                id: item.id,
+                name: item.product?.name,
+                sku: item.product?.sku,
+                quantity: item.quantity,
+                price: item.price,
+                image: item.product?.images?.[0]?.image_url || '',
+                meta: item.product?.category?.name || '',
+            }));
+            const orderItemCount = cart.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+
             const response = await orderApi.store(data);
             await refreshCart();
-            showModal({
-                title: 'Đặt hàng thành công',
-                content: `Cảm ơn bạn đã tin tưởng Gốm Đại Thành.\nMã đơn hàng của bạn là: <b>${response.data.order_number}</b>`,
-                type: 'success',
-                onAction: () => navigate('/')
+            navigate(`/old/cam-on?order=${encodeURIComponent(response.data.order_number)}`, {
+                replace: true,
+                state: {
+                    orderNumber: response.data.order_number,
+                    createdAt: new Date().toISOString(),
+                    customerName: formData.customer_name,
+                    phone: formData.customer_phone,
+                    email: formData.customer_email,
+                    shippingAddress: formData.shipping_address,
+                    paymentMethod: formData.payment_method,
+                    totalAmount: finalTotal,
+                    totalItems: orderItemCount,
+                    items: orderItems,
+                    continuePath: '/old/shop',
+                    continueLabel: 'Tiếp tục mua sắm',
+                    secondaryPath: '/old',
+                    secondaryLabel: 'Về trang chủ',
+                    message: `Cảm ơn bạn đã tin tưởng Gốm Đại Thành. Đơn hàng ${response.data.order_number} đã được tiếp nhận thành công.`,
+                },
             });
         } catch (err) {
             setError(err.response?.data?.message || 'Có lỗi xảy ra khi đặt hàng.');

@@ -1550,7 +1550,7 @@ const OrderForm = () => {
                                                 setShowSearchHistory((prev) => !prev);
                                             }}
                                             className="text-primary/30 hover:text-primary ml-3 border-l border-primary/10 pl-3 transition-all"
-                                            title="Hiá»ƒn thá»‹ lá»‹ch sá»­ tÃ¬m kiáº¿m"
+                                            title={'Hi\u1ec3n th\u1ecb l\u1ecbch s\u1eed t\u00ecm ki\u1ebfm'}
                                         >
                                             <span className="material-symbols-outlined text-[15px]">history</span>
                                         </button>
@@ -1564,7 +1564,7 @@ const OrderForm = () => {
                                                 setShowSearchHistory(false);
                                             }}
                                             className="text-primary/30 hover:text-primary ml-3 border-l border-primary/10 pl-3 transition-all"
-                                            title="Làm mới danh sách sản phẩm"
+                                            title={'L\u00e0m m\u1edbi danh s\u00e1ch s\u1ea3n ph\u1ea9m'}
                                         >
                                             <span className="material-symbols-outlined text-xs">refresh</span>
                                         </button>
@@ -1576,7 +1576,7 @@ const OrderForm = () => {
                                                 <div className="border-b border-primary/10 bg-primary/[0.02] px-3 py-2">
                                                     <div className="flex items-center justify-between gap-3">
                                                         <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
-                                                            Lá»‹ch sá»­ tÃ¬m kiáº¿m
+                                                            {'L\u1ecbch s\u1eed t\u00ecm ki\u1ebfm'}
                                                         </div>
                                                         {searchHistory.length > 0 && (
                                                             <button
@@ -1584,7 +1584,7 @@ const OrderForm = () => {
                                                                 onClick={clearSearchHistory}
                                                                 className="text-[10px] font-bold uppercase tracking-[0.12em] text-primary/35 hover:text-brick transition-colors"
                                                             >
-                                                                XÃ³a háº¿t
+                                                                {'X\u00f3a h\u1ebft'}
                                                             </button>
                                                         )}
                                                     </div>
@@ -1605,7 +1605,7 @@ const OrderForm = () => {
                                                             </button>
                                                         )) : (
                                                             <div className="py-2 text-[11px] italic text-primary/30">
-                                                                ChÆ°a cÃ³ lá»‹ch sá»­ tÃ¬m kiáº¿m.
+                                                                {'Ch\u01b0a c\u00f3 l\u1ecbch s\u1eed t\u00ecm ki\u1ebfm.'}
                                                             </div>
                                                         )}
                                                     </div>

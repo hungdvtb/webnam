@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../services/api';
 import { trackInitiateCheckout, trackPurchase } from '../../components/TrackingScripts';
 
 const StorefrontCheckout = () => {
+    const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const productId = searchParams.get('product');
     const qty = parseInt(searchParams.get('qty') || '1');
@@ -11,7 +12,6 @@ const StorefrontCheckout = () => {
     const [product, setProduct] = useState(null);
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
-    const [orderResult, setOrderResult] = useState(null);
 
     const [form, setForm] = useState({
         customer_name: '',
@@ -58,38 +58,40 @@ const StorefrontCheckout = () => {
                 items: product ? [{ product_id: product.id, quantity: form.quantity }] : [],
             };
             const res = await api.post('/storefront/order', payload);
-            setOrderResult(res.data);
             trackPurchase(res.data.order_number, product ? product.current_price * form.quantity : 0, payload.items);
+            navigate(`/cam-on?order=${encodeURIComponent(res.data.order_number)}`, {
+                replace: true,
+                state: {
+                    orderNumber: res.data.order_number,
+                    createdAt: new Date().toISOString(),
+                    message: res.data.message,
+                    customerName: form.customer_name,
+                    phone: form.phone,
+                    email: form.email,
+                    shippingAddress: [form.address, form.ward, form.district].filter(Boolean).join(', '),
+                    paymentMethod: 'cod',
+                    totalAmount: product ? product.current_price * form.quantity : 0,
+                    totalItems: form.quantity,
+                    continuePath: '/san-pham',
+                    continueLabel: 'Tiếp tục mua sắm',
+                    secondaryPath: '/',
+                    secondaryLabel: 'Về trang chủ',
+                    items: product ? [{
+                        id: product.id,
+                        name: product.name,
+                        sku: product.sku,
+                        quantity: form.quantity,
+                        price: product.current_price,
+                        image: product.images?.[0]?.url || product.main_image || '',
+                        meta: product.category?.name || '',
+                    }] : [],
+                },
+            });
         } catch (err) {
             alert(err.response?.data?.message || 'Có lỗi xảy ra, vui lòng thử lại');
         }
         setSubmitting(false);
     };
-
-    // Success screen
-    if (orderResult) return (
-        <div className="min-h-[70vh] flex items-center justify-center px-4">
-            <div className="text-center max-w-md mx-auto animate-fade-in">
-                <div className="w-20 h-20 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-6">
-                    <span className="material-symbols-outlined text-green-600 text-4xl">check_circle</span>
-                </div>
-                <h2 className="text-2xl font-black text-stone-900 uppercase mb-2">Đặt hàng thành công!</h2>
-                <p className="text-sm text-stone-600 mb-2">{orderResult.message}</p>
-                <div className="inline-block bg-stone-50 border border-stone-200 rounded-xl px-5 py-3 my-4">
-                    <p className="text-[10px] font-bold text-stone-500 uppercase tracking-widest">Mã đơn hàng</p>
-                    <p className="text-xl font-black text-primary mt-1">{orderResult.order_number}</p>
-                </div>
-                <div className="flex flex-col gap-3 mt-6">
-                    <Link to="/" className="py-3 bg-primary text-white rounded-xl text-sm font-bold hover:brightness-90 transition-all">
-                        Về trang chủ
-                    </Link>
-                    <Link to="/san-pham" className="py-3 border border-stone-200 rounded-xl text-sm font-bold text-stone-700 hover:bg-stone-50 transition-all">
-                        Tiếp tục mua hàng
-                    </Link>
-                </div>
-            </div>
-        </div>
-    );
 
     const totalPrice = product ? product.current_price * form.quantity : 0;
 

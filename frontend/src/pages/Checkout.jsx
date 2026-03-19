@@ -177,8 +177,8 @@ const Checkout = () => {
                     items: orderItems,
                     continuePath: '/old/shop',
                     continueLabel: 'Tiếp tục mua sắm',
-                    secondaryPath: '/old',
-                    secondaryLabel: 'Về trang chủ',
+                    secondaryPath: '/old/dashboard',
+                    secondaryLabel: 'Xem lịch sử đơn hàng',
                     message: `Cảm ơn bạn đã tin tưởng Gốm Đại Thành. Đơn hàng ${response.data.order_number} đã được tiếp nhận thành công.`,
                 },
             });

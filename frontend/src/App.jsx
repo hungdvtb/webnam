@@ -105,7 +105,6 @@ function App() {
                 <Route path="san-pham/:slugOrId" element={<StorefrontProductDetail />} />
                 <Route path="danh-muc/:slug" element={<StorefrontProducts />} />
                 <Route path="dat-hang" element={<StorefrontCheckout />} />
-                <Route path="cam-on" element={<OrderThankYou />} />
                 <Route path="about" element={<About />} />
                 <Route path="blog" element={<Blog />} />
                 <Route path="blog/:slug" element={<PostDetail />} />
@@ -120,13 +119,15 @@ function App() {
                 <Route path="about" element={<About />} />
                 <Route path="cart" element={<Cart />} />
                 <Route path="checkout" element={<Checkout />} />
-                <Route path="cam-on" element={<OrderThankYou />} />
                 <Route path="blog" element={<Blog />} />
                 <Route path="blog/:slug" element={<PostDetail />} />
                 <Route path="login" element={<Login />} />
                 <Route path="register" element={<Register />} />
                 <Route path="dashboard" element={<UserDashboard />} />
               </Route>
+
+              <Route path="/cam-on" element={<OrderThankYou />} />
+              <Route path="/old/cam-on" element={<OrderThankYou />} />
 
               <Route path="/admin" element={<AdminLayout />}>
                 <Route index element={<AdminDashboard />} />

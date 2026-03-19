@@ -4,178 +4,444 @@ import React from 'react';
 import Link from 'next/link';
 
 export default function ThankYouView({ orderNumber, formData, cartItems, cartTotal, discount, bankSettings }) {
-  const finalTotal = cartTotal - discount;
-  
-  // Format currency
-  const formatPrice = (price) => {
-    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
-  };
+  const finalTotal = (cartTotal || 0) - (discount || 0);
+
+  const formatPrice = (price) =>
+    new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price || 0);
+
+  const formatDate = () =>
+    new Date().toLocaleDateString('vi-VN', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  const getItemImage = (item) =>
+    item.main_image ||
+    item.image ||
+    (item.images?.find(i => i.is_primary) || item.images?.[0])?.image_url ||
+    null;
+
+  const paymentMethod = formData?.paymentMethod || formData?.payment_method || 'cod';
+  const isBankTransfer = paymentMethod === 'bank';
+
+  const name = formData?.customer_name || formData?.name || '';
+  const phone = formData?.phone || formData?.customer_phone || '';
+  const address = [formData?.address, formData?.ward, formData?.district, formData?.province]
+    .filter(Boolean).join(', ');
 
   return (
-    <div className="thank-you-container animate-fade-in" style={{ padding: '2rem 0', maxWidth: '900px', margin: '0 auto' }}>
-      {/* Success Banner */}
-      <div className="success-card border border-stone/20 shadow-premium rounded-2xl overflow-hidden bg-white">
-        <div className="banner-header bg-primary relative flex items-center justify-center py-10 overflow-hidden" style={{ minHeight: '200px' }}>
-          {/* Decorative pattern overlay */}
-          <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'url("https://www.transparenttextures.com/patterns/az-subtle.png")' }}></div>
-          
-          {/* Decorative border pattern */}
-          <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-accent via-accent/50 to-accent"></div>
-          <div className="absolute bottom-0 left-0 w-full h-1.5 bg-gradient-to-r from-accent via-accent/50 to-accent"></div>
-          
-          <div className="z-10 text-center">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-accent text-white mb-4 shadow-lg">
-              <span className="material-symbols-outlined text-4xl">check_circle</span>
+    <div className="ty-page">
+      {/* ══ CARD ══ */}
+      <div className="ty-card">
+
+        {/* ─── Banner Header ─── */}
+        <div className="ty-banner">
+          <div className="ty-banner-overlay" />
+          <div className="ty-banner-bar ty-banner-bar--top" />
+          <div className="ty-banner-bar ty-banner-bar--bottom" />
+
+          <div className="ty-banner-content">
+            <div className="ty-check-icon">
+              <span className="material-symbols-outlined">check_circle</span>
             </div>
-            <h1 className="text-white text-3xl font-display font-bold tracking-wide italic">Giao dịch Hoàn tất</h1>
+            <h1 className="ty-banner-title">Giao dịch Hoàn tất</h1>
           </div>
         </div>
 
-        <div className="content-body p-8 md:p-12">
-          <div className="text-center mb-10">
-            <h2 className="text-2xl md:text-3xl font-display text-primary mb-4 italic">Cảm ơn Quý khách đã trân trọng di sản!</h2>
-            <p className="text-lg text-slate-600 leading-relaxed font-body max-w-2xl mx-auto">
-              Đơn hàng của Quý khách đã được tiếp nhận và đang được chúng tôi chuẩn bị kỹ lưỡng. Một email xác nhận chi tiết sẽ được gửi đến địa chỉ của Quý khách.
+        {/* ─── Body ─── */}
+        <div className="ty-body">
+
+          {/* Hero text */}
+          <div className="ty-hero-text">
+            <h2 className="ty-heading">Cảm ơn Quý khách đã trân trọng di sản!</h2>
+            <p className="ty-subtitle">
+              Đơn hàng của Quý khách đã được tiếp nhận và đang được các nghệ nhân chuẩn bị kỹ lưỡng tại làng nghề.
+              Một thư xác nhận chi tiết đã được gửi đến địa chỉ email của Quý khách.
             </p>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-8 mb-10">
+          {/* ─── Info grid ─── */}
+          <div className="ty-info-grid">
+
             {/* Order Info */}
-            <div className="info-block bg-stone/5 border border-stone/10 p-6 rounded-xl">
-              <h3 className="font-display text-xl border-b border-stone/10 pb-3 mb-4 flex items-center gap-2 text-primary uppercase tracking-tight">
-                <span className="material-symbols-outlined text-accent">receipt_long</span>
+            <div className="ty-info-block">
+              <h3 className="ty-info-title">
+                <span className="material-symbols-outlined">receipt_long</span>
                 Chi tiết Đơn hàng
               </h3>
-              <div className="space-y-3 font-body text-sm">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Mã số đơn hàng:</span>
-                  <span className="font-bold text-primary font-mono">#{orderNumber}</span>
+              <div className="ty-info-rows">
+                <div className="ty-info-row">
+                  <span className="ty-label">Mã số đơn hàng:</span>
+                  <span className="ty-value ty-value--bold">#{orderNumber}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Ngày đặt:</span>
-                  <span className="text-primary font-medium">{new Date().toLocaleDateString('vi-VN', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
+                <div className="ty-info-row">
+                  <span className="ty-label">Ngày đặt:</span>
+                  <span className="ty-value">{formatDate()}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Phương thức:</span>
-                  <span className="text-primary font-medium">{formData.paymentMethod === 'bank' ? 'Chuyển khoản Ngân hàng' : 'Thanh toán khi nhận hàng (COD)'}</span>
+                <div className="ty-info-row">
+                  <span className="ty-label">Phương thức:</span>
+                  <span className="ty-value">
+                    {isBankTransfer ? 'Chuyển khoản Ngân hàng' : 'Thanh toán khi nhận hàng (COD)'}
+                  </span>
                 </div>
-                <div className="flex justify-between border-t border-stone/10 pt-3 mt-3">
-                  <span className="text-slate-500 font-bold uppercase text-[11px] tracking-wider">Tổng cộng:</span>
-                  <span className="text-xl font-bold text-primary">{formatPrice(finalTotal)}</span>
+                <div className="ty-info-row ty-info-row--total">
+                  <span className="ty-label ty-label--total">Tổng cộng:</span>
+                  <span className="ty-total">{formatPrice(finalTotal)}</span>
                 </div>
               </div>
             </div>
 
             {/* Shipping Info */}
-            <div className="info-block bg-stone/5 border border-stone/10 p-6 rounded-xl">
-              <h3 className="font-display text-xl border-b border-stone/10 pb-3 mb-4 flex items-center gap-2 text-primary uppercase tracking-tight">
-                <span className="material-symbols-outlined text-accent">local_shipping</span>
+            <div className="ty-info-block">
+              <h3 className="ty-info-title">
+                <span className="material-symbols-outlined">local_shipping</span>
                 Thông tin Giao nhận
               </h3>
-              <div className="font-body space-y-2 text-sm">
-                <p className="font-bold text-primary text-base">{formData.customer_name}</p>
-                <p className="text-slate-600 flex items-center gap-1">
-                   <span className="material-symbols-outlined text-[16px]">call</span>
-                   {formData.phone}
-                </p>
-                <p className="text-slate-600 flex items-start gap-1">
-                   <span className="material-symbols-outlined text-[16px] mt-0.5">location_on</span>
-                   <span>{[formData.address, formData.ward, formData.district, formData.province].filter(Boolean).join(', ')}</span>
-                </p>
-                <p className="italic text-xs text-accent mt-4">Dự kiến giao hàng: 3-5 ngày làm việc</p>
+              <div className="ty-shipping-info">
+                {name && <p className="ty-ship-name">{name}</p>}
+                {phone && (
+                  <p className="ty-ship-row">
+                    <span className="material-symbols-outlined">call</span> {phone}
+                  </p>
+                )}
+                {address && (
+                  <p className="ty-ship-row ty-ship-row--addr">
+                    <span className="material-symbols-outlined">location_on</span>
+                    <span>{address}</span>
+                  </p>
+                )}
+                <p className="ty-estimate">Dự kiến giao hàng: 3-5 ngày làm việc</p>
               </div>
             </div>
           </div>
 
-          {/* Product Summary */}
-          <div className="product-summary mb-12">
-            <h3 className="font-display text-xl mb-6 flex items-center gap-2 text-primary uppercase tracking-tight">
-              <span className="material-symbols-outlined text-accent">inventory_2</span>
-              Sản phẩm đã chọn
-            </h3>
-            <div className="border border-stone/10 rounded-xl overflow-hidden shadow-sm">
-              {cartItems.map((item, idx) => (
-                <div key={idx} className="flex items-center gap-4 p-4 border-b border-stone/10 last:border-0 bg-white">
-                  <div className="w-20 h-20 bg-stone/5 rounded-lg overflow-hidden flex-shrink-0 border border-stone/10">
-                    <img 
-                      src={item.main_image || (item.images?.find(i => i.is_primary) || item.images?.[0])?.image_url || 'https://placehold.co/100'} 
-                      alt={item.name} 
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-display text-lg text-primary truncate">{item.name}</h4>
-                    <p className="text-xs text-slate-500 font-body">Đơn giá: {formatPrice(item.price)}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-bold text-primary">{formatPrice(item.price * item.quantity)}</p>
-                    <p className="text-xs text-slate-500 font-body italic">Số lượng: {item.quantity < 10 ? `0${item.quantity}` : item.quantity}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Bank Transfer Instructions if needed */}
-          {formData.payment_method === 'bank' && bankSettings && (
-             <div className="bank-instructions mb-12 p-6 bg-amber-50/50 border border-amber-200 rounded-xl animate-fade-in">
-                <h4 className="text-amber-800 font-bold mb-3 flex items-center gap-2 text-sm uppercase tracking-wider">
-                   <span className="material-symbols-outlined">payments</span> 
-                   Hướng dẫn Chuyển khoản
-                </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-6 items-center">
-                   <div className="space-y-2 text-sm text-slate-700 font-body">
-                      <p><strong>Ngân hàng:</strong> {bankSettings.bank_name}</p>
-                      <p><strong>Số tài khoản:</strong> <span className="text-lg font-bold text-primary font-mono">{bankSettings.bank_account_number}</span></p>
-                      <p><strong>Chủ tài khoản:</strong> {bankSettings.bank_account_name}</p>
-                      <p className="pt-2 border-t border-amber-200">
-                        <strong>Nội dung:</strong> <span className="text-accent italic">
-                           {bankSettings.bank_transfer_template?.replace('{order_number}', orderNumber) || `${orderNumber}`}
-                        </span>
-                      </p>
-                   </div>
-                   {bankSettings.bank_qr_code && (
-                      <div className="bg-white p-2 border border-stone/20 rounded-lg shadow-sm">
-                         <img src={bankSettings.bank_qr_code} alt="Mã QR Chuyển khoản" className="w-32 h-32" />
+          {/* ─── Products ─── */}
+          {cartItems && cartItems.length > 0 && (
+            <div className="ty-products">
+              <h3 className="ty-section-title">
+                <span className="material-symbols-outlined">inventory_2</span>
+                Sản phẩm đã chọn
+              </h3>
+              <div className="ty-product-list">
+                {cartItems.map((item, idx) => {
+                  const imgSrc = getItemImage(item);
+                  const itemPrice = item.groupedItems?.length > 0
+                    ? item.groupedItems.reduce((s, gi) => s + (parseFloat(gi.price || 0) * (gi.qty || 1)), 0)
+                    : (item.price || 0);
+                  return (
+                    <div key={idx} className="ty-product-row">
+                      <div className="ty-product-img">
+                        {imgSrc
+                          ? <img src={imgSrc} alt={item.name} />
+                          : <span className="material-symbols-outlined">image</span>
+                        }
                       </div>
-                   )}
-                </div>
-             </div>
+                      <div className="ty-product-info">
+                        <h4 className="ty-product-name">{item.name}</h4>
+                        <p className="ty-product-meta">Đơn giá: {formatPrice(itemPrice)}</p>
+                      </div>
+                      <div className="ty-product-right">
+                        <p className="ty-product-total">{formatPrice(itemPrice * (item.quantity || 1))}</p>
+                        <p className="ty-product-qty">
+                          Số lượng: {(item.quantity || 1) < 10 ? `0${item.quantity || 1}` : item.quantity || 1}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           )}
 
-          {/* Actions */}
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-6">
-            <Link 
-              href="/products" 
-              className="w-full sm:w-auto px-10 py-4 bg-primary text-white font-display font-bold tracking-widest rounded-full hover:bg-slate-900 transition-all shadow-lg text-center text-sm uppercase"
-            >
-              Tiếp tục Mua sắm
+          {/* ─── Bank Transfer ─── */}
+          {isBankTransfer && bankSettings && (
+            <div className="ty-bank">
+              <h4 className="ty-bank-title">
+                <span className="material-symbols-outlined">payments</span>
+                Hướng dẫn Chuyển khoản
+              </h4>
+              <div className="ty-bank-body">
+                <div className="ty-bank-details">
+                  <p><strong>Ngân hàng:</strong> {bankSettings.bank_name}</p>
+                  <p>
+                    <strong>Số tài khoản:</strong>{' '}
+                    <span className="ty-bank-account">{bankSettings.bank_account_number}</span>
+                  </p>
+                  <p><strong>Chủ tài khoản:</strong> {bankSettings.bank_account_name}</p>
+                  <div className="ty-bank-divider" />
+                  <p>
+                    <strong>Nội dung CK:</strong>{' '}
+                    <span className="ty-bank-ref">
+                      {bankSettings.bank_transfer_template?.replace('{order_number}', orderNumber) || orderNumber}
+                    </span>
+                  </p>
+                </div>
+                {bankSettings.bank_qr_code && (
+                  <div className="ty-bank-qr">
+                    <img src={bankSettings.bank_qr_code} alt="QR Chuyển khoản" />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ─── CTA Buttons ─── */}
+          <div className="ty-actions">
+            <Link href="/products" className="ty-btn ty-btn--primary">
+              TIẾP TỤC MUA SẮM
             </Link>
-            <Link 
-              href="/" 
-              className="w-full sm:w-auto px-10 py-4 border-2 border-accent text-accent font-display font-bold tracking-widest rounded-full hover:bg-accent hover:text-white transition-all text-center text-sm uppercase"
-            >
-              Về Trang chủ
+            <Link href="/account" className="ty-btn ty-btn--outline">
+              XEM LỊCH SỬ ĐƠN HÀNG
             </Link>
           </div>
         </div>
-        
-        {/* Footer Decorative */}
-        <div className="bg-stone/5 p-6 text-center border-t border-stone/10">
-          <p className="italic font-body text-slate-500 text-sm">
-            Mọi thắc mắc vui lòng liên hệ: <span className="text-accent font-bold">1900 1234</span> hoặc <span className="text-accent font-bold">hotro@disangomviet.vn</span>
+
+        {/* ─── Footer strip ─── */}
+        <div className="ty-footer-strip">
+          <p>
+            Mọi thắc mắc vui lòng liên hệ:{' '}
+            <span className="ty-contact">1900 1234</span>{' '}
+            hoặc{' '}
+            <span className="ty-contact">hotro@disangomviet.vn</span>
           </p>
         </div>
       </div>
-      
-      <style jsx>{`
-        .font-display { font-family: 'Playfair Display', serif; }
-        .font-body { font-family: 'EB Garamond', serif; }
-        .shadow-premium { box-shadow: 0 20px 50px rgba(27, 54, 93, 0.1); }
-        .animate-fade-in { animation: fadeIn 0.8s ease-out forwards; }
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(20px); }
-          to { opacity: 1; transform: translateY(0); }
+
+      <style>{`
+        /* ── Page wrapper ── */
+        .ty-page {
+          background: #F9F5F0;
+          min-height: 100vh;
+          display: flex;
+          align-items: flex-start;
+          justify-content: center;
+          padding: 3rem 1rem 4rem;
+          font-family: 'EB Garamond', serif;
+        }
+
+        /* ── Card ── */
+        .ty-card {
+          background: #fff;
+          border: 3px double #C5A059;
+          box-shadow: 0 20px 60px rgba(27,54,93,0.12);
+          border-radius: 0.5rem;
+          overflow: hidden;
+          width: 100%;
+          max-width: 880px;
+          animation: tyFadeUp 0.7s ease-out both;
+        }
+        @keyframes tyFadeUp {
+          from { opacity: 0; transform: translateY(24px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ── Banner ── */
+        .ty-banner {
+          position: relative;
+          height: 200px;
+          background: #1B365D;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+        }
+        .ty-banner-overlay {
+          position: absolute; inset: 0;
+          background:
+            linear-gradient(135deg, rgba(197,160,89,0.12) 0%, transparent 60%),
+            repeating-linear-gradient(45deg, transparent, transparent 24px, rgba(197,160,89,0.04) 24px, rgba(197,160,89,0.04) 25px);
+        }
+        .ty-banner-bar {
+          position: absolute; left: 0; right: 0; height: 3px;
+          background: linear-gradient(90deg, #C5A059 0%, rgba(197,160,89,0.4) 50%, #C5A059 100%);
+        }
+        .ty-banner-bar--top { top: 0; }
+        .ty-banner-bar--bottom { bottom: 0; }
+        .ty-banner-content {
+          position: relative; z-index: 2; text-align: center;
+        }
+        .ty-check-icon {
+          width: 68px; height: 68px; border-radius: 50%;
+          background: #C5A059; color: #fff;
+          display: flex; align-items: center; justify-content: center;
+          margin: 0 auto 1rem;
+          box-shadow: 0 6px 20px rgba(197,160,89,0.45);
+        }
+        .ty-check-icon .material-symbols-outlined { font-size: 2.4rem; }
+        .ty-banner-title {
+          color: #fff;
+          font-family: 'Playfair Display', serif;
+          font-size: clamp(1.6rem, 4vw, 2.4rem);
+          font-weight: 700;
+          font-style: italic;
+          letter-spacing: 0.02em;
+          margin: 0;
+          text-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+
+        /* ── Body ── */
+        .ty-body { padding: 2.5rem 2.5rem 2rem; }
+        @media (max-width: 640px) { .ty-body { padding: 1.5rem 1.25rem 1.5rem; } }
+
+        /* Hero text */
+        .ty-hero-text { text-align: center; margin-bottom: 2.5rem; }
+        .ty-heading {
+          font-family: 'Playfair Display', serif;
+          font-size: clamp(1.3rem, 3vw, 1.8rem);
+          color: #1B365D;
+          margin: 0 0 0.75rem;
+          font-style: italic;
+        }
+        .ty-subtitle {
+          font-size: 1rem; color: #64748b;
+          line-height: 1.7; max-width: 600px; margin: 0 auto;
+        }
+
+        /* Info grid */
+        .ty-info-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 1.5rem;
+          margin-bottom: 2.5rem;
+        }
+        @media (max-width: 640px) { .ty-info-grid { grid-template-columns: 1fr; } }
+
+        .ty-info-block {
+          background: rgba(249,245,240,0.6);
+          border: 1px solid rgba(197,160,89,0.25);
+          border-radius: 0.25rem;
+          overflow: hidden;
+        }
+        .ty-info-title {
+          font-family: 'Playfair Display', serif;
+          font-size: 1rem; font-weight: 700; color: #1B365D;
+          display: flex; align-items: center; gap: 0.5rem;
+          padding: 0.85rem 1.25rem;
+          border-bottom: 1px solid rgba(197,160,89,0.2);
+          margin: 0;
+        }
+        .ty-info-title .material-symbols-outlined { font-size: 1.2rem; color: #C5A059; }
+
+        .ty-info-rows { padding: 1rem 1.25rem; display: flex; flex-direction: column; gap: 0.6rem; }
+        .ty-info-row { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
+        .ty-info-row--total { border-top: 1px solid rgba(197,160,89,0.2); padding-top: 0.75rem; margin-top: 0.25rem; }
+        .ty-label { font-size: 0.85rem; color: #64748b; flex-shrink: 0; }
+        .ty-label--total { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+        .ty-value { font-size: 0.9rem; color: #1B365D; text-align: right; }
+        .ty-value--bold { font-weight: 700; font-size: 0.95rem; }
+        .ty-total { font-size: 1.4rem; font-weight: 800; color: #1B365D; }
+
+        /* Shipping */
+        .ty-shipping-info { padding: 1rem 1.25rem; }
+        .ty-ship-name { font-size: 1.05rem; font-weight: 700; color: #1B365D; margin: 0 0 0.5rem; }
+        .ty-ship-row {
+          display: flex; align-items: flex-start; gap: 0.4rem;
+          font-size: 0.9rem; color: #64748b; margin: 0.35rem 0;
+        }
+        .ty-ship-row .material-symbols-outlined { font-size: 1rem; color: #C5A059; flex-shrink: 0; margin-top: 2px; }
+        .ty-estimate { font-size: 0.82rem; font-style: italic; color: #C5A059; margin: 0.75rem 0 0; }
+
+        /* Products */
+        .ty-products { margin-bottom: 2.5rem; }
+        .ty-section-title {
+          font-family: 'Playfair Display', serif;
+          font-size: 1.1rem; font-weight: 700; color: #1B365D;
+          display: flex; align-items: center; gap: 0.5rem;
+          margin: 0 0 1rem;
+        }
+        .ty-section-title .material-symbols-outlined { color: #C5A059; font-size: 1.2rem; }
+        .ty-product-list {
+          border: 1px solid rgba(197,160,89,0.2);
+          border-radius: 0.25rem; overflow: hidden;
+        }
+        .ty-product-row {
+          display: flex; align-items: center; gap: 1rem;
+          padding: 0.9rem 1.25rem;
+          border-bottom: 1px solid rgba(197,160,89,0.12);
+          background: #fff;
+          transition: background 0.2s;
+        }
+        .ty-product-row:last-child { border-bottom: none; }
+        .ty-product-row:hover { background: #fdfaf5; }
+        .ty-product-img {
+          width: 64px; height: 64px; flex-shrink: 0;
+          border: 1px solid rgba(197,160,89,0.25); border-radius: 2px;
+          overflow: hidden; display: flex; align-items: center; justify-content: center;
+          background: #F9F5F0;
+        }
+        .ty-product-img img { width: 100%; height: 100%; object-fit: cover; }
+        .ty-product-img .material-symbols-outlined { font-size: 1.6rem; color: rgba(197,160,89,0.5); }
+        .ty-product-info { flex: 1; min-width: 0; }
+        .ty-product-name {
+          font-family: 'Playfair Display', serif; font-size: 0.98rem;
+          color: #1B365D; margin: 0 0 0.25rem; font-weight: 600;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .ty-product-meta { font-size: 0.8rem; color: #94a3b8; margin: 0; }
+        .ty-product-right { text-align: right; flex-shrink: 0; }
+        .ty-product-total { font-weight: 700; color: #1B365D; font-size: 0.95rem; margin: 0; }
+        .ty-product-qty { font-size: 0.78rem; color: #94a3b8; margin: 0.2rem 0 0; }
+
+        /* Bank */
+        .ty-bank {
+          margin-bottom: 2.5rem;
+          padding: 1.5rem;
+          background: #fdf9f0;
+          border: 1px solid rgba(197,160,89,0.35);
+          border-radius: 0.25rem;
+        }
+        .ty-bank-title {
+          display: flex; align-items: center; gap: 0.5rem;
+          font-family: 'Playfair Display', serif; font-size: 1.05rem;
+          font-weight: 700; color: #1B365D; margin: 0 0 1.25rem;
+        }
+        .ty-bank-title .material-symbols-outlined { color: #C5A059; }
+        .ty-bank-body { display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: wrap; }
+        .ty-bank-details { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.9rem; color: #374151; }
+        .ty-bank-divider { height: 1px; background: rgba(197,160,89,0.2); margin: 0.5rem 0; }
+        .ty-bank-account { font-size: 1.15rem; font-weight: 800; color: #1B365D; letter-spacing: 0.06em; }
+        .ty-bank-ref { font-style: italic; font-weight: 700; color: #C5A059; }
+        .ty-bank-qr {
+          width: 120px; height: 120px; flex-shrink: 0;
+          background: #fff; border: 1px solid rgba(197,160,89,0.3);
+          padding: 4px; border-radius: 4px;
+        }
+        .ty-bank-qr img { width: 100%; height: 100%; object-fit: contain; }
+
+        /* Actions */
+        .ty-actions {
+          display: flex; flex-wrap: wrap; gap: 1rem;
+          justify-content: center; padding-top: 0.75rem;
+        }
+        .ty-btn {
+          padding: 0.85rem 2.5rem;
+          font-family: 'Playfair Display', serif; font-weight: 700;
+          font-size: 0.85rem; letter-spacing: 0.12em; text-transform: uppercase;
+          cursor: pointer; transition: all 0.2s; text-align: center; border-radius: 2px;
+          min-width: 200px;
+        }
+        .ty-btn--primary {
+          background: #1B365D; color: #fff; border: 2px solid #1B365D;
+        }
+        .ty-btn--primary:hover { background: #0e2040; border-color: #0e2040; }
+        .ty-btn--outline {
+          background: transparent; color: #C5A059; border: 2px solid #C5A059;
+        }
+        .ty-btn--outline:hover { background: #C5A059; color: #fff; }
+
+        /* Footer strip */
+        .ty-footer-strip {
+          background: #F9F5F0; padding: 1rem 2.5rem;
+          border-top: 1px solid rgba(197,160,89,0.15);
+          text-align: center;
+        }
+        .ty-footer-strip p { font-size: 0.88rem; font-style: italic; color: #94a3b8; margin: 0; }
+        .ty-contact { color: #C5A059; font-weight: 700; }
+
+        @media (max-width: 640px) {
+          .ty-card { border-width: 2px; }
+          .ty-banner { height: 160px; }
+          .ty-banner-title { font-size: 1.5rem; }
+          .ty-check-icon { width: 56px; height: 56px; }
+          .ty-check-icon .material-symbols-outlined { font-size: 2rem; }
+          .ty-btn { min-width: 100%; }
         }
       `}</style>
     </div>

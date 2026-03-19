@@ -1,243 +1,248 @@
 import React from 'react';
-import { Link, useLocation, useOutletContext, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 
-const formatCurrency = (value) =>
-    new Intl.NumberFormat('vi-VN', {
-        style: 'currency',
-        currency: 'VND',
-        maximumFractionDigits: 0,
-    }).format(Number(value || 0));
+const formatCurrency = (value) => `${Number(value || 0).toLocaleString('vi-VN')} đ`;
 
-const formatDate = (value) => {
-    if (!value) {
-        return new Intl.DateTimeFormat('vi-VN', {
-            day: '2-digit',
-            month: '2-digit',
-            year: 'numeric',
-        }).format(new Date());
-    }
+const formatOrderDate = (value) => {
+    const date = value ? new Date(value) : new Date();
+    if (Number.isNaN(date.getTime())) return value || '';
 
-    const date = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(date.getTime())) {
-        return value;
-    }
-
-    return new Intl.DateTimeFormat('vi-VN', {
-        day: '2-digit',
-        month: 'long',
-        year: 'numeric',
-    }).format(date);
+    const day = date.getDate();
+    const month = date.getMonth() + 1;
+    const year = date.getFullYear();
+    return `${day} Tháng ${month}, ${year}`;
 };
 
-const paymentMethodLabel = (value) => {
-    if (value === 'bank_transfer') return 'Chuyển khoản ngân hàng';
-    if (value === 'cod') return 'Thanh toán khi nhận hàng';
-    return value || 'Chưa xác định';
+const paymentMethodLabel = (method) => {
+    if (method === 'bank_transfer') return 'Chuyển khoản Ngân hàng';
+    if (method === 'cod') return 'Thanh toán khi nhận hàng';
+    return method || 'Thanh toán khi nhận hàng';
 };
 
-const fallbackItems = [];
+const getItemSubtotal = (item) => {
+    const quantity = Number(item.quantity || 0);
+    const price = Number(item.price || 0);
+    const subtotal = Number(item.subtotal || 0);
+    if (quantity > 0 && price > 0) return quantity * price;
+    return subtotal;
+};
 
 const OrderThankYou = () => {
     const location = useLocation();
-    const outletContext = useOutletContext();
     const [searchParams] = useSearchParams();
     const state = location.state || {};
+    const isLegacy = location.pathname.startsWith('/old/');
 
-    const orderNumber = state.orderNumber || searchParams.get('order') || 'Đang cập nhật';
-    const siteInfo = outletContext?.siteInfo || state.siteInfo || null;
-    const items = Array.isArray(state.items) ? state.items : fallbackItems;
+    const items = Array.isArray(state.items) ? state.items : [];
+    const totalItems = state.totalItems || items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    const totalAmount = state.totalAmount || items.reduce((sum, item) => sum + getItemSubtotal(item), 0);
+
+    const orderNumber = state.orderNumber || searchParams.get('order') || 'WEB-00000000';
+    const displayOrderNumber = orderNumber.startsWith('#') ? orderNumber : `#${orderNumber}`;
+
     const customerName = state.customerName || 'Quý khách';
     const customerPhone = state.phone || '';
-    const customerEmail = state.email || '';
-    const shippingAddress = state.shippingAddress || 'Thông tin giao hàng sẽ được xác nhận sau khi nhân viên liên hệ.';
-    const paymentMethod = paymentMethodLabel(state.paymentMethod);
-    const continuePath = state.continuePath || '/san-pham';
-    const continueLabel = state.continueLabel || 'Tiếp tục mua sắm';
-    const secondaryPath = state.secondaryPath || '/';
-    const secondaryLabel = state.secondaryLabel || 'Về trang chủ';
-    const totalItems = state.totalItems || items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-    const totalAmount = state.totalAmount || items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 0)), 0);
-    const helperMessage =
+    const shippingAddress =
+        state.shippingAddress || 'Thông tin địa chỉ sẽ được xác nhận trong cuộc gọi chốt đơn.';
+
+    const continuePath = state.continuePath || (isLegacy ? '/old/shop' : '/san-pham');
+    const continueLabel = state.continueLabel || 'TIẾP TỤC MUA SẮM';
+    const historyPath = state.secondaryPath || (isLegacy ? '/old/dashboard' : '/');
+    const historyLabel = state.secondaryLabel || 'XEM LỊCH SỬ ĐƠN HÀNG';
+
+    const description =
         state.message ||
-        'Đơn hàng của Quý khách đã được tiếp nhận thành công. Đội ngũ của chúng tôi sẽ xác nhận lại trong thời gian sớm nhất.';
+        'Đơn hàng của Quý khách đã được tiếp nhận và đang được các nghệ nhân chuẩn bị kỹ lưỡng tại làng nghề. Một thư xác nhận chi tiết sẽ được gửi đến địa chỉ email của Quý khách.';
 
     return (
-        <div className="bg-[#f8f1e7]">
-            <section className="mx-auto flex w-full max-w-[1180px] flex-col gap-6 px-4 py-8 md:px-6 md:py-12">
-                <div className="overflow-hidden rounded-[28px] border border-[#d6c2a4]/60 bg-white shadow-[0_24px_80px_rgba(27,54,93,0.12)]">
-                    <div className="relative overflow-hidden bg-[#1b365d] px-6 py-10 md:px-10 md:py-14">
-                        <div className="absolute inset-x-0 top-0 h-[6px] bg-gradient-to-r from-[#c5a059] via-[#ecd6ab] to-[#c5a059]" />
-                        <div className="absolute inset-x-0 bottom-0 h-[6px] bg-gradient-to-r from-[#c5a059] via-[#ecd6ab] to-[#c5a059]" />
-                        <div className="relative flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-                            <div className="max-w-3xl">
-                                <div className="mb-5 inline-flex h-16 w-16 items-center justify-center rounded-full bg-[#c5a059] text-white shadow-[0_12px_32px_rgba(197,160,89,0.35)]">
-                                    <span className="material-symbols-outlined text-[34px]">check_circle</span>
-                                </div>
-                                <p className="mb-3 text-[11px] font-black uppercase tracking-[0.45em] text-[#ecd6ab]">
-                                    Giao dịch hoàn tất
-                                </p>
-                                <h1 className="font-display text-3xl font-bold italic text-white md:text-5xl">
-                                    Cảm ơn Quý khách đã trân trọng di sản
-                                </h1>
-                                <p className="mt-4 max-w-2xl text-base leading-7 text-white/80 md:text-lg">
-                                    {helperMessage}
-                                </p>
-                            </div>
-
-                            <div className="w-full max-w-[320px] rounded-[24px] border border-white/15 bg-white/10 p-5 backdrop-blur-sm">
-                                <div className="rounded-[18px] border border-[#ecd6ab]/40 bg-white/95 px-4 py-3 text-center">
-                                    <p className="text-xs font-black uppercase tracking-[0.24em] text-[#1b365d]">
-                                        Bảng xác nhận đơn hàng
-                                    </p>
-                                </div>
-                                <div className="mt-4 space-y-3 text-white">
-                                    <div>
-                                        <p className="text-xs font-bold uppercase tracking-[0.2em] text-white/60">Mã đơn hàng</p>
-                                        <p className="mt-1 text-2xl font-black tracking-wide">{orderNumber}</p>
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-3 text-sm">
-                                        <div className="rounded-2xl bg-white/10 px-4 py-3">
-                                            <p className="text-[10px] uppercase tracking-[0.18em] text-white/60">Ngày tạo</p>
-                                            <p className="mt-1 font-semibold">{formatDate(state.createdAt)}</p>
-                                        </div>
-                                        <div className="rounded-2xl bg-white/10 px-4 py-3">
-                                            <p className="text-[10px] uppercase tracking-[0.18em] text-white/60">Tổng tiền</p>
-                                            <p className="mt-1 font-semibold">{formatCurrency(totalAmount)}</p>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
+        <div className="min-h-screen bg-[#f8f5ef] px-4 py-10 text-[#223860] md:px-6 md:py-14">
+            <main className="mx-auto w-full max-w-[860px]">
+                <section className="overflow-hidden rounded-[6px] border border-[#dfd6c8] bg-[#fffdfa] shadow-[0_16px_35px_rgba(28,45,77,0.14)]">
+                    <div className="relative bg-[linear-gradient(130deg,#2e3a62_0%,#34426f_52%,#2f3c66_100%)] px-6 pb-7 pt-12 text-center md:pb-8">
+                        <div className="absolute inset-x-0 top-0 h-[4px] bg-[#c8a356]" />
+                        <div className="absolute inset-x-0 bottom-0 h-[4px] bg-[#c8a356]" />
+                        <div className="absolute left-1/2 top-4 h-14 w-14 -translate-x-1/2 rounded-full border-4 border-[#f3ead7] bg-[#c8a356] shadow-[0_8px_18px_rgba(200,163,86,0.35)]">
+                            <span className="material-symbols-outlined mt-[11px] block text-center text-[24px] text-white">check</span>
                         </div>
+                        <h1
+                            className="mt-7 text-4xl font-semibold italic leading-tight text-white md:text-5xl"
+                            style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                        >
+                            Giao dịch Hoàn tất
+                        </h1>
                     </div>
 
                     <div className="px-6 py-8 md:px-10 md:py-10">
-                        <div className="grid gap-5 lg:grid-cols-[1.05fr,0.95fr]">
-                            <div className="rounded-[24px] border border-[#d7c8b4] bg-[#f9f4ec] p-6">
-                                <h2 className="font-display text-[28px] font-bold text-[#1b365d]">Chi tiết đơn hàng</h2>
-                                <div className="mt-5 space-y-4 text-[15px] text-slate-700">
-                                    <div className="flex items-center justify-between gap-4 border-b border-[#dccfbf] pb-3">
-                                        <span className="font-medium text-slate-500">Mã đơn hàng</span>
-                                        <span className="font-bold text-[#1b365d]">{orderNumber}</span>
+                        <div className="mx-auto max-w-[700px] text-center">
+                            <h2
+                                className="text-3xl italic leading-tight text-[#1f3560] md:text-[44px]"
+                                style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                            >
+                                Cảm ơn Quý khách đã trân trọng di sản!
+                            </h2>
+                            <p
+                                className="mt-3 text-[17px] leading-8 text-[#415171] md:text-[20px]"
+                                style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                            >
+                                {description}
+                            </p>
+                        </div>
+
+                        <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-5">
+                            <article className="rounded-[5px] border border-[#e6dccd] bg-[#fefdf9] p-5">
+                                <h3
+                                    className="flex items-center gap-2 text-[23px] font-medium text-[#223860]"
+                                    style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                                >
+                                    <span className="material-symbols-outlined text-[18px] text-[#c8a356]">receipt_long</span>
+                                    Chi tiết Đơn hàng
+                                </h3>
+                                <div
+                                    className="mt-3 border-t border-[#ebe2d5] pt-3 text-[18px] text-[#314363]"
+                                    style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                                >
+                                    <div className="flex items-center justify-between py-1.5">
+                                        <span>Mã số đơn hàng:</span>
+                                        <strong>{displayOrderNumber}</strong>
                                     </div>
-                                    <div className="flex items-center justify-between gap-4 border-b border-[#dccfbf] pb-3">
-                                        <span className="font-medium text-slate-500">Ngày đặt</span>
-                                        <span className="font-semibold">{formatDate(state.createdAt)}</span>
+                                    <div className="flex items-center justify-between py-1.5">
+                                        <span>Ngày đặt:</span>
+                                        <span>{formatOrderDate(state.createdAt)}</span>
                                     </div>
-                                    <div className="flex items-center justify-between gap-4 border-b border-[#dccfbf] pb-3">
-                                        <span className="font-medium text-slate-500">Phương thức thanh toán</span>
-                                        <span className="font-semibold">{paymentMethod}</span>
+                                    <div className="flex items-center justify-between py-1.5">
+                                        <span>Phương thức:</span>
+                                        <span>{paymentMethodLabel(state.paymentMethod)}</span>
                                     </div>
-                                    <div className="flex items-center justify-between gap-4 pt-1">
-                                        <span className="text-xs font-black uppercase tracking-[0.26em] text-[#9b7a3f]">Tổng cộng</span>
-                                        <span className="text-2xl font-black text-[#1b365d]">{formatCurrency(totalAmount)}</span>
+                                    <div className="mt-2 flex items-center justify-between border-t border-[#ebe2d5] pt-2.5">
+                                        <span className="text-[17px] font-semibold uppercase tracking-[0.08em]">Tổng cộng:</span>
+                                        <strong className="text-[30px]">{formatCurrency(totalAmount)}</strong>
                                     </div>
                                 </div>
-                            </div>
+                            </article>
 
-                            <div className="rounded-[24px] border border-[#d7c8b4] bg-[#fffdf8] p-6">
-                                <div className="flex items-start gap-4">
-                                    <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#1b365d]/8 text-[#c5a059]">
-                                        <span className="material-symbols-outlined text-[30px]">local_shipping</span>
-                                    </div>
-                                    <div className="min-w-0 flex-1">
-                                        <h2 className="font-display text-[28px] font-bold text-[#1b365d]">Thông tin giao nhận</h2>
-                                        <p className="mt-1 text-sm text-slate-500">Chúng tôi sẽ xác nhận đơn hàng và lịch giao trong thời gian sớm nhất.</p>
-                                    </div>
-                                </div>
-
-                                <div className="mt-5 space-y-3 text-[15px] leading-7 text-slate-700">
-                                    <p className="text-xl font-bold text-[#1b365d]">{customerName}</p>
+                            <article className="rounded-[5px] border border-[#e6dccd] bg-[#fefdf9] p-5">
+                                <h3
+                                    className="flex items-center gap-2 text-[23px] font-medium text-[#223860]"
+                                    style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                                >
+                                    <span className="material-symbols-outlined text-[18px] text-[#c8a356]">local_shipping</span>
+                                    Thông tin Giao nhận
+                                </h3>
+                                <div
+                                    className="mt-3 border-t border-[#ebe2d5] pt-3 text-[18px] leading-7 text-[#314363]"
+                                    style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                                >
+                                    <p className="font-semibold">{customerName}</p>
                                     {customerPhone ? <p>{customerPhone}</p> : null}
-                                    {customerEmail ? <p>{customerEmail}</p> : null}
-                                    <p>{shippingAddress}</p>
-                                    <div className="rounded-2xl border border-[#e6d8c2] bg-[#f8f1e7] px-4 py-3 text-sm italic text-[#9b7a3f]">
-                                        {siteInfo?.name || 'Gốm Đại Thành'} sẽ liên hệ để xác nhận và chuẩn bị giao hàng.
+                                    <p className="break-words">{shippingAddress}</p>
+                                    <p className="pt-1 text-[16px] italic text-[#c8a356]">Dự kiến giao hàng: 3-5 ngày làm việc</p>
+                                </div>
+                            </article>
+                        </div>
+
+                        <section className="mt-7">
+                            <h3
+                                className="flex items-center gap-2 text-[31px] font-medium text-[#223860]"
+                                style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                            >
+                                <span className="material-symbols-outlined text-[18px] text-[#c8a356]">inventory_2</span>
+                                Sản phẩm đã chọn
+                            </h3>
+
+                            <div className="mt-3 divide-y divide-[#e9e0d2] border-y border-[#e9e0d2]">
+                                {items.length > 0 ? (
+                                    items.map((item, index) => {
+                                        const quantity = Number(item.quantity || 1);
+                                        const subtotal = getItemSubtotal(item);
+                                        const meta = item.meta || item.sku || 'Sản phẩm thủ công tuyển chọn';
+                                        return (
+                                            <div
+                                                key={`${item.id || item.sku || item.name || 'item'}-${index}`}
+                                                className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between"
+                                            >
+                                                <div className="flex min-w-0 items-center gap-3">
+                                                    <div className="h-16 w-16 flex-shrink-0 overflow-hidden rounded-[3px] border border-[#e4dbcf] bg-[#f3f3f3]">
+                                                        {item.image ? (
+                                                            <img
+                                                                src={item.image}
+                                                                alt={item.name || 'Sản phẩm'}
+                                                                className="h-full w-full object-cover"
+                                                            />
+                                                        ) : (
+                                                            <div className="flex h-full w-full items-center justify-center text-[#9ea6b0]">
+                                                                <span className="material-symbols-outlined text-[20px]">image</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                        <p
+                                                            className="truncate text-[26px] leading-tight text-[#223860]"
+                                                            style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                                                        >
+                                                            {item.name || 'Sản phẩm trong đơn hàng'}
+                                                        </p>
+                                                        <p
+                                                            className="mt-0.5 text-[16px] text-[#6a7690]"
+                                                            style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                                                        >
+                                                            {meta}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                                <div
+                                                    className="text-right text-[20px] text-[#223860]"
+                                                    style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                                                >
+                                                    <p className="font-semibold">{formatCurrency(subtotal)}</p>
+                                                    <p className="text-[16px] text-[#6a7690]">Số lượng: {String(quantity).padStart(2, '0')}</p>
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                                ) : (
+                                    <div
+                                        className="py-6 text-center text-[17px] text-[#6f7d97]"
+                                        style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                                    >
+                                        Chưa có dữ liệu sản phẩm để hiển thị.
                                     </div>
-                                </div>
+                                )}
                             </div>
-                        </div>
+                        </section>
 
-                        <div className="mt-6 rounded-[24px] border border-[#d7c8b4] bg-white">
-                            <div className="flex items-center justify-between gap-4 border-b border-[#ede2d3] px-6 py-5">
-                                <div>
-                                    <h2 className="font-display text-[28px] font-bold text-[#1b365d]">Sản phẩm đã chọn</h2>
-                                    <p className="mt-1 text-sm text-slate-500">Tóm tắt các sản phẩm nằm trong đơn hàng của Quý khách.</p>
-                                </div>
-                                <div className="hidden rounded-full bg-[#f5ecdf] px-4 py-2 text-xs font-black uppercase tracking-[0.24em] text-[#9b7a3f] md:block">
-                                    {totalItems} món
-                                </div>
-                            </div>
-
-                            {items.length > 0 ? (
-                                <div className="divide-y divide-[#ede2d3]">
-                                    {items.map((item, index) => (
-                                        <div key={`${item.id || item.sku || item.name}-${index}`} className="flex flex-col gap-4 px-6 py-5 md:flex-row md:items-center">
-                                            <div className="flex min-w-0 flex-1 items-center gap-4">
-                                                <div className="h-20 w-20 overflow-hidden rounded-[18px] border border-[#e6d8c2] bg-[#f8f1e7]">
-                                                    {item.image ? (
-                                                        <img src={item.image} alt={item.name || 'Sản phẩm'} className="h-full w-full object-cover" />
-                                                    ) : (
-                                                        <div className="flex h-full w-full items-center justify-center text-[#c5a059]">
-                                                            <span className="material-symbols-outlined text-[32px]">inventory_2</span>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                                <div className="min-w-0">
-                                                    <h3 className="truncate font-display text-xl font-bold text-[#1b365d]">
-                                                        {item.name || 'Sản phẩm trong đơn hàng'}
-                                                    </h3>
-                                                    <p className="mt-1 text-sm text-slate-500">
-                                                        {[item.sku, item.meta].filter(Boolean).join(' • ') || 'Sản phẩm thủ công tuyển chọn'}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                            <div className="flex items-center justify-between gap-4 text-right md:min-w-[220px] md:justify-end">
-                                                <div>
-                                                    <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">Số lượng</p>
-                                                    <p className="mt-1 text-lg font-bold text-[#1b365d]">{item.quantity || 1}</p>
-                                                </div>
-                                                <div>
-                                                    <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">Thành tiền</p>
-                                                    <p className="mt-1 text-lg font-black text-[#1b365d]">
-                                                        {formatCurrency((Number(item.price || 0) * Number(item.quantity || 0)) || item.subtotal)}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className="px-6 py-10 text-center text-slate-500">
-                                    Thông tin sản phẩm của đơn hàng sẽ được cập nhật khi hệ thống đồng bộ hoàn tất.
-                                </div>
-                            )}
-
-                            <div className="grid gap-3 border-t border-[#ede2d3] bg-[#f9f4ec] px-6 py-5 md:grid-cols-[1fr,220px] md:items-center">
-                                <div className="text-sm text-slate-500">Mọi thông tin xác nhận đơn hàng đã được lưu lại để đội ngũ chăm sóc khách hàng tiếp nhận.</div>
-                                <div className="rounded-[18px] border border-[#d7c8b4] bg-white px-5 py-4 text-right">
-                                    <p className="text-xs font-black uppercase tracking-[0.24em] text-[#9b7a3f]">Tổng thanh toán</p>
-                                    <p className="mt-1 text-[28px] font-black text-[#1b365d]">{formatCurrency(totalAmount)}</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="mt-8 flex flex-col items-center justify-center gap-4 sm:flex-row">
+                        <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
                             <Link
                                 to={continuePath}
-                                className="w-full rounded-2xl bg-[#1b365d] px-8 py-4 text-center text-sm font-black uppercase tracking-[0.22em] text-white transition-all hover:brightness-95 sm:w-auto"
+                                className="min-w-[210px] rounded-[4px] border border-[#203b67] bg-[#203b67] px-6 py-2.5 text-center text-[17px] font-semibold uppercase tracking-[0.07em] text-white transition-colors hover:bg-[#2a4a7d]"
+                                style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
                             >
                                 {continueLabel}
                             </Link>
                             <Link
-                                to={secondaryPath}
-                                className="w-full rounded-2xl border-2 border-[#c5a059] px-8 py-4 text-center text-sm font-black uppercase tracking-[0.22em] text-[#9b7a3f] transition-all hover:bg-[#c5a059] hover:text-white sm:w-auto"
+                                to={historyPath}
+                                className="min-w-[260px] rounded-[4px] border-2 border-[#c8a356] px-6 py-2.5 text-center text-[17px] font-semibold uppercase tracking-[0.07em] text-[#c8a356] transition-colors hover:bg-[#c8a356] hover:text-white"
+                                style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
                             >
-                                {secondaryLabel}
+                                {historyLabel}
                             </Link>
                         </div>
                     </div>
-                </div>
-            </section>
+
+                    <footer
+                        className="border-t border-[#ede4d8] bg-[#f9f4ea] px-6 py-4 text-center text-[17px] italic text-[#7a869e]"
+                        style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                    >
+                        Mọi thắc mắc vui lòng liên hệ: <span className="text-[#c8a356]">1900 1234</span> hoặc <span className="text-[#c8a356]">hotro@disangomviet.vn</span>
+                    </footer>
+                </section>
+
+                <p
+                    className="mt-6 text-center text-[14px] text-[#9ca8bd]"
+                    style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                >
+                    Tổng món: {totalItems}
+                </p>
+            </main>
         </div>
     );
 };

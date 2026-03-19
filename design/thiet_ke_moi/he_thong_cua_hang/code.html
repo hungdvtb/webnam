@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+
+<html lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,100..900;1,100..900&amp;family=Playfair+Display:ital,wght@0,400..900;1,400..900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#1B365D", // Cobalt Blue
+                        "background-light": "#F9F5F0", // Rice Paper
+                        "background-dark": "#111821",
+                        "antique-gold": "#C5A065",
+                    },
+                    fontFamily: {
+                        "display": ["Noto Serif", "serif"],
+                        "playfair": ["Playfair Display", "serif"]
+                    },
+                    borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+                },
+            },
+        }
+    </script>
+<style>
+        .gold-border-double {
+            border: 4px double #C5A065;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #F9F5F0;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #C5A065;
+        }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark font-display text-slate-900 dark:text-slate-100 min-h-screen flex flex-col">
+<!-- Header -->
+<header class="border-b border-antique-gold/30 px-6 md:px-20 py-4 bg-background-light/80 backdrop-blur-md sticky top-0 z-50">
+<div class="max-w-7xl mx-auto flex items-center justify-between">
+<div class="flex items-center gap-4">
+<div class="text-primary">
+<span class="material-symbols-outlined text-4xl">rebase_edit</span>
+</div>
+<div>
+<h1 class="font-playfair text-2xl font-bold tracking-tight text-primary">Di Sản Gốm Việt</h1>
+<p class="text-[10px] uppercase tracking-[0.2em] text-antique-gold font-bold">Vietnamese Ceramics Heritage</p>
+</div>
+</div>
+<nav class="hidden md:flex items-center gap-10">
+<a class="text-sm font-medium hover:text-primary transition-colors" href="#">Trang chủ</a>
+<a class="text-sm font-medium hover:text-primary transition-colors" href="#">Bộ sưu tập</a>
+<a class="text-sm font-medium hover:text-primary transition-colors" href="#">Nghệ nhân</a>
+<a class="text-sm font-medium text-primary border-b border-primary" href="#">Cửa hàng</a>
+</nav>
+<div class="flex items-center gap-4">
+<button class="p-2 hover:bg-primary/10 rounded-full transition-colors">
+<span class="material-symbols-outlined text-primary">search</span>
+</button>
+<button class="p-2 hover:bg-primary/10 rounded-full transition-colors">
+<span class="material-symbols-outlined text-primary">shopping_bag</span>
+</button>
+<button class="p-2 bg-primary text-white rounded-full transition-colors">
+<span class="material-symbols-outlined">person</span>
+</button>
+</div>
+</div>
+</header>
+<!-- Main Content -->
+<main class="flex-grow flex flex-col md:flex-row h-[calc(100vh-88px)] overflow-hidden">
+<!-- Left Sidebar: Store List -->
+<aside class="w-full md:w-[400px] bg-background-light border-r border-antique-gold/20 flex flex-col h-full shadow-xl z-10">
+<div class="p-6 border-b border-antique-gold/10">
+<h2 class="font-playfair text-3xl text-primary mb-4">Hệ Thống Cửa Hàng</h2>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-antique-gold">location_on</span>
+<input class="w-full pl-10 pr-4 py-3 bg-white border border-antique-gold/30 rounded focus:ring-1 focus:ring-primary focus:border-primary outline-none text-sm transition-all shadow-sm" placeholder="Tìm theo thành phố..." type="text"/>
+</div>
+</div>
+<div class="flex-grow overflow-y-auto custom-scrollbar p-6 space-y-6">
+<!-- Location Item 1: Hanoi -->
+<div class="group cursor-pointer p-5 bg-white border-l-4 border-primary shadow-sm hover:shadow-md transition-all duration-300">
+<h3 class="font-playfair text-xl text-primary font-bold group-hover:text-antique-gold transition-colors">Showroom Hà Nội</h3>
+<div class="mt-3 space-y-2 text-sm text-slate-600">
+<div class="flex items-start gap-2">
+<span class="material-symbols-outlined text-base text-antique-gold mt-0.5">map</span>
+<p>Số 15 Lý Quốc Sư, Quận Hoàn Kiếm, Hà Nội</p>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-base text-antique-gold">call</span>
+<p>(+84) 24 3828 5555</p>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-base text-antique-gold">schedule</span>
+<p>08:00 - 21:00 (Hằng ngày)</p>
+</div>
+</div>
+</div>
+<!-- Location Item 2: Bat Trang -->
+<div class="group cursor-pointer p-5 bg-white border-l-4 border-antique-gold/30 hover:border-primary shadow-sm hover:shadow-md transition-all duration-300">
+<h3 class="font-playfair text-xl text-primary font-bold group-hover:text-antique-gold transition-colors">Xưởng Gốm Bát Tràng</h3>
+<div class="mt-3 space-y-2 text-sm text-slate-600">
+<div class="flex items-start gap-2">
+<span class="material-symbols-outlined text-base text-antique-gold mt-0.5">map</span>
+<p>Xóm 3, Làng cổ Bát Tràng, Gia Lâm, Hà Nội</p>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-base text-antique-gold">call</span>
+<p>(+84) 24 3874 1234</p>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-base text-antique-gold">schedule</span>
+<p>07:30 - 18:30 (Hằng ngày)</p>
+</div>
+</div>
+</div>
+<!-- Location Item 3: Ho Chi Minh City -->
+<div class="group cursor-pointer p-5 bg-white border-l-4 border-antique-gold/30 hover:border-primary shadow-sm hover:shadow-md transition-all duration-300">
+<h3 class="font-playfair text-xl text-primary font-bold group-hover:text-antique-gold transition-colors">Chi Nhánh TP. HCM</h3>
+<div class="mt-3 space-y-2 text-sm text-slate-600">
+<div class="flex items-start gap-2">
+<span class="material-symbols-outlined text-base text-antique-gold mt-0.5">map</span>
+<p>88 Đồng Khởi, Quận 1, TP. Hồ Chí Minh</p>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-base text-antique-gold">call</span>
+<p>(+84) 28 3823 4567</p>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-base text-antique-gold">schedule</span>
+<p>09:00 - 22:00 (Hằng ngày)</p>
+</div>
+</div>
+</div>
+<!-- Location Item 4: Da Nang -->
+<div class="group cursor-pointer p-5 bg-white border-l-4 border-antique-gold/30 hover:border-primary shadow-sm hover:shadow-md transition-all duration-300">
+<h3 class="font-playfair text-xl text-primary font-bold group-hover:text-antique-gold transition-colors">Cửa Hàng Đà Nẵng</h3>
+<div class="mt-3 space-y-2 text-sm text-slate-600">
+<div class="flex items-start gap-2">
+<span class="material-symbols-outlined text-base text-antique-gold mt-0.5">map</span>
+<p>150 Trần Phú, Quận Hải Châu, Đà Nẵng</p>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-base text-antique-gold">call</span>
+<p>(+84) 23 6382 1111</p>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-base text-antique-gold">schedule</span>
+<p>08:30 - 20:30 (Hằng ngày)</p>
+</div>
+</div>
+</div>
+</div>
+<div class="p-6 bg-primary text-white text-center">
+<p class="text-xs uppercase tracking-widest font-bold">Hỗ trợ khách hàng</p>
+<p class="font-playfair text-lg mt-1">Hotline: 1800 6688</p>
+</div>
+</aside>
+<!-- Right Side: Map Integration -->
+<section class="flex-grow relative bg-slate-200 overflow-hidden">
+<div class="absolute inset-0 z-0 bg-cover bg-center grayscale opacity-60 mix-blend-multiply" data-alt="Vintage style map of Vietnam cities" data-location="Vietnam" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuAecAgH7muLl9G5XKhti-_bG8amkh-zhuB-MzqT5Uawca2J6L2IoEZCW9NjoYolz_wlvAeODFNvcrwA34zPjaoAC9qZlodX89vNGESEFdI3gQ6AKPDlwtx_4XVDqLbnp8PsPaGFyjqr35pp3fm5drsKhGRQRmQJW6oiBPJQJKssFkcD4yqeZ5jI1MZKJZbhqtvJqRJO8st96xYMFoi1yUYol-qO4HbyD__0KJrEK1EWs_Pc0j5db7R60YHbXuD8t5Lovgl5KN55vG8')"></div>
+<div class="absolute inset-0 bg-primary/5 pointer-events-none"></div>
+<!-- Custom Map Controls Overlay -->
+<div class="absolute bottom-10 right-10 flex flex-col gap-2 z-20">
+<button class="w-12 h-12 bg-white text-primary flex items-center justify-center shadow-lg hover:bg-antique-gold hover:text-white transition-all rounded">
+<span class="material-symbols-outlined">add</span>
+</button>
+<button class="w-12 h-12 bg-white text-primary flex items-center justify-center shadow-lg hover:bg-antique-gold hover:text-white transition-all rounded">
+<span class="material-symbols-outlined">remove</span>
+</button>
+<button class="w-12 h-12 bg-primary text-white flex items-center justify-center shadow-lg hover:bg-antique-gold transition-all rounded mt-4">
+<span class="material-symbols-outlined">my_location</span>
+</button>
+</div>
+<!-- Map Pin Indicator (Visual Design) -->
+<div class="absolute top-[30%] left-[45%] z-20 animate-bounce">
+<div class="relative">
+<span class="material-symbols-outlined text-5xl text-primary drop-shadow-xl">location_on</span>
+<div class="absolute -top-12 left-1/2 -translate-x-1/2 bg-white px-4 py-2 shadow-xl gold-border-double min-w-[180px]">
+<p class="text-[10px] text-antique-gold font-bold uppercase">Bạn đang xem</p>
+<p class="font-playfair font-bold text-primary">Showroom Hà Nội</p>
+</div>
+</div>
+</div>
+<!-- Decorative Vintage Overlay -->
+<div class="absolute top-0 left-0 w-full h-10 bg-gradient-to-b from-background-light to-transparent opacity-50"></div>
+<div class="absolute bottom-0 left-0 w-full h-10 bg-gradient-to-t from-background-light to-transparent opacity-50"></div>
+</section>
+</main>
+<!-- Footer -->
+<footer class="bg-primary text-white/90 py-4 px-20 border-t border-antique-gold/20 flex flex-col md:flex-row justify-between items-center text-xs">
+<div class="flex gap-8 mb-4 md:mb-0">
+<a class="hover:text-antique-gold transition-all" href="#">Chính sách bảo mật</a>
+<a class="hover:text-antique-gold transition-all" href="#">Điều khoản dịch vụ</a>
+<a class="hover:text-antique-gold transition-all" href="#">Hướng dẫn mua hàng</a>
+</div>
+<div class="flex items-center gap-2">
+<p>© 2024 Di Sản Gốm Việt. Bảo tồn nét tinh hoa Việt.</p>
+<div class="w-px h-4 bg-antique-gold/40 mx-2"></div>
+<div class="flex gap-3">
+<span class="material-symbols-outlined text-sm cursor-pointer hover:text-antique-gold">social_leaderboard</span>
+<span class="material-symbols-outlined text-sm cursor-pointer hover:text-antique-gold">photo_camera</span>
+</div>
+</div>
+</footer>
+</body></html>

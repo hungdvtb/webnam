@@ -258,21 +258,16 @@ export default function CartPage() {
     }
   };
 
-  /* ─── Order success ─── */
   if (isOrderSuccess) {
     return (
-      <div className={styles.cartPage}>
-        <div className="container" style={{ padding: '2rem 1rem' }}>
-          <ThankYouView 
-            orderNumber={orderNumber}
-            formData={successOrderData?.formData || formData}
-            cartItems={successOrderData?.cartItems || []}
-            cartTotal={successOrderData?.cartTotal || 0}
-            discount={successOrderData?.discount || 0}
-            bankSettings={bankSettings}
-          />
-        </div>
-      </div>
+      <ThankYouView 
+        orderNumber={orderNumber}
+        formData={successOrderData?.formData || formData}
+        cartItems={successOrderData?.cartItems || []}
+        cartTotal={successOrderData?.cartTotal || 0}
+        discount={successOrderData?.discount || 0}
+        bankSettings={bankSettings}
+      />
     );
   }
 

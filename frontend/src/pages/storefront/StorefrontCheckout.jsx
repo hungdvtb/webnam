@@ -74,8 +74,8 @@ const StorefrontCheckout = () => {
                     totalItems: form.quantity,
                     continuePath: '/san-pham',
                     continueLabel: 'Tiếp tục mua sắm',
-                    secondaryPath: '/',
-                    secondaryLabel: 'Về trang chủ',
+                    secondaryPath: '/old/dashboard',
+                    secondaryLabel: 'Xem lịch sử đơn hàng',
                     items: product ? [{
                         id: product.id,
                         name: product.name,

@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+
+<html lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&amp;family=EB+Garamond:wght@400;500;600&amp;family=Noto+Serif:wght@400;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#1B365D", // Cobalt Blue
+                        "accent": "#C5A065",  // Antique Gold
+                        "background-light": "#F9F5F0", // Rice Paper
+                        "background-dark": "#111821",
+                    },
+                    fontFamily: {
+                        "display": ["Playfair Display", "serif"],
+                        "body": ["EB Garamond", "serif"],
+                        "sans": ["Noto Serif", "serif"]
+                    },
+                    borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+                },
+            },
+        }
+    </script>
+<style>
+        .gold-border-double {
+            border: 3px double #C5A065;
+        }
+        .text-shadow-sm {
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark font-body text-slate-900 dark:text-slate-100">
+<div class="relative flex min-h-screen flex-col overflow-x-hidden">
+<!-- Header -->
+<header class="bg-primary border-b-2 border-accent px-4 lg:px-40 py-4 sticky top-0 z-50 shadow-md">
+<div class="max-w-[1200px] mx-auto flex items-center justify-between">
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-3">
+<div class="text-accent">
+<span class="material-symbols-outlined text-4xl">temple_buddhist</span>
+</div>
+<div class="flex flex-col">
+<h1 class="text-background-light font-display text-2xl font-bold leading-none tracking-tight">DI SẢN GỐM VIỆT</h1>
+<span class="text-accent text-[10px] tracking-[0.3em] uppercase">Imperial Artisan Heritage</span>
+</div>
+</div>
+<nav class="hidden lg:flex items-center gap-8 ml-10">
+<a class="text-background-light hover:text-accent transition-colors text-sm font-medium uppercase tracking-wider" href="#">Trang Chủ</a>
+<a class="text-accent border-b border-accent text-sm font-medium uppercase tracking-wider" href="#">Tin Tức &amp; Blog</a>
+<a class="text-background-light hover:text-accent transition-colors text-sm font-medium uppercase tracking-wider" href="#">Bộ Sưu Tập</a>
+<a class="text-background-light hover:text-accent transition-colors text-sm font-medium uppercase tracking-wider" href="#">Nghệ Nhân</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<div class="relative hidden md:block">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xl">search</span>
+<input class="bg-white/10 border-slate-700 text-white rounded-full pl-10 pr-4 py-1.5 text-sm focus:ring-accent focus:border-accent w-64" placeholder="Tìm kiếm di sản..." type="text"/>
+</div>
+<button class="text-background-light hover:text-accent p-2">
+<span class="material-symbols-outlined">account_circle</span>
+</button>
+</div>
+</div>
+</header>
+<main class="flex-grow max-w-[1200px] mx-auto w-full px-4 py-8">
+<!-- Featured Article -->
+<section class="mb-12">
+<div class="relative group overflow-hidden rounded-xl gold-border-double h-[500px]">
+<div class="absolute inset-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-105" data-alt="Nghệ nhân gốm đang vẽ hoa văn lam lên bình cổ" style="background-image: linear-gradient(to top, rgba(27, 54, 93, 0.9) 0%, rgba(27, 54, 93, 0.2) 60%, transparent 100%), url('https://lh3.googleusercontent.com/aida-public/AB6AXuB1L84yUV7gRHX2qydrZVkNiHiBwLGRTnJzzgj1FNi3BRf02TIKWpO1xVT7tl7ggCMsFpnKQpJ7-3VrGAicxjEyHwlvkgwy1GC_VQdFDaSDEGa8EqDB3lS88rQ2aFpzIAPpoooWLlO-OB58ZHXnbYF4oF5_chk2CW_F3GxtZG8ekSezVTEcqziOLqrfQZU8RuNTQYhtlSgDCF-rOQ72YLBtCxO1CnTuWCVONrqcar7db0_PVSo3WNG_ptWyyqVrytRBSA1MaKQA47g');">
+</div>
+<div class="absolute bottom-0 left-0 p-8 md:p-12 w-full lg:w-3/4">
+<span class="bg-accent text-primary px-3 py-1 text-xs font-bold uppercase tracking-widest rounded-sm mb-4 inline-block">Tiêu Điểm Di Sản</span>
+<h2 class="text-white font-display text-4xl md:text-5xl font-bold mb-4 leading-tight text-shadow-sm">Kỹ Thuật Vẽ Men Lam Thời Lê Sơ: Đỉnh Cao Nghệ Thuật Gốm Việt</h2>
+<p class="text-background-light/90 text-lg mb-6 max-w-2xl line-clamp-2">Khám phá hành trình phục dựng và gìn giữ sắc xanh huyền thoại trên những bảo vật gốm sứ từ thế kỷ 15, nơi hội tụ tinh hoa của những bậc thầy nghệ nhân kinh kỳ.</p>
+<div class="flex items-center gap-6">
+<button class="bg-accent hover:bg-white text-primary px-8 py-3 font-bold uppercase tracking-wider transition-all rounded-sm flex items-center gap-2">
+                            Đọc Bài Viết <span class="material-symbols-outlined text-sm">arrow_forward</span>
+</button>
+<span class="text-accent/80 text-sm italic">Ngày 24 tháng 05, 2024</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Category Navigation -->
+<nav class="flex flex-wrap items-center justify-center gap-4 mb-12 border-y border-slate-200 py-4">
+<button class="px-6 py-2 rounded-full bg-primary text-background-light font-medium transition-all shadow-sm">Tất Cả</button>
+<button class="px-6 py-2 rounded-full bg-white hover:bg-primary/5 text-primary border border-slate-200 font-medium transition-all">Lịch Sử Gốm</button>
+<button class="px-6 py-2 rounded-full bg-white hover:bg-primary/5 text-primary border border-slate-200 font-medium transition-all">Kỹ Thuật Chế Tác</button>
+<button class="px-6 py-2 rounded-full bg-white hover:bg-primary/5 text-primary border border-slate-200 font-medium transition-all">Nghệ Nhân</button>
+<button class="px-6 py-2 rounded-full bg-white hover:bg-primary/5 text-primary border border-slate-200 font-medium transition-all">Văn Hóa</button>
+<button class="px-6 py-2 rounded-full bg-white hover:bg-primary/5 text-primary border border-slate-200 font-medium transition-all">Sự Kiện</button>
+</nav>
+<!-- Article Grid -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+<!-- Card 1 -->
+<article class="bg-white flex flex-col group border border-slate-100 shadow-sm hover:shadow-xl transition-shadow overflow-hidden">
+<div class="relative h-64 overflow-hidden">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" data-alt="Bình gốm Chu Đậu với hoa văn rồng phượng" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAXyspVJqLL1Psh20UlCNovVz-zfQhedoehrtLLFHxfPRgBAci38By28wuMvyRB23rsKDD6-Q1r0KXryW3C8igbt1AW-j054K0bAa5hRIKHa0HciZ5mQis8QTpCtbnknoBQhNJIs7_zeaZlzQt6tw0LZN2rQgMZZKHFQJFLws8eMiaMM_LUuTk8NReLHu1pNiG5-PW8C1H3Whp-dn6uuKDX_uAlcf5xUIbgonEuynyDLYwADujRymL7G2irAIUaMatwUyvasjc1F3U"/>
+<div class="absolute top-4 left-4">
+<span class="bg-primary/90 text-accent text-[10px] font-bold uppercase px-2 py-1 tracking-widest">Lịch Sử</span>
+</div>
+</div>
+<div class="p-6 flex flex-col flex-grow border-t-2 border-accent/20">
+<h3 class="font-display text-xl font-bold text-primary mb-3 group-hover:text-accent transition-colors leading-snug">Gốm Chu Đậu: Tìm Lại Ánh Hào Quang Một Thời Đại</h3>
+<p class="text-slate-600 text-base mb-4 flex-grow line-clamp-3 italic">Hành trình tìm về những vết tích rực rỡ của dòng gốm quý tộc từng vang danh khắp các hải cảng quốc tế thế kỷ 14-17.</p>
+<div class="flex items-center justify-between mt-auto pt-4 border-t border-slate-50">
+<span class="text-slate-400 text-xs">15 Phút đọc</span>
+<a class="text-primary font-bold text-sm uppercase tracking-tighter flex items-center gap-1 hover:gap-2 transition-all" href="#">
+                            Xem thêm <span class="material-symbols-outlined text-sm">east</span>
+</a>
+</div>
+</div>
+</article>
+<!-- Card 2 -->
+<article class="bg-white flex flex-col group border border-slate-100 shadow-sm hover:shadow-xl transition-shadow overflow-hidden">
+<div class="relative h-64 overflow-hidden">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" data-alt="Cận cảnh bàn tay nghệ nhân đang nhào đất sét" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCgx-hdBgUFIWAZpWWDznucNVplGyejxPz7AAoO8yPynAZQskFPTGtOhIJqWzTzw6IKEiPXBR6c3qVWiRS76hXzukU74eYSjpaRVr7_RTmEg3PnA8nYkXaBVHUHWQ9f7I6ggA8dGZSswrgSsQX2d2lNmsuK6seyrcxka2Opc40QalIKVd3IH2PBw81qE1ypVLVhi-XbelNOm2DiV7NAc_2nGa14xoCSej8EHYGfMkmTeA9nDvbGW5J1u1Qbk2ABtXLAs3mmhMs-Cuc"/>
+<div class="absolute top-4 left-4">
+<span class="bg-primary/90 text-accent text-[10px] font-bold uppercase px-2 py-1 tracking-widest">Kỹ Thuật</span>
+</div>
+</div>
+<div class="p-6 flex flex-col flex-grow border-t-2 border-accent/20">
+<h3 class="font-display text-xl font-bold text-primary mb-3 group-hover:text-accent transition-colors leading-snug">Bí Quyết Phối Trộn Đất Sét Trắng Làng Gốm Bát Tràng</h3>
+<p class="text-slate-600 text-base mb-4 flex-grow line-clamp-3 italic">Tỷ lệ vàng và những công đoạn tinh luyện khắt khe để tạo nên cốt gốm mịn màng, bền bỉ cùng thời gian.</p>
+<div class="flex items-center justify-between mt-auto pt-4 border-t border-slate-50">
+<span class="text-slate-400 text-xs">12 Phút đọc</span>
+<a class="text-primary font-bold text-sm uppercase tracking-tighter flex items-center gap-1 hover:gap-2 transition-all" href="#">
+                            Xem thêm <span class="material-symbols-outlined text-sm">east</span>
+</a>
+</div>
+</div>
+</article>
+<!-- Card 3 -->
+<article class="bg-white flex flex-col group border border-slate-100 shadow-sm hover:shadow-xl transition-shadow overflow-hidden">
+<div class="relative h-64 overflow-hidden">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" data-alt="Chân dung nghệ nhân gốm già bên lò nung" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBeTruWjXaeNb_fBIjyDJc2sYVBizt1hHlU7o34b2H3seGOHbJGyMPSOqld-y_y_5WDw13XhSBUceVR97vhgGyzJboB1mUYpB5hIZekBDp1XPIBPyKV6tBkk86qGrBZT8FV0z3LR0_0WwH6gI_tA4CC2LUtayQLafmgxdeTsH33xt2HGrALuroYQ-A1frnSEYPMC0YCO5TnQE3fPgOBJjzBuDETD11DUPAmUZT804xOyliFIvd1xZ-j0l8S3tF9aAUKS6TpMSrO8sY"/>
+<div class="absolute top-4 left-4">
+<span class="bg-primary/90 text-accent text-[10px] font-bold uppercase px-2 py-1 tracking-widest">Nghệ Nhân</span>
+</div>
+</div>
+<div class="p-6 flex flex-col flex-grow border-t-2 border-accent/20">
+<h3 class="font-display text-xl font-bold text-primary mb-3 group-hover:text-accent transition-colors leading-snug">Nghệ Nhân Ưu Tú Trần Nam: Người Thổi Hồn Vào Đất</h3>
+<p class="text-slate-600 text-base mb-4 flex-grow line-clamp-3 italic">Gần 50 năm miệt mài bên bàn xoay, ông đã hồi sinh hàng nghìn mẫu gốm cổ bị thất truyền của triều đình Huế.</p>
+<div class="flex items-center justify-between mt-auto pt-4 border-t border-slate-50">
+<span class="text-slate-400 text-xs">20 Phút đọc</span>
+<a class="text-primary font-bold text-sm uppercase tracking-tighter flex items-center gap-1 hover:gap-2 transition-all" href="#">
+                            Xem thêm <span class="material-symbols-outlined text-sm">east</span>
+</a>
+</div>
+</div>
+</article>
+<!-- Card 4 -->
+<article class="bg-white flex flex-col group border border-slate-100 shadow-sm hover:shadow-xl transition-shadow overflow-hidden">
+<div class="relative h-64 overflow-hidden">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" data-alt="Trình diễn gốm tại festival văn hóa" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBkgyzeK5Z_9tmiEBr3x9CNAclvBIq5uZzyu3FCQzcTGCbTu_bHzcw74s8ZAFSGHBWjIhyWTxbDmf9fiI1AeGVWujEFZIIFzESHuWJU-w7SGCg3aduXHioPyhD8qAGmyO3WWJz2Nj59neFZz0u8XM3OvfHgtX9IHUAcSOgUyVYy_xhJ7Qm2hujRj-sfxCSEKAe98cIcHLEvRgC0a0ZZr_oyGzzv79xOIRaud1-vrYNIJQ-F12z0RbwQ8tFyq6Xn6dnFSeMGOSEpchI"/>
+<div class="absolute top-4 left-4">
+<span class="bg-primary/90 text-accent text-[10px] font-bold uppercase px-2 py-1 tracking-widest">Văn Hóa</span>
+</div>
+</div>
+<div class="p-6 flex flex-col flex-grow border-t-2 border-accent/20">
+<h3 class="font-display text-xl font-bold text-primary mb-3 group-hover:text-accent transition-colors leading-snug">Gốm Sứ Trong Nghi Lễ Thờ Cúng Của Người Việt</h3>
+<p class="text-slate-600 text-base mb-4 flex-grow line-clamp-3 italic">Tầng sâu ý nghĩa tâm linh đằng sau những bộ đồ thờ bằng gốm men rạn, biểu tượng cho lòng hiếu thảo và sự tôn nghiêm.</p>
+<div class="flex items-center justify-between mt-auto pt-4 border-t border-slate-50">
+<span class="text-slate-400 text-xs">10 Phút đọc</span>
+<a class="text-primary font-bold text-sm uppercase tracking-tighter flex items-center gap-1 hover:gap-2 transition-all" href="#">
+                            Xem thêm <span class="material-symbols-outlined text-sm">east</span>
+</a>
+</div>
+</div>
+</article>
+<!-- Card 5 -->
+<article class="bg-white flex flex-col group border border-slate-100 shadow-sm hover:shadow-xl transition-shadow overflow-hidden">
+<div class="relative h-64 overflow-hidden">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" data-alt="Họa tiết đắp nổi trên gốm cổ" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCmroMmwTRTJYdKk_7ozIUuD3G1aN3YoruRnA8cAQyDQwxUQSjL7n5oFntcmyby7lF_55UZUT964Hr2o_hVMEo_EIdiRnn2gclcVLmIVkZphW8Sb-QGNTn0nILLFu6lLWHqyXrokEMJJEUmPG-l_SP7hqQ8VxXBIDzpcvgwt-JaXG4jz67O2McikthXAPQ0RZMFEN_88h3KtGANE9XVv-FcXLFngoDi-7IK9_2lBk9ucVU8AjgPYzBRsv4v5yMERYKzW9IlndC_j-Y"/>
+<div class="absolute top-4 left-4">
+<span class="bg-primary/90 text-accent text-[10px] font-bold uppercase px-2 py-1 tracking-widest">Kỹ Thuật</span>
+</div>
+</div>
+<div class="p-6 flex flex-col flex-grow border-t-2 border-accent/20">
+<h3 class="font-display text-xl font-bold text-primary mb-3 group-hover:text-accent transition-colors leading-snug">Nghệ Thuật Đắp Nổi Tứ Linh Trên Gốm Sứ Cổ</h3>
+<p class="text-slate-600 text-base mb-4 flex-grow line-clamp-3 italic">Cách thức các nghệ nhân xưa tạo nên những hình tượng Long - Lân - Quy - Phụng sống động như thật trên gốm.</p>
+<div class="flex items-center justify-between mt-auto pt-4 border-t border-slate-50">
+<span class="text-slate-400 text-xs">18 Phút đọc</span>
+<a class="text-primary font-bold text-sm uppercase tracking-tighter flex items-center gap-1 hover:gap-2 transition-all" href="#">
+                            Xem thêm <span class="material-symbols-outlined text-sm">east</span>
+</a>
+</div>
+</div>
+</article>
+<!-- Card 6 -->
+<article class="bg-white flex flex-col group border border-slate-100 shadow-sm hover:shadow-xl transition-shadow overflow-hidden">
+<div class="relative h-64 overflow-hidden">
+<img class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" data-alt="Nội thất trang trí gốm sứ hiện đại" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDGDim1u1L4EhYCVBbTlrbaQxeGayOHN1ZCUdck-ijNPi77OvLHdJeweK--yEA08hirBYrIkSsIEiLADQymYYrOTmo1gj0IZKYcx6ye-PmJnb_Uxzt9ytYlAhCL4BwWIxhlJZ7GMDEpYhLRrrTbAzDV55NsfoBh-bMJCHCHPZQsXvN0bVLD1tD6dLbdtU_8ayok9-yNKO6RguC6mh6O7PSr8gjTEJFw3stjXmmamcoI1es_-zunlPoL9kmGeh6ccRFumDJGoA0QAdM"/>
+<div class="absolute top-4 left-4">
+<span class="bg-primary/90 text-accent text-[10px] font-bold uppercase px-2 py-1 tracking-widest">Sự Kiện</span>
+</div>
+</div>
+<div class="p-6 flex flex-col flex-grow border-t-2 border-accent/20">
+<h3 class="font-display text-xl font-bold text-primary mb-3 group-hover:text-accent transition-colors leading-snug">Triển Lãm 'Gốm Việt: Từ Di Sản Đến Đời Sống Hiện Đại'</h3>
+<p class="text-slate-600 text-base mb-4 flex-grow line-clamp-3 italic">Không gian trưng bày những tác phẩm gốm đương đại mang hơi thở truyền thống tại trung tâm bảo tồn di sản.</p>
+<div class="flex items-center justify-between mt-auto pt-4 border-t border-slate-50">
+<span class="text-slate-400 text-xs">5 Phút đọc</span>
+<a class="text-primary font-bold text-sm uppercase tracking-tighter flex items-center gap-1 hover:gap-2 transition-all" href="#">
+                            Xem thêm <span class="material-symbols-outlined text-sm">east</span>
+</a>
+</div>
+</div>
+</article>
+</div>
+<!-- Load More Section -->
+<div class="mt-16 text-center">
+<div class="inline-block relative px-12 py-4 border-2 border-accent/40 group cursor-pointer hover:border-accent transition-colors">
+<button class="font-display text-primary font-bold uppercase tracking-[0.2em] relative z-10 flex items-center gap-3">
+                    Tải Thêm Bài Viết
+                    <span class="material-symbols-outlined animate-bounce">expand_more</span>
+</button>
+<div class="absolute top-1 left-1 w-full h-full border border-accent/20 -z-0"></div>
+</div>
+</div>
+</main>
+<!-- Footer -->
+<footer class="bg-primary text-background-light pt-16 pb-8 border-t-4 border-accent mt-12">
+<div class="max-w-[1200px] mx-auto px-4 grid grid-cols-1 md:grid-cols-4 gap-12">
+<div class="md:col-span-1">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-accent text-3xl">temple_buddhist</span>
+<h2 class="font-display text-xl font-bold tracking-tight">DI SẢN GỐM VIỆT</h2>
+</div>
+<p class="text-slate-300 text-sm leading-relaxed italic mb-6">
+                    Nơi hội tụ và tôn vinh những giá trị nghệ thuật gốm sứ tinh hoa của dân tộc, kết nối nghệ nhân với những tâm hồn yêu di sản.
+                </p>
+<div class="flex gap-4">
+<a class="text-accent hover:text-white transition-colors" href="#"><span class="material-symbols-outlined">social_leaderboard</span></a>
+<a class="text-accent hover:text-white transition-colors" href="#"><span class="material-symbols-outlined">play_circle</span></a>
+<a class="text-accent hover:text-white transition-colors" href="#"><span class="material-symbols-outlined">share</span></a>
+</div>
+</div>
+<div>
+<h4 class="font-display text-lg font-bold text-accent mb-6 uppercase tracking-widest">Khám Phá</h4>
+<ul class="space-y-3 text-sm">
+<li><a class="text-slate-300 hover:text-white transition-colors" href="#">Lịch Sử Gốm Sứ</a></li>
+<li><a class="text-slate-300 hover:text-white transition-colors" href="#">Kỹ Thuật Chế Tác</a></li>
+<li><a class="text-slate-300 hover:text-white transition-colors" href="#">Danh Sách Nghệ Nhân</a></li>
+<li><a class="text-slate-300 hover:text-white transition-colors" href="#">Văn Hóa Di Sản</a></li>
+</ul>
+</div>
+<div>
+<h4 class="font-display text-lg font-bold text-accent mb-6 uppercase tracking-widest">Hỗ Trợ</h4>
+<ul class="space-y-3 text-sm">
+<li><a class="text-slate-300 hover:text-white transition-colors" href="#">Câu Hỏi Thường Gặp</a></li>
+<li><a class="text-slate-300 hover:text-white transition-colors" href="#">Chính Sách Bảo Tồn</a></li>
+<li><a class="text-slate-300 hover:text-white transition-colors" href="#">Liên Hệ Hợp Tác</a></li>
+<li><a class="text-slate-300 hover:text-white transition-colors" href="#">Góp Ý &amp; Phản Hồi</a></li>
+</ul>
+</div>
+<div>
+<h4 class="font-display text-lg font-bold text-accent mb-6 uppercase tracking-widest">Bản Tin</h4>
+<p class="text-slate-300 text-sm mb-4 italic">Đăng ký để nhận những bài viết mới nhất về nghệ thuật gốm Việt.</p>
+<div class="flex">
+<input class="bg-white/10 border-slate-700 text-white p-2 text-sm w-full focus:ring-accent focus:border-accent" placeholder="Email của bạn" type="email"/>
+<button class="bg-accent text-primary px-4 font-bold uppercase text-xs">Gửi</button>
+</div>
+</div>
+</div>
+<div class="max-w-[1200px] mx-auto px-4 mt-16 pt-8 border-t border-slate-700 flex flex-col md:flex-row justify-between items-center gap-4">
+<p class="text-slate-400 text-xs tracking-wider">© 2024 Di Sản Gốm Việt. All Rights Reserved. Designed for Heritage Lovers.</p>
+<div class="flex gap-6 text-slate-400 text-xs">
+<a class="hover:text-accent" href="#">Điều khoản sử dụng</a>
+<a class="hover:text-accent" href="#">Chính sách bảo mật</a>
+</div>
+</div>
+</footer>
+</div>
+</body></html>

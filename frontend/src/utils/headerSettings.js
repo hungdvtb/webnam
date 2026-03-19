@@ -8,6 +8,7 @@ export const DEFAULT_HEADER_MENU_ITEMS = [
 const parseMaybeJson = (value) => {
     if (Array.isArray(value)) return value;
     if (typeof value !== 'string') return null;
+
     try {
         const parsed = JSON.parse(value);
         return Array.isArray(parsed) ? parsed : null;
@@ -48,6 +49,7 @@ export const buildHeaderConfig = (settings = {}) => {
     const activeMenus = allMenus.filter((menu) => menu.enabled);
 
     return {
+        logoUrl: settings.header_logo_url || '',
         brandText: settings.header_brand_text || settings.site_name || 'Gốm Đại Thành',
         topNoticeText: settings.header_notice_text || '',
         searchPlaceholder: settings.header_search_placeholder || 'Bạn cần tìm kiếm sản phẩm gì?',
@@ -55,4 +57,3 @@ export const buildHeaderConfig = (settings = {}) => {
         activeMenus,
     };
 };
-

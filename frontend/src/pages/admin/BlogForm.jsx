@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { blogApi, aiApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
@@ -13,8 +13,10 @@ const BlogForm = () => {
 
     const [loading, setLoading] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
+    const [categories, setCategories] = useState([]);
     const [formData, setFormData] = useState({
         title: '',
+        blog_category_id: '',
         seo_keyword: '',
         excerpt: '',
         content: '',
@@ -25,11 +27,21 @@ const BlogForm = () => {
     });
 
     useEffect(() => {
+        loadCategories();
         if (isEdit) {
             fetchPost();
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id]);
+
+    const loadCategories = async () => {
+        try {
+            const response = await blogApi.getCategories();
+            setCategories(Array.isArray(response.data?.data) ? response.data.data : []);
+        } catch (error) {
+            console.error('Error loading categories', error);
+        }
+    };
 
     const fetchPost = async () => {
         setLoading(true);
@@ -39,6 +51,7 @@ const BlogForm = () => {
 
             setFormData({
                 title: data.title || '',
+                blog_category_id: data.blog_category_id ? String(data.blog_category_id) : '',
                 seo_keyword: data.seo_keyword || '',
                 excerpt: data.excerpt || '',
                 content: data.content || '',
@@ -49,7 +62,7 @@ const BlogForm = () => {
             });
         } catch (error) {
             console.error('Error fetching post', error);
-            showModal({ title: 'Loi', content: 'Khong the tai thong tin bai viet.', type: 'error' });
+            showModal({ title: 'Lỗi', content: 'Không thể tải thông tin bài viết.', type: 'error' });
         } finally {
             setLoading(false);
         }
@@ -68,18 +81,23 @@ const BlogForm = () => {
         setLoading(true);
 
         try {
+            const payload = {
+                ...formData,
+                blog_category_id: formData.blog_category_id ? Number(formData.blog_category_id) : null,
+            };
+
             if (isEdit) {
-                await blogApi.update(id, formData);
-                showModal({ title: 'Thanh cong', content: 'Da cap nhat bai viet.', type: 'success' });
+                await blogApi.update(id, payload);
+                showModal({ title: 'Thành công', content: 'Đã cập nhật bài viết.', type: 'success' });
             } else {
-                await blogApi.store(formData);
-                showModal({ title: 'Thanh cong', content: 'Da tao bai viet moi.', type: 'success' });
+                await blogApi.store(payload);
+                showModal({ title: 'Thành công', content: 'Đã tạo bài viết mới.', type: 'success' });
             }
 
             navigate('/admin/blog');
         } catch (error) {
             console.error('Error saving post', error);
-            showModal({ title: 'Loi', content: 'Khong the luu bai viet. Vui long kiem tra lai.', type: 'error' });
+            showModal({ title: 'Lỗi', content: 'Không thể lưu bài viết. Vui lòng kiểm tra lại.', type: 'error' });
         } finally {
             setLoading(false);
         }
@@ -87,16 +105,16 @@ const BlogForm = () => {
 
     const handleAIGenerate = async () => {
         if (!formData.title) {
-            showModal({ title: 'Luu y', content: 'Vui long nhap tieu de de AI tao noi dung.', type: 'warning' });
+            showModal({ title: 'Lưu ý', content: 'Vui lòng nhập tiêu đề để AI tạo nội dung.', type: 'warning' });
             return;
         }
 
         setAiGenerating(true);
 
         try {
-            const prompt = `Viet bai blog chuan SEO bang tieng Viet voi tieu de: "${formData.title}".\n`
-                + `Yeu cau: co H2/H3, van phong trang trong, khoang 600-900 tu, tra ve JSON {"excerpt":"...","content":"..."}.`
-                + `content phai la HTML hop le voi the p, h2, h3, ul, li, strong.`;
+            const prompt = `Viết bài blog chuẩn SEO bằng tiếng Việt với tiêu đề: "${formData.title}".\n`
+                + `Yêu cầu: có H2/H3, văn phong trang trọng, khoảng 600-900 từ, trả về JSON {"excerpt":"...","content":"..."}.`
+                + `content phải là HTML hợp lệ với thẻ p, h2, h3, ul, li, strong.`;
 
             const response = await aiApi.chat({ message: prompt });
 
@@ -120,9 +138,9 @@ const BlogForm = () => {
                 is_published: true,
             }));
 
-            showModal({ title: 'Thanh cong', content: 'AI da tao ban thao bai viet.', type: 'success' });
+            showModal({ title: 'Thành công', content: 'AI đã tạo bản thảo bài viết.', type: 'success' });
         } catch (error) {
-            showModal({ title: 'Loi AI', content: 'Khong the ket noi AI luc nay.', type: 'error' });
+            showModal({ title: 'Lỗi AI', content: 'Không thể kết nối AI lúc này.', type: 'error' });
         } finally {
             setAiGenerating(false);
         }
@@ -150,10 +168,10 @@ const BlogForm = () => {
             <div className="flex justify-between items-end gap-6 border-b border-gold/10 pb-8">
                 <div>
                     <h1 className="text-2xl font-display font-bold text-primary italic uppercase tracking-wider">
-                        {isEdit ? 'Cap Nhat Bai Viet' : 'Tao Bai Viet Moi'}
+                        {isEdit ? 'Cập Nhật Bài Viết' : 'Tạo Bài Viết Mới'}
                     </h1>
                     <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.18em] mt-2">
-                        Mac dinh bai moi duoc hien thi ngay tren website
+                        Mặc định bài mới được hiển thị ngay trên website
                     </p>
                 </div>
 
@@ -163,14 +181,14 @@ const BlogForm = () => {
                         onClick={() => navigate('/admin/blog')}
                         className="px-8 py-3 text-[10px] font-bold uppercase tracking-widest text-stone hover:text-primary transition-colors border border-stone/20"
                     >
-                        Huy
+                        Hủy
                     </button>
                     <button
                         type="submit"
                         disabled={loading}
                         className="bg-primary text-white font-ui font-bold uppercase tracking-widest px-10 py-3 hover:bg-umber transition-all shadow-premium disabled:opacity-50"
                     >
-                        {loading ? 'Dang luu...' : isEdit ? 'Cap Nhat' : 'Dang Bai'}
+                        {loading ? 'Đang lưu...' : isEdit ? 'Cập Nhật' : 'Đăng Bài'}
                     </button>
                 </div>
             </div>
@@ -178,7 +196,7 @@ const BlogForm = () => {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
                 <div className="lg:col-span-8 space-y-8">
                     <div className="space-y-2">
-                        <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Tieu De Bai Viet</label>
+                        <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Tiêu Đề Bài Viết</label>
                         <input
                             type="text"
                             name="title"
@@ -186,38 +204,56 @@ const BlogForm = () => {
                             onChange={handleChange}
                             required
                             className="w-full bg-white border border-gold/20 p-5 focus:outline-none focus:border-primary font-display text-2xl text-primary shadow-sm"
-                            placeholder="VD: Bi quyet chon gom Bat Trang"
+                            placeholder="VD: Bí quyết chọn gốm Bát Tràng"
                         />
                     </div>
 
                     <div className="space-y-2">
-                        <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Tu Khoa SEO Chinh</label>
+                        <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Danh Mục Bài Viết</label>
+                        <select
+                            name="blog_category_id"
+                            value={formData.blog_category_id}
+                            onChange={handleChange}
+                            className="w-full bg-white border border-gold/20 p-4 focus:outline-none focus:border-primary font-body text-sm text-primary shadow-sm"
+                        >
+                            <option value="">Chưa gắn danh mục</option>
+                            {categories.map((category) => (
+                                <option key={category.id} value={String(category.id)}>
+                                    {category.name}
+                                </option>
+                            ))}
+                        </select>
+                        <p className="text-[10px] text-stone/55 italic">Danh mục này sẽ được sử dụng cho bộ lọc tab ngoài frontend.</p>
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Từ Khóa SEO Chính</label>
                         <input
                             type="text"
                             name="seo_keyword"
                             value={formData.seo_keyword}
                             onChange={handleChange}
                             className="w-full bg-white border border-gold/20 p-4 focus:outline-none focus:border-primary font-body text-sm text-primary shadow-sm"
-                            placeholder="VD: gom bat trang phong khach"
+                            placeholder="VD: gốm bát tràng phòng khách"
                         />
-                        <p className="text-[10px] text-stone/55 italic">Moi bai nen gan mot tu khoa SEO chinh de theo doi ket qua.</p>
+                        <p className="text-[10px] text-stone/55 italic">Mỗi bài nên gắn một từ khóa SEO chính để theo dõi kết quả.</p>
                     </div>
 
                     <div className="space-y-2">
-                        <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Tom Tat Ngan (Excerpt)</label>
+                        <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Tóm Tắt Ngắn (Excerpt)</label>
                         <textarea
                             name="excerpt"
                             value={formData.excerpt}
                             onChange={handleChange}
                             rows="3"
                             className="w-full bg-white border border-gold/20 p-4 focus:outline-none focus:border-primary font-body text-sm italic text-umber shadow-sm resize-none"
-                            placeholder="Doan mo ta ngan de thu hut doc gia..."
+                            placeholder="Đoạn mô tả ngắn để thu hút độc giả..."
                         />
                     </div>
 
                     <div className="space-y-2">
                         <div className="flex justify-between items-center mb-1">
-                            <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Noi Dung Chi Tiet</label>
+                            <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Nội Dung Chi Tiết</label>
                             <button
                                 type="button"
                                 onClick={handleAIGenerate}
@@ -230,7 +266,7 @@ const BlogForm = () => {
                                 <span className={`material-symbols-outlined text-xs ${aiGenerating ? 'animate-spin' : ''}`}>
                                     {aiGenerating ? 'progress_activity' : 'auto_awesome'}
                                 </span>
-                                {aiGenerating ? 'Dang tao noi dung...' : 'AI tao content'}
+                                {aiGenerating ? 'Đang tạo nội dung...' : 'AI tạo content'}
                             </button>
                         </div>
 
@@ -253,7 +289,7 @@ const BlogForm = () => {
                         <div className="space-y-4">
                             <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-primary flex items-center gap-2">
                                 <span className="material-symbols-outlined text-xs">image</span>
-                                Anh Dai Dien
+                                Ảnh Đại Diện
                             </label>
 
                             <div className="aspect-[16/9] w-full bg-gold/5 border-2 border-dashed border-gold/20 flex items-center justify-center relative overflow-hidden group">
@@ -273,7 +309,7 @@ const BlogForm = () => {
                                 ) : (
                                     <div className="text-center space-y-2 p-6">
                                         <span className="material-symbols-outlined text-3xl text-gold opacity-40">add_photo_alternate</span>
-                                        <p className="text-[10px] text-stone font-ui uppercase tracking-widest">Chua co anh dai dien</p>
+                                        <p className="text-[10px] text-stone font-ui uppercase tracking-widest">Chưa có ảnh đại diện</p>
                                     </div>
                                 )}
                             </div>
@@ -284,7 +320,7 @@ const BlogForm = () => {
                                 value={formData.featured_image}
                                 onChange={handleChange}
                                 className="w-full bg-gold/5 border border-gold/10 p-3 focus:outline-none focus:border-primary font-body text-xs italic"
-                                placeholder="Dan URL anh tai day..."
+                                placeholder="Dán URL ảnh tại đây..."
                             />
                         </div>
 
@@ -292,7 +328,7 @@ const BlogForm = () => {
 
                         <div className="space-y-6">
                             <div className="flex items-center justify-between">
-                                <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-primary">Trang Thai Dang</label>
+                                <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-primary">Trạng Thái Đăng</label>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                     <input
                                         type="checkbox"
@@ -306,7 +342,7 @@ const BlogForm = () => {
                             </div>
 
                             <div className="flex items-center justify-between">
-                                <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-primary">Danh Dau Sao</label>
+                                <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-primary">Đánh Dấu Sao</label>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                     <input
                                         type="checkbox"
@@ -322,7 +358,7 @@ const BlogForm = () => {
                             <div className="space-y-3">
                                 <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-primary flex items-center gap-2">
                                     <span className="material-symbols-outlined text-xs">schedule</span>
-                                    Lich Dang (Tuy chon)
+                                    Lịch Đăng (Tùy chọn)
                                 </label>
                                 <input
                                     type="date"
@@ -331,7 +367,7 @@ const BlogForm = () => {
                                     onChange={handleChange}
                                     className="w-full bg-gold/5 border border-gold/10 p-3 focus:outline-none focus:border-primary font-ui text-[10px] font-bold uppercase tracking-widest"
                                 />
-                                <p className="text-[9px] text-stone italic">De trong neu muon hien thi ngay sau khi bat Trang Thai Dang.</p>
+                                <p className="text-[9px] text-stone italic">De trong neu muon hien thi ngay sau khi bat Trạng Thái Đăng.</p>
                             </div>
                         </div>
                     </div>
@@ -342,3 +378,4 @@ const BlogForm = () => {
 };
 
 export default BlogForm;
+

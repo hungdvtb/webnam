@@ -29,6 +29,7 @@ Route::get('/product-groups', [ProductGroupController::class , 'index']);
 Route::get('/product-groups/{id}', [ProductGroupController::class , 'show']);
 
 Route::get('/blog', [\App\Http\Controllers\Api\BlogController::class , 'index']);
+Route::get('/blog/categories', [\App\Http\Controllers\Api\BlogController::class , 'categories']);
 Route::get('/blog/import/template', [\App\Http\Controllers\Api\BlogController::class , 'downloadImportTemplate']);
 Route::get('/blog/{id}', [\App\Http\Controllers\Api\BlogController::class , 'show']);
 
@@ -205,7 +206,14 @@ Route::middleware('auth:sanctum')->group(function () {
         // Blog Management (Protected)
         Route::get('/blog/seo-keywords', [\App\Http\Controllers\Api\BlogController::class , 'seoKeywords']);
         Route::post('/blog/seo-keywords', [\App\Http\Controllers\Api\BlogController::class , 'storeSeoKeyword']);
+        Route::put('/blog/seo-keywords/{id}', [\App\Http\Controllers\Api\BlogController::class , 'updateSeoKeyword']);
+        Route::delete('/blog/seo-keywords/{id}', [\App\Http\Controllers\Api\BlogController::class , 'destroySeoKeyword']);
         Route::post('/blog/bulk-seo-keyword', [\App\Http\Controllers\Api\BlogController::class , 'bulkSeoKeyword']);
+        Route::post('/blog/bulk-category', [\App\Http\Controllers\Api\BlogController::class , 'bulkCategory']);
+        Route::post('/blog/categories', [\App\Http\Controllers\Api\BlogController::class , 'storeCategory']);
+        Route::put('/blog/categories/{id}', [\App\Http\Controllers\Api\BlogController::class , 'updateCategory']);
+        Route::delete('/blog/categories/{id}', [\App\Http\Controllers\Api\BlogController::class , 'destroyCategory']);
+        Route::post('/blog/categories/reorder', [\App\Http\Controllers\Api\BlogController::class , 'reorderCategories']);
         Route::post('/blog', [\App\Http\Controllers\Api\BlogController::class , 'store']);
         Route::post('/blog/reorder', [\App\Http\Controllers\Api\BlogController::class , 'reorder']);
         Route::post('/blog/import-word', [\App\Http\Controllers\Api\BlogController::class , 'importWord']);

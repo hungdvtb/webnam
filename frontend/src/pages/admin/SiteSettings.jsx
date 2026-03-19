@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { cmsApi, mediaApi, quoteTemplateApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 import { createDefaultHeaderMenus, normalizeHeaderMenus } from '../../utils/headerSettings';
+import { createDefaultFooterMenuGroups, normalizeFooterMenuGroups } from '../../utils/footerSettings';
 
 const defaultSettings = {
     site_name: '',
@@ -28,15 +29,41 @@ const defaultSettings = {
     quote_store_name: '',
     quote_store_address: '',
     quote_store_phone: '',
+    header_logo_url: '',
     header_brand_text: '',
     header_notice_text: '',
     header_search_placeholder: '',
     header_menu_items: createDefaultHeaderMenus(),
+    footer_logo_url: '',
+    footer_brand_text: '',
+    footer_description: '',
+    footer_hotline: '',
+    footer_email: '',
+    footer_address: '',
+    footer_copyright_text: '',
+    footer_newsletter_placeholder: '',
+    footer_menu_groups: createDefaultFooterMenuGroups(),
 };
 
 const createHeaderMenuItem = () => ({
     id: `header-menu-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     label: 'Menu mới',
+    link: '/',
+    enabled: true,
+    order: 999,
+});
+
+const createFooterMenuGroup = () => ({
+    id: `footer-group-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    title: 'Nhóm mới',
+    enabled: true,
+    order: 999,
+    items: [],
+});
+
+const createFooterMenuItem = () => ({
+    id: `footer-item-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    label: 'Liên kết mới',
     link: '/',
     enabled: true,
     order: 999,
@@ -163,6 +190,7 @@ const SiteSettings = () => {
     const [quoteTemplateDraft, setQuoteTemplateDraft] = useState({ name: '', image_url: '' });
     const [savingQuoteTemplateId, setSavingQuoteTemplateId] = useState(null);
     const [headerMenus, setHeaderMenus] = useState(createDefaultHeaderMenus());
+    const [footerMenuGroups, setFooterMenuGroups] = useState(createDefaultFooterMenuGroups());
     const [copiedRoute, setCopiedRoute] = useState('');
 
     const activeAccountId = localStorage.getItem('activeAccountId');
@@ -191,8 +219,10 @@ const SiteSettings = () => {
             const response = await cmsApi.settings.get();
             const incomingSettings = response.data || {};
             const normalizedHeaderMenus = normalizeHeaderMenus(incomingSettings.header_menu_items);
+            const normalizedFooterMenuGroups = normalizeFooterMenuGroups(incomingSettings.footer_menu_groups);
 
             setHeaderMenus(normalizedHeaderMenus);
+            setFooterMenuGroups(normalizedFooterMenuGroups);
             setSettings((prev) => ({
                 ...prev,
                 ...incomingSettings,
@@ -200,6 +230,10 @@ const SiteSettings = () => {
                 header_notice_text: incomingSettings.header_notice_text || prev.header_notice_text,
                 header_search_placeholder: incomingSettings.header_search_placeholder || prev.header_search_placeholder,
                 header_menu_items: normalizedHeaderMenus,
+                footer_brand_text: incomingSettings.footer_brand_text || incomingSettings.site_name || prev.footer_brand_text,
+                footer_hotline: incomingSettings.footer_hotline || incomingSettings.contact_phone || prev.footer_hotline,
+                footer_email: incomingSettings.footer_email || incomingSettings.contact_email || prev.footer_email,
+                footer_menu_groups: normalizedFooterMenuGroups,
             }));
         } catch (error) {
             console.error('Error fetching settings', error);
@@ -253,6 +287,95 @@ const SiteSettings = () => {
             next.splice(nextIndex, 0, picked);
             return withHeaderMenuOrder(next);
         });
+    };
+
+    const withFooterMenuGroupOrder = (groups) => groups
+        .map((group, index) => ({
+            ...group,
+            order: index + 1,
+            items: (group.items || [])
+                .map((item, itemIndex) => ({ ...item, order: itemIndex + 1 }))
+                .sort((a, b) => a.order - b.order),
+        }))
+        .sort((a, b) => a.order - b.order);
+
+    const updateFooterMenuGroup = (groupId, patch) => {
+        setFooterMenuGroups((prev) => withFooterMenuGroupOrder(prev.map((group) => (
+            group.id === groupId ? { ...group, ...patch } : group
+        ))));
+    };
+
+    const handleAddFooterMenuGroup = () => {
+        setFooterMenuGroups((prev) => withFooterMenuGroupOrder([
+            ...prev,
+            createFooterMenuGroup(),
+        ]));
+    };
+
+    const handleRemoveFooterMenuGroup = (groupId) => {
+        setFooterMenuGroups((prev) => withFooterMenuGroupOrder(prev.filter((group) => group.id !== groupId)));
+    };
+
+    const handleMoveFooterMenuGroup = (groupId, direction) => {
+        setFooterMenuGroups((prev) => {
+            const currentIndex = prev.findIndex((group) => group.id === groupId);
+            if (currentIndex === -1) return prev;
+
+            const nextIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+            if (nextIndex < 0 || nextIndex >= prev.length) return prev;
+
+            const next = [...prev];
+            const [picked] = next.splice(currentIndex, 1);
+            next.splice(nextIndex, 0, picked);
+            return withFooterMenuGroupOrder(next);
+        });
+    };
+
+    const updateFooterMenuItem = (groupId, itemId, patch) => {
+        setFooterMenuGroups((prev) => withFooterMenuGroupOrder(prev.map((group) => {
+            if (group.id !== groupId) return group;
+
+            return {
+                ...group,
+                items: (group.items || []).map((item) => (
+                    item.id === itemId ? { ...item, ...patch } : item
+                )),
+            };
+        })));
+    };
+
+    const handleAddFooterMenuItem = (groupId) => {
+        setFooterMenuGroups((prev) => withFooterMenuGroupOrder(prev.map((group) => (
+            group.id === groupId
+                ? { ...group, items: [...(group.items || []), createFooterMenuItem()] }
+                : group
+        ))));
+    };
+
+    const handleRemoveFooterMenuItem = (groupId, itemId) => {
+        setFooterMenuGroups((prev) => withFooterMenuGroupOrder(prev.map((group) => (
+            group.id === groupId
+                ? { ...group, items: (group.items || []).filter((item) => item.id !== itemId) }
+                : group
+        ))));
+    };
+
+    const handleMoveFooterMenuItem = (groupId, itemId, direction) => {
+        setFooterMenuGroups((prev) => withFooterMenuGroupOrder(prev.map((group) => {
+            if (group.id !== groupId) return group;
+
+            const items = [...(group.items || [])];
+            const currentIndex = items.findIndex((item) => item.id === itemId);
+            if (currentIndex === -1) return group;
+
+            const nextIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+            if (nextIndex < 0 || nextIndex >= items.length) return group;
+
+            const [picked] = items.splice(currentIndex, 1);
+            items.splice(nextIndex, 0, picked);
+
+            return { ...group, items };
+        })));
     };
 
     const handleCopyRoute = async (route) => {
@@ -324,9 +447,11 @@ const SiteSettings = () => {
         setSaving(true);
         try {
             const normalizedHeaderMenus = normalizeHeaderMenus(headerMenus);
+            const normalizedFooterMenuGroups = normalizeFooterMenuGroups(footerMenuGroups);
             const payloadSettings = {
                 ...settings,
                 header_menu_items: normalizedHeaderMenus,
+                footer_menu_groups: normalizedFooterMenuGroups,
             };
 
             await cmsApi.settings.update({
@@ -334,7 +459,12 @@ const SiteSettings = () => {
                 settings: payloadSettings,
             });
             setHeaderMenus(normalizedHeaderMenus);
-            setSettings((prev) => ({ ...prev, header_menu_items: normalizedHeaderMenus }));
+            setFooterMenuGroups(normalizedFooterMenuGroups);
+            setSettings((prev) => ({
+                ...prev,
+                header_menu_items: normalizedHeaderMenus,
+                footer_menu_groups: normalizedFooterMenuGroups,
+            }));
             showModal({ title: 'Thành công', content: 'Đã lưu cấu hình.', type: 'success' });
         } catch (error) {
             console.error('Error saving settings', error);
@@ -467,6 +597,7 @@ const SiteSettings = () => {
     const tabs = [
         { id: 'contact', title: 'Liên hệ & Mạng xã hội', icon: 'contact_support' },
         { id: 'header', title: 'Cài đặt Header', icon: 'web' },
+        { id: 'footer', title: 'Cài đặt Footer', icon: 'bottom_panel_open' },
         { id: 'pixel', title: 'Pixel & Tracking', icon: 'analytics' },
         { id: 'domains', title: 'Quản lý tên miền', icon: 'language' },
         { id: 'bank', title: 'Cài đặt STK', icon: 'account_balance' },
@@ -605,6 +736,40 @@ const SiteSettings = () => {
                                             className={inputClasses}
                                             placeholder="Miễn phí vận chuyển toàn quốc cho đơn hàng từ 500.000đ"
                                         />
+                                    </div>
+                                </div>
+                            </SectionCard>
+
+                            <SectionCard icon="image" title="Logo header">
+                                <div className="grid grid-cols-[280px_minmax(0,1fr)] gap-6 items-start">
+                                    <div>
+                                        <label className={labelClasses}>Ảnh logo</label>
+                                        <ImageUploadCard
+                                            imageUrl={settings.header_logo_url}
+                                            onUpload={(e) => handleImageUpload(e, (url) => setSettings((prev) => ({ ...prev, header_logo_url: url })))}
+                                            onRemove={() => setSettings((prev) => ({ ...prev, header_logo_url: '' }))}
+                                            emptyLabel="Tải logo header"
+                                            previewClassName="h-44"
+                                        />
+                                    </div>
+                                    <div className="space-y-4">
+                                        <div className="rounded-sm border border-primary/10 bg-primary/[0.02] p-4">
+                                            <p className="text-[12px] font-bold text-primary">Logo ảnh sẽ ưu tiên hiển thị ở frontend.</p>
+                                            <p className="mt-2 text-[12px] leading-5 text-primary/60">
+                                                Nếu chưa tải logo, hệ thống sẽ tự fallback về logo mặc định hiện tại. Logo text vẫn được giữ cạnh ảnh để đồng bộ bố cục header.
+                                            </p>
+                                        </div>
+                                        <div>
+                                            <label className={labelClasses}>Đường dẫn logo</label>
+                                            <input
+                                                type="text"
+                                                name="header_logo_url"
+                                                value={settings.header_logo_url}
+                                                onChange={handleChange}
+                                                className={inputClasses}
+                                                placeholder="https://domain.com/logo-header.png"
+                                            />
+                                        </div>
                                     </div>
                                 </div>
                             </SectionCard>
@@ -756,6 +921,172 @@ const SiteSettings = () => {
                                     <p className="text-[11px] text-primary/40 italic">
                                         Tổng cộng {HEADER_ROUTE_REFERENCE_ROWS.length} route đã tổng hợp. Route có nhãn Placeholder là chưa tạo trong router hiện tại.
                                     </p>
+                                </div>
+                            </SectionCard>
+                        </div>
+                    )}
+
+                    {activeTab === 'footer' && (
+                        <div className="space-y-6">
+                            <SectionCard icon="view_agenda" title="Nội dung footer">
+                                <div className="grid grid-cols-[280px_minmax(0,1fr)] gap-6 items-start">
+                                    <div>
+                                        <label className={labelClasses}>Logo footer</label>
+                                        <ImageUploadCard
+                                            imageUrl={settings.footer_logo_url}
+                                            onUpload={(e) => handleImageUpload(e, (url) => setSettings((prev) => ({ ...prev, footer_logo_url: url })))}
+                                            onRemove={() => setSettings((prev) => ({ ...prev, footer_logo_url: '' }))}
+                                            emptyLabel="Tải logo footer"
+                                            previewClassName="h-48"
+                                        />
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div className="col-span-2">
+                                            <label className={labelClasses}>Đường dẫn logo footer</label>
+                                            <input
+                                                type="text"
+                                                name="footer_logo_url"
+                                                value={settings.footer_logo_url}
+                                                onChange={handleChange}
+                                                className={inputClasses}
+                                                placeholder="https://domain.com/logo-footer.png"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className={labelClasses}>Tên thương hiệu / logo text</label>
+                                            <input type="text" name="footer_brand_text" value={settings.footer_brand_text} onChange={handleChange} className={inputClasses} placeholder="Gốm Đại Thành" />
+                                        </div>
+                                        <div>
+                                            <label className={labelClasses}>Hotline footer</label>
+                                            <input type="text" name="footer_hotline" value={settings.footer_hotline} onChange={handleChange} className={inputClasses} placeholder="0123 456 789" />
+                                        </div>
+                                        <div>
+                                            <label className={labelClasses}>Email footer</label>
+                                            <input type="email" name="footer_email" value={settings.footer_email} onChange={handleChange} className={inputClasses} placeholder="contact@domain.com" />
+                                        </div>
+                                        <div>
+                                            <label className={labelClasses}>Placeholder nhận tin</label>
+                                            <input type="text" name="footer_newsletter_placeholder" value={settings.footer_newsletter_placeholder} onChange={handleChange} className={inputClasses} placeholder="Email của bạn" />
+                                        </div>
+                                        <div className="col-span-2">
+                                            <label className={labelClasses}>Mô tả ngắn footer</label>
+                                            <textarea name="footer_description" value={settings.footer_description} onChange={handleChange} className={textareaClasses} placeholder="Giới thiệu ngắn hiển thị ở cột thương hiệu footer..." />
+                                        </div>
+                                        <div className="col-span-2">
+                                            <label className={labelClasses}>Địa chỉ</label>
+                                            <textarea name="footer_address" value={settings.footer_address} onChange={handleChange} className={textareaClasses} placeholder="Bát Tràng, Gia Lâm, Hà Nội" />
+                                        </div>
+                                        <div className="col-span-2">
+                                            <label className={labelClasses}>Copyright text</label>
+                                            <input type="text" name="footer_copyright_text" value={settings.footer_copyright_text} onChange={handleChange} className={inputClasses} placeholder="© 2026 Gốm Đại Thành. Bảo lưu mọi quyền." />
+                                        </div>
+                                    </div>
+                                </div>
+                            </SectionCard>
+
+                            <SectionCard
+                                icon="table_rows"
+                                title="Nhóm menu footer"
+                                rightSlot={(
+                                    <button
+                                        type="button"
+                                        onClick={handleAddFooterMenuGroup}
+                                        className="h-9 px-4 rounded-sm bg-primary text-white text-[11px] font-black uppercase tracking-wider hover:bg-primary/90 transition-all inline-flex items-center gap-1"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">add</span>
+                                        Thêm nhóm
+                                    </button>
+                                )}
+                            >
+                                <div className="space-y-4">
+                                    {footerMenuGroups.map((group, groupIndex) => (
+                                        <div key={group.id} className="rounded-sm border border-primary/10 overflow-hidden">
+                                            <div className="flex items-center gap-3 bg-primary/[0.02] border-b border-primary/10 px-4 py-3">
+                                                <div className="text-[11px] font-black text-primary/40">{groupIndex + 1}</div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => updateFooterMenuGroup(group.id, { enabled: !group.enabled })}
+                                                    className={`h-8 px-3 rounded-sm border text-[10px] font-black uppercase tracking-wider transition-all ${group.enabled ? 'border-green-200 bg-green-50 text-green-700' : 'border-stone-200 bg-stone-50 text-stone-500'}`}
+                                                >
+                                                    {group.enabled ? 'Bật' : 'Tắt'}
+                                                </button>
+                                                <input
+                                                    type="text"
+                                                    value={group.title}
+                                                    onChange={(e) => updateFooterMenuGroup(group.id, { title: e.target.value })}
+                                                    className={inputClasses}
+                                                    placeholder="Tên nhóm footer"
+                                                />
+                                                <div className="flex items-center gap-1">
+                                                    <button type="button" onClick={() => handleMoveFooterMenuGroup(group.id, 'up')} className="size-8 rounded-sm border border-primary/20 text-primary inline-flex items-center justify-center hover:bg-primary/[0.04]">
+                                                        <span className="material-symbols-outlined text-[16px]">keyboard_arrow_up</span>
+                                                    </button>
+                                                    <button type="button" onClick={() => handleMoveFooterMenuGroup(group.id, 'down')} className="size-8 rounded-sm border border-primary/20 text-primary inline-flex items-center justify-center hover:bg-primary/[0.04]">
+                                                        <span className="material-symbols-outlined text-[16px]">keyboard_arrow_down</span>
+                                                    </button>
+                                                    <button type="button" onClick={() => handleRemoveFooterMenuGroup(group.id)} className="size-8 rounded-sm border border-brick/30 text-brick inline-flex items-center justify-center hover:bg-brick hover:text-white transition-all">
+                                                        <span className="material-symbols-outlined text-[16px]">delete</span>
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <div className="p-4 space-y-3">
+                                                {(group.items || []).length === 0 ? (
+                                                    <div className="border border-dashed border-primary/15 rounded-sm p-4 text-[12px] text-primary/40 italic">
+                                                        Nhóm này chưa có liên kết nào.
+                                                    </div>
+                                                ) : (
+                                                    group.items.map((item, itemIndex) => (
+                                                        <div key={item.id} className="grid grid-cols-[40px_100px_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 items-center border border-primary/10 rounded-sm p-3">
+                                                            <div className="text-[11px] font-black text-primary/40 text-center">{itemIndex + 1}</div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => updateFooterMenuItem(group.id, item.id, { enabled: !item.enabled })}
+                                                                className={`h-8 rounded-sm border text-[10px] font-black uppercase tracking-wider transition-all ${item.enabled ? 'border-green-200 bg-green-50 text-green-700' : 'border-stone-200 bg-stone-50 text-stone-500'}`}
+                                                            >
+                                                                {item.enabled ? 'Bật' : 'Tắt'}
+                                                            </button>
+                                                            <input
+                                                                type="text"
+                                                                value={item.label}
+                                                                onChange={(e) => updateFooterMenuItem(group.id, item.id, { label: e.target.value })}
+                                                                className={inputClasses}
+                                                                placeholder="Tên liên kết"
+                                                            />
+                                                            <input
+                                                                type="text"
+                                                                value={item.link}
+                                                                onChange={(e) => updateFooterMenuItem(group.id, item.id, { link: e.target.value })}
+                                                                className={inputClasses}
+                                                                placeholder="/duong-dan"
+                                                            />
+                                                            <div className="flex items-center gap-1">
+                                                                <button type="button" onClick={() => handleMoveFooterMenuItem(group.id, item.id, 'up')} className="size-8 rounded-sm border border-primary/20 text-primary inline-flex items-center justify-center hover:bg-primary/[0.04]">
+                                                                    <span className="material-symbols-outlined text-[16px]">keyboard_arrow_up</span>
+                                                                </button>
+                                                                <button type="button" onClick={() => handleMoveFooterMenuItem(group.id, item.id, 'down')} className="size-8 rounded-sm border border-primary/20 text-primary inline-flex items-center justify-center hover:bg-primary/[0.04]">
+                                                                    <span className="material-symbols-outlined text-[16px]">keyboard_arrow_down</span>
+                                                                </button>
+                                                                <button type="button" onClick={() => handleRemoveFooterMenuItem(group.id, item.id)} className="size-8 rounded-sm border border-brick/30 text-brick inline-flex items-center justify-center hover:bg-brick hover:text-white transition-all">
+                                                                    <span className="material-symbols-outlined text-[16px]">delete</span>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ))
+                                                )}
+
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleAddFooterMenuItem(group.id)}
+                                                    className="h-9 px-4 rounded-sm border border-primary/20 text-primary text-[11px] font-black uppercase tracking-wider hover:bg-primary/[0.04] transition-all inline-flex items-center gap-1"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">add</span>
+                                                    Thêm liên kết
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
                             </SectionCard>
                         </div>

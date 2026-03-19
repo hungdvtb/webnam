@@ -8,8 +8,42 @@ import TrackingScripts from "@/components/common/TrackingScripts";
 const DEFAULT_TOP_NOTICE = "MIỄN PHÍ VẬN CHUYỂN TOÀN QUỐC CHO ĐƠN HÀNG TỪ 500.000Đ";
 const DEFAULT_BRAND_TEXT = "GỐM ĐẠI THÀNH";
 const DEFAULT_SEARCH_PLACEHOLDER = "Bạn cần tìm kiếm sản phẩm gì?";
+const DEFAULT_FOOTER_DESCRIPTION = "Gìn giữ tinh hoa đất Việt qua từng nét vẽ, mảng men và những tác phẩm gốm sứ thủ công độc bản.";
 
-const parseHeaderMenuItems = (value) => {
+const DEFAULT_FOOTER_GROUPS = [
+  {
+    id: "footer-group-products",
+    title: "Sản phẩm",
+    enabled: true,
+    order: 1,
+    items: [
+      { id: "footer-item-products-1", label: "Gốm men lam", link: "/products", enabled: true, order: 1 },
+      { id: "footer-item-products-2", label: "Bộ trà nghệ nhân", link: "/products", enabled: true, order: 2 },
+    ],
+  },
+  {
+    id: "footer-group-support",
+    title: "Hỗ trợ",
+    enabled: true,
+    order: 2,
+    items: [
+      { id: "footer-item-support-1", label: "Chính sách vận chuyển", link: "/policy", enabled: true, order: 1 },
+      { id: "footer-item-support-2", label: "Kiến thức gốm", link: "/blog", enabled: true, order: 2 },
+    ],
+  },
+  {
+    id: "footer-group-about",
+    title: "Về chúng tôi",
+    enabled: true,
+    order: 3,
+    items: [
+      { id: "footer-item-about-1", label: "Giới thiệu", link: "/", enabled: true, order: 1 },
+      { id: "footer-item-about-2", label: "Hệ thống cửa hàng", link: "/stores", enabled: true, order: 2 },
+    ],
+  },
+];
+
+const parseMenuArray = (value) => {
   if (Array.isArray(value)) return value;
   if (typeof value !== "string" || !value.trim()) return [];
 
@@ -37,6 +71,38 @@ const normalizeHeaderMenuItems = (items = []) =>
       };
     })
     .filter((item) => item.enabled && item.title)
+    .sort((a, b) => a.order - b.order);
+
+const normalizeFooterMenuGroups = (items = []) =>
+  items
+    .map((group, index) => {
+      const fallback = DEFAULT_FOOTER_GROUPS[index] || DEFAULT_FOOTER_GROUPS[0];
+      const order = Number(group?.order ?? group?.sort_order ?? index + 1);
+      const rawItems = Array.isArray(group?.items) ? group.items : fallback.items;
+
+      return {
+        id: String(group?.id ?? `footer-group-${index + 1}`),
+        title: String(group?.title ?? group?.label ?? fallback.title ?? "").trim() || fallback.title,
+        enabled: group?.enabled === undefined ? true : Boolean(group.enabled),
+        order: Number.isFinite(order) ? order : index + 1,
+        items: rawItems
+          .map((item, itemIndex) => {
+            const fallbackItem = fallback.items[itemIndex] || fallback.items[0] || { label: "Liên kết", link: "/" };
+            const itemOrder = Number(item?.order ?? item?.sort_order ?? itemIndex + 1);
+
+            return {
+              id: String(item?.id ?? `footer-item-${itemIndex + 1}`),
+              label: String(item?.label ?? item?.title ?? fallbackItem.label ?? "").trim() || fallbackItem.label,
+              link: String(item?.link ?? item?.url ?? fallbackItem.link ?? "/").trim() || "/",
+              enabled: item?.enabled === undefined ? true : Boolean(item.enabled),
+              order: Number.isFinite(itemOrder) ? itemOrder : itemIndex + 1,
+            };
+          })
+          .filter((item) => item.enabled && item.label)
+          .sort((a, b) => a.order - b.order),
+      };
+    })
+    .filter((group) => group.enabled && group.items.length > 0)
     .sort((a, b) => a.order - b.order);
 
 export const metadata = {
@@ -68,12 +134,28 @@ export default async function RootLayout({ children }) {
     console.error("Failed to fetch layout data:", error);
   }
 
-  const headerMenuItems = normalizeHeaderMenuItems(parseHeaderMenuItems(settings?.header_menu_items));
+  const headerMenuItems = normalizeHeaderMenuItems(parseMenuArray(settings?.header_menu_items));
   const menuItems = headerMenuItems.length > 0 ? headerMenuItems : menuData?.root_items || [];
   const topNoticeText = String(settings?.header_notice_text || "").trim() || DEFAULT_TOP_NOTICE;
   const brandText = String(settings?.header_brand_text || settings?.site_name || "").trim() || DEFAULT_BRAND_TEXT;
+  const logoUrl = String(settings?.header_logo_url || "").trim();
   const searchPlaceholder =
     String(settings?.header_search_placeholder || "").trim() || DEFAULT_SEARCH_PLACEHOLDER;
+
+  const footerGroups = normalizeFooterMenuGroups(parseMenuArray(settings?.footer_menu_groups));
+  const footerConfig = {
+    logoUrl: String(settings?.footer_logo_url || "").trim(),
+    brandText: String(settings?.footer_brand_text || settings?.site_name || "").trim() || DEFAULT_BRAND_TEXT,
+    description: String(settings?.footer_description || "").trim() || DEFAULT_FOOTER_DESCRIPTION,
+    hotline: String(settings?.footer_hotline || settings?.contact_phone || "").trim(),
+    email: String(settings?.footer_email || settings?.contact_email || "").trim(),
+    address: String(settings?.footer_address || "").trim(),
+    newsletterPlaceholder: String(settings?.footer_newsletter_placeholder || "").trim() || "Email của bạn",
+    copyrightText:
+      String(settings?.footer_copyright_text || "").trim() ||
+      `© ${new Date().getFullYear()} ${brandText}. Tất cả quyền được bảo lưu.`,
+    groups: footerGroups.length > 0 ? footerGroups : normalizeFooterMenuGroups(DEFAULT_FOOTER_GROUPS),
+  };
 
   return (
     <html lang="vi">
@@ -90,10 +172,11 @@ export default async function RootLayout({ children }) {
           <Header
             menuItems={menuItems}
             brandText={brandText}
+            logoUrl={logoUrl}
             searchPlaceholder={searchPlaceholder}
           />
           {children}
-          <Footer />
+          <Footer config={footerConfig} />
         </CartProvider>
         <style
           dangerouslySetInnerHTML={{

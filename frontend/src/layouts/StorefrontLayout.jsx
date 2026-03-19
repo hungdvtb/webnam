@@ -3,6 +3,7 @@ import { Link, Outlet, useLocation } from 'react-router-dom';
 import api from '../services/api';
 import TrackingScripts, { trackLead } from '../components/TrackingScripts';
 import { buildHeaderConfig } from '../utils/headerSettings';
+import { buildFooterConfig } from '../utils/footerSettings';
 
 const StickyActionBar = ({ phone, messengerUrl }) => (
     <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-stone-200 bg-white/95 shadow-[0_-4px_20px_rgba(0,0,0,0.08)] backdrop-blur-xl md:hidden">
@@ -31,6 +32,7 @@ const StorefrontHeader = ({ headerConfig, siteInfo }) => {
     const location = useLocation();
 
     const noticeText = (headerConfig?.topNoticeText || '').trim();
+    const logoUrl = headerConfig?.logoUrl || '/logo-brand.jpg';
     const navMenus = headerConfig?.activeMenus?.length
         ? headerConfig.activeMenus
         : [
@@ -66,15 +68,15 @@ const StorefrontHeader = ({ headerConfig, siteInfo }) => {
                     </button>
 
                     <Link to="/" className="flex items-center gap-2">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary md:h-9 md:w-9">
-                            <span className="text-sm font-black text-white md:text-base">G</span>
+                        <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg bg-primary md:h-9 md:w-9">
+                            <img src={logoUrl} alt={headerConfig?.brandText || siteInfo?.name || 'Cửa hàng'} className="h-full w-full object-contain bg-white" />
                         </div>
                         <div className="hidden sm:block">
                             <h1 className="text-sm font-black uppercase leading-none tracking-tight text-stone-900 md:text-base">
-                                {headerConfig?.brandText || siteInfo?.name || 'Cửa Hàng'}
+                                {headerConfig?.brandText || siteInfo?.name || 'Cửa hàng'}
                             </h1>
                             <p className="text-[8px] font-bold uppercase tracking-[0.2em] text-stone-500 md:text-[9px]">
-                                Gốm Sứ Việt
+                                Gốm sứ Việt
                             </p>
                         </div>
                     </Link>
@@ -151,49 +153,76 @@ const StorefrontHeader = ({ headerConfig, siteInfo }) => {
     );
 };
 
-const StorefrontFooter = ({ siteInfo }) => (
+const StorefrontFooter = ({ siteInfo, footerConfig }) => (
     <footer className="bg-stone-900 pb-20 text-stone-300 md:pb-0">
         <div className="mx-auto max-w-7xl px-4 py-12 md:py-16">
-            <div className="grid grid-cols-1 gap-8 md:grid-cols-4 md:gap-12">
-                <div className="md:col-span-2">
+            <div className="grid grid-cols-1 gap-8 md:grid-cols-2 xl:grid-cols-[minmax(0,1.35fr)_repeat(3,minmax(0,1fr))] md:gap-12">
+                <div className="space-y-4">
                     <div className="mb-4 flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary">
-                            <span className="text-lg font-black text-white">G</span>
+                        <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg bg-primary">
+                            <img src={footerConfig?.logoUrl || '/logo-brand.jpg'} alt={footerConfig?.brandText || siteInfo?.name || 'Cửa hàng'} className="h-full w-full object-contain bg-white" />
                         </div>
                         <div>
-                            <h3 className="text-lg font-black uppercase tracking-tight text-white">{siteInfo?.name || 'Cửa Hàng'}</h3>
-                            <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-stone-400">Gốm Sứ Bát Tràng</p>
+                            <h3 className="text-lg font-black uppercase tracking-tight text-white">{footerConfig?.brandText || siteInfo?.name || 'Cửa hàng'}</h3>
+                            <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-stone-400">Gốm sứ Bát Tràng</p>
                         </div>
                     </div>
                     <p className="max-w-md text-sm leading-relaxed text-stone-400">
-                        Chuyên cung cấp các sản phẩm gốm sứ chất lượng cao. Mỗi sản phẩm là một tác phẩm nghệ thuật được chế tác thủ công bởi nghệ nhân lành nghề.
+                        {footerConfig?.description}
                     </p>
-                </div>
-                <div>
-                    <h4 className="mb-4 text-sm font-bold uppercase tracking-widest text-white">Liên kết</h4>
-                    <div className="space-y-2">
-                        <Link to="/" className="block text-sm transition-colors hover:text-white">Trang chủ</Link>
-                        <Link to="/san-pham" className="block text-sm transition-colors hover:text-white">Sản phẩm</Link>
-                        <Link to="/about" className="block text-sm transition-colors hover:text-white">Giới thiệu</Link>
-                        <Link to="/blog" className="block text-sm transition-colors hover:text-white">Tin tức</Link>
+                    <div className="space-y-3 text-sm text-stone-300">
+                        {footerConfig?.hotline ? (
+                            <a href={`tel:${footerConfig.hotline}`} className="flex items-center gap-2 transition-colors hover:text-white">
+                                <span className="material-symbols-outlined text-base text-primary">call</span>
+                                {footerConfig.hotline}
+                            </a>
+                        ) : null}
+                        {footerConfig?.email ? (
+                            <a href={`mailto:${footerConfig.email}`} className="flex items-center gap-2 transition-colors hover:text-white">
+                                <span className="material-symbols-outlined text-base text-primary">mail</span>
+                                {footerConfig.email}
+                            </a>
+                        ) : null}
+                        {footerConfig?.address ? (
+                            <p className="flex items-start gap-2">
+                                <span className="material-symbols-outlined mt-0.5 text-base text-primary">location_on</span>
+                                {footerConfig.address}
+                            </p>
+                        ) : null}
                     </div>
                 </div>
+
+                {footerConfig?.activeGroups?.map((group) => (
+                    <div key={group.id}>
+                        <h4 className="mb-4 text-sm font-bold uppercase tracking-widest text-white">{group.title}</h4>
+                        <div className="space-y-2">
+                            {group.items.map((item) => (
+                                <a key={item.id} href={item.link || '#'} className="block text-sm transition-colors hover:text-white">
+                                    {item.label}
+                                </a>
+                            ))}
+                        </div>
+                    </div>
+                ))}
+
                 <div>
-                    <h4 className="mb-4 text-sm font-bold uppercase tracking-widest text-white">Liên hệ</h4>
-                    <div className="space-y-3 text-sm">
-                        <a href={`tel:${siteInfo?.phone || '0123456789'}`} className="flex items-center gap-2 transition-colors hover:text-white">
-                            <span className="material-symbols-outlined text-base text-primary">call</span>
-                            {siteInfo?.phone || '0123 456 789'}
-                        </a>
-                        <p className="flex items-start gap-2">
-                            <span className="material-symbols-outlined mt-0.5 text-base text-primary">location_on</span>
-                            Bát Tràng, Gia Lâm, Hà Nội
-                        </p>
+                    <h4 className="mb-4 text-sm font-bold uppercase tracking-widest text-white">Bản tin</h4>
+                    <p className="mb-4 text-sm text-stone-400">Nhận thông tin về các bộ sưu tập mới nhất và ưu đãi đặc quyền.</p>
+                    <div className="flex gap-2">
+                        <input
+                            type="email"
+                            placeholder={footerConfig?.newsletterPlaceholder || 'Email của bạn'}
+                            className="w-full rounded-xl border border-stone-700 bg-stone-800 px-4 py-3 text-sm text-white placeholder:text-stone-500 outline-none focus:border-primary"
+                        />
+                        <button type="button" className="rounded-xl bg-primary px-4 text-sm font-bold text-white transition-all hover:brightness-90">
+                            Gửi
+                        </button>
                     </div>
                 </div>
             </div>
+
             <div className="mt-12 border-t border-stone-800 pt-6 text-center text-xs text-stone-500">
-                © {new Date().getFullYear()} {siteInfo?.name || 'Cửa Hàng'}. Tất cả quyền được bảo lưu.
+                {footerConfig?.copyrightText}
             </div>
         </div>
     </footer>
@@ -276,6 +305,7 @@ const StorefrontLayout = () => {
     const [categories, setCategories] = useState([]);
     const [siteInfo, setSiteInfo] = useState(null);
     const [headerConfig, setHeaderConfig] = useState(buildHeaderConfig({}));
+    const [footerConfig, setFooterConfig] = useState(buildFooterConfig({}));
 
     useEffect(() => {
         const load = async () => {
@@ -288,6 +318,7 @@ const StorefrontLayout = () => {
                 const settings = settingRes.data || {};
                 setCategories(catRes.data || []);
                 setHeaderConfig(buildHeaderConfig(settings));
+                setFooterConfig(buildFooterConfig(settings));
                 setSiteInfo({
                     name: settings.site_name || settings.header_brand_text || '',
                     phone: settings.contact_phone || '',
@@ -308,9 +339,9 @@ const StorefrontLayout = () => {
             <TrackingScripts />
             <StorefrontHeader siteInfo={siteInfo} headerConfig={headerConfig} />
             <main className={`flex min-h-screen flex-col ${hasTopNotice ? 'pt-[84px] md:pt-[92px]' : 'pt-14 md:pt-16'}`}>
-                <Outlet context={{ categories, siteInfo, headerConfig }} />
+                <Outlet context={{ categories, siteInfo, headerConfig, footerConfig }} />
             </main>
-            <StorefrontFooter siteInfo={siteInfo} />
+            <StorefrontFooter siteInfo={siteInfo} footerConfig={footerConfig} />
             <StickyActionBar phone={siteInfo?.phone} messengerUrl={siteInfo?.messengerUrl} />
             <div className="fixed bottom-6 right-6 z-50 hidden flex-col gap-3 md:flex">
                 <a href={`tel:${siteInfo?.phone || '0123456789'}`} className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white shadow-xl shadow-red-600/30 transition-transform hover:scale-110" title="Gọi ngay">
@@ -325,4 +356,3 @@ const StorefrontLayout = () => {
 };
 
 export default StorefrontLayout;
-

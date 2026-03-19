@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Account;
+use App\Models\BlogCategory;
 use App\Models\Post;
 use App\Models\PostSeoKeyword;
 use DOMDocument;
@@ -14,6 +15,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use RuntimeException;
 use Throwable;
 use ZipArchive;
@@ -29,6 +31,10 @@ class BlogController extends Controller
         $accountId = $this->applyAccountScope($baseQuery, $request);
 
         $query = clone $baseQuery;
+
+        if ($this->hasBlogCategorySupport()) {
+            $query->with(['category:id,account_id,name,slug,sort_order']);
+        }
 
         // Public visitors only see visible posts.
         if (!$request->user()) {
@@ -48,6 +54,30 @@ class BlogController extends Controller
         $seoKeyword = trim((string) $request->query('seo_keyword', ''));
         if ($seoKeyword !== '') {
             $query->where('seo_keyword', $seoKeyword);
+        }
+
+        if ($this->hasBlogCategorySupport()) {
+            $categoryFilter = $request->query('category_id');
+            if ($categoryFilter !== null && $categoryFilter !== '' && $categoryFilter !== 'all') {
+                $categoryFilter = trim((string) $categoryFilter);
+
+                if (in_array(Str::lower($categoryFilter), ['uncategorized', 'none', 'null'], true)) {
+                    $query->whereNull('blog_category_id');
+                } elseif (is_numeric($categoryFilter)) {
+                    $query->where('blog_category_id', (int) $categoryFilter);
+                } else {
+                    $query->whereHas('category', function (Builder $categoryQuery) use ($categoryFilter) {
+                        $categoryQuery->where('slug', $categoryFilter);
+                    });
+                }
+            }
+
+            $categorySlug = trim((string) $request->query('category_slug', ''));
+            if ($categorySlug !== '') {
+                $query->whereHas('category', function (Builder $categoryQuery) use ($categorySlug) {
+                    $categoryQuery->where('slug', $categorySlug);
+                });
+            }
         }
 
         $statusFilter = $request->query('is_published');
@@ -70,6 +100,7 @@ class BlogController extends Controller
 
         $payload = $posts->toArray();
         $payload['seo_keywords'] = $this->seoKeywordCollection($accountId, $baseQuery);
+        $payload['categories'] = $this->blogCategoryCollection($accountId, $baseQuery);
 
         return response()->json($payload);
     }
@@ -121,6 +152,87 @@ class BlogController extends Controller
             'id' => (int) $record->id,
             'keyword' => $record->keyword,
         ], $record->wasRecentlyCreated ? 201 : 200);
+    }
+
+    /**
+     * Update an existing managed SEO keyword.
+     */
+    public function updateSeoKeyword(Request $request, int $id)
+    {
+        $validated = $request->validate([
+            'keyword' => 'required|string|max:255',
+        ]);
+
+        $accountId = $this->resolveAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        if (!$this->hasSeoKeywordTable()) {
+            return response()->json(['error' => 'SEO keyword storage is not ready. Please run migrations.'], 503);
+        }
+
+        $keyword = $this->normalizeKeyword($validated['keyword'] ?? null);
+        if ($keyword === null) {
+            return response()->json(['error' => 'Keyword is required'], 422);
+        }
+
+        $record = PostSeoKeyword::where('account_id', $accountId)->whereKey($id)->firstOrFail();
+        $oldKeyword = $record->keyword;
+
+        $duplicateExists = PostSeoKeyword::where('account_id', $accountId)
+            ->where('keyword', $keyword)
+            ->where('id', '<>', $record->id)
+            ->exists();
+
+        if ($duplicateExists) {
+            return response()->json(['error' => 'Keyword already exists.'], 422);
+        }
+
+        DB::transaction(function () use ($accountId, $record, $oldKeyword, $keyword) {
+            $record->update(['keyword' => $keyword]);
+
+            if ($oldKeyword !== $keyword) {
+                Post::where('account_id', $accountId)
+                    ->where('seo_keyword', $oldKeyword)
+                    ->update(['seo_keyword' => $keyword]);
+            }
+        });
+
+        return response()->json([
+            'id' => (int) $record->id,
+            'keyword' => $record->keyword,
+        ]);
+    }
+
+    /**
+     * Delete a managed SEO keyword and clear it from related posts.
+     */
+    public function destroySeoKeyword(Request $request, int $id)
+    {
+        $accountId = $this->resolveAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        if (!$this->hasSeoKeywordTable()) {
+            return response()->json(['error' => 'SEO keyword storage is not ready. Please run migrations.'], 503);
+        }
+
+        $record = PostSeoKeyword::where('account_id', $accountId)->whereKey($id)->firstOrFail();
+        $keyword = $record->keyword;
+
+        DB::transaction(function () use ($accountId, $record, $keyword) {
+            $record->delete();
+
+            Post::where('account_id', $accountId)
+                ->where('seo_keyword', $keyword)
+                ->update(['seo_keyword' => null]);
+        });
+
+        return response()->json([
+            'message' => 'SEO keyword deleted successfully.',
+        ]);
     }
 
     /**
@@ -187,6 +299,255 @@ class BlogController extends Controller
     }
 
     /**
+     * List blog categories for current account.
+     */
+    public function categories(Request $request)
+    {
+        $accountId = $this->resolveAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        if (!$this->hasBlogCategorySupport()) {
+            return response()->json(['data' => []]);
+        }
+
+        return response()->json([
+            'data' => $this->blogCategoryCollection($accountId),
+        ]);
+    }
+
+    /**
+     * Create a new blog category.
+     */
+    public function storeCategory(Request $request)
+    {
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'slug' => 'nullable|string|max:255',
+            'sort_order' => 'nullable|integer|min:1',
+        ]);
+
+        $accountId = $this->resolveAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        if (!$this->hasBlogCategorySupport()) {
+            return response()->json(['error' => 'Blog category storage is not ready. Please run migrations.'], 503);
+        }
+
+        $name = trim((string) $validated['name']);
+        $slugSource = trim((string) ($validated['slug'] ?? '')) ?: $name;
+        $sortOrder = (int) ($validated['sort_order'] ?? $this->nextCategorySortOrder($accountId));
+
+        $category = BlogCategory::create([
+            'account_id' => $accountId,
+            'name' => $name,
+            'slug' => $this->buildUniqueCategorySlug($slugSource, $accountId),
+            'sort_order' => max($sortOrder, 1),
+        ]);
+
+        return response()->json([
+            'id' => (int) $category->id,
+            'name' => $category->name,
+            'slug' => $category->slug,
+            'sort_order' => (int) $category->sort_order,
+        ], 201);
+    }
+
+    /**
+     * Update a blog category.
+     */
+    public function updateCategory(Request $request, int $id)
+    {
+        $validated = $request->validate([
+            'name' => 'sometimes|required|string|max:255',
+            'slug' => 'nullable|string|max:255',
+            'sort_order' => 'nullable|integer|min:1',
+        ]);
+
+        $accountId = $this->resolveAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        if (!$this->hasBlogCategorySupport()) {
+            return response()->json(['error' => 'Blog category storage is not ready. Please run migrations.'], 503);
+        }
+
+        $category = BlogCategory::where('account_id', $accountId)->whereKey($id)->firstOrFail();
+
+        $updates = [];
+
+        if (array_key_exists('name', $validated)) {
+            $updates['name'] = trim((string) $validated['name']);
+        }
+
+        if (array_key_exists('sort_order', $validated) && $validated['sort_order'] !== null) {
+            $updates['sort_order'] = max((int) $validated['sort_order'], 1);
+        }
+
+        if (array_key_exists('slug', $validated) || array_key_exists('name', $validated)) {
+            $slugSource = trim((string) ($validated['slug'] ?? ''));
+            if ($slugSource === '') {
+                $slugSource = (string) ($updates['name'] ?? $category->name);
+            }
+
+            $updates['slug'] = $this->buildUniqueCategorySlug($slugSource, $accountId, $category->id);
+        }
+
+        if (!empty($updates)) {
+            $category->update($updates);
+        }
+
+        return response()->json([
+            'id' => (int) $category->id,
+            'name' => $category->name,
+            'slug' => $category->slug,
+            'sort_order' => (int) $category->sort_order,
+        ]);
+    }
+
+    /**
+     * Delete a blog category.
+     */
+    public function destroyCategory(Request $request, int $id)
+    {
+        $accountId = $this->resolveAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        if (!$this->hasBlogCategorySupport()) {
+            return response()->json(['error' => 'Blog category storage is not ready. Please run migrations.'], 503);
+        }
+
+        $category = BlogCategory::where('account_id', $accountId)->whereKey($id)->firstOrFail();
+        $category->delete();
+        $this->resequenceCategorySortOrders($accountId);
+
+        return response()->json(['message' => 'Category deleted successfully']);
+    }
+
+    /**
+     * Reorder categories in admin.
+     */
+    public function reorderCategories(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer',
+        ]);
+
+        $accountId = $this->resolveAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        if (!$this->hasBlogCategorySupport()) {
+            return response()->json(['error' => 'Blog category storage is not ready. Please run migrations.'], 503);
+        }
+
+        $providedIds = array_values(array_unique(array_map('intval', $validated['ids'])));
+
+        $currentIds = BlogCategory::where('account_id', $accountId)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $invalidIds = array_values(array_diff($providedIds, $currentIds));
+        if (!empty($invalidIds)) {
+            return response()->json([
+                'error' => 'Some category IDs are invalid for this account.',
+                'invalid_ids' => $invalidIds,
+            ], 422);
+        }
+
+        $remainingIds = array_values(array_diff($currentIds, $providedIds));
+        $finalOrder = array_merge($providedIds, $remainingIds);
+
+        DB::transaction(function () use ($accountId, $finalOrder) {
+            foreach ($finalOrder as $index => $categoryId) {
+                BlogCategory::where('account_id', $accountId)
+                    ->whereKey($categoryId)
+                    ->update(['sort_order' => $index + 1]);
+            }
+        });
+
+        return response()->json(['message' => 'Categories reordered successfully']);
+    }
+
+    /**
+     * Bulk assign or clear category for selected posts.
+     */
+    public function bulkCategory(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer',
+            'operation' => 'required|string|in:assign,clear',
+            'blog_category_id' => 'nullable|integer',
+        ]);
+
+        $accountId = $this->resolveAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        if (!$this->hasBlogCategorySupport()) {
+            return response()->json(['error' => 'Blog category storage is not ready. Please run migrations.'], 503);
+        }
+
+        $ids = array_values(array_unique(array_map('intval', $validated['ids'])));
+        $operation = (string) $validated['operation'];
+        $categoryId = $validated['blog_category_id'] ?? null;
+
+        if ($operation === 'assign' && $categoryId === null) {
+            return response()->json(['error' => 'blog_category_id is required for assign operation'], 422);
+        }
+
+        $existingPostIds = Post::where('account_id', $accountId)
+            ->whereIn('id', $ids)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $invalidIds = array_values(array_diff($ids, $existingPostIds));
+        if (!empty($invalidIds)) {
+            return response()->json([
+                'error' => 'Some post IDs are invalid for this account.',
+                'invalid_ids' => $invalidIds,
+            ], 422);
+        }
+
+        $category = null;
+        if ($operation === 'assign') {
+            $category = BlogCategory::where('account_id', $accountId)->whereKey((int) $categoryId)->first();
+            if (!$category) {
+                return response()->json(['error' => 'Category not found for this account.'], 422);
+            }
+        }
+
+        Post::where('account_id', $accountId)
+            ->whereIn('id', $ids)
+            ->update([
+                'blog_category_id' => $operation === 'assign' ? (int) $category->id : null,
+            ]);
+
+        return response()->json([
+            'message' => $operation === 'assign'
+                ? 'Category assigned successfully.'
+                : 'Category removed successfully.',
+            'updated_count' => count($ids),
+            'operation' => $operation,
+            'blog_category_id' => $operation === 'assign' ? (int) $category->id : null,
+        ]);
+    }
+
+    /**
      * Store a newly created resource in storage.
      */
     public function store(Request $request)
@@ -194,6 +555,7 @@ class BlogController extends Controller
         $validated = $request->validate([
             'title' => 'required|string|max:255',
             'slug' => 'nullable|string|max:255',
+            'blog_category_id' => 'nullable|integer',
             'seo_keyword' => 'nullable|string|max:255',
             'content' => 'required|string',
             'excerpt' => 'nullable|string',
@@ -210,6 +572,10 @@ class BlogController extends Controller
         }
 
         $validated['account_id'] = $accountId;
+        $validated['blog_category_id'] = $this->resolveCategoryIdForAccount(
+            $accountId,
+            $validated['blog_category_id'] ?? null
+        );
         $validated['seo_keyword'] = $this->normalizeKeyword($validated['seo_keyword'] ?? null);
         $validated['is_published'] = array_key_exists('is_published', $validated)
             ? (bool) $validated['is_published']
@@ -223,7 +589,7 @@ class BlogController extends Controller
             $accountId
         );
 
-        $post = Post::create($validated);
+        $post = Post::create($validated)->load('category');
         $this->ensureSeoKeywordExists($accountId, $validated['seo_keyword']);
 
         return response()->json($post, 201);
@@ -234,7 +600,7 @@ class BlogController extends Controller
      */
     public function show(Request $request, $id)
     {
-        $query = Post::query();
+        $query = Post::query()->with(['category:id,account_id,name,slug,sort_order']);
         $this->applyAccountScope($query, $request);
 
         if (!$request->user()) {
@@ -269,6 +635,7 @@ class BlogController extends Controller
         $validated = $request->validate([
             'title' => 'sometimes|required|string|max:255',
             'slug' => 'nullable|string|max:255',
+            'blog_category_id' => 'nullable|integer',
             'seo_keyword' => 'nullable|string|max:255',
             'content' => 'sometimes|required|string',
             'excerpt' => 'nullable|string',
@@ -284,13 +651,20 @@ class BlogController extends Controller
             $this->ensureSeoKeywordExists($accountId, $validated['seo_keyword']);
         }
 
+        if (array_key_exists('blog_category_id', $validated)) {
+            $validated['blog_category_id'] = $this->resolveCategoryIdForAccount(
+                $accountId,
+                $validated['blog_category_id']
+            );
+        }
+
         if (array_key_exists('slug', $validated) && $validated['slug'] !== null && $validated['slug'] !== '') {
             $validated['slug'] = $this->buildUniqueSlug($validated['slug'], $accountId, $post->id);
         }
 
         $post->update($validated);
 
-        return response()->json($post);
+        return response()->json($post->load('category'));
     }
 
     /**
@@ -589,6 +963,150 @@ class BlogController extends Controller
 
         if ($cache === null) {
             $cache = Schema::hasTable('post_seo_keywords');
+        }
+
+        return $cache;
+    }
+
+    private function resolveCategoryIdForAccount(int $accountId, $categoryId): ?int
+    {
+        if (!$this->hasBlogCategorySupport()) {
+            return null;
+        }
+
+        if ($categoryId === null || $categoryId === '' || $categoryId === '0' || $categoryId === 0) {
+            return null;
+        }
+
+        $resolved = BlogCategory::where('account_id', $accountId)
+            ->whereKey((int) $categoryId)
+            ->value('id');
+
+        if (!$resolved) {
+            throw ValidationException::withMessages([
+                'blog_category_id' => ['Category not found for this account.'],
+            ]);
+        }
+
+        return (int) $resolved;
+    }
+
+    private function nextCategorySortOrder(int $accountId): int
+    {
+        if (!$this->hasBlogCategorySupport()) {
+            return 1;
+        }
+
+        return (int) BlogCategory::where('account_id', $accountId)->max('sort_order') + 1;
+    }
+
+    private function buildUniqueCategorySlug(string $source, int $accountId, ?int $exceptId = null): string
+    {
+        $baseSlug = Str::slug($source);
+        if ($baseSlug === '') {
+            $baseSlug = 'blog-category';
+        }
+
+        $slug = $baseSlug;
+        $counter = 1;
+
+        while (true) {
+            $query = BlogCategory::where('account_id', $accountId)->where('slug', $slug);
+
+            if ($exceptId !== null) {
+                $query->where('id', '<>', $exceptId);
+            }
+
+            if (!$query->exists()) {
+                return $slug;
+            }
+
+            $counter++;
+            $slug = $baseSlug . '-' . $counter;
+        }
+    }
+
+    private function resequenceCategorySortOrders(int $accountId): void
+    {
+        if (!$this->hasBlogCategorySupport()) {
+            return;
+        }
+
+        $ids = BlogCategory::where('account_id', $accountId)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->pluck('id')
+            ->all();
+
+        DB::transaction(function () use ($accountId, $ids) {
+            foreach ($ids as $index => $id) {
+                BlogCategory::where('account_id', $accountId)
+                    ->whereKey($id)
+                    ->update(['sort_order' => $index + 1]);
+            }
+        });
+    }
+
+    private function blogCategoryCollection(?int $accountId, ?Builder $fallbackBaseQuery = null): array
+    {
+        if ($accountId && $this->hasBlogCategorySupport()) {
+            return BlogCategory::where('account_id', $accountId)
+                ->orderBy('sort_order')
+                ->orderBy('name')
+                ->get(['id', 'name', 'slug', 'sort_order'])
+                ->map(fn ($category) => [
+                    'id' => (int) $category->id,
+                    'name' => $category->name,
+                    'slug' => $category->slug,
+                    'sort_order' => (int) $category->sort_order,
+                ])
+                ->values()
+                ->all();
+        }
+
+        if (!$this->hasBlogCategorySupport()) {
+            return [];
+        }
+
+        $baseQuery = $fallbackBaseQuery ? clone $fallbackBaseQuery : Post::query();
+
+        if ($accountId) {
+            $baseQuery->where('account_id', $accountId);
+        }
+
+        $ids = $baseQuery
+            ->whereNotNull('blog_category_id')
+            ->select('blog_category_id')
+            ->distinct()
+            ->pluck('blog_category_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        if (empty($ids)) {
+            return [];
+        }
+
+        return BlogCategory::whereIn('id', $ids)
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get(['id', 'name', 'slug', 'sort_order'])
+            ->map(fn ($category) => [
+                'id' => (int) $category->id,
+                'name' => $category->name,
+                'slug' => $category->slug,
+                'sort_order' => (int) $category->sort_order,
+            ])
+            ->values()
+            ->all();
+    }
+
+    private function hasBlogCategorySupport(): bool
+    {
+        static $cache = null;
+
+        if ($cache === null) {
+            $cache = Schema::hasTable('blog_categories') && Schema::hasColumn('posts', 'blog_category_id');
         }
 
         return $cache;

@@ -152,8 +152,16 @@ export const wishlistApi = {
 
 export const blogApi = {
     getAll: (params) => api.get('/blog', { params }),
+    getCategories: (params) => api.get('/blog/categories', params ? { params } : {}),
+    createCategory: (data) => api.post('/blog/categories', data),
+    updateCategory: (id, data) => api.put(`/blog/categories/${id}`, data),
+    deleteCategory: (id) => api.delete(`/blog/categories/${id}`),
+    reorderCategories: (ids) => api.post('/blog/categories/reorder', { ids }),
+    bulkCategory: (data) => api.post('/blog/bulk-category', data),
     getSeoKeywords: () => api.get('/blog/seo-keywords'),
     createSeoKeyword: (data) => api.post('/blog/seo-keywords', data),
+    updateSeoKeyword: (id, data) => api.put(`/blog/seo-keywords/${id}`, data),
+    deleteSeoKeyword: (id) => api.delete(`/blog/seo-keywords/${id}`),
     bulkSeoKeyword: (data) => api.post('/blog/bulk-seo-keyword', data),
     getOne: (id) => api.get(`/blog/${id}`),
     store: (data) => api.post('/blog', data),

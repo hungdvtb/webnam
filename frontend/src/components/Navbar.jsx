@@ -7,6 +7,7 @@ import { buildHeaderConfig } from '../utils/headerSettings';
 
 const mapMenuApiItems = (menu) => {
     if (!menu?.root_items?.length) return [];
+
     return menu.root_items.map((item, index) => ({
         id: item.id || `menu-api-${index}`,
         label: item.title || 'Menu',
@@ -52,6 +53,7 @@ const Navbar = () => {
 
     const resolvedMenus = useMemo(() => {
         if (headerConfig?.activeMenus?.length) return headerConfig.activeMenus;
+
         const mappedMenus = mapMenuApiItems(headerMenu);
         return mappedMenus.length ? mappedMenus : fallbackMenus;
     }, [headerConfig, headerMenu]);
@@ -60,6 +62,7 @@ const Navbar = () => {
     const searchPlaceholder = headerConfig.searchPlaceholder || 'Bạn cần tìm kiếm sản phẩm gì?';
     const topNoticeText = (headerConfig.topNoticeText || '').trim();
     const brandText = headerConfig.brandText || 'GỐM ĐẠI THÀNH';
+    const logoUrl = headerConfig.logoUrl || '/logo-brand.jpg';
 
     const handleLogout = async () => {
         await logout();
@@ -69,6 +72,7 @@ const Navbar = () => {
     const handleSearchSubmit = (e) => {
         e.preventDefault();
         if (!searchQuery.trim()) return;
+
         const searchPath = isLegacyPath ? '/old/shop' : '/san-pham';
         navigate(`${searchPath}?search=${encodeURIComponent(searchQuery.trim())}`);
     };
@@ -87,7 +91,7 @@ const Navbar = () => {
                 <div className="flex items-center gap-8">
                     <Link className="group flex items-center gap-3 text-primary" to="/">
                         <div className="flex h-14 items-center overflow-hidden">
-                            <img src="/logo-brand.jpg" alt={brandText} className="h-full object-contain" />
+                            <img src={logoUrl} alt={brandText} className="h-full object-contain" />
                         </div>
                         <div className="flex flex-col">
                             <h2 className="font-display text-xl font-bold leading-none tracking-wide text-primary transition-opacity group-hover:opacity-80">
@@ -185,4 +189,3 @@ const Navbar = () => {
 };
 
 export default Navbar;
-

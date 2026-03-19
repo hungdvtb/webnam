@@ -8,6 +8,7 @@ class Post extends Model
 {
     protected $fillable = [
         'account_id',
+        'blog_category_id',
         'title',
         'slug',
         'seo_keyword',
@@ -21,6 +22,7 @@ class Post extends Model
     ];
 
     protected $casts = [
+        'blog_category_id' => 'integer',
         'is_published' => 'boolean',
         'is_starred' => 'boolean',
         'sort_order' => 'integer',
@@ -45,5 +47,10 @@ class Post extends Model
     public function account()
     {
         return $this->belongsTo(Account::class);
+    }
+
+    public function category()
+    {
+        return $this->belongsTo(BlogCategory::class, 'blog_category_id');
     }
 }

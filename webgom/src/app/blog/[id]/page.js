@@ -1,24 +1,6 @@
 import Link from 'next/link';
 import { getBlogPost, getBlogPosts } from '@/lib/blogApi';
 
-export async function generateMetadata({ params }) {
-  try {
-    const post = await getBlogPost(params.id);
-    if (!post) return { title: 'Bài viết không tìm thấy' };
-    return {
-      title: `${post.title} | Di Sản Gốm Việt`,
-      description: post.excerpt || post.title,
-      openGraph: {
-        title: post.title,
-        description: post.excerpt,
-        images: post.image ? [post.image] : [],
-      },
-    };
-  } catch {
-    return { title: 'Bài viết | Di Sản Gốm Việt' };
-  }
-}
-
 function formatDate(dateStr) {
   if (!dateStr) return '';
   return new Date(dateStr).toLocaleDateString('vi-VN', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -28,16 +10,60 @@ function getPostImage(post) {
   return post?.image || post?.thumbnail || post?.featured_image || null;
 }
 
+function extractPosts(res) {
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res?.data)) return res.data;
+  if (Array.isArray(res?.data?.data)) return res.data.data;
+  return [];
+}
+
+export async function generateMetadata({ params }) {
+  const resolvedParams = await params;
+  const slugOrId = resolvedParams?.id;
+
+  try {
+    const post = await getBlogPost(slugOrId);
+    if (!post) {
+      return { title: 'Bài viết không tìm thấy' };
+    }
+
+    const image = getPostImage(post);
+
+    return {
+      title: `${post.title} | Di sản Gốm Việt`,
+      description: post.excerpt || post.title,
+      openGraph: {
+        title: post.title,
+        description: post.excerpt || post.title,
+        images: image ? [image] : [],
+      },
+    };
+  } catch {
+    return { title: 'Bài viết | Di sản Gốm Việt' };
+  }
+}
+
 export default async function BlogPostPage({ params }) {
+  const resolvedParams = await params;
+  const slugOrId = resolvedParams?.id;
+
   let post = null;
   let related = [];
 
   try {
-    post = await getBlogPost(params.id);
-    const res = await getBlogPosts({ per_page: 10 });
-    const all = Array.isArray(res?.data || res) ? (res?.data || res) : [];
-    related = all.filter(p => String(p.id) !== String(params.id)).slice(0, 3);
-  } catch (e) { /* silent */ }
+    post = await getBlogPost(slugOrId);
+
+    if (post) {
+      const res = await getBlogPosts({ per_page: 10 });
+      const all = extractPosts(res);
+      related = all
+        .filter((p) => String(p.id) !== String(post.id) && String(p.slug || '') !== String(post.slug || slugOrId))
+        .slice(0, 3);
+    }
+  } catch (e) {
+    post = null;
+    related = [];
+  }
 
   if (!post) {
     return (
@@ -66,11 +92,7 @@ export default async function BlogPostPage({ params }) {
 
   return (
     <main className="bdt-page">
-
-      {/* ── MAIN ARTICLE ── */}
       <div className="bdt-container">
-
-        {/* Breadcrumb */}
         <nav className="bdt-breadcrumb">
           <Link href="/">Trang chủ</Link>
           <span className="material-symbols-outlined">chevron_right</span>
@@ -80,10 +102,9 @@ export default async function BlogPostPage({ params }) {
         </nav>
 
         <article>
-          {/* ── Article Header centered ── */}
           <header className="bdt-article-header">
-            {(post.category || post.tag) && (
-              <div className="bdt-category-badge">{post.category || post.tag}</div>
+            {(post.category?.name || post.category || post.tag) && (
+              <div className="bdt-category-badge">{post.category?.name || post.category || post.tag}</div>
             )}
             <h1 className="bdt-title">{post.title}</h1>
             <div className="bdt-meta">
@@ -93,7 +114,6 @@ export default async function BlogPostPage({ params }) {
             </div>
           </header>
 
-          {/* ── Featured Image with double gold border ── */}
           {heroImg && (
             <div className="bdt-hero-img-wrap">
               <div className="bdt-hero-img-inner">
@@ -105,12 +125,10 @@ export default async function BlogPostPage({ params }) {
             </div>
           )}
 
-          {/* ── Excerpt as drop-cap lead ── */}
           {post.excerpt && (
             <p className="bdt-excerpt-dropcap">{post.excerpt}</p>
           )}
 
-          {/* ── Main Content ── */}
           {hasContent && (
             <div
               className="bdt-content"
@@ -124,7 +142,6 @@ export default async function BlogPostPage({ params }) {
             </div>
           )}
 
-          {/* ── Tags ── */}
           {post.tags && post.tags.length > 0 && (
             <div className="bdt-tags">
               <span className="bdt-tags-label">Thẻ:</span>
@@ -137,19 +154,17 @@ export default async function BlogPostPage({ params }) {
           )}
         </article>
 
-        {/* ── Ornamental divider ── */}
         <div className="bdt-divider">
           <div className="bdt-divider-line" />
           <span className="material-symbols-outlined bdt-divider-icon">flare</span>
           <div className="bdt-divider-line" />
         </div>
 
-        {/* ── Related posts ── */}
         <section className="bdt-related">
           <h3 className="bdt-related-title">Bài viết liên quan</h3>
           <div className="bdt-related-grid">
-            {related.length > 0 ? related.map(rel => (
-              <Link key={rel.id} href={`/blog/${rel.id}`} className="bdt-related-card">
+            {related.length > 0 ? related.map((rel) => (
+              <Link key={rel.id} href={`/blog/${rel.slug || rel.id}`} className="bdt-related-card">
                 <div className="bdt-related-img">
                   {getPostImage(rel)
                     ? <img src={getPostImage(rel)} alt={rel.title} />
@@ -166,7 +181,6 @@ export default async function BlogPostPage({ params }) {
                 )}
               </Link>
             )) : (
-              // fallback decorative items if no related posts
               [
                 { title: 'Tâm hồn Việt trong chén trà Bát Tràng', date: 'Ngày 12 tháng 10, 2023' },
                 { title: 'Men chàm: Sắc lam vĩnh cửu của thời đại', date: 'Ngày 05 tháng 10, 2023' },
@@ -184,18 +198,15 @@ export default async function BlogPostPage({ params }) {
           </div>
         </section>
 
-        {/* ── Back button ── */}
         <div className="bdt-back-wrap">
           <Link href="/blog" className="bdt-back-btn">
             <span className="material-symbols-outlined">arrow_back</span>
             Quay lại danh sách bài viết
           </Link>
         </div>
-
       </div>
 
       <style>{`
-        /* ── Global ── */
         .bdt-page {
           background: #F9F5F0;
           min-height: 100vh;
@@ -209,7 +220,6 @@ export default async function BlogPostPage({ params }) {
           padding: 2.5rem 1.5rem 3rem;
         }
 
-        /* ── Breadcrumb ── */
         .bdt-breadcrumb {
           display: flex; align-items: center; gap: 0.3rem;
           font-size: 0.85rem; color: rgba(27,54,93,0.6);
@@ -223,7 +233,6 @@ export default async function BlogPostPage({ params }) {
           max-width: 350px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
 
-        /* ── Article header ── */
         .bdt-article-header {
           text-align: center;
           margin-bottom: 3rem;
@@ -253,7 +262,6 @@ export default async function BlogPostPage({ params }) {
           background: #C5A059;
         }
 
-        /* ── Hero image ── */
         .bdt-hero-img-wrap {
           position: relative;
           padding: 0.5rem;
@@ -281,7 +289,6 @@ export default async function BlogPostPage({ params }) {
           color: rgba(27,54,93,0.8);
         }
 
-        /* ── Drop-cap excerpt ── */
         .bdt-excerpt-dropcap {
           font-size: 1.2rem; line-height: 1.85;
           color: rgba(27,54,93,0.9); margin-bottom: 2.5rem;
@@ -294,7 +301,6 @@ export default async function BlogPostPage({ params }) {
           color: #1B365D; font-weight: 900;
         }
 
-        /* ── Content ── */
         .bdt-content {
           font-size: 1.1rem; line-height: 1.9;
           color: rgba(27,54,93,0.9);
@@ -344,7 +350,6 @@ export default async function BlogPostPage({ params }) {
         }
         @media (max-width: 600px) { .bdt-content .grid-2 { grid-template-columns: 1fr; } }
 
-        /* ── Tags ── */
         .bdt-tags {
           display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
           padding: 1.5rem 0; border-top: 1px solid rgba(197,160,89,0.2);
@@ -357,7 +362,6 @@ export default async function BlogPostPage({ params }) {
           border: 1px solid rgba(27,54,93,0.15); border-radius: 99px;
         }
 
-        /* ── Divider ── */
         .bdt-divider {
           display: flex; align-items: center; justify-content: center;
           gap: 0; margin: 4rem 0;
@@ -367,7 +371,6 @@ export default async function BlogPostPage({ params }) {
           color: #C5A059; padding: 0 1rem; font-size: 1.4rem;
         }
 
-        /* ── Related posts ── */
         .bdt-related { margin-bottom: 4rem; }
         .bdt-related-title {
           font-family: 'Playfair Display', serif;
@@ -376,64 +379,71 @@ export default async function BlogPostPage({ params }) {
           margin: 0 0 2.5rem;
         }
         .bdt-related-grid {
-          display: grid; grid-template-columns: repeat(1, 1fr); gap: 2rem;
+          display: grid; gap: 1.25rem;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
         }
-        @media (min-width: 640px) { .bdt-related-grid { grid-template-columns: repeat(3, 1fr); } }
-
+        @media (max-width: 900px) {
+          .bdt-related-grid { grid-template-columns: 1fr; }
+        }
         .bdt-related-card {
-          display: block; cursor: pointer;
-          transition: opacity 0.2s;
-        }
-        .bdt-related-card:hover { opacity: 0.85; }
-        .bdt-related-img {
-          aspect-ratio: 1; overflow: hidden;
           border: 1px solid rgba(197,160,89,0.25);
-          margin-bottom: 0.85rem;
+          background: #fff;
+          text-decoration: none;
+          color: inherit;
+          display: block;
+          transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .bdt-related-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 10px 22px rgba(27,54,93,0.12);
+        }
+        .bdt-related-img {
+          height: 140px;
+          background: rgba(27,54,93,0.08);
+          overflow: hidden;
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
         .bdt-related-img img {
-          width: 100%; height: 100%; object-fit: cover;
-          transition: transform 0.5s;
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
         }
-        .bdt-related-card:hover .bdt-related-img img { transform: scale(1.1); }
-        .bdt-related-placeholder {
-          width: 100%; height: 100%;
-          background: linear-gradient(135deg, #d6cec2, #1B365D);
-          display: flex; align-items: center; justify-content: center;
-        }
-        .bdt-related-placeholder .material-symbols-outlined { font-size: 2.5rem; color: rgba(249,245,240,0.4); }
+        .bdt-related-placeholder,
         .bdt-related-placeholder-bg {
-          background: linear-gradient(135deg, #d6cec2, #1B365D) !important;
-          display: flex !important; align-items: center; justify-content: center;
+          width: 100%; height: 100%;
+          display: flex; align-items: center; justify-content: center;
+          color: rgba(27,54,93,0.4);
         }
-        .bdt-related-placeholder-bg .material-symbols-outlined { font-size: 2.5rem; color: rgba(249,245,240,0.4); }
         .bdt-related-name {
-          font-family: 'Playfair Display', serif; font-size: 0.95rem;
-          color: #1B365D; font-weight: 700; margin: 0 0 0.5rem;
-          line-height: 1.4; transition: color 0.2s;
+          margin: 0; padding: 0.85rem 0.9rem 0.45rem;
+          font-family: 'Playfair Display', serif;
+          color: #1B365D;
+          font-size: 1rem;
+          line-height: 1.4;
         }
-        .bdt-related-card:hover .bdt-related-name { color: #C5A059; }
         .bdt-related-date {
+          padding: 0 0.9rem 0.9rem;
           font-size: 0.8rem; color: rgba(27,54,93,0.5); font-style: italic; margin: 0;
         }
 
-        /* ── Back button ── */
         .bdt-back-wrap { text-align: center; }
         .bdt-back-btn {
           display: inline-flex; align-items: center; gap: 0.5rem;
-          font-family: 'Playfair Display', serif; font-size: 0.85rem;
-          font-weight: 700; color: #1B365D; text-transform: uppercase;
-          letter-spacing: 0.1em; padding: 0.75rem 2rem;
-          border: 1.5px solid #1B365D; transition: all 0.2s;
-          background: transparent;
+          color: #1B365D;
+          text-decoration: none;
+          border: 1px solid rgba(197,160,89,0.35);
+          padding: 0.55rem 1rem;
+          font-size: 0.85rem;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
         }
-        .bdt-back-btn:hover { background: #1B365D; color: #F9F5F0; }
-        .bdt-back-btn .material-symbols-outlined { font-size: 1rem; }
-
-        @media (max-width: 640px) {
-          .bdt-title { font-size: 2.2rem; }
-          .bdt-hero-img-wrap { margin-bottom: 3rem; }
-          .bdt-img-caption { position: static; margin-top: 0.5rem; }
-          .bdt-excerpt-dropcap::first-letter { font-size: 4rem; line-height: 3.2rem; }
+        .bdt-back-btn:hover {
+          background: #1B365D;
+          color: #F9F5F0;
+          border-color: #1B365D;
         }
       `}</style>
     </main>

@@ -1,22 +1,49 @@
 "use client";
 
-import Link from 'next/link';
-import { useState, useEffect } from 'react';
-import { useCart } from '@/context/CartContext';
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCart } from "@/context/CartContext";
+
+const isExternalUrl = (value = "") => /^https?:\/\//i.test(String(value).trim());
+
+const renderNavLink = (item) => {
+  const href = String(item?.url || item?.link || "#").trim() || "#";
+  const label = String(item?.title || item?.label || "").trim();
+
+  if (!label) return null;
+
+  if (isExternalUrl(href)) {
+    return (
+      <a href={href} className="nav-link" target="_blank" rel="noopener noreferrer">
+        {label}
+      </a>
+    );
+  }
+
+  return (
+    <Link href={href} className="nav-link">
+      {label}
+    </Link>
+  );
+};
 
 export default function Header({
   menuItems = [],
-  brandText = 'GỐM ĐẠI THÀNH',
-  searchPlaceholder = 'Bạn cần tìm kiếm sản phẩm gì?',
+  brandText = "GỐM ĐẠI THÀNH",
+  logoUrl = "",
+  searchPlaceholder = "Bạn cần tìm kiếm sản phẩm gì?",
 }) {
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState("");
   const { cartCount } = useCart();
   const [isBouncing, setIsBouncing] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const router = typeof window !== 'undefined' ? require('next/navigation').useRouter() : null;
+  const router = useRouter();
 
-  const resolvedBrandText = String(brandText || '').trim() || 'GỐM ĐẠI THÀNH';
-  const resolvedSearchPlaceholder = String(searchPlaceholder || '').trim() || 'Bạn cần tìm kiếm sản phẩm gì?';
+  const resolvedBrandText = String(brandText || "").trim() || "GỐM ĐẠI THÀNH";
+  const resolvedLogoUrl = String(logoUrl || "").trim() || "/logo-dai-thanh.png";
+  const resolvedSearchPlaceholder =
+    String(searchPlaceholder || "").trim() || "Bạn cần tìm kiếm sản phẩm gì?";
 
   useEffect(() => {
     setMounted(true);
@@ -31,7 +58,7 @@ export default function Header({
   }, [cartCount]);
 
   const handleSearch = (e) => {
-    if ((e.type === 'keydown' && e.key === 'Enter') || e.type === 'click') {
+    if ((e.type === "keydown" && e.key === "Enter") || e.type === "click") {
       if (searchQuery.trim()) {
         router.push(`/products?search=${encodeURIComponent(searchQuery.trim())}`);
       }
@@ -41,78 +68,13 @@ export default function Header({
   return (
     <header className="site-header">
       <div className="container header-content">
-        <Link
-          href="/"
-          className="logo-section"
-          style={{
-            display: 'flex',
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: '12px',
-            textDecoration: 'none',
-            flexWrap: 'nowrap',
-          }}
-        >
-          <div
-            className="logo-img-box"
-            style={{
-              width: '40px',
-              height: '40px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-            }}
-          >
-            <img
-              src="/logo-dai-thanh.png"
-              alt={resolvedBrandText}
-              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-            />
+        <Link href="/" className="logo-section">
+          <div className="logo-img-box">
+            <img src={resolvedLogoUrl} alt={resolvedBrandText} className="logo-img" />
           </div>
-          <div
-            className="logo-text"
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'center',
-              borderLeft: '1.5px solid rgba(197, 160, 89, 0.4)',
-              paddingLeft: '12px',
-              flexShrink: 0,
-            }}
-          >
-            <h1
-              className="logo-title"
-              style={{
-                fontFamily: 'var(--font-display)',
-                fontSize: '18px',
-                fontWeight: '600',
-                color: 'var(--primary)',
-                margin: '0',
-                whiteSpace: 'nowrap',
-                textTransform: 'uppercase',
-                lineHeight: '1.1',
-                letterSpacing: '0.02em',
-              }}
-            >
-              {resolvedBrandText}
-            </h1>
-            <span
-              className="logo-subtitle"
-              style={{
-                fontFamily: 'var(--font-body)',
-                fontSize: '10px',
-                textTransform: 'uppercase',
-                letterSpacing: '0.3em',
-                color: 'var(--accent)',
-                fontWeight: '600',
-                marginTop: '2px',
-                lineHeight: '1',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              TINH HOA ĐẤT VIỆT
-            </span>
+          <div className="logo-text">
+            <h1 className="logo-title">{resolvedBrandText}</h1>
+            <span className="logo-subtitle">TINH HOA ĐẤT VIỆT</span>
           </div>
         </Link>
 
@@ -120,28 +82,20 @@ export default function Header({
           <ul className="nav-list">
             {menuItems.length > 0 ? (
               menuItems.map((item) => (
-                <li key={item.id} className="nav-item">
-                  <Link href={item.url || '#'} className="nav-link">
-                    {item.title}
-                  </Link>
+                <li key={item.id || item.url || item.link} className="nav-item">
+                  {renderNavLink(item)}
                 </li>
               ))
             ) : (
               <>
                 <li className="nav-item">
-                  <Link href="/products" className="nav-link">
-                    SẢN PHẨM
-                  </Link>
+                  <Link href="/products" className="nav-link">SẢN PHẨM</Link>
                 </li>
                 <li className="nav-item">
-                  <Link href="/collections" className="nav-link">
-                    BỘ SƯU TẬP
-                  </Link>
+                  <Link href="/blog" className="nav-link">TIN TỨC</Link>
                 </li>
                 <li className="nav-item">
-                  <Link href="/blog" className="nav-link">
-                    TIN TỨC
-                  </Link>
+                  <Link href="/stores" className="nav-link">CỬA HÀNG</Link>
                 </li>
               </>
             )}
@@ -150,13 +104,7 @@ export default function Header({
 
         <div className="actions-section">
           <div className="search-bar">
-            <span
-              className="material-symbols-outlined search-icon"
-              onClick={handleSearch}
-              style={{ cursor: 'pointer' }}
-            >
-              search
-            </span>
+            <span className="material-symbols-outlined search-icon" onClick={handleSearch}>search</span>
             <input
               type="text"
               placeholder={resolvedSearchPlaceholder}
@@ -167,42 +115,12 @@ export default function Header({
             />
           </div>
 
-          <Link href="/cart" className={`cart-action ${isBouncing ? 'bounce-cart' : ''}`}>
-            <span
-              className="material-symbols-outlined cart-icon"
-              style={{ fontSize: '32px', color: '#1a2c4e', marginRight: '8px' }}
-            >
-              shopping_cart
-            </span>
+          <Link href="/cart" className={`cart-action ${isBouncing ? "bounce-cart" : ""}`}>
+            <span className="material-symbols-outlined cart-icon">shopping_cart</span>
             <div className="cart-text">
-              <span
-                style={{
-                  display: 'block',
-                  color: '#3b82f6',
-                  fontWeight: '700',
-                  fontSize: '15px',
-                  lineHeight: '1.2',
-                }}
-              >
-                Giỏ hàng
-              </span>
-              <span
-                style={{
-                  display: 'block',
-                  color: '#64748b',
-                  fontSize: '13px',
-                  whiteSpace: 'nowrap',
-                  marginTop: '2px',
-                }}
-              >
-                Có{' '}
-                <strong
-                  className={isBouncing ? 'bounce-text' : ''}
-                  style={{ color: '#ef4444', transition: 'all 0.3s' }}
-                >
-                  {mounted ? cartCount : 0}
-                </strong>{' '}
-                sản phẩm
+              <span className="cart-title">Giỏ hàng</span>
+              <span className="cart-subtitle">
+                Có <strong className={isBouncing ? "bounce-text" : ""}>{mounted ? cartCount : 0}</strong> sản phẩm
               </span>
             </div>
           </Link>
@@ -234,11 +152,9 @@ export default function Header({
         }
 
         .logo-section {
-          display: flex !important;
-          flex-direction: row !important;
-          flex-wrap: nowrap !important;
-          align-items: center !important;
-          gap: 12px !important;
+          display: flex;
+          align-items: center;
+          gap: 12px;
           text-decoration: none;
           color: inherit;
           flex-shrink: 0;
@@ -247,12 +163,14 @@ export default function Header({
         .logo-img-box {
           width: 40px;
           height: 40px;
-          display: flex !important;
+          display: flex;
           align-items: center;
           justify-content: center;
           overflow: hidden;
           transition: transform 0.3s ease;
           flex-shrink: 0;
+          background: #fff;
+          border-radius: 8px;
         }
 
         .logo-img {
@@ -266,8 +184,8 @@ export default function Header({
         }
 
         .logo-text {
-          display: flex !important;
-          flex-direction: column !important;
+          display: flex;
+          flex-direction: column;
           justify-content: center;
           border-left: 2px solid rgba(197, 160, 89, 0.4);
           padding-left: 12px;
@@ -340,6 +258,7 @@ export default function Header({
           left: 12px;
           color: #94a3b8;
           font-size: 20px !important;
+          cursor: pointer;
         }
 
         .search-input {
@@ -363,6 +282,29 @@ export default function Header({
           text-decoration: none;
           display: flex;
           align-items: center;
+          color: inherit;
+        }
+
+        .cart-icon {
+          font-size: 32px;
+          color: #1a2c4e;
+          margin-right: 8px;
+        }
+
+        .cart-title {
+          display: block;
+          color: #3b82f6;
+          font-weight: 700;
+          font-size: 15px;
+          line-height: 1.2;
+        }
+
+        .cart-subtitle {
+          display: block;
+          color: #64748b;
+          font-size: 13px;
+          white-space: nowrap;
+          margin-top: 2px;
         }
 
         .bounce-text {
@@ -375,43 +317,28 @@ export default function Header({
         }
 
         @keyframes badgeBounce {
-          0% {
-            transform: scale(1);
-          }
-          50% {
-            transform: scale(1.4);
-            background-color: #d4af37;
-          }
-          100% {
-            transform: scale(1);
-          }
+          0% { transform: scale(1); }
+          50% { transform: scale(1.4); }
+          100% { transform: scale(1); }
         }
 
         @keyframes cartShake {
-          0% {
-            transform: rotate(0deg) scale(1);
-          }
-          25% {
-            transform: rotate(-15deg) scale(1.2);
-          }
-          50% {
-            transform: rotate(15deg) scale(1.2);
-          }
-          75% {
-            transform: rotate(-5deg) scale(1.1);
-          }
-          100% {
-            transform: rotate(0deg) scale(1);
-          }
+          0% { transform: rotate(0deg) scale(1); }
+          25% { transform: rotate(-15deg) scale(1.2); }
+          50% { transform: rotate(15deg) scale(1.2); }
+          75% { transform: rotate(-5deg) scale(1.1); }
+          100% { transform: rotate(0deg) scale(1); }
         }
 
         @media (max-width: 1024px) {
           .main-nav {
             display: none;
           }
+
           .search-input {
             width: 180px;
           }
+
           .search-input:focus {
             width: 220px;
           }

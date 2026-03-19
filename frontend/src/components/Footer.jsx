@@ -1,84 +1,105 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { cmsApi } from '../services/api';
+import { buildFooterConfig } from '../utils/footerSettings';
 
 const Footer = () => {
-    const [settings, setSettings] = useState({
-        footer_brand_logo: '/logo.png',
-        footer_brand_desc: 'Tôn vinh nét đẹp văn hóa truyền thống qua từng đường nét gốm sứ thủ công tinh xảo.',
-        footer_column_1_title: 'Khám Phá',
-        footer_column_2_title: 'Hỗ Trợ',
-        footer_social_instagram: '#',
-        footer_social_facebook: '#',
-        footer_social_pinterest: '#',
-        footer_text: '© 2024 Gốm Sứ Đại Thành. Bảo lưu mọi quyền.'
-    });
+    const [footerConfig, setFooterConfig] = useState(buildFooterConfig({}));
 
     useEffect(() => {
         const fetchSettings = async () => {
             try {
                 const response = await cmsApi.settings.get();
-                if (response.data) {
-                    setSettings(prev => ({ ...prev, ...response.data }));
-                }
+                setFooterConfig(buildFooterConfig(response.data || {}));
             } catch (error) {
-                console.error("Error fetching footer settings", error);
+                console.error('Error fetching footer settings', error);
             }
         };
+
         fetchSettings();
     }, []);
+
+    const {
+        logoUrl,
+        brandText,
+        description,
+        hotline,
+        email,
+        address,
+        copyrightText,
+        newsletterPlaceholder,
+        activeGroups,
+    } = footerConfig;
 
     return (
         <footer className="bg-primary text-background-light pt-20 pb-10 px-6 lg:px-12 border-t-4 border-gold">
             <div className="container mx-auto">
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
-                    {/* Brand */}
-                    <div className="col-span-1 md:col-span-1 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-[minmax(0,1.35fr)_repeat(3,minmax(0,1fr))] gap-12 mb-16">
+                    <div className="space-y-5">
                         <div className="flex items-center gap-3">
-                            <img src={settings.footer_brand_logo || "/logo.png"} alt="Logo" className="h-12 rounded-sm bg-white p-1" />
-                            <span className="font-display text-xl font-bold uppercase tracking-wider">{settings.site_name || "Gốm Sứ Đại Thành"}</span>
+                            <img src={logoUrl || '/logo.png'} alt={brandText} className="h-12 rounded-sm bg-white p-1 object-contain" />
+                            <span className="font-display text-xl font-bold uppercase tracking-wider">{brandText}</span>
                         </div>
+
                         <p className="font-body text-stone/80 text-lg leading-relaxed">
-                            {settings.footer_brand_desc}
+                            {description}
                         </p>
+
+                        <div className="space-y-2 font-ui text-sm text-stone/80">
+                            {hotline ? (
+                                <a href={`tel:${hotline}`} className="flex items-center gap-2 hover:text-gold transition-colors">
+                                    <span className="material-symbols-outlined text-[18px] text-gold">call</span>
+                                    {hotline}
+                                </a>
+                            ) : null}
+
+                            {email ? (
+                                <a href={`mailto:${email}`} className="flex items-center gap-2 hover:text-gold transition-colors">
+                                    <span className="material-symbols-outlined text-[18px] text-gold">mail</span>
+                                    {email}
+                                </a>
+                            ) : null}
+
+                            {address ? (
+                                <div className="flex items-start gap-2">
+                                    <span className="material-symbols-outlined text-[18px] text-gold mt-0.5">location_on</span>
+                                    <span>{address}</span>
+                                </div>
+                            ) : null}
+                        </div>
                     </div>
-                    {/* Links 1 */}
+
+                    {activeGroups.map((group) => (
+                        <div key={group.id}>
+                            <h4 className="font-ui font-bold uppercase tracking-widest text-gold text-sm mb-6">{group.title}</h4>
+                            <ul className="space-y-3 font-ui text-sm">
+                                {group.items.map((item) => (
+                                    <li key={item.id}>
+                                        <a className="hover:text-gold transition-colors" href={item.link || '#'}>
+                                            {item.label}
+                                        </a>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    ))}
+
                     <div>
-                        <h4 className="font-ui font-bold uppercase tracking-widest text-gold text-sm mb-6">{settings.footer_column_1_title}</h4>
-                        <ul className="space-y-3 font-ui text-sm">
-                            <li><a className="hover:text-gold transition-colors" href="/about">Về Chúng Tôi</a></li>
-                            <li><a className="hover:text-gold transition-colors" href="#">Nghệ Nhân</a></li>
-                            <li><a className="hover:text-gold transition-colors" href="#">Blog Di Sản</a></li>
-                            <li><a className="hover:text-gold transition-colors" href="#">Tuyển Dụng</a></li>
-                        </ul>
-                    </div>
-                    {/* Links 2 */}
-                    <div>
-                        <h4 className="font-ui font-bold uppercase tracking-widest text-gold text-sm mb-6">{settings.footer_column_2_title}</h4>
-                        <ul className="space-y-3 font-ui text-sm">
-                            <li><a className="hover:text-gold transition-colors" href="#">Chính Sách Vận Chuyển</a></li>
-                            <li><a className="hover:text-gold transition-colors" href="#">Đổi Trả & Bảo Hành</a></li>
-                            <li><a className="hover:text-gold transition-colors" href="#">Hướng Dẫn Mua Hàng</a></li>
-                            <li><a className="hover:text-gold transition-colors" href="/contact">Liên Hệ</a></li>
-                        </ul>
-                    </div>
-                    {/* Newsletter */}
-                    <div>
-                        <h4 className="font-ui font-bold uppercase tracking-widest text-gold text-sm mb-6">Bản Tin</h4>
-                        <p className="font-body text-stone/80 text-sm mb-4">Nhận thông tin về các bộ sưu tập mới nhất.</p>
+                        <h4 className="font-ui font-bold uppercase tracking-widest text-gold text-sm mb-6">Bản tin</h4>
+                        <p className="font-body text-stone/80 text-sm mb-4">Nhận thông tin về các bộ sưu tập mới nhất và ưu đãi đặc quyền.</p>
                         <div className="flex border-b border-gold py-2">
-                            <input type="email" placeholder="Email của bạn..." className="bg-transparent border-none text-white placeholder-stone/50 focus:ring-0 w-full" />
+                            <input type="email" placeholder={newsletterPlaceholder} className="bg-transparent border-none text-white placeholder-stone/50 focus:ring-0 w-full outline-none" />
                             <button className="text-gold hover:text-white transition-colors">
                                 <span className="material-symbols-outlined">east</span>
                             </button>
                         </div>
                     </div>
                 </div>
-                <div className="flex flex-col md:flex-row justify-between items-center pt-8 border-t border-white/10 text-stone/60 font-ui text-xs">
-                    <p>{settings.footer_text}</p>
-                    <div className="flex gap-6 mt-4 md:mt-0">
-                        <a href={settings.footer_social_instagram} target="_blank" rel="noreferrer" className="hover:text-gold transition-colors">Instagram</a>
-                        <a href={settings.footer_social_facebook} target="_blank" rel="noreferrer" className="hover:text-gold transition-colors">Facebook</a>
-                        <a href={settings.footer_social_pinterest} target="_blank" rel="noreferrer" className="hover:text-gold transition-colors">Pinterest</a>
+
+                <div className="flex flex-col md:flex-row justify-between items-center pt-8 border-t border-white/10 text-stone/60 font-ui text-xs gap-3">
+                    <p>{copyrightText}</p>
+                    <div className="flex gap-6 flex-wrap justify-center">
+                        {hotline ? <a href={`tel:${hotline}`} className="hover:text-gold transition-colors">Hotline</a> : null}
+                        {email ? <a href={`mailto:${email}`} className="hover:text-gold transition-colors">Email</a> : null}
                     </div>
                 </div>
             </div>

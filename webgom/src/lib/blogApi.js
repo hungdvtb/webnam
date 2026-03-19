@@ -17,7 +17,10 @@ export async function getBlogPosts(params = {}) {
 }
 
 export async function getBlogPost(id) {
-  const res = await fetch(`${config.apiUrl}/blog/${id}`, {
+  const slugOrId = encodeURIComponent(String(id ?? ''));
+  if (!slugOrId) return null;
+
+  const res = await fetch(`${config.apiUrl}/blog/${slugOrId}`, {
     headers: { 'Accept': 'application/json', 'X-Site-Code': config.siteCode },
     next: { revalidate: 60 },
   });

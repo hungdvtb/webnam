@@ -142,11 +142,22 @@ class OrderController extends Controller
     public function store(Request $request)
     {
         $accountId = $request->header('X-Account-Id');
+        $request->validate([
+            'lead_id' => 'nullable|integer|exists:leads,id',
+        ]);
         
         // Use shorter log or skip if heavy
         \Illuminate\Support\Facades\Log::info('Order Store Attempt', ['account_id' => $accountId, 'customer' => $request->customer_phone]);
 
         return DB::transaction(function () use ($request, $accountId) {
+            $lead = null;
+            if ($request->filled('lead_id')) {
+                $lead = \App\Models\Lead::query()
+                    ->where('account_id', $accountId)
+                    ->with('statusConfig')
+                    ->findOrFail((int) $request->lead_id);
+            }
+
             $items = [];
             $totalPrice = 0;
 
@@ -203,6 +214,7 @@ class OrderController extends Controller
                 'user_id' => Auth::id(),
                 'account_id' => $accountId,
                 'customer_id' => $customer->id,
+                'lead_id' => $lead?->id,
                 'order_number' => $this->generateOrderNumber($accountId),
                 'total_price' => $totalPrice,
                 'status' => $request->status ?? (\App\Models\OrderStatus::where('account_id', $accountId)->where('is_default', true)->value('code') ?: 'new'),
@@ -286,6 +298,33 @@ class OrderController extends Controller
 
             if (!$request->has('items')) {
                 Cart::where('user_id', Auth::id())->first()?->items()->delete();
+            }
+
+            if ($lead) {
+                $createdStatus = \App\Models\LeadStatus::query()
+                    ->where('account_id', $accountId)
+                    ->where('code', 'da-tao-don')
+                    ->first();
+
+                $lead->update([
+                    'order_id' => $order->id,
+                    'lead_status_id' => $createdStatus?->id ?? $lead->lead_status_id,
+                    'status' => $createdStatus?->code ?? 'da-tao-don',
+                    'status_changed_at' => now(),
+                ]);
+
+                \App\Models\LeadNote::create([
+                    'account_id' => $accountId,
+                    'lead_id' => $lead->id,
+                    'user_id' => Auth::id(),
+                    'staff_name' => Auth::user()?->name ?? 'Nhân viên',
+                    'content' => 'Đã tạo đơn hàng ' . $order->order_number,
+                ]);
+
+                $lead->forceFill([
+                    'latest_note_excerpt' => 'Đã tạo đơn hàng ' . $order->order_number,
+                    'last_noted_at' => now(),
+                ])->save();
             }
 
             return response()->json($order->load(['items', 'customer', 'attributeValues']), 201);

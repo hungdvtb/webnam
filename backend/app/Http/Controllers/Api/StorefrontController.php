@@ -6,13 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\Category;
 use App\Models\Banner;
-use App\Models\Lead;
-use App\Models\Order;
-use App\Models\OrderItem;
-use App\Models\Customer;
 use App\Models\ProductReview;
+use App\Services\Leads\LeadCaptureService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
 
 class StorefrontController extends Controller
 {
@@ -402,74 +398,31 @@ class StorefrontController extends Controller
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.options' => 'nullable|array',
+            'items.*.product_url' => 'nullable|string|max:2000',
+            'items.*.product_slug' => 'nullable|string|max:255',
+            'items.*.product_name' => 'nullable|string|max:255',
+            'items.*.product_sku' => 'nullable|string|max:120',
+            'landing_url' => 'nullable|string|max:2000',
+            'current_url' => 'nullable|string|max:2000',
+            'referrer' => 'nullable|string|max:2000',
+            'utm_source' => 'nullable|string|max:255',
+            'utm_medium' => 'nullable|string|max:255',
+            'utm_campaign' => 'nullable|string|max:255',
+            'utm_content' => 'nullable|string|max:255',
+            'utm_term' => 'nullable|string|max:255',
+            'raw_query' => 'nullable|string|max:2000',
         ]);
 
-        $accountId = $request->header('X-Account-Id');
-
-        // Find or create customer
-        $customer = Customer::firstOrCreate(
-            ['phone' => $request->phone, 'account_id' => $accountId],
-            [
-                'name' => $request->customer_name,
-                'email' => $request->email,
-                'address' => $request->address,
-            ]
-        );
-
-        // Calculate totals
-        $totalPrice = 0;
-        $totalCost = 0;
-        $orderItems = [];
-
-        foreach ($request->items as $item) {
-            $product = Product::findOrFail($item['product_id']);
-            $price = $product->current_price;
-            $qty = $item['quantity'];
-            $totalPrice += $price * $qty;
-            $totalCost += ($product->cost_price ?? 0) * $qty;
-
-            $orderItems[] = [
-                'product_id' => $product->id,
-                'product_name_snapshot' => $product->name,
-                'product_sku_snapshot' => $product->sku,
-                'quantity' => $qty,
-                'price' => $price,
-                'cost_price' => $product->cost_price ?? 0,
-                'options' => $item['options'] ?? null,
-                'account_id' => $accountId,
-            ];
-        }
-
-        // Create order
-        $order = Order::create([
-            'order_number' => 'WEB-' . strtoupper(Str::random(8)),
-            'customer_name' => $request->customer_name,
-            'customer_phone' => $request->phone,
-            'customer_email' => $request->email ?? '',
-            'shipping_address' => $request->address,
-            'district' => $request->district,
-            'ward' => $request->ward,
-            'notes' => $request->notes,
-            'total_price' => $totalPrice,
-            'cost_total' => $totalCost,
-            'status' => 'new',
-            'source' => $request->source ?? 'website',
-            'type' => 'website',
-            'account_id' => $accountId,
-            'customer_id' => $customer->id,
-        ]);
-
-        foreach ($orderItems as $item) {
-            $order->items()->create($item);
-        }
+        $lead = app(LeadCaptureService::class)->createWebsiteOrderLead($request);
 
         return response()->json([
             'success' => true,
-            'order_number' => $order->order_number,
-            'message' => 'Đặt hàng thành công! Chúng tôi sẽ liên hệ bạn sớm nhất.',
+            'order_number' => $lead->lead_number,
+            'lead_number' => $lead->lead_number,
+            'lead_id' => $lead->id,
+            'message' => '??t h?ng th?nh c?ng! ??n ?? ???c ??a v?o b?ng x? l? lead, ch?ng t?i s? li?n h? b?n s?m nh?t.',
         ], 201);
     }
-
     /**
      * POST /api/storefront/lead
      * Public: Gửi yêu cầu tư vấn
@@ -481,38 +434,33 @@ class StorefrontController extends Controller
             'phone' => 'required|string|max:20',
             'email' => 'nullable|email|max:255',
             'product_id' => 'nullable|exists:products,id',
+            'product_name' => 'nullable|string|max:255',
             'message' => 'nullable|string|max:2000',
             'source' => 'nullable|string|max:50',
+            'landing_url' => 'nullable|string|max:2000',
+            'current_url' => 'nullable|string|max:2000',
+            'referrer' => 'nullable|string|max:2000',
+            'utm_source' => 'nullable|string|max:255',
+            'utm_medium' => 'nullable|string|max:255',
+            'utm_campaign' => 'nullable|string|max:255',
+            'utm_content' => 'nullable|string|max:255',
+            'utm_term' => 'nullable|string|max:255',
+            'raw_query' => 'nullable|string|max:2000',
         ]);
 
-        $accountId = $request->header('X-Account-Id');
-        $productName = null;
-        if ($request->product_id) {
-            $productName = Product::find($request->product_id)?->name;
+        if (!$request->filled('product_name') && $request->filled('product_id')) {
+            $request->merge([
+                'product_name' => Product::find($request->product_id)?->name,
+            ]);
         }
 
-        Lead::create([
-            'account_id' => $accountId,
-            'customer_name' => $request->customer_name,
-            'phone' => $request->phone,
-            'email' => $request->email,
-            'product_id' => $request->product_id,
-            'product_name' => $productName,
-            'message' => $request->message,
-            'source' => $request->source ?? 'website',
-            'utm_source' => $request->utm_source,
-            'utm_medium' => $request->utm_medium,
-            'utm_campaign' => $request->utm_campaign,
-            'ip_address' => $request->ip(),
-            'user_agent' => $request->userAgent(),
-        ]);
+        app(LeadCaptureService::class)->createGenericLead($request);
 
         return response()->json([
             'success' => true,
-            'message' => 'Cảm ơn bạn! Chúng tôi sẽ liên hệ tư vấn trong thời gian sớm nhất.',
+            'message' => 'C?m on b?n! Ch�ng t�i s? li�n h? tu v?n trong th?i gian s?m nh?t.',
         ], 201);
     }
-
     /**
      * Build category tree from flat collection
      */
@@ -547,3 +495,5 @@ class StorefrontController extends Controller
         return $tree;
     }
 }
+
+

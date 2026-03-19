@@ -4,6 +4,7 @@ import api from '../services/api';
 import TrackingScripts, { trackLead } from '../components/TrackingScripts';
 import { buildHeaderConfig } from '../utils/headerSettings';
 import { buildFooterConfig } from '../utils/footerSettings';
+import { rememberLeadAttribution } from '../utils/leadAttribution';
 
 const StickyActionBar = ({ phone, messengerUrl }) => (
     <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-stone-200 bg-white/95 shadow-[0_-4px_20px_rgba(0,0,0,0.08)] backdrop-blur-xl md:hidden">
@@ -308,6 +309,8 @@ const StorefrontLayout = () => {
     const [footerConfig, setFooterConfig] = useState(buildFooterConfig({}));
 
     useEffect(() => {
+        rememberLeadAttribution();
+
         const load = async () => {
             try {
                 const [catRes, settingRes] = await Promise.all([

@@ -29,6 +29,7 @@ export function CartProvider({ children }) {
   }, [cartItems, isInitialized]);
 
   const addToCart = (product, quantity = 1, options = {}, groupedItems = [], finalPrice = null) => {
+    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
     setCartItems(prev => {
       // Create a unique key for the item based on product ID, options, and grouped items
       const itemKey = `${product.id}-${JSON.stringify(options)}-${JSON.stringify(groupedItems.map(i => i.id).sort())}`;
@@ -48,6 +49,7 @@ export function CartProvider({ children }) {
         name: product.name,
         slug: product.slug,
         sku: product.sku,
+        productUrl: currentUrl,
         price: finalPrice || product.price,
         originalPrice: finalPrice || product.price,
         image: product.primary_image || (product.images && product.images[0]),

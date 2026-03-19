@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './layouts/Layout';
 import Home from './pages/Home';
 import Shop from './pages/Shop';
@@ -32,7 +32,6 @@ import AccountList from './pages/admin/AccountList';
 import WarehouseList from './pages/admin/WarehouseList';
 import ShipmentList from './pages/admin/ShipmentList';
 import OrderList from './pages/admin/OrderList';
-import PendingOrderList from './pages/admin/PendingOrderList';
 import OrderDetail from './pages/admin/OrderDetail';
 import OrderForm from './pages/admin/OrderForm';
 import InventoryMovement from './pages/admin/InventoryMovement';
@@ -127,6 +126,8 @@ function App() {
 
               <Route path="/cam-on" element={<OrderThankYou />} />
               <Route path="/old/cam-on" element={<OrderThankYou />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/register" element={<Register />} />
 
               <Route path="/admin" element={<AdminLayout />}>
                 <Route index element={<AdminDashboard />} />
@@ -139,7 +140,7 @@ function App() {
                 <Route path="accounts" element={<AccountList />} />
                 <Route path="warehouses" element={<WarehouseList />} />
                 <Route path="shipments" element={<ShipmentList />} />
-                <Route path="pending-orders" element={<PendingOrderList />} />
+                <Route path="pending-orders" element={<Navigate to="/admin/leads" replace />} />
                 <Route path="orders" element={<OrderList />} />
                 <Route path="orders/new" element={<OrderForm />} />
                 <Route path="orders/edit/:id" element={<OrderForm />} />

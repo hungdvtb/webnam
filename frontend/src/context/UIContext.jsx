@@ -55,7 +55,8 @@ export const UIProvider = ({ children }) => {
     const value = useMemo(() => ({
         showModal,
         hideModal,
-        showToast
+        showToast,
+        showNotification: showToast
     }), [showModal, hideModal, showToast]);
 
     return (

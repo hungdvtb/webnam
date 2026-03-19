@@ -156,8 +156,27 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Leads / KhÃ¡ch liÃªn há»‡ tÆ° váº¥n
     Route::get('/leads', [\App\Http\Controllers\Api\LeadController::class , 'index']);
+    Route::get('/leads/realtime', [\App\Http\Controllers\Api\LeadController::class , 'realtime']);
+    Route::get('/leads/{id}', [\App\Http\Controllers\Api\LeadController::class , 'show']);
+    Route::get('/leads/{id}/notes', [\App\Http\Controllers\Api\LeadController::class , 'notes']);
+    Route::post('/leads/{id}/notes', [\App\Http\Controllers\Api\LeadController::class , 'storeNote']);
+    Route::get('/leads/{id}/order-draft', [\App\Http\Controllers\Api\LeadController::class , 'orderDraft']);
     Route::put('/leads/{id}', [\App\Http\Controllers\Api\LeadController::class , 'update']);
     Route::delete('/leads/{id}', [\App\Http\Controllers\Api\LeadController::class , 'destroy']);
+    Route::get('/lead-statuses', [\App\Http\Controllers\Api\LeadStatusController::class , 'index']);
+    Route::post('/lead-statuses', [\App\Http\Controllers\Api\LeadStatusController::class , 'store']);
+    Route::put('/lead-statuses/{id}', [\App\Http\Controllers\Api\LeadStatusController::class , 'update']);
+    Route::post('/lead-statuses/reorder', [\App\Http\Controllers\Api\LeadStatusController::class , 'reorder']);
+    Route::delete('/lead-statuses/{id}', [\App\Http\Controllers\Api\LeadStatusController::class , 'destroy']);
+    Route::get('/lead-staffs', [\App\Http\Controllers\Api\LeadStaffController::class , 'index']);
+    Route::post('/lead-staffs', [\App\Http\Controllers\Api\LeadStaffController::class , 'store']);
+    Route::put('/lead-staffs/{id}', [\App\Http\Controllers\Api\LeadStaffController::class , 'update']);
+    Route::post('/lead-staffs/reorder', [\App\Http\Controllers\Api\LeadStaffController::class , 'reorder']);
+    Route::delete('/lead-staffs/{id}', [\App\Http\Controllers\Api\LeadStaffController::class , 'destroy']);
+    Route::get('/lead-tag-rules', [\App\Http\Controllers\Api\LeadTagRuleController::class , 'index']);
+    Route::post('/lead-tag-rules', [\App\Http\Controllers\Api\LeadTagRuleController::class , 'store']);
+    Route::put('/lead-tag-rules/{id}', [\App\Http\Controllers\Api\LeadTagRuleController::class , 'update']);
+    Route::delete('/lead-tag-rules/{id}', [\App\Http\Controllers\Api\LeadTagRuleController::class , 'destroy']);
 
 
     // Inventory & Logistics expansion
@@ -294,3 +313,4 @@ Route::group(['prefix' => 'web-api'], function () {
     Route::get('/categories', [\App\Http\Controllers\StorefrontApi\CategoryController::class, 'index']);
     Route::get('/categories/{slug}', [\App\Http\Controllers\StorefrontApi\CategoryController::class, 'show']);
 });
+

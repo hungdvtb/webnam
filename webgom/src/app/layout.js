@@ -4,6 +4,7 @@ import Footer from "@/components/Footer";
 import { getActiveMenu, getWebSiteSettings } from "@/lib/api";
 import { CartProvider } from "@/context/CartContext";
 import TrackingScripts from "@/components/common/TrackingScripts";
+import LeadAttributionTracker from "@/components/common/LeadAttributionTracker";
 
 const DEFAULT_TOP_NOTICE = "MIỄN PHÍ VẬN CHUYỂN TOÀN QUỐC CHO ĐƠN HÀNG TỪ 500.000Đ";
 const DEFAULT_BRAND_TEXT = "GỐM ĐẠI THÀNH";
@@ -167,6 +168,7 @@ export default async function RootLayout({ children }) {
         <TrackingScripts settings={settings} />
       </head>
       <body>
+        <LeadAttributionTracker />
         <div className="top-promotion-bar">{topNoticeText}</div>
         <CartProvider>
           <Header

@@ -6,6 +6,7 @@ import Image from 'next/image';
 import { useCart } from '@/context/CartContext';
 import config from '@/lib/config';
 import { placeWebOrder, getWebSiteSettings } from '@/lib/api';
+import { rememberLeadAttribution } from '@/lib/leadAttribution';
 import SearchableSelect from '@/components/ui/SearchableSelect';
 import styles from './cart.module.css';
 import ThankYouView from '@/components/common/ThankYouView';
@@ -224,6 +225,7 @@ export default function CartPage() {
 
     setIsSubmitting(true);
     try {
+      const attribution = rememberLeadAttribution();
       const fullAddress = [formData.address, formData.ward, formData.district, formData.province]
         .filter(Boolean).join(', ');
       const orderData = {
@@ -231,11 +233,25 @@ export default function CartPage() {
         address: fullAddress,
         discount,
         total: totalAfterDiscount,
+        landing_url: attribution.landing_url || attribution.first_url || window.location.href,
+        current_url: window.location.href,
+        referrer: attribution.referrer || document.referrer || '',
+        utm_source: attribution.utm_source || '',
+        utm_medium: attribution.utm_medium || '',
+        utm_campaign: attribution.utm_campaign || '',
+        utm_content: attribution.utm_content || '',
+        utm_term: attribution.utm_term || '',
+        raw_query: attribution.raw_query || '',
         items: cartItems.map(item => ({
           product_id: item.id,
           quantity: item.quantity,
           options: item.options,
-          sub_items: item.groupedItems?.map(gi => ({ id: gi.id, qty: gi.qty || 1 }))
+          sub_items: item.groupedItems?.map(gi => ({ id: gi.id, qty: gi.qty || 1 })),
+          product_name: item.name,
+          product_sku: item.sku,
+          product_slug: item.slug,
+          product_url: item.productUrl || `${window.location.origin}/product/${item.slug || item.id}`,
+          unit_price: item.price,
         }))
       };
       const response = await placeWebOrder(orderData);

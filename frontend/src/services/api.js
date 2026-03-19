@@ -107,6 +107,31 @@ export const orderApi = {
     bulkUpdate: (data) => api.post('/orders/bulk-update', data),
 };
 
+export const leadApi = {
+    getAll: (params) => api.get('/leads', { params }),
+    getOne: (id) => api.get(`/leads/${id}`),
+    update: (id, data) => api.put(`/leads/${id}`, data),
+    destroy: (id) => api.delete(`/leads/${id}`),
+    realtime: (params) => api.get('/leads/realtime', { params }),
+    getNotes: (id) => api.get(`/leads/${id}/notes`),
+    addNote: (id, data) => api.post(`/leads/${id}/notes`, data),
+    getOrderDraft: (id) => api.get(`/leads/${id}/order-draft`),
+    getStatuses: () => api.get('/lead-statuses'),
+    createStatus: (data) => api.post('/lead-statuses', data),
+    updateStatusConfig: (id, data) => api.put(`/lead-statuses/${id}`, data),
+    reorderStatuses: (ids) => api.post('/lead-statuses/reorder', { ids }),
+    deleteStatusConfig: (id) => api.delete(`/lead-statuses/${id}`),
+    getStaffs: () => api.get('/lead-staffs'),
+    createStaff: (data) => api.post('/lead-staffs', data),
+    updateStaff: (id, data) => api.put(`/lead-staffs/${id}`, data),
+    reorderStaffs: (ids) => api.post('/lead-staffs/reorder', { ids }),
+    deleteStaff: (id) => api.delete(`/lead-staffs/${id}`),
+    getTagRules: () => api.get('/lead-tag-rules'),
+    createTagRule: (data) => api.post('/lead-tag-rules', data),
+    updateTagRule: (id, data) => api.put(`/lead-tag-rules/${id}`, data),
+    deleteTagRule: (id) => api.delete(`/lead-tag-rules/${id}`),
+};
+
 export const orderStatusApi = {
     getAll: (params) => api.get('/order-statuses', params ? { params } : {}),
     getOne: (id) => api.get(`/order-statuses/${id}`),

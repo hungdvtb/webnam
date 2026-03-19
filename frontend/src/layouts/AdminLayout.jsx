@@ -35,7 +35,7 @@ const AdminLayout = () => {
     }
 
     if (!user) {
-        return <Navigate to="/login" replace />;
+        return <Navigate to="/old/login" replace />;
     }
 
     const canAccess = (permId) => {
@@ -189,10 +189,10 @@ const AdminLayout = () => {
                                     {canAccess('orders') && (
                                         <>
                                             <Link 
-                                                to="/admin/pending-orders" 
-                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/pending-orders' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
+                                                to="/admin/leads" 
+                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/leads' || location.pathname === '/admin/pending-orders' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
                                             >
-                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/pending-orders' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>pending_actions</span>
+                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/leads' || location.pathname === '/admin/pending-orders' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>pending_actions</span>
                                                 <span className="font-sans text-xs font-medium tracking-wide">Xử lý lead</span>
                                             </Link>
                                             <Link 

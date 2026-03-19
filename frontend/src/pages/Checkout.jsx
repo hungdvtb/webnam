@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
-import { orderApi, couponApi } from '../services/api';
+import api, { couponApi } from '../services/api';
 import { VN_REGIONS } from '../data/regions';
 import SearchableSelect from '../components/SearchableSelect';
+import { rememberLeadAttribution } from '../utils/leadAttribution';
 import {
     buildRegionPath,
     buildShippingAddress,
@@ -135,10 +136,35 @@ const Checkout = () => {
         setLoading(true);
         setError('');
         try {
+            const attribution = rememberLeadAttribution();
             const data = {
                 ...formData,
+                phone: formData.customer_phone,
+                email: formData.customer_email,
+                address: formData.shipping_address,
                 coupon_id: couponData?.id,
                 discount_amount: discountAmount,
+                discount: discountAmount,
+                total: finalTotal,
+                landing_url: attribution.landing_url || attribution.first_url || window.location.href,
+                current_url: window.location.href,
+                referrer: attribution.referrer || document.referrer || '',
+                utm_source: attribution.utm_source || '',
+                utm_medium: attribution.utm_medium || '',
+                utm_campaign: attribution.utm_campaign || '',
+                utm_content: attribution.utm_content || '',
+                utm_term: attribution.utm_term || '',
+                raw_query: attribution.raw_query || '',
+                items: cart.items.map(item => ({
+                    product_id: item.product_id,
+                    quantity: item.quantity,
+                    options: item.options || null,
+                    product_name: item.product?.name || '',
+                    product_sku: item.product?.sku || '',
+                    product_slug: item.product?.slug || '',
+                    product_url: `${window.location.origin}/old/details/${item.product_id}`,
+                    unit_price: item.price,
+                })),
                 custom_attributes: {
                     region_type: regionType === 'new' ? 'Địa giới mới' : 'Địa giới cũ',
                     full_region_path: buildRegionPath({
@@ -160,7 +186,7 @@ const Checkout = () => {
             }));
             const orderItemCount = cart.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
 
-            const response = await orderApi.store(data);
+            const response = await api.post('/storefront/order', data);
             await refreshCart();
             navigate(`/old/cam-on?order=${encodeURIComponent(response.data.order_number)}`, {
                 replace: true,

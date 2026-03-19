@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import api, { cmsApi, orderApi, productApi, attributeApi, orderStatusApi, quoteTemplateApi } from '../../services/api';
+import api, { cmsApi, orderApi, productApi, attributeApi, orderStatusApi, quoteTemplateApi, leadApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
@@ -408,6 +408,7 @@ const OrderForm = () => {
     const location = useLocation();
     const queryParams = new URLSearchParams(location.search);
     const duplicateFromId = queryParams.get('duplicate_from');
+    const leadId = queryParams.get('lead_id');
     const isEdit = !!id;
     const navigate = useNavigate();
     const { user } = useAuth();
@@ -431,6 +432,7 @@ const OrderForm = () => {
     const [showQuoteTemplatePicker, setShowQuoteTemplatePicker] = useState(false);
     const [quoteTemplateSearch, setQuoteTemplateSearch] = useState('');
     const [quoteCaptureTemplate, setQuoteCaptureTemplate] = useState(null);
+    const [leadConversionSummary, setLeadConversionSummary] = useState(null);
     const captureRef = useRef(null);
     const quoteCaptureRef = useRef(null);
 
@@ -510,8 +512,12 @@ const OrderForm = () => {
             fetchOrder(id);
         } else if (duplicateFromId) {
             fetchOrder(duplicateFromId, true);
+        } else if (leadId) {
+            fetchLeadDraft(leadId);
+        } else {
+            setLoading(false);
         }
-    }, [id, duplicateFromId]);
+    }, [id, duplicateFromId, leadId]);
 
     useEffect(() => {
         const nextProvinces = sortRegionObjects(VN_REGIONS[regionType] || []);
@@ -911,6 +917,72 @@ const OrderForm = () => {
                 showModal({ title: 'Lỗi', content: 'Không thể tải thông tin đơn hàng.', type: 'error' });
             }
             navigate('/admin/orders');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const fetchLeadDraft = async (targetLeadId) => {
+        try {
+            setLoading(true);
+            const response = await leadApi.getOrderDraft(targetLeadId);
+            const draft = response.data || {};
+
+            if (draft.can_create_order === false) {
+                showModal({
+                    title: 'Không thể mở lead',
+                    content: 'Lead này đã ở trạng thái Đã tạo đơn nên không mở lại form tạo đơn.',
+                    type: 'warning'
+                });
+                navigate('/admin/leads');
+                return;
+            }
+
+            setLeadConversionSummary(draft.conversion_summary || null);
+            setFormData((prev) => syncShippingAddress({
+                ...prev,
+                customer_name: draft.customer_name || '',
+                customer_email: draft.customer_email || '',
+                customer_phone: draft.customer_phone || '',
+                address_detail: extractAddressDetail({
+                    shippingAddress: draft.shipping_address || '',
+                    province: draft.province || '',
+                    district: draft.district || '',
+                    ward: draft.ward || '',
+                    regionType: draft.district ? 'old' : 'new'
+                }),
+                shipping_address: draft.shipping_address || '',
+                district: draft.district || '',
+                ward: draft.ward || '',
+                province: draft.province || '',
+                source: draft.source || 'Website',
+                type: draft.type || 'Lẻ',
+                shipment_status: draft.shipment_status || 'Chưa giao',
+                notes: draft.notes || '',
+                items: (draft.items || []).map((item) => ({
+                    product_id: item.product_id,
+                    name: item.name || item.product_name || `Sản phẩm #${item.product_id}`,
+                    sku: item.sku || item.product_sku || 'N/A',
+                    quantity: Number(item.quantity) || 1,
+                    price: Number(item.price) || 0,
+                    cost_price: Number(item.cost_price) || 0,
+                    options: item.options || {}
+                })),
+                custom_attributes: draft.custom_attributes || {},
+                shipping_fee: Number(draft.shipping_fee) || 0,
+                discount: Number(draft.discount) || 0,
+                cost_total: 0,
+                status: draft.status || 'new'
+            }));
+            setRegionType(draft.district ? 'old' : 'new');
+        } catch (error) {
+            console.error('Error fetching lead draft', error);
+            showModal({
+                title: 'Lỗi',
+                content: 'Không thể tải dữ liệu lead để tạo đơn.',
+                type: 'error'
+            });
+            navigate('/admin/leads');
         } finally {
             setLoading(false);
         }
@@ -1350,6 +1422,7 @@ const OrderForm = () => {
         try {
             const payload = {
                 ...formData,
+                lead_id: leadId ? Number(leadId) : undefined,
                 address_detail: effectiveAddressDetail,
                 shipping_address: buildShippingAddress({
                     addressDetail: effectiveAddressDetail,
@@ -1934,6 +2007,54 @@ const OrderForm = () => {
 
                 {/* Right Section: Sidebar Metadata */}
                 <div className="w-full min-w-0 max-w-full flex flex-col gap-[10px]">
+                    {leadConversionSummary ? (
+                        <div className="bg-white border border-primary/10 p-4 shadow-sm rounded-sm">
+                            <div className="flex items-center gap-2.5 mb-[10px] border-b border-primary/10 pb-3">
+                                <span className="material-symbols-outlined text-primary/40 text-[18px]">conversion_path</span>
+                                <h3 className="font-sans text-[15px] font-bold text-primary uppercase tracking-tight">Thông tin chuyển đổi</h3>
+                            </div>
+
+                            <div className="space-y-3 text-[13px] text-slate-700">
+                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                                    <span className="font-bold text-primary/55">Lead</span>
+                                    <span>{formData.custom_attributes?.lead_number || `#${leadId}`}</span>
+                                </div>
+                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                                    <span className="font-bold text-primary/55">Tag</span>
+                                    <span>{leadConversionSummary.tag || 'Website'}</span>
+                                </div>
+                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                                    <span className="font-bold text-primary/55">Landing URL</span>
+                                    <div className="min-w-0 break-all">
+                                        {leadConversionSummary.landing_url ? <a href={leadConversionSummary.landing_url} target="_blank" rel="noreferrer" className="text-primary hover:text-brick">{leadConversionSummary.landing_url}</a> : <span>-</span>}
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                                    <span className="font-bold text-primary/55">Trang đặt</span>
+                                    <div className="min-w-0 break-all">
+                                        {leadConversionSummary.current_url ? <a href={leadConversionSummary.current_url} target="_blank" rel="noreferrer" className="text-primary hover:text-brick">{leadConversionSummary.current_url}</a> : <span>-</span>}
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                                    <span className="font-bold text-primary/55">Referrer</span>
+                                    <span className="break-all">{leadConversionSummary.referrer || '-'}</span>
+                                </div>
+                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                                    <span className="font-bold text-primary/55">UTM</span>
+                                    <span>
+                                        {[leadConversionSummary.utm_source, leadConversionSummary.utm_medium, leadConversionSummary.utm_campaign].filter(Boolean).join(' / ') || '-'}
+                                    </span>
+                                </div>
+                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                                    <span className="font-bold text-primary/55">Link sản phẩm</span>
+                                    <div className="min-w-0 break-all">
+                                        {leadConversionSummary.product_link ? <a href={leadConversionSummary.product_link} target="_blank" rel="noreferrer" className="text-primary hover:text-brick">{leadConversionSummary.product_link}</a> : <span>-</span>}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    ) : null}
+
                     <div className="bg-white border border-primary/10 p-4 shadow-sm rounded-sm">
                         <div className="flex items-center gap-2.5 mb-[10px] border-b border-primary/10 pb-3">
                             <span className="material-symbols-outlined text-primary/40 text-[18px]">assignment</span>

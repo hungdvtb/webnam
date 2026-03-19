@@ -9,6 +9,30 @@ use Illuminate\Support\Str;
 
 class MediaController extends Controller
 {
+    public function proxy(Request $request)
+    {
+        $validated = $request->validate([
+            'url' => 'required|string|max:2048',
+        ]);
+
+        $path = parse_url($validated['url'], PHP_URL_PATH) ?: $validated['url'];
+
+        if (!$path || !str_starts_with($path, '/storage/')) {
+            return response()->json(['message' => 'Invalid image path'], 422);
+        }
+
+        $fullPath = public_path(ltrim($path, '/'));
+
+        if (!is_file($fullPath)) {
+            return response()->json(['message' => 'Image not found'], 404);
+        }
+
+        return response()->file($fullPath, [
+            'Cache-Control' => 'public, max-age=86400',
+            'Content-Disposition' => 'inline; filename="' . basename($fullPath) . '"',
+        ]);
+    }
+
     public function upload(Request $request)
     {
         $request->validate([

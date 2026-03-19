@@ -251,4 +251,11 @@ export const mediaApi = {
     }),
 };
 
+export const quoteTemplateApi = {
+    getAll: () => api.get('/quote-templates'),
+    store: (data) => api.post('/quote-templates', data),
+    update: (id, data) => api.put(`/quote-templates/${id}`, data),
+    destroy: (id) => api.delete(`/quote-templates/${id}`),
+};
+
 export default api;

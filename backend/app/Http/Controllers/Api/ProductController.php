@@ -70,8 +70,11 @@ class ProductController extends Controller
             });
         }
 
+        $searchRankingSql = null;
+        $searchRankingBindings = [];
+
         // Search by name & SKU & more (Advanced Fuzzy & Token Matching)
-        if ($request->filled('search')) {
+        if (false && $request->filled('search')) {
             $search = trim($request->search);
             // Split into tokens
             $tokens = preg_split('/\s+/', $search, -1, PREG_SPLIT_NO_EMPTY);
@@ -100,6 +103,105 @@ class ProductController extends Controller
 
                         }
                         );
+                    }
+                });
+            }
+        }
+
+        if ($request->filled('search')) {
+            $rawSearch = trim($request->search);
+            $normalizedSearch = Str::of($rawSearch)
+                ->lower()
+                ->ascii()
+                ->replaceMatches('/[^a-z0-9\s]+/', ' ')
+                ->squish()
+                ->toString();
+            $strictTokens = collect(preg_split('/\s+/', $normalizedSearch, -1, PREG_SPLIT_NO_EMPTY))
+                ->map(fn ($token) => trim($token))
+                ->filter(fn ($token) => mb_strlen($token) >= 2)
+                ->unique()
+                ->take(6)
+                ->values()
+                ->all();
+
+            if ($rawSearch !== '' || !empty($strictTokens)) {
+                $escapeLike = static fn ($value) => str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
+                $nameExpr = "immutable_unaccent(COALESCE(products.name, ''))";
+                $skuExpr = "immutable_unaccent(COALESCE(products.sku, ''))";
+                $compactSkuExpr = "immutable_unaccent(REGEXP_REPLACE(COALESCE(products.sku, ''), '[^a-zA-Z0-9]', '', 'g'))";
+                $phraseLike = '%' . $escapeLike($rawSearch) . '%';
+                $prefixLike = $escapeLike($rawSearch) . '%';
+                $compactSearch = preg_replace('/[^a-z0-9]+/', '', $normalizedSearch);
+                $compactPhraseLike = $compactSearch !== '' ? '%' . $escapeLike($compactSearch) . '%' : null;
+                $compactPrefixLike = $compactSearch !== '' ? $escapeLike($compactSearch) . '%' : null;
+                $strictTokenMatchParts = [];
+                $strictTokenMatchBindings = [];
+
+                foreach ($strictTokens as $token) {
+                    $tokenLike = '%' . $escapeLike($token) . '%';
+                    $compactToken = preg_replace('/[^a-z0-9]+/', '', $token);
+                    $compactTokenLike = '%' . $escapeLike($compactToken) . '%';
+                    $strictTokenMatchParts[] = "CASE WHEN ({$nameExpr} ILIKE immutable_unaccent(?) OR {$skuExpr} ILIKE immutable_unaccent(?) OR {$compactSkuExpr} ILIKE immutable_unaccent(?)) THEN 1 ELSE 0 END";
+                    array_push($strictTokenMatchBindings, $tokenLike, $tokenLike, $compactTokenLike);
+                }
+
+                $strictTokenMatchSql = !empty($strictTokenMatchParts) ? '(' . implode(' + ', $strictTokenMatchParts) . ')' : '0';
+                $minimumRelevantMatches = count($strictTokens) <= 1 ? 1 : max(2, count($strictTokens) - 1);
+
+                $searchRankingParts = [
+                    "CASE WHEN {$skuExpr} = immutable_unaccent(?) THEN 1500 ELSE 0 END",
+                    "CASE WHEN {$nameExpr} = immutable_unaccent(?) THEN 1400 ELSE 0 END",
+                    "CASE WHEN {$skuExpr} ILIKE immutable_unaccent(?) THEN 950 ELSE 0 END",
+                    "CASE WHEN {$nameExpr} ILIKE immutable_unaccent(?) THEN 900 ELSE 0 END",
+                    "CASE WHEN {$skuExpr} ILIKE immutable_unaccent(?) THEN 820 ELSE 0 END",
+                    "CASE WHEN {$nameExpr} ILIKE immutable_unaccent(?) THEN 780 ELSE 0 END",
+                ];
+                $searchRankingBindings = [
+                    $rawSearch,
+                    $rawSearch,
+                    $prefixLike,
+                    $prefixLike,
+                    $phraseLike,
+                    $phraseLike,
+                ];
+
+                if ($compactPhraseLike !== null) {
+                    $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} ILIKE immutable_unaccent(?) THEN 900 ELSE 0 END";
+                    $searchRankingBindings[] = $compactPhraseLike;
+                }
+
+                if ($compactPrefixLike !== null) {
+                    $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} ILIKE immutable_unaccent(?) THEN 880 ELSE 0 END";
+                    $searchRankingBindings[] = $compactPrefixLike;
+                }
+
+                if (!empty($strictTokenMatchParts)) {
+                    $searchRankingParts[] = "({$strictTokenMatchSql} * 140)";
+                    $searchRankingBindings = array_merge($searchRankingBindings, $strictTokenMatchBindings);
+                }
+
+                $searchRankingSql = '(' . implode(' + ', $searchRankingParts) . ')';
+                $query->selectRaw("{$searchRankingSql} AS search_score", $searchRankingBindings);
+                $query->where(function (Builder $strictSearchQuery) use (
+                    $nameExpr,
+                    $skuExpr,
+                    $compactSkuExpr,
+                    $phraseLike,
+                    $compactPhraseLike,
+                    $strictTokenMatchSql,
+                    $strictTokenMatchBindings,
+                    $minimumRelevantMatches
+                ) {
+                    $strictSearchQuery
+                        ->whereRaw("{$nameExpr} ILIKE immutable_unaccent(?)", [$phraseLike])
+                        ->orWhereRaw("{$skuExpr} ILIKE immutable_unaccent(?)", [$phraseLike]);
+
+                    if ($compactPhraseLike !== null) {
+                        $strictSearchQuery->orWhereRaw("{$compactSkuExpr} ILIKE immutable_unaccent(?)", [$compactPhraseLike]);
+                    }
+
+                    if ($strictTokenMatchSql !== '0') {
+                        $strictSearchQuery->orWhereRaw("{$strictTokenMatchSql} >= ?", array_merge($strictTokenMatchBindings, [$minimumRelevantMatches]));
                     }
                 });
             }
@@ -191,8 +293,14 @@ class ProductController extends Controller
             $order = (strtolower($sortOrder) === 'asc') ? 'asc' : 'desc';
 
             // Ưu tiên đưa sản phẩm có biến thể lên đầu nếu cùng tiêu chí sắp xếp (giúp dễ quản lý)
-            $query->orderByRaw("CASE WHEN type = 'configurable' THEN 0 ELSE 1 END")
-                ->orderBy($field, $order);
+            if ($searchRankingSql !== null) {
+                $query->orderByRaw("{$searchRankingSql} DESC", $searchRankingBindings)
+                    ->orderByRaw("CASE WHEN type = 'configurable' THEN 0 ELSE 1 END")
+                    ->orderBy('name', 'asc');
+            } else {
+                $query->orderByRaw("CASE WHEN type = 'configurable' THEN 0 ELSE 1 END")
+                    ->orderBy($field, $order);
+            }
         }
 
         $perPage = (int)$request->get('per_page', 20);

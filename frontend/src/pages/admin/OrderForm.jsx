@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { orderApi, productApi, attributeApi, orderStatusApi } from '../../services/api';
+import api, { cmsApi, orderApi, productApi, attributeApi, orderStatusApi, quoteTemplateApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
-import { toPng, toBlob } from 'html-to-image';
 import SearchableSelect from '../../components/SearchableSelect';
 import { VN_REGIONS } from '../../data/regions';
 import {
@@ -54,6 +53,289 @@ const adminTextareaClassName = 'w-full min-h-[88px] bg-primary/5 border border-p
 const adminRegionFieldClassName = 'group relative min-w-0 min-h-[42px] rounded-sm border border-primary/10 bg-primary/5 px-2 py-1 shadow-sm transition-all focus-within:border-primary/30 focus-within:bg-white flex flex-col justify-center';
 const adminRegionLabelClassName = 'mb-1 block text-[8px] font-bold uppercase tracking-widest leading-none text-slate-400 transition-colors pointer-events-none group-focus-within:text-primary';
 const adminRegionClearButtonClassName = 'absolute right-1.5 top-1.5 z-[5] size-4 rounded-full border border-primary/10 bg-white/90 text-primary/35 hover:text-brick hover:border-brick/20 transition-all flex items-center justify-center shadow-sm';
+const defaultQuoteSettings = {
+    quote_logo_url: '',
+    quote_store_name: '',
+    quote_store_address: '',
+    quote_store_phone: ''
+};
+const productSearchHistoryStorageKey = 'order_form_product_search_history';
+const quoteCurrencyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
+const quoteCanvasFontFamily = '"Tahoma", "Arial", sans-serif';
+
+const normalizeCanvasText = (value) => String(value ?? '').normalize('NFC').trim();
+const normalizeProductSearchText = (value) => String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+const compactProductSearchText = (value) => normalizeProductSearchText(value).replace(/\s+/g, '');
+const tokenizeProductSearch = (value) => Array.from(new Set(
+    normalizeProductSearchText(value)
+        .split(' ')
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2)
+)).slice(0, 6);
+const getStoredProductSearchHistory = () => {
+    if (typeof window === 'undefined') return [];
+
+    try {
+        const raw = window.localStorage.getItem(productSearchHistoryStorageKey);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed)
+            ? parsed.filter((item) => typeof item === 'string' && item.trim() !== '').slice(0, 8)
+            : [];
+    } catch (error) {
+        console.error('Unable to read product search history', error);
+        return [];
+    }
+};
+const scoreProductSearchResult = (product, rawTerm) => {
+    const query = normalizeProductSearchText(rawTerm);
+    if (!query) return 1;
+
+    const name = normalizeProductSearchText(product?.name);
+    const sku = normalizeProductSearchText(product?.sku);
+    const compactSku = compactProductSearchText(product?.sku);
+    const compactQuery = compactProductSearchText(rawTerm);
+    const tokens = tokenizeProductSearch(rawTerm);
+
+    const phraseInName = Boolean(query) && name.includes(query);
+    const phraseInSku = Boolean(query) && sku.includes(query);
+    const phraseInCompactSku = Boolean(compactQuery) && compactSku.includes(compactQuery);
+
+    const nameTokenMatches = tokens.reduce((count, token) => count + Number(name.includes(token)), 0);
+    const skuTokenMatches = tokens.reduce((count, token) => {
+        const compactToken = compactProductSearchText(token);
+        return count + Number(sku.includes(token) || (compactToken && compactSku.includes(compactToken)));
+    }, 0);
+    const combinedTokenMatches = tokens.reduce((count, token) => {
+        const compactToken = compactProductSearchText(token);
+        return count + Number(
+            name.includes(token)
+            || sku.includes(token)
+            || (compactToken && compactSku.includes(compactToken))
+        );
+    }, 0);
+
+    const minimumRelevantMatches = tokens.length <= 1 ? 1 : Math.max(2, tokens.length - 1);
+    if (!phraseInName && !phraseInSku && !phraseInCompactSku) {
+        if (tokens.length === 0) return 0;
+        if (combinedTokenMatches < minimumRelevantMatches) return 0;
+    }
+
+    let score = 0;
+
+    if (sku === query || (compactQuery && compactSku === compactQuery)) score += 1500;
+    if (name === query) score += 1400;
+    if (phraseInSku || phraseInCompactSku) score += 880;
+    if (phraseInName) score += 820;
+    if (sku.startsWith(query) || (compactQuery && compactSku.startsWith(compactQuery))) score += 760;
+    if (name.startsWith(query)) score += 700;
+
+    score += combinedTokenMatches * 140;
+    score += nameTokenMatches * 50;
+    score += skuTokenMatches * 70;
+
+    if (tokens.length > 1 && combinedTokenMatches === tokens.length) score += 260;
+    if (tokens.length > 1 && nameTokenMatches === tokens.length) score += 120;
+    if (tokens.length > 2 && combinedTokenMatches === minimumRelevantMatches) score -= 40;
+
+    return Math.max(score, 0);
+};
+const formatQuoteMoney = (value) => `${quoteCurrencyFormatter.format(Number(value) || 0)} đ`;
+const quoteCanvasPageWidth = 1200;
+
+const waitForNodeImages = async (node) => {
+    if (!node) return;
+
+    const images = Array.from(node.querySelectorAll('img'));
+    const imagePromises = images.map((image) => {
+        if (image.complete) return Promise.resolve();
+
+        return new Promise((resolve) => {
+            image.addEventListener('load', resolve, { once: true });
+            image.addEventListener('error', resolve, { once: true });
+        });
+    });
+
+    await Promise.all(imagePromises);
+
+    if (document.fonts?.ready) {
+        try {
+            await document.fonts.ready;
+        } catch (error) {
+            console.error('Font readiness check failed', error);
+        }
+    }
+};
+
+const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+});
+
+const loadCanvasImage = async (src) => {
+    if (!src) return null;
+
+    try {
+        const normalizedSrc = src.startsWith('data:')
+            ? src
+            : `${String(api.defaults.baseURL || '').replace(/\/+$/, '')}/media/proxy?url=${encodeURIComponent(src)}`;
+
+        const response = await fetch(normalizedSrc, { mode: 'cors', credentials: 'omit', cache: 'no-store' });
+        if (!response.ok) throw new Error(`IMAGE_FETCH_${response.status}`);
+        const blob = await response.blob();
+        const dataUrl = await blobToDataUrl(blob);
+
+        return await new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => resolve(image);
+            image.onerror = reject;
+            image.src = dataUrl;
+        });
+    } catch (error) {
+        console.error('Failed to load canvas image', src, error);
+        return null;
+    }
+};
+
+const wrapCanvasText = (ctx, text, maxWidth) => {
+    const normalized = normalizeCanvasText(text);
+    if (!normalized) return [''];
+
+    const paragraphs = normalized.split('\n').map((line) => line.trim()).filter(Boolean);
+    const lines = [];
+
+    paragraphs.forEach((paragraph) => {
+        const words = paragraph.split(/\s+/);
+        let currentLine = '';
+
+        words.forEach((word) => {
+            const testLine = currentLine ? `${currentLine} ${word}` : word;
+            if (ctx.measureText(testLine).width <= maxWidth || !currentLine) {
+                currentLine = testLine;
+            } else {
+                lines.push(currentLine);
+                currentLine = word;
+            }
+        });
+
+        if (currentLine) lines.push(currentLine);
+    });
+
+    return lines.length ? lines : [''];
+};
+
+const drawTextLines = (ctx, lines, x, y, lineHeight, align = 'left') => {
+    ctx.textAlign = align;
+    ctx.textBaseline = 'top';
+    lines.forEach((line, index) => {
+        ctx.fillText(normalizeCanvasText(line), x, y + (index * lineHeight));
+    });
+};
+
+const drawImageContain = (ctx, image, x, y, width, height) => {
+    if (!image) return;
+
+    const ratio = Math.min(width / image.width, height / image.height);
+    const drawWidth = image.width * ratio;
+    const drawHeight = image.height * ratio;
+    const drawX = x + ((width - drawWidth) / 2);
+    const drawY = y + ((height - drawHeight) / 2);
+
+    ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+};
+
+const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orderId, totalQuantity, subtotal }) => {
+    const headerAddress = [quoteSettings.quote_store_address, quoteSettings.quote_store_phone ? `Điện thoại: ${quoteSettings.quote_store_phone}` : '']
+        .filter(Boolean)
+        .join('\n');
+    const hasLogo = Boolean(quoteSettings.quote_logo_url);
+    const sheetTitle = orderId ? `Báo giá đơn #${orderId}` : 'Báo giá sản phẩm';
+
+    return (
+        <div ref={captureRef} className="w-[1125px] bg-white text-slate-900 shadow-2xl" style={{ fontFamily: '"Times New Roman", serif' }}>
+            <div className="border-[2px] border-[#2F1A14]">
+                <div className="grid grid-cols-[250px_minmax(0,1fr)] min-h-[210px]">
+                    <div className="border-r border-[#2F1A14] flex items-center justify-center p-6">
+                        {hasLogo ? (
+                            <img src={quoteSettings.quote_logo_url} alt="Logo" className="max-w-full max-h-[150px] object-contain" />
+                        ) : (
+                            <div className="w-full h-[150px] border border-dashed border-[#C59A6A] flex items-center justify-center text-[#C59A6A] text-[28px] font-bold tracking-[0.2em]">
+                                LOGO
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="p-6 flex flex-col justify-center text-center">
+                        <div className="text-[16px] font-bold uppercase tracking-[0.06em] leading-snug">
+                            {quoteSettings.quote_store_name || 'Thông tin xưởng / cửa hàng'}
+                        </div>
+                        <div className="mt-4 whitespace-pre-line text-[12px] leading-6">
+                            {headerAddress || 'Cấu hình địa chỉ và số điện thoại trong phần Cài đặt web > Báo giá.'}
+                        </div>
+                        <div className="mt-4 inline-flex self-center border border-[#2F1A14] px-4 py-1 text-[12px] font-bold uppercase tracking-[0.14em]">
+                            {sheetTitle}
+                        </div>
+                    </div>
+                </div>
+
+                <table className="w-full border-collapse table-fixed">
+                    <thead>
+                        <tr className="bg-[#6B0F0F] text-white">
+                            <th className="w-[240px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold">Hình ảnh sản phẩm</th>
+                            <th className="border border-[#2F1A14] px-3 py-3 text-[12px] font-bold">Tên sản phẩm</th>
+                            <th className="w-[84px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold text-center">SL</th>
+                            <th className="w-[150px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold text-right">Đơn giá</th>
+                            <th className="w-[170px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold text-right">Thành tiền</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {formData.items.map((item, index) => (
+                            <tr key={`${template?.id || 'template'}-${item.product_id}-${index}`} className="align-top">
+                                {index === 0 && (
+                                    <td rowSpan={formData.items.length} className="border border-[#2F1A14] bg-[#8E0B0B] p-4 align-middle">
+                                        <div className="flex h-full flex-col items-center justify-between text-white">
+                                            <div className="w-full flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.12em]">
+                                                <span>{quoteSettings.quote_store_name || 'Báo giá'}</span>
+                                                <span>{template?.name || 'Mẫu'}</span>
+                                            </div>
+                                            <div className="mt-4 flex-1 w-full bg-white/10 border border-white/15 p-3">
+                                                {template?.image_url ? (
+                                                    <img src={template.image_url} alt={template.name} className="h-[220px] w-full object-contain" />
+                                                ) : (
+                                                    <div className="h-[220px] w-full border border-dashed border-white/30 flex items-center justify-center text-[12px] uppercase tracking-[0.16em]">
+                                                        Chưa có ảnh mẫu
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </td>
+                                )}
+                                <td className="border border-[#D5CEC9] px-4 py-3 text-[12px] leading-6">{item.name}</td>
+                                <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold">{item.quantity}</td>
+                                <td className="border border-[#D5CEC9] px-4 py-3 text-[12px] text-right">{formatQuoteMoney(item.price)}</td>
+                                <td className="border border-[#D5CEC9] px-4 py-3 text-[12px] text-right font-semibold">{formatQuoteMoney(item.price * item.quantity)}</td>
+                            </tr>
+                        ))}
+                        <tr className="bg-[#F5E7BF]">
+                            <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold uppercase">Tổng món</td>
+                            <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-center">{totalQuantity}</td>
+                            <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-center" colSpan={2}>Tổng tiền</td>
+                            <td className="border border-[#2F1A14] px-4 py-3 text-[13px] font-bold text-right">{formatQuoteMoney(subtotal)}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+};
 
 const ProductSearchOption = ({ product, onSelect }) => {
     const skuRef = useRef(null);
@@ -140,9 +422,17 @@ const OrderForm = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
     const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+    const [showSearchHistory, setShowSearchHistory] = useState(false);
+    const [searchHistory, setSearchHistory] = useState(() => getStoredProductSearchHistory());
     const [showColumnConfig, setShowColumnConfig] = useState(false);
     const [isCapturing, setIsCapturing] = useState(false);
+    const [quoteSettings, setQuoteSettings] = useState(defaultQuoteSettings);
+    const [quoteTemplates, setQuoteTemplates] = useState([]);
+    const [showQuoteTemplatePicker, setShowQuoteTemplatePicker] = useState(false);
+    const [quoteTemplateSearch, setQuoteTemplateSearch] = useState('');
+    const [quoteCaptureTemplate, setQuoteCaptureTemplate] = useState(null);
     const captureRef = useRef(null);
+    const quoteCaptureRef = useRef(null);
 
     const COLUMN_DEFS = {
         stt: { label: 'STT', width: 'w-12', align: 'center' },
@@ -405,7 +695,7 @@ const OrderForm = () => {
                     active.getAttribute('contenteditable') === 'true'
                 );
 
-                if (isWriting && !showColumnConfig && !showSearchDropdown) return;
+                if (isWriting && !showColumnConfig && !showSearchDropdown && !showQuoteTemplatePicker) return;
 
                 if (showColumnConfig) {
                     setShowColumnConfig(false);
@@ -413,6 +703,11 @@ const OrderForm = () => {
                 }
                 if (showSearchDropdown) {
                     setShowSearchDropdown(false);
+                    setShowSearchHistory(false);
+                    return;
+                }
+                if (showQuoteTemplatePicker) {
+                    setShowQuoteTemplatePicker(false);
                     return;
                 }
                 handleCancel();
@@ -420,7 +715,7 @@ const OrderForm = () => {
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [showColumnConfig, showSearchDropdown, handleCancel]);
+    }, [showColumnConfig, showSearchDropdown, showQuoteTemplatePicker, handleCancel]);
 
     const saveColumnSettings = () => {
         localStorage.setItem('order_form_column_order', JSON.stringify(columnOrder));
@@ -462,6 +757,46 @@ const OrderForm = () => {
         }
     };
 
+    const pushSearchHistory = useCallback((term) => {
+        const trimmedTerm = normalizeCanvasText(term);
+        if (trimmedTerm.length < 2) return;
+
+        setSearchHistory((prev) => {
+            const next = [
+                trimmedTerm,
+                ...prev.filter((item) => normalizeProductSearchText(item) !== normalizeProductSearchText(trimmedTerm))
+            ].slice(0, 8);
+
+            window.localStorage.setItem(productSearchHistoryStorageKey, JSON.stringify(next));
+            return next;
+        });
+    }, []);
+
+    const clearSearchHistory = useCallback(() => {
+        setSearchHistory([]);
+        window.localStorage.removeItem(productSearchHistoryStorageKey);
+    }, []);
+
+    const rankedSearchProducts = useMemo(() => {
+        const availableProducts = products.filter((product) => !formData.items.some((item) => item.product_id === product.id));
+
+        if (!searchTerm.trim()) {
+            return availableProducts.slice(0, 50);
+        }
+
+        return availableProducts
+            .map((product) => ({
+                ...product,
+                __searchScore: scoreProductSearchResult(product, searchTerm)
+            }))
+            .filter((product) => product.__searchScore > 0)
+            .sort((left, right) => (
+                right.__searchScore - left.__searchScore
+                || String(left.name || '').localeCompare(String(right.name || ''), 'vi')
+            ))
+            .slice(0, 50);
+    }, [formData.items, products, searchTerm]);
+
     useEffect(() => {
         const timerId = setTimeout(() => {
             setDebouncedSearchTerm(searchTerm);
@@ -479,6 +814,11 @@ const OrderForm = () => {
         }
     }, [debouncedSearchTerm]);
 
+    useEffect(() => {
+        if (!showSearchDropdown || debouncedSearchTerm.trim().length < 2) return;
+        pushSearchHistory(debouncedSearchTerm);
+    }, [debouncedSearchTerm, pushSearchHistory, showSearchDropdown]);
+
     const fetchInitialData = async () => {
         try {
             // Fetch statuses first and independently
@@ -489,14 +829,23 @@ const OrderForm = () => {
         }
 
         try {
-            const [prodRes, attrRes] = await Promise.all([
+            const [prodRes, attrRes, settingsRes, templatesRes] = await Promise.all([
                 productApi.getAll({ per_page: 50 }),
-                attributeApi.getAll({ entity_type: 'order', active_only: true })
+                attributeApi.getAll({ entity_type: 'order', active_only: true }),
+                cmsApi.settings.get(),
+                quoteTemplateApi.getAll()
             ]);
             setProducts(prodRes.data.data || []);
             setAttributes(attrRes.data || []);
+            setQuoteSettings((prev) => ({ ...prev, ...(settingsRes.data || {}) }));
+            setQuoteTemplates((templatesRes.data || []).sort((a, b) => {
+                const sortA = Number(a.sort_order) || 0;
+                const sortB = Number(b.sort_order) || 0;
+                if (sortA !== sortB) return sortA - sortB;
+                return String(a.name || '').localeCompare(String(b.name || ''), 'vi');
+            }));
         } catch (error) {
-            console.error("Error fetching products/attributes", error);
+            console.error("Error fetching products/attributes/quote assets", error);
         }
     };
 
@@ -607,6 +956,7 @@ const OrderForm = () => {
         if (!product) return;
 
         if (formData.items.some(item => item.product_id === product.id)) return;
+        if (searchTerm.trim()) pushSearchHistory(searchTerm);
 
         const newItems = [...formData.items, {
             product_id: product.id,
@@ -624,6 +974,7 @@ const OrderForm = () => {
             items: newItems,
             cost_total: costTotal
         }));
+        setShowSearchHistory(false);
         // Keep search term and dropdown open for consecutive selections
     };
 
@@ -660,99 +1011,307 @@ const OrderForm = () => {
         return calculateSubtotal() + Number(formData.shipping_fee) - Number(formData.discount);
     };
 
-    const handleScreenshot = async () => {
-        if (!captureRef.current) return;
+    const captureQuoteImage = async (template) => {
+        if (!template) return;
+
         setIsCapturing(true);
+        setShowQuoteTemplatePicker(false);
 
-        const element = captureRef.current;
-        
-        // --- STAGE 1: Force UI Stability ---
-        // Save original states
-        const originalStyle = element.style.cssText;
-        const stickyElements = element.querySelectorAll('.sticky');
-        const stickyStyles = Array.from(stickyElements).map(el => el.style.cssText);
-        
         try {
-            // --- STAGE 2: Force Natural Dimensions ---
-            // Set styles that force the element to its full content height
-            element.style.position = 'relative';
-            element.style.height = 'auto';
-            element.style.maxHeight = 'none';
-            element.style.overflow = 'visible';
-            element.style.width = `${element.offsetWidth}px`;
-            element.style.backgroundColor = '#ffffff';
-            element.style.zIndex = '9999';
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error('CANVAS_CONTEXT_UNAVAILABLE');
 
-            // Fix sticky elements which mess up the bounding box in most libraries
-            stickyElements.forEach(el => {
-                el.style.position = 'static';
-                el.style.backgroundColor = '#f8fafc'; 
+            const pageWidth = quoteCanvasPageWidth;
+            const headerHeight = 248;
+            const tableHeaderHeight = 52;
+            const footerHeight = 56;
+            const imageColWidth = 260;
+            const qtyColWidth = 92;
+            const priceColWidth = 170;
+            const totalColWidth = 180;
+            const nameColWidth = pageWidth - imageColWidth - qtyColWidth - priceColWidth - totalColWidth;
+            const bodyStartY = headerHeight + tableHeaderHeight;
+            const borderColor = '#D7C7B8';
+            const borderStrong = '#B79D86';
+            const textPrimary = '#1F2937';
+            const textMuted = '#7C6A58';
+            const brandDark = '#243447';
+            const brandGold = '#C8A56A';
+            const headerBg = '#FCF8F3';
+            const footerBg = '#F6E7C8';
+            const imagePanelBg = '#F9F5EF';
+            const subtleBg = '#F8F4EE';
+
+            const measureCanvas = document.createElement('canvas');
+            const measureCtx = measureCanvas.getContext('2d');
+            if (!measureCtx) throw new Error('MEASURE_CONTEXT_UNAVAILABLE');
+            measureCtx.font = `15px ${quoteCanvasFontFamily}`;
+
+            const rowHeights = formData.items.map((item) => {
+                const lines = wrapCanvasText(measureCtx, item.name || '', nameColWidth - 30);
+                return Math.max(48, (lines.length * 18) + 16);
             });
 
-            // Wait for layout to reflow and settle
-            await new Promise(resolve => setTimeout(resolve, 300));
+            const itemsHeight = rowHeights.reduce((sum, height) => sum + height, 0);
+            const pageHeight = headerHeight + tableHeaderHeight + itemsHeight + footerHeight;
 
-            // CRITICAL: Calculate the REAL height including all hidden content and paddings
-            const realHeight = element.scrollHeight;
-            const realWidth = element.scrollWidth;
+            canvas.width = pageWidth * 2;
+            canvas.height = pageHeight * 2;
+            canvas.style.width = `${pageWidth}px`;
+            canvas.style.height = `${pageHeight}px`;
+            ctx.scale(2, 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, pageWidth, pageHeight);
 
-            const options = {
-                backgroundColor: '#ffffff',
-                cacheBust: true,
-                pixelRatio: 2, // High resolution
-                width: realWidth,
-                height: realHeight,
-                style: {
-                    margin: '0',
-                    padding: '0', // We already have padding in the DOM
-                    borderRadius: '0'
-                },
-                filter: (node) => {
-                    const isNode = node instanceof HTMLElement;
-                    if (!isNode) return true;
-                    
-                    // Remove UI buttons and interactive icons
-                    const text = node.innerText || '';
-                    if (node.tagName === 'BUTTON') return false;
-                    if (node.classList.contains('material-symbols-outlined') && 
-                        (text.includes('delete') || text.includes('settings') || text.includes('refresh') || text.includes('drag'))) {
-                        return false;
-                    }
-                    if (node.getAttribute('data-screenshot-hide') === 'true') return false;
-                    
-                    return true;
-                }
-            };
+            const [logoImage, templateImage] = await Promise.all([
+                loadCanvasImage(quoteSettings.quote_logo_url),
+                loadCanvasImage(template.image_url)
+            ]);
 
-            // Capture the full content
-            const blob = await toBlob(element, options);
+            ctx.direction = 'ltr';
+            ctx.fillStyle = headerBg;
+            ctx.fillRect(0, 0, pageWidth, headerHeight);
+            ctx.fillStyle = brandDark;
+            ctx.fillRect(0, 0, pageWidth, 18);
+            ctx.fillStyle = brandGold;
+            ctx.fillRect(0, 18, pageWidth, 4);
 
-            if (blob) {
-                // Clipboard integration
-                try {
+            ctx.strokeStyle = borderStrong;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(0.5, 0.5, pageWidth - 1, pageHeight - 1);
+
+            const logoCardX = 34;
+            const logoCardY = 44;
+            const logoCardSize = 176;
+
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = '#E6D7C9';
+            ctx.lineWidth = 1;
+            ctx.fillRect(logoCardX, logoCardY, logoCardSize, logoCardSize);
+            ctx.strokeRect(logoCardX, logoCardY, logoCardSize, logoCardSize);
+
+            if (logoImage) {
+                drawImageContain(ctx, logoImage, logoCardX + 16, logoCardY + 16, logoCardSize - 32, logoCardSize - 32);
+            } else {
+                ctx.fillStyle = '#F8F2E8';
+                ctx.beginPath();
+                ctx.arc(logoCardX + (logoCardSize / 2), logoCardY + (logoCardSize / 2), 48, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = brandGold;
+                ctx.font = `700 22px ${quoteCanvasFontFamily}`;
+                ctx.textAlign = 'center';
+                ctx.fillText('LOGO', logoCardX + (logoCardSize / 2), logoCardY + 74);
+                ctx.font = `400 12px ${quoteCanvasFontFamily}`;
+                ctx.fillStyle = textMuted;
+                ctx.fillText(normalizeCanvasText('Cấu hình trong hệ thống'), logoCardX + (logoCardSize / 2), logoCardY + 102);
+            }
+
+            const centerColX = 246;
+            const centerColWidth = 600;
+            const rightCardX = 884;
+            const rightCardWidth = 282;
+            const quoteBadgeText = normalizeCanvasText(id ? `Báo giá đơn #${id}` : 'Báo giá sản phẩm');
+            const storeName = normalizeCanvasText(quoteSettings.quote_store_name || 'Thông tin cửa hàng / xưởng');
+            const addressText = normalizeCanvasText(quoteSettings.quote_store_address || 'Bổ sung địa chỉ cửa hàng trong Cài đặt web > Báo giá');
+            const phoneText = normalizeCanvasText(quoteSettings.quote_store_phone || 'Chưa có số điện thoại');
+            const selectedTemplateName = normalizeCanvasText(template.name || 'Chưa đặt tên mẫu');
+
+            ctx.fillStyle = brandDark;
+            ctx.font = `800 42px ${quoteCanvasFontFamily}`;
+            ctx.textAlign = 'left';
+            ctx.fillText(normalizeCanvasText('BẢNG BÁO GIÁ'), centerColX, 72);
+
+            ctx.fillStyle = textPrimary;
+            ctx.font = `700 28px ${quoteCanvasFontFamily}`;
+            ctx.fillText(storeName, centerColX, 128);
+
+            ctx.fillStyle = textMuted;
+            ctx.font = `400 14px ${quoteCanvasFontFamily}`;
+            const addressLines = wrapCanvasText(ctx, addressText, centerColWidth);
+            drawTextLines(ctx, addressLines, centerColX, 166, 24, 'left');
+            drawTextLines(ctx, [`Điện thoại: ${phoneText}`], centerColX, 166 + (addressLines.length * 24) + 8, 22, 'left');
+
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = '#D8C4AF';
+            ctx.fillRect(rightCardX, 46, rightCardWidth, 156);
+            ctx.strokeRect(rightCardX, 46, rightCardWidth, 156);
+
+            ctx.fillStyle = subtleBg;
+            ctx.fillRect(rightCardX + 18, 64, rightCardWidth - 36, 40);
+            ctx.strokeStyle = '#E6D7C9';
+            ctx.strokeRect(rightCardX + 18, 64, rightCardWidth - 36, 40);
+            ctx.fillStyle = brandDark;
+            ctx.font = `700 12px ${quoteCanvasFontFamily}`;
+            ctx.textAlign = 'center';
+            ctx.fillText(quoteBadgeText.toUpperCase(), rightCardX + (rightCardWidth / 2), 78);
+
+            ctx.textAlign = 'left';
+            ctx.fillStyle = textMuted;
+            ctx.font = `700 12px ${quoteCanvasFontFamily}`;
+            ctx.fillText(normalizeCanvasText('Mẫu đã chọn'), rightCardX + 24, 126);
+            ctx.fillStyle = textPrimary;
+            ctx.font = `700 24px ${quoteCanvasFontFamily}`;
+            ctx.fillText(selectedTemplateName, rightCardX + 24, 148);
+            ctx.fillStyle = textMuted;
+            ctx.font = `400 13px ${quoteCanvasFontFamily}`;
+            ctx.fillText(normalizeCanvasText(`Ngày tạo: ${new Date().toLocaleDateString('vi-VN')}`), rightCardX + 24, 180);
+
+            ctx.fillStyle = brandDark;
+            ctx.fillRect(0, headerHeight, pageWidth, tableHeaderHeight);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = `700 13px ${quoteCanvasFontFamily}`;
+            ctx.textAlign = 'center';
+            ctx.fillText(normalizeCanvasText('Ảnh bộ / mẫu'), imageColWidth / 2, headerHeight + 18);
+            ctx.fillText(normalizeCanvasText('Tên sản phẩm'), imageColWidth + (nameColWidth / 2), headerHeight + 18);
+            ctx.fillText('SL', imageColWidth + nameColWidth + (qtyColWidth / 2), headerHeight + 18);
+            ctx.fillText(normalizeCanvasText('Đơn giá'), imageColWidth + nameColWidth + qtyColWidth + (priceColWidth / 2), headerHeight + 18);
+            ctx.fillText(normalizeCanvasText('Thành tiền'), imageColWidth + nameColWidth + qtyColWidth + priceColWidth + (totalColWidth / 2), headerHeight + 18);
+
+            const xName = imageColWidth;
+            const xQty = xName + nameColWidth;
+            const xPrice = xQty + qtyColWidth;
+            const xTotal = xPrice + priceColWidth;
+
+            ctx.fillStyle = imagePanelBg;
+            ctx.fillRect(0, bodyStartY, imageColWidth, itemsHeight);
+            ctx.strokeStyle = borderStrong;
+            ctx.strokeRect(0.5, bodyStartY + 0.5, imageColWidth - 1, itemsHeight - 1);
+
+            const imageInset = 22;
+            const imageBoxX = imageInset;
+            const imageBoxY = bodyStartY + imageInset;
+            const imageBoxWidth = imageColWidth - (imageInset * 2);
+            const imageBoxHeight = itemsHeight - (imageInset * 2);
+
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(imageBoxX, imageBoxY, imageBoxWidth, imageBoxHeight);
+            ctx.strokeStyle = '#E7D9CB';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(imageBoxX, imageBoxY, imageBoxWidth, imageBoxHeight);
+
+            if (templateImage) {
+                drawImageContain(ctx, templateImage, imageBoxX + 10, imageBoxY + 10, imageBoxWidth - 20, imageBoxHeight - 20);
+            } else {
+                ctx.fillStyle = '#FBF6EE';
+                ctx.fillRect(imageBoxX + 12, imageBoxY + 12, imageBoxWidth - 24, imageBoxHeight - 24);
+                ctx.textAlign = 'center';
+                ctx.fillStyle = brandDark;
+                ctx.font = `700 18px ${quoteCanvasFontFamily}`;
+                ctx.fillText(selectedTemplateName, imageBoxX + (imageBoxWidth / 2), imageBoxY + (imageBoxHeight / 2) - 14);
+                ctx.fillStyle = textMuted;
+                ctx.font = `400 12px ${quoteCanvasFontFamily}`;
+                ctx.fillText(normalizeCanvasText('Chưa có ảnh mẫu trong hệ thống'), imageBoxX + (imageBoxWidth / 2), imageBoxY + (imageBoxHeight / 2) + 14);
+            }
+
+            let currentY = bodyStartY;
+            formData.items.forEach((item, index) => {
+                const rowHeight = rowHeights[index];
+                const nameLines = wrapCanvasText(ctx, normalizeCanvasText(item.name || ''), nameColWidth - 30);
+
+                ctx.fillStyle = index % 2 === 0 ? '#FFFFFF' : '#FBF8F4';
+                ctx.fillRect(xName, currentY, pageWidth - xName, rowHeight);
+                ctx.strokeStyle = borderColor;
+                ctx.strokeRect(xName + 0.5, currentY + 0.5, nameColWidth - 1, rowHeight - 1);
+                ctx.strokeRect(xQty + 0.5, currentY + 0.5, qtyColWidth - 1, rowHeight - 1);
+                ctx.strokeRect(xPrice + 0.5, currentY + 0.5, priceColWidth - 1, rowHeight - 1);
+                ctx.strokeRect(xTotal + 0.5, currentY + 0.5, totalColWidth - 1, rowHeight - 1);
+
+                ctx.fillStyle = textPrimary;
+                ctx.font = `400 15px ${quoteCanvasFontFamily}`;
+                const nameBlockHeight = nameLines.length * 18;
+                const nameTextY = currentY + Math.max(10, (rowHeight - nameBlockHeight) / 2);
+                drawTextLines(ctx, nameLines, xName + 14, nameTextY, 18, 'left');
+
+                const valueY = currentY + (rowHeight / 2);
+                ctx.textAlign = 'center';
+                ctx.font = `400 13px ${quoteCanvasFontFamily}`;
+                ctx.textBaseline = 'middle';
+                ctx.fillText(String(item.quantity || 0), xQty + (qtyColWidth / 2), valueY);
+
+                ctx.textAlign = 'right';
+                ctx.fillStyle = textPrimary;
+                ctx.font = `400 13px ${quoteCanvasFontFamily}`;
+                ctx.fillText(formatQuoteMoney(item.price), xPrice + priceColWidth - 14, valueY);
+                ctx.font = `700 13px ${quoteCanvasFontFamily}`;
+                ctx.fillText(formatQuoteMoney(item.price * item.quantity), xTotal + totalColWidth - 14, valueY);
+                ctx.textBaseline = 'top';
+
+                currentY += rowHeight;
+            });
+
+            ctx.fillStyle = footerBg;
+            ctx.fillRect(0, bodyStartY + itemsHeight, pageWidth, footerHeight);
+            ctx.strokeStyle = borderStrong;
+            ctx.strokeRect(0.5, bodyStartY + itemsHeight + 0.5, pageWidth - 1, footerHeight - 1);
+            [imageColWidth, xQty, xPrice].forEach((x) => {
+                ctx.beginPath();
+                ctx.moveTo(x, bodyStartY + itemsHeight);
+                ctx.lineTo(x, pageHeight);
+                ctx.stroke();
+            });
+
+            ctx.fillStyle = textPrimary;
+            ctx.font = `700 15px ${quoteCanvasFontFamily}`;
+            ctx.textAlign = 'left';
+            ctx.fillText(normalizeCanvasText('Tổng món'), 18, bodyStartY + itemsHeight + 18);
+            ctx.textAlign = 'center';
+            ctx.fillText(String(quoteTotalQuantity), imageColWidth + (nameColWidth / 2), bodyStartY + itemsHeight + 18);
+            ctx.fillText(normalizeCanvasText('Tổng tiền'), xQty + ((qtyColWidth + priceColWidth) / 2), bodyStartY + itemsHeight + 18);
+            ctx.textAlign = 'right';
+            ctx.fillText(formatQuoteMoney(quoteSubtotal), pageWidth - 18, bodyStartY + itemsHeight + 18);
+
+            const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png', 1));
+
+            if (!blob) {
+                throw new Error('QUOTE_CAPTURE_FAILED');
+            }
+
+            try {
+                if (navigator.clipboard?.write && window.ClipboardItem) {
                     const data = [new ClipboardItem({ 'image/png': blob })];
                     await navigator.clipboard.write(data);
-                } catch (clipErr) {
-                    console.error('Clipboard copy failed:', clipErr);
                 }
-
-                // Automatic Download
-                const link = document.createElement('a');
-                link.download = `bao-gia-${formData.customer_name || 'khach-le'}-${new Date().getTime()}.png`;
-                link.href = URL.createObjectURL(blob);
-                link.click();
+            } catch (clipErr) {
+                console.error('Clipboard copy failed:', clipErr);
             }
+
+            const safeCustomerName = (formData.customer_name || 'khach-le')
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .replace(/[^a-zA-Z0-9-_]+/g, '-')
+                .replace(/^-+|-+$/g, '')
+                .toLowerCase() || 'khach-le';
+
+            const link = document.createElement('a');
+            link.download = `bao-gia-${safeCustomerName}-${Date.now()}.png`;
+            link.href = URL.createObjectURL(blob);
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(link.href), 1000);
         } catch (err) {
-            console.error('Screenshot failed', err);
-            alert('Lỗi tạo ảnh báo giá. Hãy thử lại.');
+            console.error('Quote capture failed', err);
+            showModal({ title: 'Lỗi', content: 'Không thể tạo ảnh báo giá. Hãy thử lại.', type: 'error' });
         } finally {
-            // --- STAGE 3: Restore Original UI ---
-            element.style.cssText = originalStyle;
-            stickyElements.forEach((el, i) => {
-                el.style.cssText = stickyStyles[i];
-            });
             setIsCapturing(false);
         }
+    };
+
+    const handleScreenshot = async () => {
+        if (formData.items.length === 0 || isCapturing) return;
+
+        const availableTemplates = quoteTemplates.filter((template) => template.is_active !== false);
+
+        if (availableTemplates.length === 0) {
+            showModal({
+                title: 'Thiếu cấu hình',
+                content: 'Chưa có bộ/mẫu báo giá hoạt động. Vào Cài đặt web > Báo giá để cấu hình trước.',
+                type: 'error'
+            });
+            return;
+        }
+
+        setQuoteTemplateSearch('');
+        setShowQuoteTemplatePicker(true);
     };
 
     const handleSubmit = async (e) => {
@@ -841,6 +1400,14 @@ const OrderForm = () => {
     const handleReorder = React.useCallback((newItems) => {
         setFormData(prev => ({ ...prev, items: newItems }));
     }, []);
+
+    const availableQuoteTemplates = quoteTemplates.filter((template) => template.is_active !== false);
+    const normalizedQuoteTemplateSearch = normalizeCanvasText(quoteTemplateSearch).toLowerCase();
+    const filteredQuoteTemplates = availableQuoteTemplates.filter((template) => (
+        !normalizedQuoteTemplateSearch || normalizeCanvasText(template.name).toLowerCase().includes(normalizedQuoteTemplateSearch)
+    ));
+    const quoteTotalQuantity = formData.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    const quoteSubtotal = calculateSubtotal();
 
     if (loading) return <div className="p-8 text-center italic text-primary">Đang tải dữ liệu...</div>;
 
@@ -955,12 +1522,23 @@ const OrderForm = () => {
                                             onChange={(e) => {
                                                 setSearchTerm(e.target.value);
                                                 setShowSearchDropdown(true);
+                                                setShowSearchHistory(false);
                                             }}
                                             onFocus={() => setShowSearchDropdown(true)}
-                                            onClick={() => setShowSearchDropdown(true)}
+                                            onClick={() => {
+                                                setShowSearchDropdown(true);
+                                                setShowSearchHistory(false);
+                                            }}
                                         />
                                         {searchTerm && (
-                                            <button type="button" onClick={() => setSearchTerm('')} className="text-primary/30 hover:text-brick ml-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setSearchTerm('');
+                                                    setShowSearchHistory(false);
+                                                }}
+                                                className="text-primary/30 hover:text-brick ml-2"
+                                            >
                                                 <span className="material-symbols-outlined text-[14px]">close</span>
                                             </button>
                                         )}
@@ -968,7 +1546,22 @@ const OrderForm = () => {
                                             type="button"
                                             onClick={(e) => {
                                                 e.stopPropagation();
-                                                fetchProducts();
+                                                setShowSearchDropdown(true);
+                                                setShowSearchHistory((prev) => !prev);
+                                            }}
+                                            className="text-primary/30 hover:text-primary ml-3 border-l border-primary/10 pl-3 transition-all"
+                                            title="Hiá»ƒn thá»‹ lá»‹ch sá»­ tÃ¬m kiáº¿m"
+                                        >
+                                            <span className="material-symbols-outlined text-[15px]">history</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                if (searchTerm.trim()) pushSearchHistory(searchTerm);
+                                                fetchProducts(searchTerm.trim());
+                                                setShowSearchDropdown(true);
+                                                setShowSearchHistory(false);
                                             }}
                                             className="text-primary/30 hover:text-primary ml-3 border-l border-primary/10 pl-3 transition-all"
                                             title="Làm mới danh sách sản phẩm"
@@ -979,23 +1572,65 @@ const OrderForm = () => {
 
                                     {showSearchDropdown && (
                                         <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl rounded-sm z-[100] max-h-[400px] overflow-auto custom-scrollbar">
-                                            {products
-                                                .filter(p => !formData.items.some(item => item.product_id === p.id))
-                                                .slice(0, 50)
-                                                .map(p => (
+                                            {showSearchHistory && (
+                                                <div className="border-b border-primary/10 bg-primary/[0.02] px-3 py-2">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                                            Lá»‹ch sá»­ tÃ¬m kiáº¿m
+                                                        </div>
+                                                        {searchHistory.length > 0 && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={clearSearchHistory}
+                                                                className="text-[10px] font-bold uppercase tracking-[0.12em] text-primary/35 hover:text-brick transition-colors"
+                                                            >
+                                                                XÃ³a háº¿t
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    <div className="mt-2 flex flex-wrap gap-2">
+                                                        {searchHistory.length > 0 ? searchHistory.map((term) => (
+                                                            <button
+                                                                key={term}
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    setSearchTerm(term);
+                                                                    setShowSearchDropdown(true);
+                                                                    setShowSearchHistory(false);
+                                                                }}
+                                                                className="inline-flex items-center gap-1 rounded-sm border border-primary/10 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-primary hover:border-primary/25 hover:bg-primary/5 transition-all"
+                                                            >
+                                                                <span className="material-symbols-outlined text-[13px] text-primary/35">history</span>
+                                                                <span className="max-w-[220px] truncate">{term}</span>
+                                                            </button>
+                                                        )) : (
+                                                            <div className="py-2 text-[11px] italic text-primary/30">
+                                                                ChÆ°a cÃ³ lá»‹ch sá»­ tÃ¬m kiáº¿m.
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )}
+                                            {rankedSearchProducts.map((p) => (
                                                     <ProductSearchOption
                                                         key={p.id}
                                                         product={p}
                                                         onSelect={addProductById}
                                                     />
                                                 ))}
-                                            {searchTerm.trim() !== '' && products.filter(p => !formData.items.some(item => item.product_id === p.id)).length === 0 && (
+                                            {searchTerm.trim() !== '' && rankedSearchProducts.length === 0 && (
                                                 <div className="p-4 text-center italic text-primary/20 text-[11px] uppercase font-black tracking-widest">Không có kết quả khả dụng...</div>
                                             )}
                                         </div>
                                     )}
                                     {showSearchDropdown && (
-                                        <div className="fixed inset-0 z-[90]" onClick={() => setShowSearchDropdown(false)} />
+                                        <div
+                                            className="fixed inset-0 z-[90]"
+                                            onClick={() => {
+                                                setShowSearchDropdown(false);
+                                                setShowSearchHistory(false);
+                                            }}
+                                        />
                                     )}
                                 </div>
 
@@ -1512,6 +2147,130 @@ const OrderForm = () => {
                     </div>
                 </div>
             </form>
+
+            <AnimatePresence>
+                {showQuoteTemplatePicker && (
+                    <>
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="fixed inset-0 z-[220] bg-slate-950/35 backdrop-blur-[1px]"
+                            onClick={() => setShowQuoteTemplatePicker(false)}
+                        />
+                        <motion.div
+                            initial={{ opacity: 0, y: 16 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 16 }}
+                            className="fixed inset-0 z-[230] flex items-center justify-center p-6"
+                        >
+                            <div className="w-full max-w-6xl rounded-sm border border-primary/10 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.2)] overflow-hidden">
+                                <div className="flex items-start justify-between gap-4 border-b border-primary/10 bg-primary/[0.02] px-6 py-4">
+                                    <div>
+                                        <h3 className="text-[15px] font-black uppercase tracking-[0.12em] text-primary">Chọn bộ / mẫu báo giá</h3>
+                                        <p className="mt-1 text-[12px] text-primary/45">Chọn ảnh đại diện để hệ thống tạo ảnh báo giá dạng bảng cho đơn hàng hiện tại.</p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setQuoteTemplateSearch('');
+                                            setShowQuoteTemplatePicker(false);
+                                        }}
+                                        className="size-9 rounded-sm border border-primary/10 text-primary/40 hover:text-brick hover:border-brick/20 transition-all flex items-center justify-center"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">close</span>
+                                    </button>
+                                </div>
+
+                                <div className="border-b border-primary/10 px-6 py-4 bg-white">
+                                    <div className="flex flex-col lg:flex-row gap-3 lg:items-center lg:justify-between">
+                                        <div className="relative w-full lg:max-w-[360px]">
+                                            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[16px] text-primary/35">search</span>
+                                            <input
+                                                type="text"
+                                                value={quoteTemplateSearch}
+                                                onChange={(e) => setQuoteTemplateSearch(e.target.value)}
+                                                placeholder="Tìm nhanh theo tên bộ / mẫu..."
+                                                className="w-full h-10 rounded-sm border border-primary/10 bg-primary/[0.02] pl-10 pr-10 text-[13px] text-primary focus:outline-none focus:border-primary/30 focus:bg-white transition-all"
+                                            />
+                                            {quoteTemplateSearch && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setQuoteTemplateSearch('')}
+                                                    className="absolute right-2 top-1/2 -translate-y-1/2 size-7 rounded-sm text-primary/35 hover:text-brick hover:bg-primary/5 transition-all flex items-center justify-center"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">close</span>
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        <div className="flex items-center gap-2 text-[12px] text-primary/45">
+                                            <span className="font-semibold">{filteredQuoteTemplates.length}</span>
+                                            <span>mẫu hiển thị</span>
+                                            <span className="text-primary/20">/</span>
+                                            <span>{availableQuoteTemplates.length} mẫu hoạt động</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="max-h-[68vh] overflow-y-auto p-6 custom-scrollbar">
+                                    {filteredQuoteTemplates.length === 0 ? (
+                                        <div className="rounded-sm border border-dashed border-primary/15 bg-primary/[0.02] px-6 py-14 text-center">
+                                            <div className="text-[13px] font-bold text-primary">Không tìm thấy mẫu phù hợp</div>
+                                            <div className="mt-2 text-[12px] text-primary/45">Thử từ khóa ngắn hơn hoặc xóa bộ lọc để xem toàn bộ mẫu báo giá.</div>
+                                        </div>
+                                    ) : (
+                                        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
+                                        {filteredQuoteTemplates.map((template) => (
+                                            <button
+                                                key={template.id}
+                                                type="button"
+                                                onClick={() => captureQuoteImage(template)}
+                                                className="group overflow-hidden rounded-sm border border-primary/10 bg-white text-left shadow-sm hover:border-primary/30 hover:shadow-md transition-all"
+                                            >
+                                                <div className="aspect-[4/3] bg-stone-50 border-b border-primary/10 overflow-hidden">
+                                                    {template.image_url ? (
+                                                        <img src={template.image_url} alt={template.name} className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform" />
+                                                    ) : (
+                                                        <div className="w-full h-full flex items-center justify-center text-primary/25 uppercase tracking-[0.16em] text-[12px] font-black">
+                                                            Chưa có ảnh
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <div className="px-3 py-3">
+                                                    <div className="text-[12px] font-black uppercase tracking-[0.1em] text-primary line-clamp-2 min-h-[34px]">{template.name}</div>
+                                                    <div className="mt-2 flex items-center justify-between text-[10px] text-primary/45">
+                                                        <span>Sẵn sàng tạo ảnh</span>
+                                                        <span className="inline-flex items-center gap-1 text-primary">
+                                                            Chọn mẫu
+                                                            <span className="material-symbols-outlined text-[15px]">arrow_forward</span>
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </motion.div>
+                    </>
+                )}
+            </AnimatePresence>
+
+            {quoteCaptureTemplate && (
+                <div className="fixed left-[-20000px] top-0 z-[-1]">
+                    <QuoteCaptureSheet
+                        captureRef={quoteCaptureRef}
+                        quoteSettings={quoteSettings}
+                        template={quoteCaptureTemplate}
+                        formData={formData}
+                        orderId={id}
+                        totalQuantity={quoteTotalQuantity}
+                        subtotal={quoteSubtotal}
+                    />
+                </div>
+            )}
         </div>
     );
 };

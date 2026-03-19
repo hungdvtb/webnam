@@ -39,6 +39,7 @@ Route::get('/site-settings', [\App\Http\Controllers\Api\SiteSettingController::c
 Route::get('/menus/code/{code}', [\App\Http\Controllers\Api\MenuController::class , 'getByCode']);
 Route::get('/menus/active', [\App\Http\Controllers\Api\MenuController::class , 'getActive']);
 Route::get('/thumbnail', [ProductImageController::class , 'thumbnail']);
+Route::get('/media/proxy', [MediaController::class, 'proxy']);
 
 
 // Protected routes
@@ -211,6 +212,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/banners/{id}', [\App\Http\Controllers\Api\BannerController::class , 'update']);
         Route::delete('/banners/{id}', [\App\Http\Controllers\Api\BannerController::class , 'destroy']);
         Route::post('/site-settings', [\App\Http\Controllers\Api\SiteSettingController::class , 'store']);
+        Route::get('/quote-templates', [\App\Http\Controllers\Api\QuoteTemplateController::class, 'index']);
+        Route::post('/quote-templates', [\App\Http\Controllers\Api\QuoteTemplateController::class, 'store']);
+        Route::put('/quote-templates/{id}', [\App\Http\Controllers\Api\QuoteTemplateController::class, 'update']);
+        Route::delete('/quote-templates/{id}', [\App\Http\Controllers\Api\QuoteTemplateController::class, 'destroy']);
 
         // Admin Domain routes
         Route::get('/site-domains', [\App\Http\Controllers\Api\SiteDomainController::class , 'index']);

@@ -308,6 +308,7 @@ class OrderController extends Controller
             'customer_phone' => 'nullable|string|max:20',
             'shipping_address' => 'nullable|string',
             'province' => 'nullable|string',
+            'district' => 'nullable|string',
             'ward' => 'nullable|string',
             'notes' => 'nullable|string',
             'custom_attributes' => 'nullable|array',
@@ -368,13 +369,18 @@ class OrderController extends Controller
             // Sync Order EAV custom attributes
             if ($request->has('custom_attributes')) {
                 foreach ($request->custom_attributes as $attrCode => $val) {
-                    $attribute = \App\Models\Attribute::where('code', $attrCode)->first();
-                    if ($attribute) {
-                        \App\Models\OrderAttributeValue::updateOrCreate(
-                            ['order_id' => $order->id, 'attribute_id' => $attribute->id],
-                            ['value' => is_array($val) ? json_encode($val) : $val]
-                        );
-                    }
+                    $attribute = \App\Models\Attribute::firstOrCreate(
+                        ['account_id' => $order->account_id, 'code' => $attrCode],
+                        [
+                            'name' => ucwords(str_replace('_', ' ', $attrCode)),
+                            'frontend_type' => 'text'
+                        ]
+                    );
+
+                    \App\Models\OrderAttributeValue::updateOrCreate(
+                        ['order_id' => $order->id, 'attribute_id' => $attribute->id],
+                        ['value' => is_array($val) ? json_encode($val) : $val]
+                    );
                 }
             }
 

@@ -6,17 +6,120 @@ import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
 import { toPng, toBlob } from 'html-to-image';
 import SearchableSelect from '../../components/SearchableSelect';
+import { VN_REGIONS } from '../../data/regions';
+import {
+    buildRegionPath,
+    buildShippingAddress,
+    extractCustomerInfoFromText,
+    extractAddressDetail,
+    parseAdministrativeAddress,
+    sortRegionObjects,
+    sortRegionStrings,
+    validateVietnamesePhone
+} from '../../utils/administrativeUnits';
 
-const Field = ({ label, children, className = "", labelClassName = "" }) => (
-    <div className={`relative border border-stone/30 rounded-sm px-3 focus-within:border-primary/30 transition-colors flex items-center min-h-[40px] bg-white ${className}`}>
-        <label className={`absolute -top-3 left-2 bg-white px-1.5 font-sans text-[13px] font-bold text-orange-700 tracking-tight leading-none ${labelClassName}`}>
-            {label}
-        </label>
-        <div className="w-full flex items-center pt-0.5 text-[14px]">
-            {children}
+const AdminSection = ({ icon, title, children, className = '', bodyClassName = '' }) => (
+    <section className={`bg-white border border-primary/10 shadow-sm rounded-sm overflow-hidden ${className}`}>
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-primary/10 bg-primary/[0.02]">
+            <span className="material-symbols-outlined text-[18px] text-primary/50">{icon}</span>
+            <h3 className="text-[13px] font-black uppercase tracking-[0.1em] text-primary">{title}</h3>
         </div>
+        <div className={`p-4 space-y-[10px] ${bodyClassName}`}>{children}</div>
+    </section>
+);
+
+const AdminField = ({ label, children, required = false, className = '' }) => (
+    <div className={`space-y-1 ${className}`}>
+        <label className="block text-[11px] font-bold uppercase tracking-widest text-primary/70">
+            {label}
+            {required && <span className="text-brick"> *</span>}
+        </label>
+        {children}
     </div>
 );
+
+const Field = ({ label, children, className = '' }) => (
+    React.Children.toArray(children).some((child) => React.isValidElement(child) && child.props?.readOnly && child.props?.name === 'shipping_address')
+        ? null
+        : (
+            <div className={`space-y-1 ${className}`}>
+                <label className="block text-[11px] font-bold uppercase tracking-widest text-primary/70">{label}</label>
+                {children}
+            </div>
+        )
+);
+
+const adminInputClassName = 'w-full h-10 bg-primary/5 border border-primary/10 px-3 rounded-sm text-[14px] text-[#0F172A] focus:outline-none focus:border-primary/30 transition-all';
+const adminTextareaClassName = 'w-full min-h-[88px] bg-primary/5 border border-primary/10 px-3 py-2 rounded-sm text-[14px] text-[#0F172A] focus:outline-none focus:border-primary/30 transition-all resize-none';
+const adminRegionFieldClassName = 'group relative min-w-0 min-h-[42px] rounded-sm border border-primary/10 bg-primary/5 px-2 py-1 shadow-sm transition-all focus-within:border-primary/30 focus-within:bg-white flex flex-col justify-center';
+const adminRegionLabelClassName = 'mb-1 block text-[8px] font-bold uppercase tracking-widest leading-none text-slate-400 transition-colors pointer-events-none group-focus-within:text-primary';
+const adminRegionClearButtonClassName = 'absolute right-1.5 top-1.5 z-[5] size-4 rounded-full border border-primary/10 bg-white/90 text-primary/35 hover:text-brick hover:border-brick/20 transition-all flex items-center justify-center shadow-sm';
+
+const ProductSearchOption = ({ product, onSelect }) => {
+    const skuRef = useRef(null);
+    const nameRef = useRef(null);
+    const [hasTruncation, setHasTruncation] = useState(false);
+    const [isHovered, setIsHovered] = useState(false);
+
+    const checkTruncation = useCallback(() => {
+        const skuTruncated = skuRef.current && skuRef.current.scrollWidth > skuRef.current.clientWidth + 1;
+        const nameTruncated = nameRef.current && nameRef.current.scrollWidth > nameRef.current.clientWidth + 1;
+        return Boolean(skuTruncated || nameTruncated);
+    }, []);
+
+    useEffect(() => {
+        const frameId = window.requestAnimationFrame(() => {
+            setHasTruncation(checkTruncation());
+        });
+
+        const handleResize = () => {
+            setHasTruncation(checkTruncation());
+        };
+
+        window.addEventListener('resize', handleResize);
+        return () => {
+            window.cancelAnimationFrame(frameId);
+            window.removeEventListener('resize', handleResize);
+        };
+    }, [checkTruncation, product.name, product.sku]);
+
+    const handleMouseEnter = () => {
+        setHasTruncation(checkTruncation());
+        setIsHovered(true);
+    };
+
+    return (
+        <button
+            type="button"
+            onClick={() => onSelect(product.id)}
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={() => setIsHovered(false)}
+            className="w-full px-3 py-2.5 text-left hover:bg-primary/5 border-b border-primary/5 flex items-center gap-3 transition-colors group relative overflow-visible"
+        >
+            <div className="size-8 bg-primary/5 rounded-sm flex items-center justify-center text-primary/10 overflow-hidden shrink-0">
+                {product.main_image ? <img src={product.main_image} alt="" className="size-full object-cover" /> : <span className="material-symbols-outlined text-sm">image</span>}
+            </div>
+            <div className="flex-1 min-w-0">
+                <div className="flex justify-between items-center mb-0.5 gap-3">
+                    <span ref={skuRef} className="text-[13px] font-bold text-primary truncate tracking-tight">{product.sku || '---'}</span>
+                    <span className="text-[14px] font-extrabold text-blue-600 shrink-0 ml-4">{new Intl.NumberFormat('vi-VN').format(product.price)}₫</span>
+                </div>
+                <p ref={nameRef} className="text-[12px] text-primary/50 truncate font-medium">{product.name || '---'}</p>
+            </div>
+
+            {isHovered && hasTruncation && (
+                <div className="pointer-events-none absolute left-11 right-3 top-1/2 z-[120] -translate-y-1/2 rounded-sm border border-primary/10 bg-white/95 px-3 py-2 shadow-[0_18px_40px_rgba(15,23,42,0.16)] ring-1 ring-black/5 backdrop-blur-sm">
+                    <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45 break-all">
+                        {product.sku || '---'}
+                    </div>
+                    <div className="mt-1 text-[12px] font-semibold leading-5 text-[#0F172A] break-words">
+                        {product.name || '---'}
+                    </div>
+                </div>
+            )}
+        </button>
+    );
+};
 
 const OrderForm = () => {
     const { id } = useParams();
@@ -85,6 +188,7 @@ const OrderForm = () => {
         customer_name: '',
         customer_email: '',
         customer_phone: '',
+        address_detail: '',
         shipping_address: '',
         district: '',
         ward: '',
@@ -104,10 +208,11 @@ const OrderForm = () => {
     const [provinces, setProvinces] = useState([]);
     const [districts, setDistricts] = useState([]);
     const [wards, setWards] = useState([]);
-    const [isWardsLoading, setIsWardsLoading] = useState(false);
-    const [isDistrictsLoading, setIsDistrictsLoading] = useState(false);
-    const [useNewAddress, setUseNewAddress] = useState(true);
-    const [didLoadInitialLocation, setDidLoadInitialLocation] = useState(false);
+    const [regionType, setRegionType] = useState('new');
+    const [addressDetection, setAddressDetection] = useState(null);
+    const useNewAddress = regionType === 'new';
+    const isWardsLoading = false;
+    const isDistrictsLoading = false;
 
     useEffect(() => {
         fetchInitialData();
@@ -118,152 +223,169 @@ const OrderForm = () => {
         }
     }, [id, duplicateFromId]);
 
-    // Fetch provinces when mode changes, WITHOUT resetting the entire formData
     useEffect(() => {
-        const fetchProvinces = async () => {
-            try {
-                if (useNewAddress) {
-                    const res = await fetch('https://partner.viettelpost.vn/v2/categories/listProvinceNew');
-                    const data = await res.json();
-                    setProvinces((data.data || []).sort((a, b) => a.PROVINCE_NAME.localeCompare(b.PROVINCE_NAME)));
-                } else {
-                    const res = await fetch('https://provinces.open-api.vn/api/p/');
-                    const data = await res.json();
-                    setProvinces(data.map(p => ({ PROVINCE_ID: p.code, PROVINCE_NAME: p.name })).sort((a, b) => a.PROVINCE_NAME.localeCompare(b.PROVINCE_NAME)));
-                }
-            } catch (e) {
-                console.error('Failed to fetch provinces', e);
-            }
-        };
-        fetchProvinces();
-    }, [useNewAddress]);
-
-    const handleProvinceChange = async (e) => {
-        const pName = e.target.value;
-        setFormData(prev => ({ ...prev, province: pName, district: '', ward: '' }));
+        const nextProvinces = sortRegionObjects(VN_REGIONS[regionType] || []);
+        setProvinces(nextProvinces);
         setDistricts([]);
         setWards([]);
-        if (!pName) return;
-        
-        const provinceObj = provinces.find(p => p.PROVINCE_NAME === pName);
-        if (!provinceObj) return;
 
-        try {
-            if (useNewAddress) {
-                setIsWardsLoading(true);
-                const res = await fetch(`https://partner.viettelpost.vn/v2/categories/listWardsNew?provinceId=${provinceObj.PROVINCE_ID}`);
-                const data = await res.json();
-                const newWards = (data.data || []).map(w => ({ WARD_ID: w.WARDS_ID, WARD_NAME: w.WARDS_NAME }))
-                    .sort((a, b) => a.WARD_NAME.localeCompare(b.WARD_NAME));
-                setWards(newWards);
-                setIsWardsLoading(false);
-            } else {
-                setIsDistrictsLoading(true);
-                const res = await fetch(`https://provinces.open-api.vn/api/p/${provinceObj.PROVINCE_ID}?depth=2`);
-                const data = await res.json();
-                if (data.districts) {
-                    setDistricts(data.districts.map(d => ({ DISTRICT_ID: d.code, DISTRICT_NAME: d.name }))
-                        .sort((a, b) => a.DISTRICT_NAME.localeCompare(b.DISTRICT_NAME)));
-                }
-                setIsDistrictsLoading(false);
-            }
-        } catch (e) {
-            console.error('Failed to fetch address data', e);
-            setIsWardsLoading(false);
-            setIsDistrictsLoading(false);
+        setFormData(prev => {
+            const provinceExists = nextProvinces.some((province) => province.name === prev.province);
+            const nextData = {
+                ...prev,
+                province: provinceExists ? prev.province : '',
+                district: provinceExists && regionType === 'old' ? prev.district : '',
+                ward: provinceExists ? prev.ward : ''
+            };
+
+            return nextData;
+        });
+    }, [regionType]);
+
+    const handleProvinceChange = (e) => {
+        const provinceName = e.target.value;
+        const provinceData = provinces.find((province) => province.name === provinceName);
+
+        setAddressDetection(null);
+        setFormData(prev => syncShippingAddress({
+            ...prev,
+            province: provinceName,
+            district: '',
+            ward: ''
+        }));
+
+        if (regionType === 'old') {
+            setDistricts(sortRegionObjects(provinceData?.districts || []));
+            setWards([]);
+            return;
         }
+
+        setDistricts([]);
+        setWards(sortRegionStrings(provinceData?.wards || []));
     };
 
-    const handleDistrictChange = async (e) => {
-        const dName = e.target.value;
-        setFormData(prev => ({ ...prev, district: dName, ward: '' }));
-        setWards([]);
-        if (!dName) return;
-        
-        const districtObj = districts.find(d => d.DISTRICT_NAME === dName);
-        if (!districtObj) return;
+    const handleDistrictChange = (e) => {
+        const districtName = e.target.value;
+        const districtData = districts.find((district) => district.name === districtName);
 
-        try {
-            setIsWardsLoading(true);
-            const res = await fetch(`https://provinces.open-api.vn/api/d/${districtObj.DISTRICT_ID}?depth=2`);
-            const data = await res.json();
-            if (data.wards) {
-                setWards(data.wards.map(w => ({ WARD_ID: w.code, WARD_NAME: w.name }))
-                    .sort((a, b) => a.WARD_NAME.localeCompare(b.WARD_NAME)));
-            }
-            setIsWardsLoading(false);
-        } catch (e) {
-            console.error('Failed to fetch wards', e);
-            setIsWardsLoading(false);
-        }
+        setAddressDetection(null);
+        setFormData(prev => syncShippingAddress({
+            ...prev,
+            district: districtName,
+            ward: ''
+        }));
+        setWards(sortRegionStrings(districtData?.wards || []));
     };
 
     const handleWardChange = (e) => {
-        const wName = e.target.value;
-        setFormData(prev => {
-            const newData = { ...prev, ward: wName };
-            // Auto fill address
-            if (prev.province && wName) {
-                const baseAddr = prev.shipping_address.split(',')[0].trim();
-                let fullAddr = baseAddr;
-                if (wName) fullAddr += (fullAddr ? ', ' : '') + wName;
-                if (!useNewAddress && prev.district) fullAddr += (fullAddr ? ', ' : '') + prev.district;
-                if (prev.province) fullAddr += (fullAddr ? ', ' : '') + prev.province;
-                newData.shipping_address = fullAddr;
-            }
-            return newData;
-        });
+        const wardName = e.target.value;
+        setAddressDetection(null);
+        setFormData(prev => syncShippingAddress({ ...prev, ward: wardName }));
     };
 
+    const syncShippingAddress = useCallback((nextData, nextRegionType = regionType) => ({
+        ...nextData,
+        shipping_address: nextData.shipping_address || nextData.address_detail || ''
+    }), [regionType]);
+
+    const clearProvince = useCallback(() => {
+        setAddressDetection(null);
+        setDistricts([]);
+        setWards([]);
+        setFormData(prev => syncShippingAddress({
+            ...prev,
+            province: '',
+            district: '',
+            ward: ''
+        }));
+    }, [syncShippingAddress]);
+
+    const clearDistrict = useCallback(() => {
+        setAddressDetection(null);
+        setWards([]);
+        setFormData(prev => syncShippingAddress({
+            ...prev,
+            district: '',
+            ward: ''
+        }));
+    }, [syncShippingAddress]);
+
+    const clearWard = useCallback(() => {
+        setAddressDetection(null);
+        setFormData(prev => syncShippingAddress({
+            ...prev,
+            ward: ''
+        }));
+    }, [syncShippingAddress]);
+
     useEffect(() => {
-        if (provinces.length > 0 && formData.province && !didLoadInitialLocation) {
-            const provinceObj = provinces.find(p => p.PROVINCE_NAME === formData.province);
-            if (!provinceObj) return;
-
-            // Trigger switch to basic mode if district exists
-            if (formData.district && useNewAddress) {
-                setUseNewAddress(false);
-                return; 
-            }
-
-            const loadData = async () => {
-                try {
-                    setDidLoadInitialLocation(true); // Prevent further auto-runs
-                    if (useNewAddress) {
-                        setIsWardsLoading(true);
-                        const res = await fetch(`https://partner.viettelpost.vn/v2/categories/listWardsNew?provinceId=${provinceObj.PROVINCE_ID}`);
-                        const data = await res.json();
-                        setWards((data.data || []).map(w => ({ WARD_ID: w.WARDS_ID, WARD_NAME: w.WARDS_NAME }))
-                            .sort((a, b) => a.WARD_NAME.localeCompare(b.WARD_NAME)));
-                        setIsWardsLoading(false);
-                    } else {
-                        setIsDistrictsLoading(true);
-                        const res = await fetch(`https://provinces.open-api.vn/api/p/${provinceObj.PROVINCE_ID}?depth=2`);
-                        const data = await res.json();
-                        const newDistricts = (data.districts || []).map(d => ({ DISTRICT_ID: d.code, DISTRICT_NAME: d.name }))
-                            .sort((a, b) => a.DISTRICT_NAME.localeCompare(b.DISTRICT_NAME));
-                        setDistricts(newDistricts);
-                        setIsDistrictsLoading(false);
-
-                        if (formData.district) {
-                            const districtObj = newDistricts.find(d => d.DISTRICT_NAME === formData.district);
-                            if (districtObj) {
-                                setIsWardsLoading(true);
-                                const wRes = await fetch(`https://provinces.open-api.vn/api/d/${districtObj.DISTRICT_ID}?depth=2`);
-                                const wData = await wRes.json();
-                                setWards((wData.wards || []).map(w => ({ WARD_ID: w.code, WARD_NAME: w.name }))
-                                    .sort((a, b) => a.WARD_NAME.localeCompare(b.WARD_NAME)));
-                                setIsWardsLoading(false);
-                            }
-                        }
-                    }
-                } catch (e) {
-                    console.error("Error loading saved location data", e);
-                }
-            };
-            loadData();
+        if (!formData.province) {
+            setDistricts([]);
+            setWards([]);
+            return;
         }
-    }, [provinces, formData.province, formData.district, useNewAddress, didLoadInitialLocation]);
+
+        const provinceData = provinces.find((province) => province.name === formData.province);
+        if (!provinceData) return;
+
+        if (regionType === 'old') {
+            const nextDistricts = sortRegionObjects(provinceData.districts || []);
+            setDistricts(nextDistricts);
+            const districtData = nextDistricts.find((district) => district.name === formData.district);
+            setWards(sortRegionStrings(districtData?.wards || []));
+            return;
+        }
+
+        setDistricts([]);
+        setWards(sortRegionStrings(provinceData.wards || []));
+    }, [formData.province, formData.district, provinces, regionType]);
+
+    const detectAdministrativeAddress = useCallback((rawAddress) => {
+        const trimmedAddress = (rawAddress || '').trim();
+        if (!trimmedAddress) {
+            setAddressDetection(null);
+            return;
+        }
+
+        const parsed = parseAdministrativeAddress(trimmedAddress, VN_REGIONS);
+        const extracted = extractCustomerInfoFromText(trimmedAddress);
+
+        if (!parsed || parsed.confidence === 'none') {
+            setAddressDetection({
+                type: 'warning',
+                message: 'Không tự nhận diện chắc chắn. Vui lòng kiểm tra lại đơn vị hành chính.'
+            });
+            setFormData(prev => ({
+                ...prev,
+                customer_name: extracted.customerName || prev.customer_name,
+                customer_phone: extracted.customerPhone || prev.customer_phone,
+                province: '',
+                district: '',
+                ward: '',
+                shipping_address: extracted.addressText || trimmedAddress,
+                address_detail: extracted.addressText || trimmedAddress
+            }));
+            return;
+        }
+
+        setRegionType(parsed.regionType);
+        setFormData(prev => syncShippingAddress({
+            ...prev,
+            customer_name: parsed.customerName || prev.customer_name,
+            customer_phone: parsed.customerPhone || prev.customer_phone,
+            shipping_address: parsed.addressText,
+            address_detail: parsed.addressDetail,
+            province: parsed.province,
+            district: parsed.district || '',
+            ward: parsed.ward || ''
+        }, parsed.regionType));
+        setAddressDetection({
+            type: parsed.confidence === 'exact' ? 'success' : 'warning',
+            message: parsed.confidence === 'exact'
+                ? 'Đã tự nhận diện địa chỉ và điền sẵn thông tin khách hàng.'
+                : 'Đã tự nhận diện gần đúng. Vui lòng kiểm tra lại trước khi lưu.'
+        });
+    }, [syncShippingAddress]);
 
     const handleCancel = useCallback(() => {
         navigate('/admin/orders');
@@ -396,10 +518,18 @@ const OrderForm = () => {
                 }
             });
 
+            setRegionType(order.district ? 'old' : 'new');
             setFormData({
                 customer_name: order.customer_name || '',
                 customer_email: order.customer_email || '',
                 customer_phone: order.customer_phone || '',
+                address_detail: extractAddressDetail({
+                    shippingAddress: order.shipping_address || '',
+                    province: order.province || '',
+                    district: order.district || '',
+                    ward: order.ward || '',
+                    regionType: order.district ? 'old' : 'new'
+                }),
                 shipping_address: order.shipping_address || '',
                 notes: order.notes || '',
                 items: order.items?.map(item => ({
@@ -422,6 +552,7 @@ const OrderForm = () => {
                 district: order.district || '',
                 ward: order.ward || ''
             });
+            setRegionType(order.district ? 'old' : 'new');
 
         } catch (error) {
             console.error("Error fetching order", error);
@@ -438,7 +569,35 @@ const OrderForm = () => {
 
     const handleInputChange = (e) => {
         const { name, value } = e.target;
+        if (name === 'address_detail') {
+            setAddressDetection(null);
+            setFormData(prev => syncShippingAddress({ ...prev, address_detail: value }));
+            return;
+        }
+
         setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleShippingAddressChange = (e) => {
+        const value = e.target.value;
+        setAddressDetection(null);
+        setFormData(prev => ({
+            ...prev,
+            shipping_address: value,
+            address_detail: value
+        }));
+    };
+
+    const handleShippingAddressPaste = (e) => {
+        const pastedText = e.clipboardData.getData('text');
+        if (!pastedText) return;
+
+        e.preventDefault();
+        detectAdministrativeAddress(pastedText);
+    };
+
+    const handleShippingAddressBlur = (e) => {
+        detectAdministrativeAddress(e.target.value);
     };
 
 
@@ -600,21 +759,62 @@ const OrderForm = () => {
         e.preventDefault();
         
         // Validate location
-        const isLocValid = useNewAddress 
+        const isLocValid = regionType === 'new'
             ? (formData.province && formData.ward)
             : (formData.province && formData.district && formData.ward);
 
         if (!isLocValid) {
-            alert(useNewAddress ? 'Vui lòng chọn Tỉnh/Thành phố và Phường/Xã.' : 'Vui lòng chọn đầy đủ Tỉnh, Quận và Phường.');
+            alert(regionType === 'new' ? 'Vui lòng chọn Tỉnh/Thành phố và Phường/Xã.' : 'Vui lòng chọn đầy đủ Tỉnh, Quận và Phường.');
+            return;
+        }
+
+        const normalizedAddressDetail = extractAddressDetail({
+            shippingAddress: formData.shipping_address.trim(),
+            ward: formData.ward,
+            district: formData.district,
+            province: formData.province,
+            regionType
+        });
+        const effectiveAddressDetail = normalizedAddressDetail || formData.address_detail.trim() || formData.shipping_address.trim();
+
+        if (!effectiveAddressDetail) {
+            alert('Vui lòng nhập địa chỉ giao hàng.');
+            return;
+        }
+
+        if (formData.customer_phone && !validateVietnamesePhone(formData.customer_phone)) {
+            alert('Số điện thoại không hợp lệ.');
             return;
         }
 
         setSaving(true);
         try {
+            const payload = {
+                ...formData,
+                address_detail: effectiveAddressDetail,
+                shipping_address: buildShippingAddress({
+                    addressDetail: effectiveAddressDetail,
+                    ward: formData.ward,
+                    district: formData.district,
+                    province: formData.province,
+                    regionType
+                }),
+                custom_attributes: {
+                    ...formData.custom_attributes,
+                    region_type: regionType === 'new' ? 'Địa giới mới' : 'Địa giới cũ',
+                    full_region_path: buildRegionPath({
+                        ward: formData.ward,
+                        district: formData.district,
+                        province: formData.province,
+                        regionType
+                    })
+                }
+            };
+
             if (isEdit) {
-                await orderApi.update(id, formData);
+                await orderApi.update(id, payload);
             } else {
-                await orderApi.store(formData);
+                await orderApi.store(payload);
             }
             navigate('/admin/orders');
         } catch (error) {
@@ -645,19 +845,28 @@ const OrderForm = () => {
     if (loading) return <div className="p-8 text-center italic text-primary">Đang tải dữ liệu...</div>;
 
     return (
-        <div className="bg-[#F8FAFC] min-h-screen p-6 animate-fade-in pb-24 relative">
-            {/* Header Section synchronized with OrderList */}
-            <div className="flex justify-between items-center mb-8 pb-4 border-b-2 border-primary/10">
-                <div className="flex items-center gap-4">
+        <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full overflow-y-auto">
+            <style>{`
+                @keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                .animate-refresh-spin { animation: refresh-spin 0.8s linear infinite; }
+                .admin-header-title { font-size: 15px !important; font-weight: 800 !important; color: #1B365D !important; text-transform: uppercase !important; letter-spacing: 0.1em !important; }
+                .admin-table-header { font-size: 11px !important; font-weight: 900 !important; color: #1B365D !important; text-transform: uppercase !important; letter-spacing: 0.15em !important; background-color: #F0F4F8 !important; }
+                .order-form-table::-webkit-scrollbar { width: 10px; height: 10px; }
+                .order-form-table::-webkit-scrollbar-track { background: #F0F4F8; }
+                .order-form-table::-webkit-scrollbar-thumb { background: #1B365D; border: 2px solid #F0F4F8; border-radius: 5px; }
+            `}</style>
+            <div className="flex-none bg-[#F8FAFC] pb-4 space-y-2">
+                <div className="flex justify-between items-center">
+                <div className="flex items-center gap-3">
                     <button
                         onClick={handleCancel}
-                        className="size-10 flex items-center justify-center bg-white border border-primary/10 text-primary/40 hover:text-brick hover:border-brick/20 rounded-sm shadow-sm transition-all group"
+                        className="size-9 flex items-center justify-center bg-white border border-primary/10 text-primary/50 hover:text-brick hover:border-brick/20 rounded-sm shadow-sm transition-all"
                         title="Quay lại"
                     >
-                        <span className="material-symbols-outlined text-lg">arrow_back</span>
+                        <span className="material-symbols-outlined text-[18px]">arrow_back</span>
                     </button>
                     <div>
-                        <h1 className="font-sans text-[18px] font-bold text-primary leading-none mb-1">
+                        <h1 className="admin-header-title italic">
                             {isEdit ? "Chỉnh sửa đơn hàng" : "Tạo đơn hàng mới"}
                         </h1>
                         <p className="font-sans text-[12px] font-medium text-primary/40">Trang quản trị / Đơn hàng / {isEdit ? `Chi tiết #${id}` : "Thêm mới"}</p>
@@ -669,7 +878,7 @@ const OrderForm = () => {
                      <button
                         type="button"
                         onClick={handleCancel}
-                        className="px-4 py-2 bg-white border border-primary/10 text-primary/60 hover:text-brick text-[12px] font-semibold rounded-sm transition-all"
+                        className="px-4 h-9 bg-white border border-primary/10 text-primary/60 hover:text-brick text-[12px] font-semibold rounded-sm transition-all"
                     >
                         Hủy thoát
                     </button>
@@ -677,7 +886,7 @@ const OrderForm = () => {
                         type="submit"
                         form="order-form"
                         disabled={saving}
-                        className="bg-primary text-white px-6 py-2 rounded-sm text-[12px] font-semibold hover:bg-brick transition-all shadow-lg flex items-center gap-2"
+                        className="bg-primary text-white px-4 h-9 rounded-sm text-[12px] font-semibold hover:bg-brick transition-all shadow-sm flex items-center gap-2"
                     >
                         <span className={`material-symbols-outlined text-base ${saving ? 'animate-spin' : ''}`}>
                             {saving ? 'progress_activity' : 'save'}
@@ -687,12 +896,40 @@ const OrderForm = () => {
                 </div>
             </div>
 
-            <form id="order-form" onSubmit={handleSubmit} className="flex flex-col lg:flex-row gap-[10px] max-w-[1800px] mx-auto">
+                <div className="hidden bg-white border border-primary/10 p-2 shadow-sm rounded-sm flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                        <span className="material-symbols-outlined text-[18px] text-primary/40">receipt_long</span>
+                        <span className="text-[13px] font-bold text-primary">Biên tập đơn hàng</span>
+                    </div>
+                    <div className="flex lg:hidden items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={handleCancel}
+                            className="px-3 h-9 bg-white border border-primary/10 text-primary/60 hover:text-brick text-[12px] font-semibold rounded-sm transition-all"
+                        >
+                            Hủy
+                        </button>
+                        <button
+                            type="submit"
+                            form="order-form"
+                            disabled={saving}
+                            className="bg-primary text-white px-3 h-9 rounded-sm text-[12px] font-semibold hover:bg-brick transition-all shadow-sm flex items-center gap-2"
+                        >
+                            <span className={`material-symbols-outlined text-[16px] ${saving ? 'animate-spin' : ''}`}>
+                                {saving ? 'progress_activity' : 'save'}
+                            </span>
+                            Lưu
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <form id="order-form" onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-[65%_35%] gap-[10px] flex-1 min-h-0">
                 {/* Left Section: Product Management & Custom Attributes */}
-                <div className="flex-1 flex flex-col gap-[10px] max-w-full min-w-0">
-                    <div className="bg-white border border-primary/10 px-8 pb-8 pt-1 shadow-xl rounded-md">
+                <div className="flex flex-col gap-[10px] max-w-full min-w-0">
+                    <div className="bg-white border border-primary/10 p-4 shadow-sm rounded-sm">
                         {/* Title & Product Selector Tags */}
-                        <div className="flex items-center gap-4 mb-6 pt-4 border-b border-primary/5 pb-4">
+                        <div className="flex flex-col xl:flex-row xl:items-center gap-[10px] border-b border-primary/10 pb-4">
                             <div className="relative group">
                                 <span className="material-symbols-outlined text-primary/30 p-3 bg-primary/5 rounded-full">shopping_bag</span>
                                 <button
@@ -705,15 +942,15 @@ const OrderForm = () => {
                                     <span className="material-symbols-outlined text-[14px]">{isCapturing ? 'progress_activity' : 'photo_camera'}</span>
                                 </button>
                             </div>
-                            <div className="flex-1 flex gap-6 items-center relative z-[100] min-w-0">
+                            <div className="flex-1 flex flex-col xl:flex-row gap-[10px] xl:items-center relative z-[100] min-w-0">
                                 {/* Flexible Search Input */}
-                                <div className="relative min-w-[340px] flex-1">
-                                    <div className="flex items-center bg-blue-50/50 border border-dashed border-blue-200 rounded-sm px-4 py-2 focus-within:border-blue-400 focus-within:bg-white transition-all group shadow-sm">
-                                        <span className="material-symbols-outlined text-sm text-slate-900/40 mr-2">search</span>
+                                <div className="relative min-w-[320px] flex-1">
+                                    <div className="flex items-center bg-primary/5 border border-primary/10 rounded-sm px-3 h-10 focus-within:border-primary/30 focus-within:bg-white transition-all shadow-sm">
+                                        <span className="material-symbols-outlined text-[16px] text-primary/40 mr-2">search</span>
                                         <input
                                             type="text"
                                             placeholder="Gõ mã hoặc tên sản phẩm..."
-                                            className="bg-transparent text-[13px] placeholder:text-slate-900/20 focus:outline-none flex-1 font-bold text-slate-900 tracking-tight"
+                                            className="bg-transparent text-[14px] placeholder:text-primary/30 focus:outline-none flex-1 font-medium text-[#0F172A] tracking-tight"
                                             value={searchTerm}
                                             onChange={(e) => {
                                                 setSearchTerm(e.target.value);
@@ -723,7 +960,7 @@ const OrderForm = () => {
                                             onClick={() => setShowSearchDropdown(true)}
                                         />
                                         {searchTerm && (
-                                            <button type="button" onClick={() => setSearchTerm('')} className="text-slate-900/30 hover:text-brick ml-2">
+                                            <button type="button" onClick={() => setSearchTerm('')} className="text-primary/30 hover:text-brick ml-2">
                                                 <span className="material-symbols-outlined text-[14px]">close</span>
                                             </button>
                                         )}
@@ -733,7 +970,7 @@ const OrderForm = () => {
                                                 e.stopPropagation();
                                                 fetchProducts();
                                             }}
-                                            className="text-slate-900/10 hover:text-slate-900 ml-3 border-l border-slate-900/10 pl-3 transition-all"
+                                            className="text-primary/30 hover:text-primary ml-3 border-l border-primary/10 pl-3 transition-all"
                                             title="Làm mới danh sách sản phẩm"
                                         >
                                             <span className="material-symbols-outlined text-xs">refresh</span>
@@ -741,35 +978,16 @@ const OrderForm = () => {
                                     </div>
 
                                     {showSearchDropdown && (
-                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/10 shadow-2xl rounded-sm z-[100] max-h-[400px] overflow-auto custom-scrollbar">
+                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl rounded-sm z-[100] max-h-[400px] overflow-auto custom-scrollbar">
                                             {products
                                                 .filter(p => !formData.items.some(item => item.product_id === p.id))
                                                 .slice(0, 50)
                                                 .map(p => (
-                                                    <button
+                                                    <ProductSearchOption
                                                         key={p.id}
-                                                        type="button"
-                                                        onClick={() => addProductById(p.id)}
-                                                        className="w-full p-3 text-left hover:bg-primary/5 border-b border-primary/5 flex items-center gap-3 transition-colors group relative"
-                                                    >
-                                                        <div className="size-8 bg-primary/5 rounded-sm flex items-center justify-center text-primary/10 overflow-hidden shrink-0">
-                                                            {p.main_image ? <img src={p.main_image} alt="" className="size-full object-cover" /> : <span className="material-symbols-outlined text-sm">image</span>}
-                                                        </div>
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="flex justify-between items-center mb-0.5">
-                                                                <span className="text-[13px] font-bold text-primary truncate tracking-wider">{p.sku || '---'}</span>
-                                                                 <span className="text-[14px] font-extrabold text-blue-600 shrink-0 ml-4">{new Intl.NumberFormat('vi-VN').format(p.price)}₫</span>
-                                                            </div>
-                                                            <p className="text-[12px] text-primary/50 truncate font-medium">{p.name || '---'}</p>
-                                                        </div>
-
-                                                        {/* Tooltip for full details */}
-                                                        <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 bg-slate-900/95 text-white p-3 rounded-sm shadow-2xl opacity-0 group-hover:opacity-100 pointer-events-none transition-all z-[200] w-72 backdrop-blur-md border border-white/10 scale-95 group-hover:scale-100 origin-left">
-                                                            <div className="text-[10px] text-blue-400 font-bold uppercase tracking-widest mb-1 pb-1 border-b border-white/10">{p.sku || 'N/A'}</div>
-                                                            <div className="text-[13px] font-bold leading-relaxed">{p.name}</div>
-                                                            <div className="absolute right-full top-1/2 -translate-y-1/2 w-0 h-0 border-t-[6px] border-t-transparent border-b-[6px] border-b-transparent border-r-[6px] border-r-slate-900/95"></div>
-                                                        </div>
-                                                    </button>
+                                                        product={p}
+                                                        onSelect={addProductById}
+                                                    />
                                                 ))}
                                             {searchTerm.trim() !== '' && products.filter(p => !formData.items.some(item => item.product_id === p.id)).length === 0 && (
                                                 <div className="p-4 text-center italic text-primary/20 text-[11px] uppercase font-black tracking-widest">Không có kết quả khả dụng...</div>
@@ -782,7 +1000,7 @@ const OrderForm = () => {
                                 </div>
 
                                 {/* Scrollable Product Chips - Strictly Single Row */}
-                                <div className="flex-[3] flex flex-nowrap gap-2 items-center overflow-x-auto overflow-y-hidden custom-scrollbar-horizontal pb-1 border-l border-blue-100/50 pl-4 h-[52px] min-w-0 mask-fade-right">
+                                <div className="flex-[3] flex flex-nowrap gap-2 items-center overflow-x-auto overflow-y-hidden custom-scrollbar pb-1 border border-primary/10 bg-primary/5 rounded-sm px-2 h-[42px] min-w-0">
                                     {formData.items.map((item, index) => (
                                         <div key={item.product_id} className="bg-orange-50 hover:bg-orange-100/50 px-3 py-1.5 rounded-sm border border-orange-200 flex items-center gap-2 transition-all group/chip relative shadow-sm shrink-0">
                                             <div className="flex items-center gap-2 overflow-hidden">
@@ -807,13 +1025,13 @@ const OrderForm = () => {
                         </div>
 
                              {/* Captured Area for Screenshot */}
-                        <div ref={captureRef} className="bg-white px-12 pb-12 pt-6 -mx-12 rounded-sm shadow-sm border border-primary/5">
-                            <div className="relative min-h-[400px]">
+                        <div ref={captureRef} className="bg-white mt-[10px] rounded-sm shadow-xl border border-primary/10 overflow-hidden">
+                            <div className="relative min-h-[400px] overflow-auto order-form-table">
                                 <table className="w-full text-left border-collapse table-fixed lg:table-auto">
-                                    <thead className="font-sans text-[11px] font-extrabold text-blue-600 bg-blue-50 sticky top-0 z-30 shadow-sm border-b border-blue-100">
+                                    <thead className="admin-table-header sticky top-0 z-30 shadow-sm border-b border-primary/10">
                                         <tr>
                                             {/* Column Config Header */}
-                                            <th className="w-12 border border-blue-100 bg-blue-50 shrink-0 relative text-center sticky top-0 z-30">
+                                            <th className="w-12 border border-primary/10 bg-[#F0F4F8] shrink-0 relative text-center sticky top-0 z-30">
                                                 <div className="flex items-center justify-center">
                                                     <button
                                                         type="button"
@@ -838,7 +1056,7 @@ const OrderForm = () => {
                                                                     <div className="space-y-1">
                                                                         <Reorder.Group axis="y" values={columnOrder} onReorder={setColumnOrder} className="space-y-1">
                                                                             {columnOrder.map(colId => (
-                                                                                 <Reorder.Item key={colId} value={colId} className="flex items-center justify-between p-2 hover:bg-blue-50 rounded-sm cursor-grab active:cursor-grabbing border border-transparent hover:border-blue-100 group transition-all">
+                                                                                 <Reorder.Item key={colId} value={colId} className="flex items-center justify-between p-2 hover:bg-primary/5 rounded-sm cursor-grab active:cursor-grabbing border border-transparent hover:border-primary/10 group transition-all">
                                                                                     <div className="flex items-center gap-3">
                                                                                         <span className="material-symbols-outlined text-[16px] text-primary/20 group-hover:text-primary/40">drag_indicator</span>
                                                                                          <span className="text-[12px] font-bold text-primary">{COLUMN_DEFS[colId].label}</span>
@@ -889,10 +1107,10 @@ const OrderForm = () => {
                                                 return (
                                                     <th
                                                         key={colId}
-                                                        className={`py-4 px-4 border border-blue-100 text-${def.align} relative group/header sticky top-0 z-30 bg-blue-50`}
+                                                        className={`py-3 px-4 border border-primary/10 text-${def.align} relative group/header sticky top-0 z-30 bg-[#F0F4F8]`}
                                                         style={width ? { width: `${width}px` } : { width: 'auto' }}
                                                     >
-                                                          <span className="block whitespace-nowrap font-sans text-[10px] font-black text-blue-600/60 uppercase tracking-[0.15em]">{def.label}</span>
+                                                          <span className="block whitespace-nowrap text-primary font-black uppercase tracking-[0.15em]">{def.label}</span>
                                                         {/* Resize Handle */}
                                                         <div
                                                             className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/30 z-20 transition-colors opacity-0 group-hover/header:opacity-100"
@@ -1016,7 +1234,7 @@ const OrderForm = () => {
                                 </table>
                             </div>
 
-                            <div className="flex justify-end pt-8 border-t-2 border-primary/10 mt-2">
+                            <div className="flex justify-end px-4 py-5 border-t border-primary/10 bg-white">
                                 <div className="flex items-baseline gap-4">
                                     <span className="font-sans font-bold text-brick/60 text-[12px]">Tổng thanh toán:</span>
                                     <span className="font-sans font-black text-brick text-[32px] leading-none tracking-tighter">
@@ -1026,7 +1244,7 @@ const OrderForm = () => {
                             </div>
                         </div>
 
-                        <div className="flex justify-end pt-4 border-t border-primary/10 section-summary bg-primary/5 -mx-12 px-12 pb-8 rounded-b-md">
+                        <div className="flex justify-end p-4 border-t border-primary/10 bg-primary/[0.02]">
                             {/* Right: Totals */}
                             <div className="space-y-4 font-sans min-w-[340px]">
                                 <div className="flex justify-between items-center" data-screenshot-hide="true">
@@ -1080,20 +1298,20 @@ const OrderForm = () => {
                 </div>
 
                 {/* Right Section: Sidebar Metadata */}
-                <div className="w-full lg:w-[450px] shrink-0 flex flex-col gap-[10px]">
-                    <div className="bg-white border border-stone/10 p-5 shadow-sm rounded-sm">
-                        <div className="flex items-center gap-2.5 mb-6 border-b border-stone/10 pb-2">
-                            <span className="material-symbols-outlined text-primary/40 p-1.5 bg-stone/5 rounded-full text-base">assignment</span>
+                <div className="w-full min-w-0 max-w-full flex flex-col gap-[10px]">
+                    <div className="bg-white border border-primary/10 p-4 shadow-sm rounded-sm">
+                        <div className="flex items-center gap-2.5 mb-[10px] border-b border-primary/10 pb-3">
+                            <span className="material-symbols-outlined text-primary/40 text-[18px]">assignment</span>
                             <h3 className="font-sans text-[15px] font-bold text-primary uppercase tracking-tight">Thông tin đơn hàng</h3>
                         </div>
 
-                        <div className="space-y-5">
+                        <div className="space-y-[10px]">
                             <Field label="Trạng thái">
                             <select
                                 name="status"
                                 value={formData.status}
                                 onChange={handleInputChange}
-                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px] min-h-[30px] pt-1 appearance-none cursor-pointer"
+                                className={adminInputClassName}
                             >
                                 {orderStatuses.filter(s => s.is_active || (formData.status && s.code.toLowerCase() === formData.status.toLowerCase())).map(s => (
                                     <option key={s.id} value={s.code}>{s.name || s.code}</option>
@@ -1103,9 +1321,25 @@ const OrderForm = () => {
                                 )}
                             </select>
                         </Field>
+                        {addressDetection && (
+                            <div className={`rounded-sm border px-3 py-2 text-[12px] ${addressDetection.type === 'success' ? 'border-green-200 bg-green-50 text-green-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                                {addressDetection.message}
+                            </div>
+                        )}
+
+                        <Field label="Địa chỉ giao hàng tự động" className="min-h-[100px] items-start pt-3">
+                            <textarea
+                                name="shipping_address"
+                                value={formData.shipping_address}
+                                readOnly
+                                rows="3"
+                                className={`${adminTextareaClassName} bg-slate-50`}
+                                placeholder="..."
+                            />
+                        </Field>
 
                         <Field label="Nhân viên xử lý">
-                            <p className="w-full bg-transparent text-primary/60 font-bold text-[14px] min-h-[30px] pt-1 leading-none">{user?.name || "Super Admin"}</p>
+                            <div className={`${adminInputClassName} flex items-center text-primary/60 bg-slate-50`}>{user?.name || "Super Admin"}</div>
                         </Field>
 
                         <Field label="Tên khách hàng">
@@ -1114,7 +1348,7 @@ const OrderForm = () => {
                                 name="customer_name"
                                 value={formData.customer_name}
                                 onChange={handleInputChange}
-                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px] min-h-[30px] pt-1"
+                                className={adminInputClassName}
                                 placeholder="..."
                             />
                         </Field>
@@ -1125,7 +1359,7 @@ const OrderForm = () => {
                                 name="customer_phone"
                                 value={formData.customer_phone}
                                 onChange={handleInputChange}
-                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px] min-h-[30px] pt-1"
+                                className={`${adminInputClassName} ${formData.customer_phone && !validateVietnamesePhone(formData.customer_phone) ? 'border-brick' : ''}`}
                                 placeholder="..."
                             />
                         </Field>
@@ -1135,55 +1369,87 @@ const OrderForm = () => {
                             <span className="text-[11px] font-black text-primary/40 uppercase tracking-widest leading-none">Đơn vị hành chính</span>
                             <div 
                                 className="flex items-center gap-1 cursor-pointer p-0.5 bg-primary/5 rounded-full border border-primary/10"
-                                onClick={() => setUseNewAddress(!useNewAddress)}
+                                onClick={() => setRegionType(useNewAddress ? 'old' : 'new')}
                             >
                                 <div className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase transition-all ${useNewAddress ? 'bg-primary text-white shadow-sm' : 'text-primary/40'}`}>Mới nhất</div>
                                 <div className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase transition-all ${!useNewAddress ? 'bg-orange-600 text-white shadow-sm' : 'text-primary/40'}`}>Cũ</div>
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-3 gap-1.5 mb-4">
-                            <div className="relative border border-primary/5 rounded-sm px-2 py-1 focus-within:border-primary/20 focus-within:bg-white shadow-sm transition-all flex flex-col justify-center min-h-[42px] bg-primary/[0.03] group">
-                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1 pointer-events-none group-focus-within:text-primary transition-colors">
+                        <div className={`grid ${useNewAddress ? 'grid-cols-[minmax(0,1.16fr)_minmax(0,1fr)]' : 'grid-cols-[minmax(0,1.24fr)_minmax(0,0.96fr)_minmax(0,1.04fr)]'} gap-[10px] mb-[10px]`}>
+                            <div className={adminRegionFieldClassName}>
+                                <span className={adminRegionLabelClassName}>
                                     Tỉnh / Thành phố
                                 </span>
+                                {formData.province && (
+                                    <button
+                                        type="button"
+                                        onClick={clearProvince}
+                                        className={adminRegionClearButtonClassName}
+                                        title="Xóa Tỉnh/Thành phố"
+                                    >
+                                        <span className="material-symbols-outlined text-[10px] leading-none">close</span>
+                                    </button>
+                                )}
                                 <SearchableSelect
-                                    options={(provinces || []).map(p => p.PROVINCE_NAME)}
+                                    options={(provinces || []).map(p => p.name)}
                                     value={formData.province}
                                     name="province"
                                     onChange={handleProvinceChange}
                                     placeholder="Tỉnh..."
-                                    compact={true}
+                                    variant="admin"
                                 />
                             </div>
 
-                            <div className={`relative border border-primary/5 rounded-sm px-2 py-1 focus-within:border-primary/20 focus-within:bg-white shadow-sm transition-all flex flex-col justify-center min-h-[42px] bg-primary/[0.03] group ${(!useNewAddress && isDistrictsLoading) ? 'opacity-50' : ''} ${useNewAddress ? 'opacity-30 grayscale cursor-not-allowed' : ''}`}>
-                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1 pointer-events-none group-focus-within:text-primary transition-colors">
+                            {!useNewAddress && (
+                            <div className={adminRegionFieldClassName}>
+                                <span className={adminRegionLabelClassName}>
                                     Quận / Huyện
                                 </span>
+                                {formData.district && (
+                                    <button
+                                        type="button"
+                                        onClick={clearDistrict}
+                                        className={adminRegionClearButtonClassName}
+                                        title="Xóa Quận/Huyện"
+                                    >
+                                        <span className="material-symbols-outlined text-[10px] leading-none">close</span>
+                                    </button>
+                                )}
                                 <SearchableSelect
-                                    options={districts.map(d => d.DISTRICT_NAME)}
+                                    options={districts.map(d => d.name)}
                                     value={formData.district}
                                     name="district"
                                     onChange={handleDistrictChange}
                                     placeholder={useNewAddress ? "-" : (isDistrictsLoading ? "..." : "Quận...")}
                                     disabled={useNewAddress || !formData.province || isDistrictsLoading}
-                                    compact={true}
+                                    variant="admin"
                                 />
                             </div>
 
-                            <div className={`relative border border-primary/5 rounded-sm px-2 py-1 focus-within:border-primary/20 focus-within:bg-white shadow-sm transition-all flex flex-col justify-center min-h-[42px] bg-primary/[0.03] group ${isWardsLoading ? 'opacity-50' : ''}`}>
-                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1 pointer-events-none group-focus-within:text-primary transition-colors">
+                            )}
+                            <div className={adminRegionFieldClassName}>
+                                <span className={adminRegionLabelClassName}>
                                     Phường / Xã
                                 </span>
+                                {formData.ward && (
+                                    <button
+                                        type="button"
+                                        onClick={clearWard}
+                                        className={adminRegionClearButtonClassName}
+                                        title="Xóa Phường/Xã"
+                                    >
+                                        <span className="material-symbols-outlined text-[10px] leading-none">close</span>
+                                    </button>
+                                )}
                                 <SearchableSelect
-                                    options={wards.map(w => w.WARD_NAME)}
+                                    options={wards}
                                     value={formData.ward}
                                     name="ward"
                                     onChange={handleWardChange}
                                     placeholder={isWardsLoading ? "..." : "Phường..."}
                                     disabled={(!useNewAddress && !formData.district) || (useNewAddress && !formData.province) || isWardsLoading}
-                                    compact={true}
+                                    variant="admin"
                                 />
                             </div>
                         </div>
@@ -1192,10 +1458,12 @@ const OrderForm = () => {
                             <textarea
                                 name="shipping_address"
                                 value={formData.shipping_address}
-                                onChange={handleInputChange}
+                                onChange={handleShippingAddressChange}
+                                onPaste={handleShippingAddressPaste}
+                                onBlur={handleShippingAddressBlur}
                                 rows="3"
-                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[13px] resize-none leading-relaxed mt-2"
-                                placeholder="..."
+                                className={adminTextareaClassName}
+                                placeholder="Dán hoặc nhập địa chỉ để tự nhận diện..."
                             />
                         </Field>
 
@@ -1205,7 +1473,7 @@ const OrderForm = () => {
                                 value={formData.notes}
                                 onChange={handleInputChange}
                                 rows="3"
-                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[13px] resize-none leading-relaxed mt-2"
+                                className={adminTextareaClassName}
                                 placeholder="..."
                             />
                         </Field>
@@ -1223,7 +1491,7 @@ const OrderForm = () => {
                                             type="text"
                                             value={formData.custom_attributes[attr.code] || ''}
                                             onChange={(e) => handleAttributeChange(attr.code, e.target.value)}
-                                            className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px] min-h-[30px] pt-1"
+                                            className={adminInputClassName}
                                             placeholder={`...`}
                                         />
                                     </Field>

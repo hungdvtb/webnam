@@ -6,6 +6,13 @@ import { useUI } from '../context/UIContext';
 import { orderApi, couponApi } from '../services/api';
 import { VN_REGIONS } from '../data/regions';
 import SearchableSelect from '../components/SearchableSelect';
+import {
+    buildRegionPath,
+    buildShippingAddress,
+    sortRegionObjects,
+    sortRegionStrings,
+    validateVietnamesePhone
+} from '../utils/administrativeUnits';
 
 const Checkout = () => {
     const { cart, cartTotal, refreshCart } = useCart();
@@ -31,14 +38,24 @@ const Checkout = () => {
         district: '',
         ward: '',
         address_detail: '',
+        shipping_address: '',
         notes: '',
         payment_method: 'cod'
     });
 
     useEffect(() => {
-        const provinceList = VN_REGIONS[regionType] || [];
+        const provinceList = sortRegionObjects(VN_REGIONS[regionType] || []);
         setProvinces(provinceList);
-        setFormData(prev => ({ ...prev, province: '', district: '', ward: '' }));
+        setFormData(prev => ({
+            ...prev,
+            province: '',
+            district: '',
+            ward: '',
+            shipping_address: buildShippingAddress({
+                addressDetail: prev.address_detail,
+                regionType
+            })
+        }));
         setDistricts([]);
         setWards([]);
     }, [regionType]);
@@ -47,11 +64,11 @@ const Checkout = () => {
         if (formData.province) {
             const provinceData = provinces.find(p => p.name === formData.province);
             if (regionType === 'old') {
-                setDistricts(provinceData?.districts || []);
+                setDistricts(sortRegionObjects(provinceData?.districts || []));
                 setWards([]);
                 setFormData(prev => ({ ...prev, district: '', ward: '' }));
             } else {
-                setWards(provinceData?.wards || []);
+                setWards(sortRegionStrings(provinceData?.wards || []));
                 setDistricts([]);
                 setFormData(prev => ({ ...prev, district: '', ward: '' }));
             }
@@ -61,10 +78,28 @@ const Checkout = () => {
     useEffect(() => {
         if (regionType === 'old' && formData.district) {
             const districtData = districts.find(d => d.name === formData.district);
-            setWards(districtData?.wards || []);
+            setWards(sortRegionStrings(districtData?.wards || []));
             setFormData(prev => ({ ...prev, ward: '' }));
         }
     }, [formData.district, districts, regionType]);
+
+    useEffect(() => {
+        setFormData(prev => {
+            const shippingAddress = buildShippingAddress({
+                addressDetail: prev.address_detail,
+                ward: prev.ward,
+                district: prev.district,
+                province: prev.province,
+                regionType
+            });
+
+            if (prev.shipping_address === shippingAddress) {
+                return prev;
+            }
+
+            return { ...prev, shipping_address: shippingAddress };
+        });
+    }, [formData.address_detail, formData.province, formData.district, formData.ward, regionType]);
 
     if (!cart || cart.items.length === 0) {
         navigate('/cart');
@@ -75,10 +110,7 @@ const Checkout = () => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
     };
 
-    const validatePhone = (phone) => {
-        const regex = /^(0[3|5|7|8|9])+([0-9]{8})$/;
-        return regex.test(phone);
-    };
+    const validatePhone = validateVietnamesePhone;
 
     const handleApplyCoupon = async () => {
         if (!couponCode) return;
@@ -97,7 +129,7 @@ const Checkout = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
 
-        if (!validatePhone(formData.customer_phone)) {
+        if (!validateVietnamesePhone(formData.customer_phone)) {
             setError('Số điện thoại không hợp lệ (Cần 10 số, bắt đầu bằng 03, 05, 07, 08, 09)');
             return;
         }
@@ -105,23 +137,18 @@ const Checkout = () => {
         setLoading(true);
         setError('');
         try {
-            const addressParts = [
-                formData.address_detail,
-                formData.ward,
-                regionType === 'old' ? formData.district : null,
-                formData.province
-            ].filter(Boolean);
-
-            const fullAddress = addressParts.join(', ');
-
             const data = {
                 ...formData,
-                shipping_address: fullAddress,
                 coupon_id: couponData?.id,
                 discount_amount: discountAmount,
                 custom_attributes: {
                     region_type: regionType === 'new' ? 'Địa giới mới' : 'Địa giới cũ',
-                    full_region_path: addressParts.slice(1).join(' > ')
+                    full_region_path: buildRegionPath({
+                        ward: formData.ward,
+                        district: formData.district,
+                        province: formData.province,
+                        regionType
+                    })
                 }
             };
             const response = await orderApi.store(data);
@@ -193,7 +220,7 @@ const Checkout = () => {
                                     value={formData.customer_phone}
                                     onChange={handleChange}
                                     required
-                                    className={`w-full bg-white border p-4 focus:outline-none font-body ${formData.customer_phone && !validatePhone(formData.customer_phone) ? 'border-brick' : 'border-gold/20 focus:border-primary'}`}
+                                    className={`w-full bg-white border p-4 focus:outline-none font-body ${formData.customer_phone && !validateVietnamesePhone(formData.customer_phone) ? 'border-brick' : 'border-gold/20 focus:border-primary'}`}
                                     placeholder="09xx xxx xxx"
                                 />
                                 {formData.customer_phone && !validatePhone(formData.customer_phone) && <p className="text-[10px] text-brick italic">Số điện thoại không hợp lệ</p>}

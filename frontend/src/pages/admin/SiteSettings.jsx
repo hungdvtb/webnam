@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { cmsApi, mediaApi, quoteTemplateApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
+import { createDefaultHeaderMenus, normalizeHeaderMenus } from '../../utils/headerSettings';
 
 const defaultSettings = {
     site_name: '',
@@ -27,11 +28,82 @@ const defaultSettings = {
     quote_store_name: '',
     quote_store_address: '',
     quote_store_phone: '',
+    header_brand_text: '',
+    header_notice_text: '',
+    header_search_placeholder: '',
+    header_menu_items: createDefaultHeaderMenus(),
 };
+
+const createHeaderMenuItem = () => ({
+    id: `header-menu-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    label: 'Menu mới',
+    link: '/',
+    enabled: true,
+    order: 999,
+});
 
 const inputClasses = 'w-full h-10 bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary transition-all placeholder:text-primary/20';
 const textareaClasses = 'w-full min-h-[96px] bg-white border border-primary/20 rounded-sm px-3 py-2 text-[13px] font-bold text-primary focus:outline-none focus:border-primary transition-all placeholder:text-primary/20 resize-none';
 const labelClasses = 'text-[11px] font-black uppercase text-primary/80 tracking-wider mb-2 block';
+
+const HEADER_ROUTE_REFERENCE_ROWS = [
+    { page: 'Trang chủ', route: '/', note: 'Storefront chính (đã tạo)', scope: 'Public', exists: true },
+    { page: 'Sản phẩm', route: '/san-pham', note: 'Danh sách sản phẩm storefront (đã tạo)', scope: 'Public', exists: true },
+    { page: 'Chi tiết sản phẩm', route: '/san-pham/:slugOrId', note: 'Route động chi tiết sản phẩm', scope: 'Public', exists: true },
+    { page: 'Danh mục sản phẩm', route: '/danh-muc/:slug', note: 'Route động theo danh mục', scope: 'Public', exists: true },
+    { page: 'Thanh toán (storefront mới)', route: '/dat-hang', note: 'Trang đặt hàng/checkout hiện tại (đã tạo)', scope: 'Public', exists: true },
+    { page: 'Về chúng tôi', route: '/about', note: 'Trang giới thiệu (đã tạo)', scope: 'Public', exists: true },
+    { page: 'Tin tức / Kiến thức gốm', route: '/blog', note: 'Danh sách bài viết (đã tạo)', scope: 'Public', exists: true },
+    { page: 'Chi tiết bài viết', route: '/blog/:slug', note: 'Route động chi tiết blog', scope: 'Public', exists: true },
+    { page: 'Cảm ơn đơn hàng', route: '/cam-on', note: 'Trang hoàn tất đơn (đã tạo)', scope: 'Public', exists: true },
+    { page: 'Trang chủ (legacy)', route: '/old', note: 'Nhánh website cũ', scope: 'Legacy', exists: true },
+    { page: 'Sản phẩm (legacy)', route: '/old/shop', note: 'Cửa hàng phiên bản cũ', scope: 'Legacy', exists: true },
+    { page: 'Chi tiết sản phẩm (legacy)', route: '/old/details', note: 'Chi tiết sản phẩm cũ', scope: 'Legacy', exists: true },
+    { page: 'Chi tiết sản phẩm theo id (legacy)', route: '/old/details/:id', note: 'Route động', scope: 'Legacy', exists: true },
+    { page: 'Về chúng tôi (legacy)', route: '/old/about', note: 'Trang giới thiệu cũ', scope: 'Legacy', exists: true },
+    { page: 'Giỏ hàng (legacy)', route: '/old/cart', note: 'Giỏ hàng cũ', scope: 'Legacy', exists: true },
+    { page: 'Thanh toán (legacy)', route: '/old/checkout', note: 'Checkout cũ', scope: 'Legacy', exists: true },
+    { page: 'Tin tức (legacy)', route: '/old/blog', note: 'Blog cũ', scope: 'Legacy', exists: true },
+    { page: 'Chi tiết bài viết (legacy)', route: '/old/blog/:slug', note: 'Route động', scope: 'Legacy', exists: true },
+    { page: 'Đăng nhập (legacy)', route: '/old/login', note: 'Trang đăng nhập cũ', scope: 'Legacy', exists: true },
+    { page: 'Đăng ký (legacy)', route: '/old/register', note: 'Trang đăng ký cũ', scope: 'Legacy', exists: true },
+    { page: 'Lịch sử đơn / Dashboard (legacy)', route: '/old/dashboard', note: 'Hiện đang dùng cho tài khoản người dùng cũ', scope: 'Legacy', exists: true },
+    { page: 'Cảm ơn đơn hàng (legacy)', route: '/old/cam-on', note: 'Trang hoàn tất đơn ở nhánh cũ', scope: 'Legacy', exists: true },
+    { page: 'Admin dashboard', route: '/admin', note: 'Trang quản trị', scope: 'Admin', exists: true },
+    { page: 'Admin - Sản phẩm', route: '/admin/products', note: 'Quản trị sản phẩm', scope: 'Admin', exists: true },
+    { page: 'Admin - Thêm sản phẩm', route: '/admin/products/new', note: 'Form tạo sản phẩm', scope: 'Admin', exists: true },
+    { page: 'Admin - Sửa sản phẩm', route: '/admin/products/edit/:id', note: 'Route động', scope: 'Admin', exists: true },
+    { page: 'Admin - Danh mục', route: '/admin/categories', note: 'Quản trị danh mục', scope: 'Admin', exists: true },
+    { page: 'Admin - Thuộc tính', route: '/admin/attributes', note: 'Quản trị thuộc tính', scope: 'Admin', exists: true },
+    { page: 'Admin - Menu', route: '/admin/menus', note: 'Quản trị menu hệ thống', scope: 'Admin', exists: true },
+    { page: 'Admin - Accounts', route: '/admin/accounts', note: 'Quản lý account', scope: 'Admin', exists: true },
+    { page: 'Admin - Kho', route: '/admin/warehouses', note: 'Quản lý kho', scope: 'Admin', exists: true },
+    { page: 'Admin - Vận đơn', route: '/admin/shipments', note: 'Quản lý shipment', scope: 'Admin', exists: true },
+    { page: 'Admin - Đơn chờ xử lý', route: '/admin/pending-orders', note: 'Danh sách đơn chờ', scope: 'Admin', exists: true },
+    { page: 'Admin - Đơn hàng', route: '/admin/orders', note: 'Danh sách đơn hàng', scope: 'Admin', exists: true },
+    { page: 'Admin - Tạo đơn hàng', route: '/admin/orders/new', note: 'Form tạo đơn', scope: 'Admin', exists: true },
+    { page: 'Admin - Sửa đơn hàng', route: '/admin/orders/edit/:id', note: 'Route động', scope: 'Admin', exists: true },
+    { page: 'Admin - Chi tiết đơn hàng', route: '/admin/orders/:id', note: 'Route động chi tiết', scope: 'Admin', exists: true },
+    { page: 'Admin - Tồn kho', route: '/admin/inventory', note: 'Theo dõi nhập/xuất', scope: 'Admin', exists: true },
+    { page: 'Admin - Khách hàng', route: '/admin/customers', note: 'Quản lý khách hàng', scope: 'Admin', exists: true },
+    { page: 'Admin - Leads', route: '/admin/leads', note: 'Danh sách khách tiềm năng', scope: 'Admin', exists: true },
+    { page: 'Admin - Blog', route: '/admin/blog', note: 'Danh sách bài viết', scope: 'Admin', exists: true },
+    { page: 'Admin - Tạo bài viết', route: '/admin/blog/new', note: 'Form tạo bài', scope: 'Admin', exists: true },
+    { page: 'Admin - Sửa bài viết', route: '/admin/blog/edit/:id', note: 'Route động', scope: 'Admin', exists: true },
+    { page: 'Admin - Banner', route: '/admin/banners', note: 'Đã disable khỏi router/menu admin', scope: 'Placeholder', exists: false },
+    { page: 'Admin - Tạo banner', route: '/admin/banners/new', note: 'Đã disable khỏi router/menu admin', scope: 'Placeholder', exists: false },
+    { page: 'Admin - Sửa banner', route: '/admin/banners/edit/:id', note: 'Đã disable khỏi router/menu admin', scope: 'Placeholder', exists: false },
+    { page: 'Admin - Cài đặt web', route: '/admin/settings', note: 'Trang bạn đang thao tác', scope: 'Admin', exists: true },
+    { page: 'Admin - Users', route: '/admin/users', note: 'Quản lý người dùng', scope: 'Admin', exists: true },
+    { page: 'Admin - Báo cáo', route: '/admin/reports', note: 'Báo cáo kinh doanh', scope: 'Admin', exists: true },
+    { page: 'Admin - Cấu hình trạng thái đơn', route: '/admin/order-status-settings', note: 'Thiết lập trạng thái đơn', scope: 'Admin', exists: true },
+    { page: 'Admin - Mapping hãng vận chuyển', route: '/admin/carrier-mappings', note: 'Thiết lập carrier mapping', scope: 'Admin', exists: true },
+    { page: 'Hệ thống cửa hàng', route: '/he-thong-cua-hang', note: 'Chưa tạo trong router hiện tại (placeholder)', scope: 'Placeholder', exists: false },
+    { page: 'Giỏ hàng (storefront mới)', route: '/cart', note: 'Chưa tạo trong storefront mới, đang có /old/cart', scope: 'Placeholder', exists: false },
+    { page: 'Thanh toán (route mẫu)', route: '/checkout', note: 'Chưa tạo trong storefront mới, đang dùng /dat-hang', scope: 'Placeholder', exists: false },
+    { page: 'Cảm ơn / hoàn tất đơn (route mẫu)', route: '/order-success', note: 'Chưa tạo, hiện dùng /cam-on', scope: 'Placeholder', exists: false },
+    { page: 'Lịch sử đơn hàng (route mẫu)', route: '/order-history', note: 'Chưa tạo, gần nhất là /old/dashboard', scope: 'Placeholder', exists: false },
+];
 
 const SectionCard = ({ icon, title, children, rightSlot = null }) => (
     <div className="bg-white border border-primary/10 shadow-sm rounded-sm overflow-hidden">
@@ -90,6 +162,8 @@ const SiteSettings = () => {
     const [quoteTemplates, setQuoteTemplates] = useState([]);
     const [quoteTemplateDraft, setQuoteTemplateDraft] = useState({ name: '', image_url: '' });
     const [savingQuoteTemplateId, setSavingQuoteTemplateId] = useState(null);
+    const [headerMenus, setHeaderMenus] = useState(createDefaultHeaderMenus());
+    const [copiedRoute, setCopiedRoute] = useState('');
 
     const activeAccountId = localStorage.getItem('activeAccountId');
 
@@ -115,7 +189,18 @@ const SiteSettings = () => {
         setLoading(true);
         try {
             const response = await cmsApi.settings.get();
-            setSettings((prev) => ({ ...prev, ...(response.data || {}) }));
+            const incomingSettings = response.data || {};
+            const normalizedHeaderMenus = normalizeHeaderMenus(incomingSettings.header_menu_items);
+
+            setHeaderMenus(normalizedHeaderMenus);
+            setSettings((prev) => ({
+                ...prev,
+                ...incomingSettings,
+                header_brand_text: incomingSettings.header_brand_text || incomingSettings.site_name || prev.header_brand_text,
+                header_notice_text: incomingSettings.header_notice_text || prev.header_notice_text,
+                header_search_placeholder: incomingSettings.header_search_placeholder || prev.header_search_placeholder,
+                header_menu_items: normalizedHeaderMenus,
+            }));
         } catch (error) {
             console.error('Error fetching settings', error);
         } finally {
@@ -132,6 +217,78 @@ const SiteSettings = () => {
     const handleChange = (e) => {
         const { name, value } = e.target;
         setSettings((prev) => ({ ...prev, [name]: value }));
+    };
+
+    const withHeaderMenuOrder = (menus) => menus
+        .map((menu, index) => ({ ...menu, order: index + 1 }))
+        .sort((a, b) => a.order - b.order);
+
+    const updateHeaderMenu = (menuId, patch) => {
+        setHeaderMenus((prev) => withHeaderMenuOrder(prev.map((menu) => (
+            menu.id === menuId ? { ...menu, ...patch } : menu
+        ))));
+    };
+
+    const handleAddHeaderMenu = () => {
+        setHeaderMenus((prev) => withHeaderMenuOrder([
+            ...prev,
+            createHeaderMenuItem(),
+        ]));
+    };
+
+    const handleRemoveHeaderMenu = (menuId) => {
+        setHeaderMenus((prev) => withHeaderMenuOrder(prev.filter((menu) => menu.id !== menuId)));
+    };
+
+    const handleMoveHeaderMenu = (menuId, direction) => {
+        setHeaderMenus((prev) => {
+            const currentIndex = prev.findIndex((menu) => menu.id === menuId);
+            if (currentIndex === -1) return prev;
+
+            const nextIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+            if (nextIndex < 0 || nextIndex >= prev.length) return prev;
+
+            const next = [...prev];
+            const [picked] = next.splice(currentIndex, 1);
+            next.splice(nextIndex, 0, picked);
+            return withHeaderMenuOrder(next);
+        });
+    };
+
+    const handleCopyRoute = async (route) => {
+        const value = String(route || '').trim();
+        if (!value) return;
+
+        const markCopied = () => {
+            setCopiedRoute(value);
+            window.setTimeout(() => setCopiedRoute((prev) => (prev === value ? '' : prev)), 1500);
+        };
+
+        try {
+            if (navigator?.clipboard?.writeText) {
+                await navigator.clipboard.writeText(value);
+                markCopied();
+                return;
+            }
+        } catch (error) {
+            console.warn('Clipboard API not available', error);
+        }
+
+        try {
+            const textarea = document.createElement('textarea');
+            textarea.value = value;
+            textarea.setAttribute('readonly', '');
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            markCopied();
+        } catch (error) {
+            console.error('Copy route failed', error);
+            showModal({ title: 'Lỗi', content: 'Không thể copy route. Vui lòng thử lại.', type: 'error' });
+        }
     };
 
     const uploadImage = async (file) => {
@@ -166,10 +323,18 @@ const SiteSettings = () => {
 
         setSaving(true);
         try {
+            const normalizedHeaderMenus = normalizeHeaderMenus(headerMenus);
+            const payloadSettings = {
+                ...settings,
+                header_menu_items: normalizedHeaderMenus,
+            };
+
             await cmsApi.settings.update({
                 account_id: activeAccountId,
-                settings,
+                settings: payloadSettings,
             });
+            setHeaderMenus(normalizedHeaderMenus);
+            setSettings((prev) => ({ ...prev, header_menu_items: normalizedHeaderMenus }));
             showModal({ title: 'Thành công', content: 'Đã lưu cấu hình.', type: 'success' });
         } catch (error) {
             console.error('Error saving settings', error);
@@ -301,6 +466,7 @@ const SiteSettings = () => {
 
     const tabs = [
         { id: 'contact', title: 'Liên hệ & Mạng xã hội', icon: 'contact_support' },
+        { id: 'header', title: 'Cài đặt Header', icon: 'web' },
         { id: 'pixel', title: 'Pixel & Tracking', icon: 'analytics' },
         { id: 'domains', title: 'Quản lý tên miền', icon: 'language' },
         { id: 'bank', title: 'Cài đặt STK', icon: 'account_balance' },
@@ -398,6 +564,198 @@ const SiteSettings = () => {
                                         <label className={labelClasses}>YouTube URL</label>
                                         <input type="text" name="youtube_link" value={settings.youtube_link} onChange={handleChange} className={inputClasses} placeholder="https://youtube.com/@yourchannel" />
                                     </div>
+                                </div>
+                            </SectionCard>
+                        </div>
+                    )}
+
+                    {activeTab === 'header' && (
+                        <div className="space-y-6">
+                            <SectionCard icon="branding_watermark" title="Nội dung header">
+                                <div className="grid grid-cols-2 gap-6">
+                                    <div>
+                                        <label className={labelClasses}>Tên thương hiệu / Logo text</label>
+                                        <input
+                                            type="text"
+                                            name="header_brand_text"
+                                            value={settings.header_brand_text}
+                                            onChange={handleChange}
+                                            className={inputClasses}
+                                            placeholder="Gốm Đại Thành"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className={labelClasses}>Placeholder ô tìm kiếm</label>
+                                        <input
+                                            type="text"
+                                            name="header_search_placeholder"
+                                            value={settings.header_search_placeholder}
+                                            onChange={handleChange}
+                                            className={inputClasses}
+                                            placeholder="Bạn cần tìm kiếm sản phẩm gì?"
+                                        />
+                                    </div>
+                                    <div className="col-span-2">
+                                        <label className={labelClasses}>Text thanh thông báo trên cùng</label>
+                                        <input
+                                            type="text"
+                                            name="header_notice_text"
+                                            value={settings.header_notice_text}
+                                            onChange={handleChange}
+                                            className={inputClasses}
+                                            placeholder="Miễn phí vận chuyển toàn quốc cho đơn hàng từ 500.000đ"
+                                        />
+                                    </div>
+                                </div>
+                            </SectionCard>
+
+                            <SectionCard
+                                icon="menu"
+                                title="Menu header"
+                                rightSlot={
+                                    <button
+                                        type="button"
+                                        onClick={handleAddHeaderMenu}
+                                        className="h-9 px-4 rounded-sm bg-primary text-white text-[11px] font-black uppercase tracking-wider hover:bg-primary/90 transition-all inline-flex items-center gap-1"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">add</span>
+                                        Thêm menu
+                                    </button>
+                                }
+                            >
+                                <div className="space-y-3">
+                                    {headerMenus.length === 0 ? (
+                                        <div className="border border-primary/10 rounded-sm p-5 text-center text-[12px] text-primary/40 italic">
+                                            Chưa có menu nào. Bấm "Thêm menu" để tạo mới.
+                                        </div>
+                                    ) : (
+                                        headerMenus.map((menu, index) => (
+                                            <div key={menu.id} className="grid grid-cols-[40px_120px_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 items-center border border-primary/10 rounded-sm p-3">
+                                                <div className="text-[11px] font-black text-primary/40 text-center">{index + 1}</div>
+
+                                                <button
+                                                    type="button"
+                                                    onClick={() => updateHeaderMenu(menu.id, { enabled: !menu.enabled })}
+                                                    className={`h-8 rounded-sm border text-[10px] font-black uppercase tracking-wider transition-all ${menu.enabled ? 'border-green-200 bg-green-50 text-green-700' : 'border-stone-200 bg-stone-50 text-stone-500'}`}
+                                                >
+                                                    {menu.enabled ? 'Bật' : 'Tắt'}
+                                                </button>
+
+                                                <input
+                                                    type="text"
+                                                    value={menu.label}
+                                                    onChange={(e) => updateHeaderMenu(menu.id, { label: e.target.value })}
+                                                    className={inputClasses}
+                                                    placeholder="Tên menu"
+                                                />
+
+                                                <input
+                                                    type="text"
+                                                    value={menu.link}
+                                                    onChange={(e) => updateHeaderMenu(menu.id, { link: e.target.value })}
+                                                    className={inputClasses}
+                                                    placeholder="/duong-dan-menu"
+                                                />
+
+                                                <div className="flex items-center gap-1">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleMoveHeaderMenu(menu.id, 'up')}
+                                                        className="size-8 rounded-sm border border-primary/20 text-primary inline-flex items-center justify-center hover:bg-primary/[0.04]"
+                                                        title="Di chuyển lên"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[16px]">keyboard_arrow_up</span>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleMoveHeaderMenu(menu.id, 'down')}
+                                                        className="size-8 rounded-sm border border-primary/20 text-primary inline-flex items-center justify-center hover:bg-primary/[0.04]"
+                                                        title="Di chuyển xuống"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[16px]">keyboard_arrow_down</span>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleRemoveHeaderMenu(menu.id)}
+                                                        className="size-8 rounded-sm border border-brick/30 text-brick inline-flex items-center justify-center hover:bg-brick hover:text-white transition-all"
+                                                        title="Xóa menu"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[16px]">delete</span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </SectionCard>
+
+                            <SectionCard
+                                icon="route"
+                                title="Danh sách route / trang"
+                                rightSlot={<span className="text-[10px] font-black uppercase tracking-wider text-primary/40">Tự quét từ frontend/src/App.jsx</span>}
+                            >
+                                <div className="space-y-4">
+                                    <p className="text-[12px] text-primary/60 leading-5">
+                                        Bảng này chỉ để tham khảo và copy nhanh route khi cấu hình menu header. Không ảnh hưởng logic website.
+                                    </p>
+                                    <div className="overflow-x-auto border border-primary/10 rounded-sm">
+                                        <table className="w-full text-left border-collapse min-w-[880px]">
+                                            <thead>
+                                                <tr className="bg-primary/[0.03] border-b border-primary/10">
+                                                    <th className="px-4 py-3 text-[11px] font-black uppercase tracking-wider text-primary/60">Tên trang</th>
+                                                    <th className="px-4 py-3 text-[11px] font-black uppercase tracking-wider text-primary/60">Đường dẫn route</th>
+                                                    <th className="px-4 py-3 text-[11px] font-black uppercase tracking-wider text-primary/60">Ghi chú</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-primary/5">
+                                                {HEADER_ROUTE_REFERENCE_ROWS.map((item) => (
+                                                    <tr key={`${item.route}-${item.page}`} className="hover:bg-primary/[0.015] transition-colors">
+                                                        <td className="px-4 py-3 align-top">
+                                                            <div className="space-y-1">
+                                                                <p className="text-[13px] font-bold text-primary leading-tight">{item.page}</p>
+                                                                <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${item.scope === 'Public'
+                                                                    ? 'bg-green-50 text-green-700 border border-green-200'
+                                                                    : item.scope === 'Legacy'
+                                                                        ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                                                        : item.scope === 'Admin'
+                                                                            ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                                                            : 'bg-brick/10 text-brick border border-brick/30'
+                                                                    }`}>
+                                                                    {item.scope}
+                                                                </span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-4 py-3 align-top">
+                                                            <div className="inline-flex items-center gap-2 rounded-sm border border-primary/15 bg-white px-2 py-1">
+                                                                <code className="text-[12px] font-bold text-primary whitespace-nowrap">{item.route}</code>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleCopyRoute(item.route)}
+                                                                    className={`size-7 rounded-sm border inline-flex items-center justify-center transition-all ${copiedRoute === item.route
+                                                                        ? 'border-green-300 bg-green-50 text-green-700'
+                                                                        : 'border-primary/20 text-primary hover:bg-primary/[0.04]'
+                                                                        }`}
+                                                                    title={`Copy route ${item.route}`}
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[16px]">
+                                                                        {copiedRoute === item.route ? 'check' : 'content_copy'}
+                                                                    </span>
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-4 py-3 align-top">
+                                                            <p className={`text-[12px] leading-5 ${item.exists ? 'text-primary/60' : 'text-brick font-bold'}`}>
+                                                                {item.note}
+                                                            </p>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <p className="text-[11px] text-primary/40 italic">
+                                        Tổng cộng {HEADER_ROUTE_REFERENCE_ROWS.length} route đã tổng hợp. Route có nhãn Placeholder là chưa tạo trong router hiện tại.
+                                    </p>
                                 </div>
                             </SectionCard>
                         </div>

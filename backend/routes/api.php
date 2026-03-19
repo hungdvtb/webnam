@@ -29,6 +29,7 @@ Route::get('/product-groups', [ProductGroupController::class , 'index']);
 Route::get('/product-groups/{id}', [ProductGroupController::class , 'show']);
 
 Route::get('/blog', [\App\Http\Controllers\Api\BlogController::class , 'index']);
+Route::get('/blog/import/template', [\App\Http\Controllers\Api\BlogController::class , 'downloadImportTemplate']);
 Route::get('/blog/{id}', [\App\Http\Controllers\Api\BlogController::class , 'show']);
 
 // Public account resolution by site_code (for frontend)
@@ -152,7 +153,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/customers/{id}', [\App\Http\Controllers\Api\CustomerController::class , 'update']);
     Route::delete('/customers/{id}', [\App\Http\Controllers\Api\CustomerController::class , 'destroy']);
 
-    // Leads / Khách liên hệ tư vấn
+    // Leads / KhÃ¡ch liÃªn há»‡ tÆ° váº¥n
     Route::get('/leads', [\App\Http\Controllers\Api\LeadController::class , 'index']);
     Route::put('/leads/{id}', [\App\Http\Controllers\Api\LeadController::class , 'update']);
     Route::delete('/leads/{id}', [\App\Http\Controllers\Api\LeadController::class , 'destroy']);
@@ -202,7 +203,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/wishlist/toggle/{productId}', [\App\Http\Controllers\Api\WishlistController::class , 'toggle']);
 
         // Blog Management (Protected)
+        Route::get('/blog/seo-keywords', [\App\Http\Controllers\Api\BlogController::class , 'seoKeywords']);
+        Route::post('/blog/seo-keywords', [\App\Http\Controllers\Api\BlogController::class , 'storeSeoKeyword']);
+        Route::post('/blog/bulk-seo-keyword', [\App\Http\Controllers\Api\BlogController::class , 'bulkSeoKeyword']);
         Route::post('/blog', [\App\Http\Controllers\Api\BlogController::class , 'store']);
+        Route::post('/blog/reorder', [\App\Http\Controllers\Api\BlogController::class , 'reorder']);
+        Route::post('/blog/import-word', [\App\Http\Controllers\Api\BlogController::class , 'importWord']);
         Route::put('/blog/{id}', [\App\Http\Controllers\Api\BlogController::class , 'update']);
         Route::delete('/blog/{id}', [\App\Http\Controllers\Api\BlogController::class , 'destroy']);
 
@@ -261,7 +267,7 @@ Route::get('/products/{productId}/reviews', [\App\Http\Controllers\Api\ReviewCon
 Route::post('/ai/chat', [AIController::class , 'chat']);
 Route::get('/ai/history/{chat_id}', [AIController::class , 'getHistory']);
 
-// ─── Storefront Public API (Website bán hàng) ───
+// â”€â”€â”€ Storefront Public API (Website bÃ¡n hÃ ng) â”€â”€â”€
 Route::group(['prefix' => 'storefront'], function () {
     Route::get('/homepage', [\App\Http\Controllers\Api\StorefrontController::class , 'homepage']);
     Route::get('/categories', [\App\Http\Controllers\Api\StorefrontController::class , 'categories']);
@@ -272,7 +278,7 @@ Route::group(['prefix' => 'storefront'], function () {
     Route::post('/lead', [\App\Http\Controllers\Api\StorefrontController::class , 'submitLead']);
 });
 
-// ─── Separate Storefront API (Web API) ───
+// â”€â”€â”€ Separate Storefront API (Web API) â”€â”€â”€
 Route::group(['prefix' => 'web-api'], function () {
     Route::get('/products', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'index']);
     Route::get('/products/{slug}', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'show']);

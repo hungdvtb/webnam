@@ -40,8 +40,7 @@ import CustomerManagement from './pages/admin/CustomerManagement';
 import ReportDashboard from './pages/admin/ReportDashboard';
 import BlogList from './pages/admin/BlogList';
 import BlogForm from './pages/admin/BlogForm';
-import BannerList from './pages/admin/BannerList';
-import BannerForm from './pages/admin/BannerForm';
+import BlogImport from './pages/admin/BlogImport';
 import SiteSettings from './pages/admin/SiteSettings';
 import UserList from './pages/admin/UserList';
 import OrderStatusSettings from './pages/admin/OrderStatusSettings';
@@ -149,10 +148,8 @@ function App() {
                 <Route path="leads" element={<LeadList />} />
                 <Route path="blog" element={<BlogList />} />
                 <Route path="blog/new" element={<BlogForm />} />
+                <Route path="blog/import" element={<BlogImport />} />
                 <Route path="blog/edit/:id" element={<BlogForm />} />
-                <Route path="banners" element={<BannerList />} />
-                <Route path="banners/new" element={<BannerForm />} />
-                <Route path="banners/edit/:id" element={<BannerForm />} />
                 <Route path="settings" element={<SiteSettings />} />
                 <Route path="users" element={<UserList />} />
                 <Route path="reports" element={<ReportDashboard />} />

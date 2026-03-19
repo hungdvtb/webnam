@@ -35,8 +35,8 @@ const PostDetail = () => {
     if (!post) {
         return (
             <div className="text-center py-60 bg-background-light space-y-8">
-                <h2 className="font-display text-3xl text-primary font-bold italic">Bài viết không hiện hữu.</h2>
-                <Link to="/blog" className="px-10 py-4 bg-primary text-white font-ui font-bold uppercase tracking-[0.2em] shadow-premium">Trở lại cẩm nang</Link>
+                <h2 className="font-display text-3xl text-primary font-bold italic">BÃ i viáº¿t khÃ´ng hiá»‡n há»¯u.</h2>
+                <Link to="/blog" className="px-10 py-4 bg-primary text-white font-ui font-bold uppercase tracking-[0.2em] shadow-premium">Trá»Ÿ láº¡i cáº©m nang</Link>
             </div>
         );
     }
@@ -45,13 +45,13 @@ const PostDetail = () => {
         <article className="w-full bg-background-light min-h-screen">
             {/* Featured Image Banner */}
             <div className="relative h-[60vh] overflow-hidden border-b-4 border-gold group">
-                <img src={post.image || 'https://placehold.co/1920x1080'} alt={post.title} className="w-full h-full object-cover transition-transform duration-[2s] group-hover:scale-105" />
+                <img src={post.featured_image || post.image || 'https://placehold.co/1920x1080'} alt={post.title} className="w-full h-full object-cover transition-transform duration-[2s] group-hover:scale-105" />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent"></div>
                 <div className="absolute inset-x-6 bottom-16 lg:px-24">
                     <div className="max-w-4xl mx-auto space-y-6">
                         <div className="flex items-center gap-4 text-gold font-ui text-xs font-bold uppercase tracking-[0.5em]">
                             <div className="h-px w-8 bg-gold"></div>
-                            Cẩm Nang Bát Tràng | {new Date(post.created_at).toLocaleDateString('vi-VN')}
+                            Cáº©m Nang BÃ¡t TrÃ ng | {new Date(post.created_at).toLocaleDateString('vi-VN')}
                         </div>
                         <h1 className="font-display text-4xl lg:text-7xl font-extrabold text-white leading-tight italic drop-shadow-premium uppercase">{post.title}</h1>
                     </div>
@@ -62,7 +62,7 @@ const PostDetail = () => {
             <div className="max-w-4xl mx-auto px-6 lg:px-24 py-24 pb-48">
                 <div className="flex items-center justify-between mb-16 border-b border-gold/10 pb-8 h-10">
                     <Link to="/blog" className="font-ui text-[10px] font-bold uppercase tracking-[0.3em] text-primary hover:text-gold transition-colors flex items-center gap-2 group">
-                        <span className="material-symbols-outlined text-sm group-hover:-translate-x-1 transition-transform">west</span> Khám Phá Thêm
+                        <span className="material-symbols-outlined text-sm group-hover:-translate-x-1 transition-transform">west</span> KhÃ¡m PhÃ¡ ThÃªm
                     </Link>
                     <div className="flex items-center gap-4 text-stone/40">
                         <span className="material-symbols-outlined text-lg">share</span>
@@ -76,11 +76,11 @@ const PostDetail = () => {
                 />
 
                 <div className="mt-24 p-12 bg-white border border-gold/20 shadow-premium relative text-center">
-                    <span className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gold text-white px-8 py-2 font-display text-4xl leading-none">“</span>
+                    <span className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gold text-white px-8 py-2 font-display text-4xl leading-none">â€œ</span>
                     <p className="font-body text-2xl text-umber/80 italic leading-relaxed">
-                        Tấc đất Bát Tràng, tâm hồn người thợ gốm. Nơi gìn giữ tinh hoa nghìn năm của dân tộc.
+                        Táº¥c Ä‘áº¥t BÃ¡t TrÃ ng, tÃ¢m há»“n ngÆ°á»i thá»£ gá»‘m. NÆ¡i gÃ¬n giá»¯ tinh hoa nghÃ¬n nÄƒm cá»§a dÃ¢n tá»™c.
                     </p>
-                    <p className="mt-8 font-ui text-[10px] font-bold uppercase tracking-widest text-gold">— Gốm Sứ Đại Thành</p>
+                    <p className="mt-8 font-ui text-[10px] font-bold uppercase tracking-widest text-gold">â€” Gá»‘m Sá»© Äáº¡i ThÃ nh</p>
                 </div>
             </div>
         </article>

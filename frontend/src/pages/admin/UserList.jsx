@@ -14,7 +14,6 @@ const PAGE_PERMISSIONS = [
     { id: 'attributes', label: 'Thuộc tính' },
     { id: 'settings', label: 'Cấu hình Website' },
     { id: 'menus', label: 'Menu & Điều hướng' },
-    { id: 'banners', label: 'Banner & Quảng cáo' },
     { id: 'users', label: 'Quản lý Người dùng' },
 ];
 

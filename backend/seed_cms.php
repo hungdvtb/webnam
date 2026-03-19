@@ -1,8 +1,8 @@
 <?php
 
+use App\Models\Account;
 use App\Models\Banner;
 use App\Models\SiteSetting;
-use App\Models\Account;
 
 require __DIR__ . '/vendor/autoload.php';
 $app = require_once __DIR__ . '/bootstrap/app.php';
@@ -36,6 +36,20 @@ SiteSetting::setValue('contact_phone', '0988 123 456', $account->id);
 SiteSetting::setValue('contact_email', 'contact@gomsu.vn', $account->id);
 SiteSetting::setValue('footer_text', '© 2026 Gốm Sứ Đại Thành. Preservation of Vietnamese Heritage.', $account->id);
 SiteSetting::setValue('about_story_title', 'Di Sản Ngàn Năm Trong Tầm Tay', $account->id);
-SiteSetting::setValue('about_story_content', 'Từ những làng nghề truyền thống Bát Tràng, Chu Đậu, mỗi sản phẩm tại Gốm Sứ Đại Thành đều được chế tác thủ công bởi những nghệ nhân bậc thầy, lưu giữ những kỹ thuật phục dựng men cổ quý hiếm.', $account->id);
+SiteSetting::setValue(
+    'about_story_content',
+    'Từ những làng nghề truyền thống Bát Tràng, Chu Đậu, mỗi sản phẩm tại Gốm Sứ Đại Thành đều được chế tác thủ công bởi những nghệ nhân bậc thầy, lưu giữ những kỹ thuật phục dựng men cổ quý hiếm.',
+    $account->id
+);
+SiteSetting::setValue('header_brand_text', 'Gốm Đại Thành', $account->id);
+SiteSetting::setValue('header_notice_text', 'MIỄN PHÍ VẬN CHUYỂN TOÀN QUỐC CHO ĐƠN HÀNG TỪ 500.000Đ', $account->id);
+SiteSetting::setValue('header_search_placeholder', 'Bạn cần tìm kiếm sản phẩm gì?', $account->id);
+SiteSetting::setValue('header_menu_items', json_encode([
+    ['id' => 'header-menu-products', 'label' => 'Sản phẩm', 'link' => '/san-pham', 'enabled' => true, 'order' => 1],
+    ['id' => 'header-menu-about', 'label' => 'Về chúng tôi', 'link' => '/about', 'enabled' => true, 'order' => 2],
+    ['id' => 'header-menu-knowledge', 'label' => 'Kiến thức gốm', 'link' => '/blog', 'enabled' => true, 'order' => 3],
+    ['id' => 'header-menu-store', 'label' => 'Hệ thống cửa hàng', 'link' => '/he-thong-cua-hang', 'enabled' => true, 'order' => 4],
+], JSON_UNESCAPED_UNICODE), $account->id);
 
 echo "CMS seeding complete!\n";
+

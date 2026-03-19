@@ -9,6 +9,10 @@ use Illuminate\Http\Request;
 
 class SiteSettingController extends Controller
 {
+    private const JSON_SETTING_KEYS = [
+        'header_menu_items',
+    ];
+
     public function index(Request $request)
     {
         $accountId = null;
@@ -25,7 +29,14 @@ class SiteSettingController extends Controller
             return response()->json([]);
         }
 
-        $settings = SiteSetting::where('account_id', $accountId)->get()->pluck('value', 'key');
+        $settings = SiteSetting::where('account_id', $accountId)
+            ->get(['key', 'value'])
+            ->mapWithKeys(function ($setting) {
+                return [
+                    $setting->key => $this->decodeSettingValue($setting->key, $setting->value),
+                ];
+            });
+
         return response()->json($settings);
     }
 
@@ -37,9 +48,56 @@ class SiteSettingController extends Controller
         ]);
 
         foreach ($validated['settings'] as $key => $value) {
-            SiteSetting::setValue($key, $value, $validated['account_id']);
+            SiteSetting::setValue(
+                $key,
+                $this->encodeSettingValue($key, $value),
+                $validated['account_id']
+            );
         }
 
         return response()->json(['message' => 'Settings updated successfully']);
+    }
+
+    private function decodeSettingValue(string $key, $value)
+    {
+        if (in_array($key, self::JSON_SETTING_KEYS, true)) {
+            if (!is_string($value) || trim($value) === '') {
+                return [];
+            }
+
+            $decoded = json_decode($value, true);
+            return json_last_error() === JSON_ERROR_NONE && is_array($decoded) ? $decoded : [];
+        }
+
+        return $value;
+    }
+
+    private function encodeSettingValue(string $key, $value)
+    {
+        if (in_array($key, self::JSON_SETTING_KEYS, true)) {
+            if (is_string($value)) {
+                $decoded = json_decode($value, true);
+                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                    return json_encode(array_values($decoded), JSON_UNESCAPED_UNICODE);
+                }
+                return json_encode([], JSON_UNESCAPED_UNICODE);
+            }
+
+            if (is_array($value)) {
+                return json_encode(array_values($value), JSON_UNESCAPED_UNICODE);
+            }
+
+            return json_encode([], JSON_UNESCAPED_UNICODE);
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        if (is_scalar($value) || $value === null) {
+            return $value;
+        }
+
+        return json_encode($value, JSON_UNESCAPED_UNICODE);
     }
 }

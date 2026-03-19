@@ -92,5 +92,5 @@ export async function placeWebOrder(orderData) {
 }
 
 export async function getWebSiteSettings() {
-    return fetchFromApi('/site-settings', { next: { revalidate: 60 } });
+    return fetchFromApi('/site-settings', { next: { revalidate: 0 } });
 }

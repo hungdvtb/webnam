@@ -10,14 +10,14 @@ const AdminLayout = () => {
     const location = useLocation();
     const [isSettingsOpen, setIsSettingsOpen] = React.useState(location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users'));
     const [isOrdersOpen, setIsOrdersOpen] = React.useState(location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads'));
-    const [isDesignOpen, setIsDesignOpen] = React.useState(location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/banners') || location.pathname.startsWith('/admin/blog'));
+    const [isDesignOpen, setIsDesignOpen] = React.useState(location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/blog'));
 
     const isOrderForm = location.pathname.startsWith('/admin/orders/new') || location.pathname.startsWith('/admin/orders/edit');
 
     React.useEffect(() => {
         if (location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users')) setIsSettingsOpen(true);
         if (location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads')) setIsOrdersOpen(true);
-        if (location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/banners') || location.pathname.startsWith('/admin/blog')) setIsDesignOpen(true);
+        if (location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/blog')) setIsDesignOpen(true);
     }, [location.pathname]);
 
 
@@ -61,7 +61,6 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/settings')) return 'settings';
         if (path.startsWith('/admin/shipments')) return 'orders';
         if (path.startsWith('/admin/menus')) return 'menus';
-        if (path.startsWith('/admin/banners')) return 'banners';
         if (path.startsWith('/admin/users')) return 'users';
         return null;
     };
@@ -236,7 +235,7 @@ const AdminLayout = () => {
                     )}
 
                     {/* Collapsible Design & Content Menu */}
-                    {(canAccess('categories') || canAccess('banners') || canAccess('blog')) && (
+                    {(canAccess('categories') || canAccess('blog')) && (
                         <div className="space-y-1">
                             <button 
                                 onClick={() => setIsDesignOpen(!isDesignOpen)}
@@ -260,15 +259,6 @@ const AdminLayout = () => {
                                         >
                                             <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/categories' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>category</span>
                                             <span className="font-sans text-xs font-medium tracking-wide">Danh mục sản phẩm</span>
-                                        </Link>
-                                    )}
-                                    {canAccess('banners') && (
-                                        <Link 
-                                            to="/admin/banners" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/banners' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
-                                        >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/banners' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>gallery_thumbnail</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Quản lý Banners</span>
                                         </Link>
                                     )}
                                     {canAccess('blog') && (

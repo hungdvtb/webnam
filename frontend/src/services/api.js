@@ -152,10 +152,18 @@ export const wishlistApi = {
 
 export const blogApi = {
     getAll: (params) => api.get('/blog', { params }),
+    getSeoKeywords: () => api.get('/blog/seo-keywords'),
+    createSeoKeyword: (data) => api.post('/blog/seo-keywords', data),
+    bulkSeoKeyword: (data) => api.post('/blog/bulk-seo-keyword', data),
     getOne: (id) => api.get(`/blog/${id}`),
     store: (data) => api.post('/blog', data),
     update: (id, data) => api.put(`/blog/${id}`, data),
     destroy: (id) => api.delete(`/blog/${id}`),
+    reorder: (ids) => api.post('/blog/reorder', { ids }),
+    importWord: (formData) => api.post('/blog/import-word', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+    }),
+    downloadImportTemplate: () => api.get('/blog/import/template', { responseType: 'blob' }),
 };
 
 export const reportApi = {

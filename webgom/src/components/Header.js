@@ -4,12 +4,19 @@ import Link from 'next/link';
 import { useState, useEffect } from 'react';
 import { useCart } from '@/context/CartContext';
 
-export default function Header({ menuItems = [] }) {
+export default function Header({
+  menuItems = [],
+  brandText = 'GỐM ĐẠI THÀNH',
+  searchPlaceholder = 'Bạn cần tìm kiếm sản phẩm gì?',
+}) {
   const [searchQuery, setSearchQuery] = useState('');
   const { cartCount } = useCart();
   const [isBouncing, setIsBouncing] = useState(false);
   const [mounted, setMounted] = useState(false);
   const router = typeof window !== 'undefined' ? require('next/navigation').useRouter() : null;
+
+  const resolvedBrandText = String(brandText || '').trim() || 'GỐM ĐẠI THÀNH';
+  const resolvedSearchPlaceholder = String(searchPlaceholder || '').trim() || 'Bạn cần tìm kiếm sản phẩm gì?';
 
   useEffect(() => {
     setMounted(true);
@@ -34,14 +41,78 @@ export default function Header({ menuItems = [] }) {
   return (
     <header className="site-header">
       <div className="container header-content">
-        {/* Logo Section */}
-        <Link href="/" className="logo-section" style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '12px', textDecoration: 'none', flexWrap: 'nowrap' }}>
-          <div className="logo-img-box" style={{ width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-             <img src="/logo-dai-thanh.png" alt="Gốm Đại Thành" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+        <Link
+          href="/"
+          className="logo-section"
+          style={{
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: '12px',
+            textDecoration: 'none',
+            flexWrap: 'nowrap',
+          }}
+        >
+          <div
+            className="logo-img-box"
+            style={{
+              width: '40px',
+              height: '40px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <img
+              src="/logo-dai-thanh.png"
+              alt={resolvedBrandText}
+              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+            />
           </div>
-          <div className="logo-text" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', borderLeft: '1.5px solid rgba(197, 160, 89, 0.4)', paddingLeft: '12px', flexShrink: 0 }}>
-            <h1 className="logo-title" style={{ fontFamily: 'var(--font-display)', fontSize: '18px', fontWeight: '600', color: 'var(--primary)', margin: '0', whiteSpace: 'nowrap', textTransform: 'uppercase', lineHeight: '1.1', letterSpacing: '0.02em' }}>Gốm Đại Thành</h1>
-            <span className="logo-subtitle" style={{ fontFamily: 'var(--font-body)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3em', color: 'var(--accent)', fontWeight: '600', marginTop: '2px', lineHeight: '1', whiteSpace: 'nowrap' }}>TINH HOA ĐẤT VIỆT</span>
+          <div
+            className="logo-text"
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              borderLeft: '1.5px solid rgba(197, 160, 89, 0.4)',
+              paddingLeft: '12px',
+              flexShrink: 0,
+            }}
+          >
+            <h1
+              className="logo-title"
+              style={{
+                fontFamily: 'var(--font-display)',
+                fontSize: '18px',
+                fontWeight: '600',
+                color: 'var(--primary)',
+                margin: '0',
+                whiteSpace: 'nowrap',
+                textTransform: 'uppercase',
+                lineHeight: '1.1',
+                letterSpacing: '0.02em',
+              }}
+            >
+              {resolvedBrandText}
+            </h1>
+            <span
+              className="logo-subtitle"
+              style={{
+                fontFamily: 'var(--font-body)',
+                fontSize: '10px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.3em',
+                color: 'var(--accent)',
+                fontWeight: '600',
+                marginTop: '2px',
+                lineHeight: '1',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              TINH HOA ĐẤT VIỆT
+            </span>
           </div>
         </Link>
 
@@ -57,40 +128,81 @@ export default function Header({ menuItems = [] }) {
               ))
             ) : (
               <>
-                <li className="nav-item"><Link href="/products" className="nav-link">SẢN PHẨM</Link></li>
-                <li className="nav-item"><Link href="/collections" className="nav-link">BỘ SƯU TẬP</Link></li>
-                <li className="nav-item"><Link href="/blog" className="nav-link">TIN TỨC</Link></li>
+                <li className="nav-item">
+                  <Link href="/products" className="nav-link">
+                    SẢN PHẨM
+                  </Link>
+                </li>
+                <li className="nav-item">
+                  <Link href="/collections" className="nav-link">
+                    BỘ SƯU TẬP
+                  </Link>
+                </li>
+                <li className="nav-item">
+                  <Link href="/blog" className="nav-link">
+                    TIN TỨC
+                  </Link>
+                </li>
               </>
             )}
           </ul>
         </nav>
 
-        {/* Right Section: Search & Cart */}
         <div className="actions-section">
           <div className="search-bar">
-            <span 
-              className="material-symbols-outlined search-icon" 
+            <span
+              className="material-symbols-outlined search-icon"
               onClick={handleSearch}
               style={{ cursor: 'pointer' }}
             >
               search
             </span>
-            <input 
-              type="text" 
-              placeholder="Bạn cần tìm kiếm sản phẩm gì?" 
+            <input
+              type="text"
+              placeholder={resolvedSearchPlaceholder}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearch}
               className="search-input"
             />
           </div>
-          
+
           <Link href="/cart" className={`cart-action ${isBouncing ? 'bounce-cart' : ''}`}>
-            <span className="material-symbols-outlined cart-icon" style={{ fontSize: '32px', color: '#1a2c4e', marginRight: '8px' }}>shopping_cart</span>
+            <span
+              className="material-symbols-outlined cart-icon"
+              style={{ fontSize: '32px', color: '#1a2c4e', marginRight: '8px' }}
+            >
+              shopping_cart
+            </span>
             <div className="cart-text">
-              <span style={{ display: 'block', color: '#3b82f6', fontWeight: '700', fontSize: '15px', lineHeight: '1.2' }}>Giỏ hàng</span>
-              <span style={{ display: 'block', color: '#64748b', fontSize: '13px', whiteSpace: 'nowrap', marginTop: '2px' }}>
-                Có <strong className={isBouncing ? 'bounce-text' : ''} style={{ color: '#ef4444', transition: 'all 0.3s' }}>{mounted ? cartCount : 0}</strong> sản phẩm
+              <span
+                style={{
+                  display: 'block',
+                  color: '#3b82f6',
+                  fontWeight: '700',
+                  fontSize: '15px',
+                  lineHeight: '1.2',
+                }}
+              >
+                Giỏ hàng
+              </span>
+              <span
+                style={{
+                  display: 'block',
+                  color: '#64748b',
+                  fontSize: '13px',
+                  whiteSpace: 'nowrap',
+                  marginTop: '2px',
+                }}
+              >
+                Có{' '}
+                <strong
+                  className={isBouncing ? 'bounce-text' : ''}
+                  style={{ color: '#ef4444', transition: 'all 0.3s' }}
+                >
+                  {mounted ? cartCount : 0}
+                </strong>{' '}
+                sản phẩm
               </span>
             </div>
           </Link>
@@ -106,7 +218,7 @@ export default function Header({ menuItems = [] }) {
           padding: 0 24px;
           display: flex;
           align-items: center;
-          box-shadow: 0 2px 10px rgba(0,0,0,0.03);
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
           position: sticky;
           top: 0;
           z-index: 1000;
@@ -263,17 +375,34 @@ export default function Header({ menuItems = [] }) {
         }
 
         @keyframes badgeBounce {
-          0% { transform: scale(1); }
-          50% { transform: scale(1.4); background-color: #d4af37; }
-          100% { transform: scale(1); }
+          0% {
+            transform: scale(1);
+          }
+          50% {
+            transform: scale(1.4);
+            background-color: #d4af37;
+          }
+          100% {
+            transform: scale(1);
+          }
         }
 
         @keyframes cartShake {
-          0% { transform: rotate(0deg) scale(1); }
-          25% { transform: rotate(-15deg) scale(1.2); }
-          50% { transform: rotate(15deg) scale(1.2); }
-          75% { transform: rotate(-5deg) scale(1.1); }
-          100% { transform: rotate(0deg) scale(1); }
+          0% {
+            transform: rotate(0deg) scale(1);
+          }
+          25% {
+            transform: rotate(-15deg) scale(1.2);
+          }
+          50% {
+            transform: rotate(15deg) scale(1.2);
+          }
+          75% {
+            transform: rotate(-5deg) scale(1.1);
+          }
+          100% {
+            transform: rotate(0deg) scale(1);
+          }
         }
 
         @media (max-width: 1024px) {
@@ -284,7 +413,7 @@ export default function Header({ menuItems = [] }) {
             width: 180px;
           }
           .search-input:focus {
-             width: 220px;
+            width: 220px;
           }
         }
       `}</style>

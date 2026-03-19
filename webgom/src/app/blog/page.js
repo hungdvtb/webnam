@@ -40,7 +40,6 @@ function getPostImage(post) {
 export default async function BlogPage({ searchParams }) {
   const activeCategory = searchParams?.category || '';
   let posts = [];
-  let featuredPost = null;
 
   try {
     const res = await getBlogPosts({ per_page: 20 });
@@ -53,12 +52,6 @@ export default async function BlogPage({ searchParams }) {
   // Use fallback if no data from API
   if (!posts.length) posts = FALLBACK_POSTS;
 
-  // Featured post = first item
-  if (posts.length) {
-    featuredPost = posts[0];
-    posts = posts.slice(1);
-  }
-
   // Filter by category
   const filteredPosts = activeCategory
     ? posts.filter(p => (p.category || p.tag || '') === activeCategory)
@@ -66,49 +59,7 @@ export default async function BlogPage({ searchParams }) {
 
   return (
     <main className="blog-page">
-      {/* Page Hero */}
-      <div className="blog-hero">
-        <div className="blog-hero-inner container">
-          <span className="blog-hero-label">DI SẢN &amp; VĂN HÓA</span>
-          <h1 className="blog-hero-title">Tin Tức &amp; Blog</h1>
-          <p className="blog-hero-subtitle">Khám phá vẻ đẹp tinh hoa của gốm sứ – nơi lịch sử, nghệ thuật và tâm hồn người Việt hội tụ.</p>
-        </div>
-      </div>
-
       <div className="container blog-container">
-        {/* Featured Article */}
-        {featuredPost && (
-          <section className="blog-featured">
-            <div
-              className="blog-featured-card"
-              style={{
-                backgroundImage: `linear-gradient(to top, rgba(27,54,93,0.92) 0%, rgba(27,54,93,0.3) 60%, transparent 100%)${getPostImage(featuredPost) ? `, url('${getPostImage(featuredPost)}')` : ''}`,
-                backgroundSize: 'cover',
-                backgroundPosition: 'center',
-              }}
-            >
-              {!getPostImage(featuredPost) && (
-                <div className="blog-featured-placeholder" />
-              )}
-              <div className="blog-featured-content">
-                <span className="blog-tag">Tiêu Điểm Di Sản</span>
-                <h2 className="blog-featured-title">{featuredPost.title}</h2>
-                {featuredPost.excerpt && (
-                  <p className="blog-featured-desc">{featuredPost.excerpt}</p>
-                )}
-                <div className="blog-featured-actions">
-                  <Link href={`/blog/${featuredPost.id}`} className="blog-featured-btn">
-                    Đọc Bài Viết <span className="material-symbols-outlined">arrow_forward</span>
-                  </Link>
-                  {featuredPost.created_at && (
-                    <span className="blog-featured-date">{formatDate(featuredPost.created_at)}</span>
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
-        )}
-
         {/* Category Nav */}
         <nav className="blog-category-nav">
           {CATEGORIES.map(cat => (
@@ -176,76 +127,13 @@ export default async function BlogPage({ searchParams }) {
       <style>{`
         .blog-page { background: #F9F5F0; min-height: 100vh; }
 
-        /* Hero */
-        .blog-hero {
-          background: #1B365D;
-          border-bottom: 3px solid #C5A065;
-          padding: 3.5rem 0 3rem;
-          text-align: center;
-        }
-        .blog-hero-inner { display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
-        .blog-hero-label {
-          font-size: 0.7rem; font-weight: 700; letter-spacing: 0.35em; color: #C5A065;
-          text-transform: uppercase; background: rgba(197,160,101,0.1);
-          border: 1px solid rgba(197,160,101,0.3); padding: 0.3rem 1rem; border-radius: 99px;
-        }
-        .blog-hero-title {
-          font-family: 'Playfair Display', serif; font-size: 2.8rem; font-weight: 700;
-          color: #F9F5F0; letter-spacing: -0.02em; margin: 0;
-        }
-        .blog-hero-subtitle {
-          font-family: 'EB Garamond', serif; font-size: 1.15rem; color: rgba(249,245,240,0.75);
-          max-width: 600px; margin: 0; line-height: 1.6; font-style: italic;
-        }
-
         /* Container */
-        .blog-container { padding-top: 2.5rem; padding-bottom: 4rem; }
-
-        /* Featured */
-        .blog-featured { margin-bottom: 2.5rem; }
-        .blog-featured-card {
-          position: relative; border-radius: 0.5rem; overflow: hidden; min-height: 480px;
-          display: flex; align-items: flex-end;
-          border: 3px double #C5A065;
-          transition: box-shadow 0.3s;
-          box-shadow: 0 8px 30px rgba(27,54,93,0.15);
-        }
-        .blog-featured-placeholder {
-          position: absolute; inset: 0;
-          background: linear-gradient(135deg, #1B365D 0%, #2a4a7a 50%, #1B365D 100%);
-        }
-        .blog-featured-content {
-          position: relative; z-index:2; padding: 3rem; width: 100%; max-width: 800px;
-        }
-        .blog-tag {
-          background: #C5A065; color: #1B365D; font-size: 0.65rem; font-weight: 800;
-          letter-spacing: 0.2em; text-transform: uppercase; padding: 0.3rem 0.8rem;
-          display: inline-block; margin-bottom: 1rem;
-        }
-        .blog-featured-title {
-          color: white; font-family: 'Playfair Display', serif;
-          font-size: clamp(1.8rem, 4vw, 3rem); font-weight: 700; margin: 0 0 1rem;
-          line-height: 1.2; text-shadow: 1px 1px 4px rgba(0,0,0,0.5);
-        }
-        .blog-featured-desc {
-          color: rgba(249,245,240,0.9); font-family: 'EB Garamond', serif; font-size: 1.1rem;
-          margin: 0 0 1.5rem; max-width: 600px; line-height: 1.6;
-          display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-        }
-        .blog-featured-actions { display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
-        .blog-featured-btn {
-          background: #C5A065; color: #1B365D; font-weight: 700; font-size: 0.85rem;
-          letter-spacing: 0.12em; text-transform: uppercase; padding: 0.75rem 2rem;
-          display: inline-flex; align-items: center; gap: 0.5rem;
-          transition: background 0.2s, color 0.2s;
-        }
-        .blog-featured-btn:hover { background: white; color: #1B365D; }
-        .blog-featured-date { color: rgba(197,160,101,0.9); font-size: 0.85rem; font-style: italic; }
+        .blog-container { padding-top: 1.25rem; padding-bottom: 3rem; }
 
         /* Category Nav */
         .blog-category-nav {
           display: flex; flex-wrap: wrap; gap: 0.65rem; justify-content: center;
-          padding: 1.25rem 0; margin-bottom: 2rem;
+          padding: 0.9rem 0; margin-bottom: 1.5rem;
           border-top: 1px solid #e2dbd0; border-bottom: 1px solid #e2dbd0;
         }
         .blog-cat-btn {
@@ -360,9 +248,7 @@ export default async function BlogPage({ searchParams }) {
         }
 
         @media (max-width: 768px) {
-          .blog-hero-title { font-size: 2rem; }
-          .blog-featured-content { padding: 1.5rem; }
-          .blog-featured-card { min-height: 320px; }
+          .blog-container { padding-top: 1rem; padding-bottom: 2.5rem; }
         }
       `}</style>
     </main>

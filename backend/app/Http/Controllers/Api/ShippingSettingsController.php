@@ -8,6 +8,7 @@ use App\Models\ShippingIntegration;
 use App\Models\Warehouse;
 use App\Services\Shipping\ViettelPostClient;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Crypt;
 
 class ShippingSettingsController extends Controller
 {
@@ -69,6 +70,8 @@ class ShippingSettingsController extends Controller
                         'api_base_url' => $integration?->api_base_url ?: 'https://partner.viettelpost.vn',
                         'auth_mode' => $config['auth_mode'] ?? 'api_key',
                         'has_api_key' => $hasApiKey,
+                        'username' => $integration?->username,
+                        'has_password' => filled($integration?->password_encrypted),
                         'sender_name' => $integration?->sender_name,
                         'sender_phone' => $integration?->sender_phone,
                         'sender_address' => $integration?->sender_address,
@@ -104,8 +107,10 @@ class ShippingSettingsController extends Controller
         $validated = $request->validate([
             'is_enabled' => 'nullable|boolean',
             'api_base_url' => 'nullable|url',
-            'auth_mode' => 'nullable|string|in:api_key',
+            'auth_mode' => 'nullable|string|in:api_key,credentials',
             'api_key' => 'nullable|string|max:4000',
+            'username' => 'nullable|string|max:255',
+            'password' => 'nullable|string|max:255',
             'sender_name' => 'nullable|string|max:255',
             'sender_phone' => 'nullable|string|max:30',
             'sender_address' => 'nullable|string',
@@ -146,7 +151,7 @@ class ShippingSettingsController extends Controller
             'carrier_name' => $carrier->name,
             'is_enabled' => (bool) ($validated['is_enabled'] ?? $integration->is_enabled),
             'api_base_url' => $validated['api_base_url'] ?? $integration->api_base_url ?? 'https://partner.viettelpost.vn',
-            'username' => null,
+            'username' => $validated['username'] ?? $integration->username,
             'default_service_code' => $validated['default_service_code'] ?? $integration->default_service_code,
             'default_service_add' => $validated['default_service_add'] ?? $integration->default_service_add,
             'default_warehouse_id' => $defaultWarehouse?->id,
@@ -174,7 +179,14 @@ class ShippingSettingsController extends Controller
         if (array_key_exists('api_key', $validated) && trim((string) $validated['api_key']) !== '') {
             $integration->access_token = trim((string) $validated['api_key']);
             $integration->token_expires_at = null;
-            $integration->password_encrypted = null;
+        }
+
+        if (array_key_exists('password', $validated) && trim((string) $validated['password']) !== '') {
+            $integration->password_encrypted = Crypt::encryptString(trim((string) $validated['password']));
+        }
+
+        if (($configJson['auth_mode'] ?? 'api_key') === 'credentials' && (!$integration->username || !$integration->password_encrypted)) {
+            return response()->json(['message' => 'Vui long nhap day du username va password ViettelPost de dung che do thong tin dang nhap.'], 422);
         }
 
         $hasToken = filled($integration->access_token);

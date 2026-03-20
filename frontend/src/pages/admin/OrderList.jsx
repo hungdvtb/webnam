@@ -878,10 +878,11 @@ const OrderList = () => {
                 carrier_code: selectedCarrierCode,
                 warehouse_id: selectedWarehouseId || null,
             });
-            const { success_count = 0, failed_count = 0 } = response.data || {};
+            const { success_count = 0, failed_count = 0, results = [] } = response.data || {};
+            const firstFailed = results.find((item) => item.success === false && item.message);
             setNotification({
                 type: failed_count > 0 ? 'error' : 'success',
-                message: `Đã gửi ${success_count} đơn sang vận chuyển${failed_count > 0 ? `, ${failed_count} đơn lỗi` : ''}.`,
+                message: `Đã gửi ${success_count} đơn sang vận chuyển${failed_count > 0 ? `, ${failed_count} đơn lỗi` : ''}.${firstFailed ? ` ${firstFailed.order_number}: ${firstFailed.message}` : ''}`,
             });
             setSelectedIds([]);
             closeDispatchModal();

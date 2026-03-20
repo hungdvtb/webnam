@@ -289,17 +289,57 @@ const renderTabContent = ({
                                             <input className={inputClasses} value={form.api_base_url || 'https://partner.viettelpost.vn'} onChange={(e) => handleInputChange('api_base_url', e.target.value)} />
                                         </div>
                                         <div className="lg:col-span-2">
-                                            <label className={labelClasses}>API key / Token</label>
-                                            <input className={inputClasses} value={form.api_key || ''} placeholder={selectedCarrier.integration?.has_api_key ? 'De trong neu khong doi token hien tai' : 'Dan token ViettelPost vao day'} onChange={(e) => handleInputChange('api_key', e.target.value)} />
-                                            <div className="mt-2 space-y-2">
-                                                <p className="text-[12px] font-bold text-primary/55">He thong se dung truc tiep token ViettelPost ban cung cap.</p>
-                                                {selectedCarrier.integration?.has_api_key && !form.api_key && (
-                                                    <div className="inline-flex max-w-full items-center gap-2 rounded-sm border border-green-200 bg-green-50 px-3 py-2 text-[12px] font-bold text-green-700">
-                                                        <span className="material-symbols-outlined text-[16px]">verified</span>
-                                                        <span className="break-words">Token hien tai da duoc luu an toan. De trong neu ban khong muon thay token.</span>
-                                                    </div>
-                                                )}
+                                            <label className={labelClasses}>Che do xac thuc</label>
+                                            <div className="flex flex-wrap items-center gap-5">
+                                                <label className="inline-flex items-center gap-2 text-[13px] font-bold text-primary">
+                                                    <input type="radio" checked={(form.auth_mode || 'api_key') === 'api_key'} onChange={() => handleInputChange('auth_mode', 'api_key')} className="accent-primary" />
+                                                    API key / Token
+                                                </label>
+                                                <label className="inline-flex items-center gap-2 text-[13px] font-bold text-primary">
+                                                    <input type="radio" checked={(form.auth_mode || 'api_key') === 'credentials'} onChange={() => handleInputChange('auth_mode', 'credentials')} className="accent-primary" />
+                                                    Username + Password
+                                                </label>
                                             </div>
+                                        </div>
+                                        <div className="lg:col-span-2">
+                                            {(form.auth_mode || 'api_key') === 'api_key' ? (
+                                                <>
+                                                    <label className={labelClasses}>Token tao don / Client token</label>
+                                                    <input className={inputClasses} value={form.api_key || ''} placeholder={selectedCarrier.integration?.has_api_key ? 'De trong neu khong doi client token hien tai' : 'Dan client token ViettelPost vao day'} onChange={(e) => handleInputChange('api_key', e.target.value)} />
+                                                    <div className="mt-2 space-y-2">
+                                                        <p className="text-[12px] font-bold text-primary/55">He thong se dung truc tiep token tao don cua tai khoan client ViettelPost ban cung cap de tinh phi va tao van don.</p>
+                                                        {selectedCarrier.integration?.has_api_key && !form.api_key && (
+                                                            <div className="inline-flex max-w-full items-center gap-2 rounded-sm border border-green-200 bg-green-50 px-3 py-2 text-[12px] font-bold text-green-700">
+                                                                <span className="material-symbols-outlined text-[16px]">verified</span>
+                                                                <span className="break-words">Client token hien tai da duoc luu an toan. De trong neu ban khong muon thay token.</span>
+                                                            </div>
+                                                        )}
+                                                        <div className="rounded-sm border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-bold text-amber-700">
+                                                            Khong dung token partner tong quat. ViettelPost yeu cau token tao don cua tai khoan client cho cac API getPriceAll va createOrderNlp.
+                                                        </div>
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                                    <div>
+                                                        <label className={labelClasses}>Username ViettelPost</label>
+                                                        <input className={inputClasses} value={form.username || ''} placeholder="So dien thoai / username doi tac" onChange={(e) => handleInputChange('username', e.target.value)} />
+                                                    </div>
+                                                    <div>
+                                                        <label className={labelClasses}>Password ViettelPost</label>
+                                                        <input type="password" className={inputClasses} value={form.password || ''} placeholder={selectedCarrier.integration?.has_password ? 'De trong neu khong doi mat khau hien tai' : 'Nhap password ViettelPost'} onChange={(e) => handleInputChange('password', e.target.value)} />
+                                                        <div className="mt-2 space-y-2">
+                                                            <p className="text-[12px] font-bold text-primary/55">He thong se dang nhap Login va ownerconnect de lay token dai han tu dong.</p>
+                                                            {selectedCarrier.integration?.has_password && !form.password && (
+                                                                <div className="inline-flex max-w-full items-center gap-2 rounded-sm border border-green-200 bg-green-50 px-3 py-2 text-[12px] font-bold text-green-700">
+                                                                    <span className="material-symbols-outlined text-[16px]">verified</span>
+                                                                    <span className="break-words">Mat khau hien tai da duoc luu an toan. De trong neu ban khong muon thay mat khau.</span>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                         <div>
                                             <label className={labelClasses}>Ma dich vu mac dinh</label>
@@ -550,7 +590,7 @@ const ShippingSettingsPanel = ({ initialTab = 'integrations', onTabChange }) => 
             await shippingApi.updateIntegration(selectedCarrier.carrier_code, {
                 ...form,
                 is_enabled: !!form.is_enabled,
-                auth_mode: 'api_key',
+                auth_mode: form.auth_mode || 'api_key',
                 default_warehouse_id: form.default_warehouse_id ? Number(form.default_warehouse_id) : null,
             });
             await loadSettings(selectedCarrier.carrier_code);

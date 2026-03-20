@@ -6,6 +6,8 @@ use App\Models\ShippingIntegration;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Str;
 use RuntimeException;
 
 class ViettelPostClient
@@ -14,10 +16,12 @@ class ViettelPostClient
     {
         $token = $this->authenticate($integration, true);
         $provinces = $this->request($integration, 'GET', '/v2/categories/listProvince', [], $token);
+        $orderScopeCheck = $this->validateOrderScope($integration, $token);
 
         return [
             'token' => $token,
             'provinces_count' => count($this->extractList($provinces)),
+            'order_scope_check' => $orderScopeCheck,
             'raw' => $provinces,
         ];
     }
@@ -45,7 +49,31 @@ class ViettelPostClient
 
     public function createOrder(ShippingIntegration $integration, array $payload): array
     {
-        return $this->request($integration, 'POST', '/v2/order/createOrder', $payload);
+        try {
+            return $this->request(
+                $integration,
+                'POST',
+                '/v2/order/createOrderNlp',
+                $payload,
+                null,
+                true,
+                ['Cookie' => 'SERVERID=A']
+            );
+        } catch (RuntimeException $exception) {
+            if (!$this->isTokenInvalidMessage($exception->getMessage())) {
+                throw $exception;
+            }
+
+            return $this->request(
+                $integration,
+                'POST',
+                '/v2/order/createOrder',
+                $payload,
+                null,
+                true,
+                ['Cookie' => 'SERVERID=A']
+            );
+        }
     }
 
     public function getPriceAll(ShippingIntegration $integration, array $payload): array
@@ -53,12 +81,13 @@ class ViettelPostClient
         return $this->request($integration, 'POST', '/v2/order/getPriceAll', $payload);
     }
 
-    public function authenticate(ShippingIntegration $integration, bool $forceRefresh = false): string
+    public function authenticate(ShippingIntegration $integration, bool $forceRefresh = false, bool $preferCredentials = false): string
     {
         $authMode = (string) data_get($integration->config_json, 'auth_mode', 'api_key');
+        $hasCredentials = $this->hasStoredCredentials($integration);
 
-        if ($authMode !== 'api_key') {
-            throw new RuntimeException('Che do dang nhap username/password da duoc tat. Vui long dung API key / token ViettelPost.');
+        if ($preferCredentials || $authMode === 'credentials') {
+            return $this->authenticateWithCredentials($integration, $forceRefresh);
         }
 
         $token = trim((string) $integration->access_token);
@@ -77,13 +106,21 @@ class ViettelPostClient
         return $token;
     }
 
-    public function request(ShippingIntegration $integration, string $method, string $path, array $payload = [], ?string $token = null): array
+    public function request(
+        ShippingIntegration $integration,
+        string $method,
+        string $path,
+        array $payload = [],
+        ?string $token = null,
+        bool $retryOnAuthFailure = true,
+        array $extraHeaders = []
+    ): array
     {
         $token = $token ?: $this->authenticate($integration);
 
-        $request = $this->baseRequest($integration)->withHeaders([
+        $request = $this->baseRequest($integration)->withHeaders(array_merge([
             'Token' => $token,
-        ]);
+        ], $extraHeaders));
 
         $url = $this->buildUrl($integration, $path);
         $response = strtoupper($method) === 'GET'
@@ -92,17 +129,38 @@ class ViettelPostClient
 
         $json = $response->json();
 
-        if ($response->failed()) {
-            $message = Arr::get($json, 'message')
-                ?: Arr::get($json, 'error')
-                ?: Arr::get($json, 'status')
-                ?: $response->body();
-            throw new RuntimeException('ViettelPost API loi: ' . $message);
-        }
+        $message = Arr::get($json, 'message')
+            ?: Arr::get($json, 'error')
+            ?: Arr::get($json, 'status')
+            ?: $response->body();
 
-        if ((int) Arr::get($json, 'status') >= 400) {
-            $message = Arr::get($json, 'message') ?: Arr::get($json, 'error') ?: 'Phan hoi khong hop le tu ViettelPost.';
-            throw new RuntimeException($message);
+        $errorFlag = Arr::get($json, 'error');
+        $hasApiError = $response->failed()
+            || $errorFlag === true
+            || $errorFlag === 'true'
+            || $errorFlag === 1
+            || $errorFlag === '1'
+            || (is_numeric(Arr::get($json, 'status')) && (int) Arr::get($json, 'status') >= 400);
+
+        if ($hasApiError) {
+            if (
+                $retryOnAuthFailure
+                && $this->isTokenInvalidMessage($message)
+                && (string) data_get($integration->config_json, 'auth_mode', 'api_key') === 'credentials'
+                && $this->hasStoredCredentials($integration)
+            ) {
+                $freshToken = $this->authenticate($integration, true, true);
+                return $this->request($integration, $method, $path, $payload, $freshToken, false);
+            }
+
+            if (
+                $this->isTokenInvalidMessage($message)
+                && (string) data_get($integration->config_json, 'auth_mode', 'api_key') === 'api_key'
+            ) {
+                throw new RuntimeException('ViettelPost API loi: Token invalid. Vui long dung token tao don / client token.');
+            }
+
+            throw new RuntimeException('ViettelPost API loi: ' . $message);
         }
 
         return is_array($json) ? $json : [];
@@ -145,6 +203,103 @@ class ViettelPostClient
         }
 
         return null;
+    }
+
+    public function validateOrderScope(ShippingIntegration $integration, ?string $token = null): array
+    {
+        try {
+            return $this->request(
+                $integration,
+                'POST',
+                '/v2/order/printing-code',
+                [
+                    'EXPIRY_TIME' => 0,
+                    'ORDER_ARRAY' => ['TOKEN-CHECK-ONLY'],
+                ],
+                $token,
+                false,
+                ['Cookie' => 'SERVERID=A']
+            );
+        } catch (RuntimeException $exception) {
+            if ($this->isTokenInvalidMessage($exception->getMessage())) {
+                throw new RuntimeException('Token hien tai khong du quyen tao don ViettelPost. Vui long dung token tao don / client token.');
+            }
+
+            return [
+                'validated' => true,
+                'message' => $exception->getMessage(),
+            ];
+        }
+    }
+
+    private function authenticateWithCredentials(ShippingIntegration $integration, bool $forceRefresh = false): string
+    {
+        $cachedToken = trim((string) $integration->access_token);
+        if (!$forceRefresh && $cachedToken !== '') {
+            return $cachedToken;
+        }
+
+        $username = trim((string) $integration->username);
+        $password = $this->decryptPassword($integration);
+        if ($username === '' || $password === '') {
+            throw new RuntimeException('Chua cau hinh username/password ViettelPost.');
+        }
+
+        $loginResponse = $this->baseRequest($integration)
+            ->post($this->buildUrl($integration, '/v2/user/Login'), [
+                'USERNAME' => $username,
+                'PASSWORD' => $password,
+            ])
+            ->json();
+
+        $temporaryToken = $this->extractToken(is_array($loginResponse) ? $loginResponse : []);
+        if (!filled($temporaryToken)) {
+            $message = Arr::get($loginResponse, 'message') ?: 'Khong lay duoc token tam tu ViettelPost.';
+            throw new RuntimeException($message);
+        }
+
+        $ownerConnectResponse = $this->baseRequest($integration)
+            ->withHeaders(['Token' => $temporaryToken])
+            ->post($this->buildUrl($integration, '/v2/user/ownerconnect'), [
+                'USERNAME' => $username,
+                'PASSWORD' => $password,
+            ])
+            ->json();
+
+        $longLivedToken = $this->extractToken(is_array($ownerConnectResponse) ? $ownerConnectResponse : []);
+        if (!filled($longLivedToken)) {
+            $message = Arr::get($ownerConnectResponse, 'message') ?: 'Khong lay duoc token dai han tu ViettelPost.';
+            throw new RuntimeException($message);
+        }
+
+        $integration->forceFill([
+            'access_token' => $longLivedToken,
+            'token_expires_at' => null,
+            'connection_status' => 'connected',
+            'last_tested_at' => now(),
+            'last_error_message' => null,
+        ])->save();
+
+        return $longLivedToken;
+    }
+
+    private function hasStoredCredentials(ShippingIntegration $integration): bool
+    {
+        return filled($integration->username) && filled($integration->password_encrypted);
+    }
+
+    private function decryptPassword(ShippingIntegration $integration): string
+    {
+        try {
+            return $integration->password_encrypted ? Crypt::decryptString($integration->password_encrypted) : '';
+        } catch (\Throwable) {
+            return '';
+        }
+    }
+
+    private function isTokenInvalidMessage(string $message): bool
+    {
+        return Str::contains(Str::lower($message), ['token invalid', 'invalid token', 'unauthorized', 'khong hop le']);
     }
 
     private function baseRequest(ShippingIntegration $integration): PendingRequest

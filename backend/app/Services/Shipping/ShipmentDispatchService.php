@@ -136,6 +136,13 @@ class ShipmentDispatchService
                 ];
             } catch (\Throwable $e) {
                 $failedCount++;
+                Log::error('Dispatch order to carrier failed', [
+                    'order_id' => $order->id,
+                    'order_number' => $order->order_number,
+                    'carrier_code' => $carrierCode,
+                    'warehouse_id' => $warehouse?->id,
+                    'message' => $e->getMessage(),
+                ]);
                 $results[] = [
                     'order_id' => $order->id,
                     'order_number' => $order->order_number,
@@ -207,6 +214,12 @@ class ShipmentDispatchService
         $carrierFee = $this->extractCarrierFee($response);
 
         if (!$trackingNumber) {
+            Log::error('ViettelPost createOrder response missing tracking number', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'carrier_code' => $integration->carrier_code,
+                'response' => $response,
+            ]);
             throw new RuntimeException('ViettelPost khong tra ve ma van don.');
         }
 
@@ -322,6 +335,17 @@ class ShipmentDispatchService
             $productWeight = (float) ($item->product?->weight ?? 0);
             return max(1, $productWeight) * max(1, $item->quantity);
         })));
+        $listItems = $items->map(function (OrderItem $item) {
+            $unitPrice = (float) ($item->price ?? $item->unit_price ?? 0);
+            $productWeight = (float) ($item->product?->weight ?? 0);
+
+            return [
+                'PRODUCT_NAME' => $item->product_name_snapshot ?: 'Don hang website',
+                'PRODUCT_QUANTITY' => max(1, (int) $item->quantity),
+                'PRODUCT_PRICE' => (int) round(max(0, $unitPrice)),
+                'PRODUCT_WEIGHT' => max(1, (int) round(max(1, $productWeight))),
+            ];
+        })->values()->all();
 
         $payload = [
             'ORDER_NUMBER' => $order->order_number,
@@ -333,11 +357,13 @@ class ShipmentDispatchService
             'SENDER_ADDRESS' => $senderProfile['address'],
             'SENDER_PROVINCE' => $sender['province_id'],
             'SENDER_DISTRICT' => $sender['district_id'],
+            'SENDER_WARD' => $sender['ward_id'],
             'RECEIVER_FULLNAME' => $order->customer_name,
             'RECEIVER_PHONE' => $order->customer_phone,
             'RECEIVER_ADDRESS' => $order->shipping_address,
             'RECEIVER_PROVINCE' => $receiver['province_id'],
             'RECEIVER_DISTRICT' => $receiver['district_id'],
+            'RECEIVER_WARD' => $receiver['ward_id'],
             'PRODUCT_NAME' => $productName ?: ($firstItem?->product_name_snapshot ?: 'Don hang website'),
             'PRODUCT_DESCRIPTION' => $productName ?: ($firstItem?->product_name_snapshot ?: 'Don hang website'),
             'PRODUCT_QUANTITY' => max(1, (int) $items->sum('quantity')),
@@ -348,6 +374,9 @@ class ShipmentDispatchService
             'PRODUCT_HEIGHT' => 0,
             'PRODUCT_TYPE' => 'HH',
             'MONEY_COLLECTION' => (int) round((float) $order->total_price),
+            'EXTRA_MONEY' => 0,
+            'CHECK_UNIQUE' => true,
+            'LIST_ITEM' => $listItems,
         ];
 
         $serviceSelection = $this->resolveServiceSelection($integration, $payload);
@@ -355,9 +384,9 @@ class ShipmentDispatchService
             $payload['ORDER_SERVICE'] = $serviceSelection['service_code'];
         }
         if (array_key_exists('service_add', $serviceSelection)) {
-            $payload['ORDER_SERVICE_ADD'] = $serviceSelection['service_add'] ?? '';
+            $payload['ORDER_SERVICE_ADD'] = $serviceSelection['service_add'] ?: null;
         } else {
-            $payload['ORDER_SERVICE_ADD'] = $integration->default_service_add ?: '';
+            $payload['ORDER_SERVICE_ADD'] = $integration->default_service_add ?: null;
         }
 
         return [
@@ -603,6 +632,10 @@ class ShipmentDispatchService
             if (is_string($candidate) && trim($candidate) !== '') {
                 return trim($candidate);
             }
+
+            if (is_numeric($candidate)) {
+                return (string) $candidate;
+            }
         }
 
         return null;
@@ -620,6 +653,10 @@ class ShipmentDispatchService
         foreach ($candidates as $candidate) {
             if (is_string($candidate) && trim($candidate) !== '') {
                 return trim($candidate);
+            }
+
+            if (is_numeric($candidate)) {
+                return (string) $candidate;
             }
         }
 

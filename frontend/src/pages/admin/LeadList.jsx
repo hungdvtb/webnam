@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import Pagination from '../../components/Pagination';
+import { useTableColumns } from '../../hooks/useTableColumns';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { leadApi } from '../../services/api';
@@ -12,6 +13,27 @@ const iconButtonClassName = 'relative inline-flex size-10 items-center justify-c
 const MAX_NOTIFICATION_ITEMS = 12;
 const emptyFilters = { status: '', tag: '', date_from: '', date_to: '' };
 const leadNotificationSettingsKey = 'lead_notification_sound_settings';
+const LEAD_COLUMNS = [
+    { id: 'placed_at', label: 'Thời gian đặt', minWidth: '150px' },
+    { id: 'product', label: 'Sản phẩm', minWidth: '280px' },
+    { id: 'customer_name', label: 'Tên khách hàng', minWidth: '170px' },
+    { id: 'phone', label: 'Số điện thoại', minWidth: '150px' },
+    { id: 'address', label: 'Địa chỉ', minWidth: '220px' },
+    { id: 'tag', label: 'Tag', minWidth: '110px' },
+    { id: 'status', label: 'Trạng thái đơn', minWidth: '190px' },
+    { id: 'notes', label: 'Ghi chú', minWidth: '180px' },
+    { id: 'link', label: 'Link', minWidth: '100px' },
+];
+const STATUS_LABEL_MAP = {
+    'don moi': 'Đơn mới',
+    'da tao don': 'Đã tạo đơn',
+    'huy don': 'Hủy đơn',
+    'sai sdt': 'Sai SĐT',
+    'cho xem lai': 'Chờ xem lại',
+    'hen goi lai': 'Hẹn gọi lại',
+    'da chot': 'Đã chốt',
+    'tat ca': 'Tất cả',
+};
 
 const formatMoney = (value) => `${new Intl.NumberFormat('vi-VN').format(Number(value) || 0)} đ`;
 
@@ -48,6 +70,36 @@ const getLeadProductSummary = (lead) => {
 
     return lead?.product_summary || '';
 };
+
+const formatStatusLabel = (value, code = '') => {
+    const source = `${value || ''} ${code || ''}`.trim();
+    const normalized = normalizeSearchTextSafe(source);
+
+    for (const [key, label] of Object.entries(STATUS_LABEL_MAP)) {
+        if (normalized.includes(key)) return label;
+    }
+
+    if (!String(value || '').trim()) return '';
+
+    return String(value)
+        .trim()
+        .split(/\s+/)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+};
+
+const buildProductTooltip = (lead) => (
+    Array.isArray(lead?.items)
+        ? lead.items.map((item) => {
+            const optionTitle = item?.bundle_option_title ? ` - ${item.bundle_option_title}` : '';
+            const bundleChildren = Array.isArray(item?.bundle_items) && item.bundle_items.length > 0
+                ? `\n  ${item.bundle_items.map((child) => `• ${child.product_name} x${child.quantity || 1}`).join('\n  ')}`
+                : '';
+
+            return `${item?.product_name || item?.product_sku || 'Sản phẩm'} x${item?.quantity || 1}${optionTitle}${bundleChildren}`;
+        }).join('\n')
+        : ''
+);
 
 const areFiltersEqual = (left, right) => (
     left.status === right.status
@@ -196,6 +248,208 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
         return <div className="text-[13px] text-primary/50">{lead?.product_summary || 'Không có sản phẩm'}</div>;
     }
 
+    const legacyRenderTableCellA = useCallback((lead, columnId) => {
+        switch (columnId) {
+        case 'placed_at':
+            return (
+                <div className="text-[13px] text-[#0F172A]">
+                    <div>{lead.placed_date || '-'}</div>
+                    <div className="mt-1 font-semibold text-primary/60">{lead.placed_time || '-'}</div>
+                    {lead.order_number ? (
+                        <div className="mt-2 truncate text-[11px] font-bold text-primary/45" title={lead.order_number}>{lead.order_number}</div>
+                    ) : null}
+                </div>
+            );
+        case 'product':
+            return <CompactProductCell lead={lead} expandedBundleIds={expandedBundleIds} onToggleBundle={handleToggleBundle} />;
+        case 'customer_name':
+            return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.customer_name || 'Khách chưa có tên'}>{lead.customer_name || 'Khách chưa có tên'}</div>;
+        case 'phone':
+            return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.phone || '-'}>{lead.phone || '-'}</div>;
+        case 'address':
+            return <div className="text-[13px] leading-5 text-[#0F172A]" title={lead.address || '-'}>{lead.address || '-'}</div>;
+        case 'tag':
+            return (
+                <span className="inline-flex rounded-full border border-primary/10 bg-primary/[0.04] px-3 py-1 text-[11px] font-bold text-primary">
+                    {lead.tag || 'Website'}
+                </span>
+            );
+        case 'status':
+            return (
+                <select
+                    value={lead.status_config?.id || ''}
+                    onChange={(event) => handleLeadStatusChange(lead, event.target.value)}
+                    className={`${inputClassName} min-w-[160px]`}
+                >
+                    {statuses.map((status) => (
+                        <option key={status.id} value={status.id}>{formatStatusLabel(status.name, status.code)}</option>
+                    ))}
+                </select>
+            );
+        case 'notes':
+            return (
+                <button type="button" onClick={() => setNotesLead(lead)} className="w-full text-left">
+                    <div className="text-[12px] font-bold text-primary">Chi tiết</div>
+                    <div className="mt-1 truncate text-[13px] text-primary/60" title={lead.latest_note_excerpt || 'Chưa có ghi chú'}>
+                        {lead.latest_note_excerpt || 'Chưa có ghi chú'}
+                    </div>
+                </button>
+            );
+        case 'link':
+            return lead.link_url ? (
+                <a
+                    href={lead.link_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-[12px] font-bold text-primary transition-all hover:text-brick"
+                    title="Mở link"
+                >
+                    Mở
+                    <span className="material-symbols-outlined text-[17px]">open_in_new</span>
+                </a>
+            ) : (
+                <span className="text-[13px] text-primary/40">Không có link</span>
+            );
+        default:
+            return null;
+        }
+    }, [expandedBundleIds, handleToggleBundle, statuses]);
+
+    const legacyRenderTableCellB = useCallback((lead, columnId) => {
+        switch (columnId) {
+        case 'placed_at':
+            return (
+                <div className="text-[13px] text-[#0F172A]">
+                    <div>{lead.placed_date || '-'}</div>
+                    <div className="mt-1 font-semibold text-primary/60">{lead.placed_time || '-'}</div>
+                    {lead.order_number ? (
+                        <div className="mt-2 truncate text-[11px] font-bold text-primary/45" title={lead.order_number}>{lead.order_number}</div>
+                    ) : null}
+                </div>
+            );
+        case 'product':
+            return <CompactProductCell lead={lead} expandedBundleIds={expandedBundleIds} onToggleBundle={handleToggleBundle} />;
+        case 'customer_name':
+            return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.customer_name || 'Khách chưa có tên'}>{lead.customer_name || 'Khách chưa có tên'}</div>;
+        case 'phone':
+            return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.phone || '-'}>{lead.phone || '-'}</div>;
+        case 'address':
+            return <div className="text-[13px] leading-5 text-[#0F172A]" title={lead.address || '-'}>{lead.address || '-'}</div>;
+        case 'tag':
+            return (
+                <span className="inline-flex rounded-full border border-primary/10 bg-primary/[0.04] px-3 py-1 text-[11px] font-bold text-primary">
+                    {lead.tag || 'Website'}
+                </span>
+            );
+        case 'status':
+            return (
+                <select
+                    value={lead.status_config?.id || ''}
+                    onChange={(event) => handleLeadStatusChange(lead, event.target.value)}
+                    className={`${inputClassName} min-w-[160px]`}
+                >
+                    {statuses.map((status) => (
+                        <option key={status.id} value={status.id}>{formatStatusLabel(status.name, status.code)}</option>
+                    ))}
+                </select>
+            );
+        case 'notes':
+            return (
+                <button type="button" onClick={() => setNotesLead(lead)} className="w-full text-left">
+                    <div className="text-[12px] font-bold text-primary">Chi tiết</div>
+                    <div className="mt-1 truncate text-[13px] text-primary/60" title={lead.latest_note_excerpt || 'Chưa có ghi chú'}>
+                        {lead.latest_note_excerpt || 'Chưa có ghi chú'}
+                    </div>
+                </button>
+            );
+        case 'link':
+            return lead.link_url ? (
+                <a
+                    href={lead.link_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-[12px] font-bold text-primary transition-all hover:text-brick"
+                    title="Mở link"
+                >
+                    Mở
+                    <span className="material-symbols-outlined text-[17px]">open_in_new</span>
+                </a>
+            ) : (
+                <span className="text-[13px] text-primary/40">Không có link</span>
+            );
+        default:
+            return null;
+        }
+    }, [expandedBundleIds, handleToggleBundle, statuses]);
+
+    const renderLeadTable = () => (
+        <div className="lead-table-scrollbar min-h-0 flex-1 overflow-auto">
+            <table className="min-h-full table-fixed border-collapse" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
+                <thead>
+                    <tr className="lead-table-head sticky top-0 z-10 border-b border-primary/10 text-left shadow-sm">
+                        {renderedColumns.map((column, index) => (
+                            <th
+                                key={column.id}
+                                draggable
+                                onDragStart={(event) => handleHeaderDragStart(event, index)}
+                                onDragOver={(event) => event.preventDefault()}
+                                onDrop={(event) => handleHeaderDrop(event, index)}
+                                className="group relative border-r border-primary/10 px-4 py-3 text-[12px] font-bold text-primary last:border-r-0"
+                                style={{
+                                    width: columnWidths[column.id] || column.minWidth,
+                                    minWidth: columnWidths[column.id] || column.minWidth,
+                                }}
+                                title="Kéo để đổi vị trí cột"
+                            >
+                                <div className="truncate pr-3">{column.label}</div>
+                                <span
+                                    onMouseDown={(event) => handleColumnResize(column.id, event)}
+                                    className="absolute right-0 top-0 h-full w-2 cursor-col-resize opacity-0 transition-opacity group-hover:opacity-100"
+                                    title="Kéo để đổi độ rộng cột"
+                                />
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody>
+                    {loading ? (
+                        <tr>
+                            <td colSpan={renderedColumns.length || 1} className="px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                Đang tải danh sách lead...
+                            </td>
+                        </tr>
+                    ) : leads.length === 0 ? (
+                        <tr>
+                            <td colSpan={renderedColumns.length || 1} className="px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                Không tìm thấy lead phù hợp với bộ lọc hiện tại.
+                            </td>
+                        </tr>
+                    ) : leads.map((lead) => (
+                        <tr
+                            key={lead.id}
+                            id={`lead-row-${lead.id}`}
+                            className={`border-b border-primary/10 align-top transition-all ${highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-white hover:bg-primary/[0.025]'}`}
+                            onDoubleClick={() => handleOpenOrderForm(lead)}
+                        >
+                            {renderedColumns.map((column) => (
+                                <td
+                                    key={`${lead.id}-${column.id}`}
+                                    className="px-4 py-3 align-top text-[13px]"
+                                    style={{
+                                        width: columnWidths[column.id] || column.minWidth,
+                                        minWidth: columnWidths[column.id] || column.minWidth,
+                                    }}
+                                >
+                                    {renderTableCell(lead, column.id)}
+                                </td>
+                            ))}
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+
     return (
         <div className="space-y-2.5">
             {lead.items.slice(0, 2).map((item) => {
@@ -264,6 +518,152 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
         </div>
     );
 };
+
+const CompactProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
+    if (!Array.isArray(lead?.items) || lead.items.length === 0) {
+        return <div className="truncate text-[13px] text-primary/50">{lead?.product_summary || 'Không có sản phẩm'}</div>;
+    }
+
+    const detailKey = `lead-${lead.id}`;
+    const isOpen = expandedBundleIds.has(detailKey);
+    const primaryItem = lead.items[0];
+    const totalItemCount = lead.items.length;
+    const totalQuantity = lead.items.reduce((sum, item) => sum + Number(item?.quantity || 0), 0);
+    const hasDetailButton = totalItemCount > 1 || lead.items.some((item) => item?.is_bundle || (item?.bundle_items || []).length > 0);
+    const summaryTitle = primaryItem?.product_name || primaryItem?.product_sku || 'Sản phẩm';
+    const productTooltip = buildProductTooltip(lead);
+
+    return (
+        <div className="relative max-w-full" title={productTooltip}>
+            <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                    <div
+                        className="overflow-hidden text-[13px] font-bold leading-5 text-[#0F172A]"
+                        style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}
+                    >
+                        {summaryTitle}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold text-primary/55">
+                        {primaryItem?.bundle_option_title ? (
+                            <span className="rounded-sm bg-primary/[0.05] px-1.5 py-0.5 text-primary">{primaryItem.bundle_option_title}</span>
+                        ) : null}
+                        {primaryItem?.product_sku ? <span className="truncate">{primaryItem.product_sku}</span> : null}
+                        <span>{totalItemCount > 1 ? `${totalItemCount} sản phẩm` : `x${primaryItem?.quantity || 1}`}</span>
+                        {lead.items.some((item) => item?.is_bundle) ? <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-primary">Bundle</span> : null}
+                    </div>
+                    {totalItemCount > 1 ? (
+                        <div className="mt-1 truncate text-[11px] text-primary/45">
+                            +{totalItemCount - 1} sản phẩm khác, tổng SL {totalQuantity}
+                        </div>
+                    ) : null}
+                </div>
+
+                {hasDetailButton ? (
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onToggleBundle(detailKey);
+                        }}
+                        className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/65 transition-all hover:border-primary/30 hover:text-primary"
+                        title={isOpen ? 'Ẩn chi tiết sản phẩm' : 'Xem chi tiết sản phẩm'}
+                    >
+                        <span className="material-symbols-outlined text-[18px]">{isOpen ? 'expand_less' : 'expand_more'}</span>
+                    </button>
+                ) : null}
+            </div>
+
+            {isOpen ? (
+                <div
+                    className="absolute left-0 top-[calc(100%+8px)] z-20 w-[360px] max-w-[min(360px,calc(100vw-120px))] rounded-sm border border-primary/15 bg-white p-3 shadow-[0_18px_50px_-18px_rgba(15,23,42,0.45)]"
+                    onClick={(event) => event.stopPropagation()}
+                >
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                        <div className="text-[12px] font-black tracking-[0.08em] text-primary">Chi tiết sản phẩm</div>
+                        <button
+                            type="button"
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onToggleBundle(detailKey);
+                            }}
+                            className="inline-flex size-7 items-center justify-center rounded-sm text-primary/45 transition-all hover:bg-primary/5 hover:text-primary"
+                            title="Đóng"
+                        >
+                            <span className="material-symbols-outlined text-[16px]">close</span>
+                        </button>
+                    </div>
+
+                    <div className="max-h-[320px] space-y-2 overflow-auto pr-1">
+                        {lead.items.map((item) => (
+                            <div key={item.id || `${item.product_sku}-${item.product_name}`} className="rounded-sm border border-primary/10 bg-[#F8FAFC] px-3 py-2">
+                                <div className="text-[12px] font-bold leading-5 text-[#0F172A]">{item.product_name || item.product_sku || 'Sản phẩm'}</div>
+                                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold text-primary/55">
+                                    {item.product_sku ? <span>{item.product_sku}</span> : null}
+                                    <span>x{item.quantity || 1}</span>
+                                    {item.bundle_option_title ? <span>{item.bundle_option_title}</span> : null}
+                                </div>
+
+                                {Array.isArray(item.bundle_items) && item.bundle_items.length > 0 ? (
+                                    <div className="mt-2 space-y-1 border-t border-primary/10 pt-2">
+                                        {item.bundle_items.map((child, index) => (
+                                            <div key={`${item.id || item.product_sku}-${child.product_id || index}`} className="flex items-start justify-between gap-3 text-[11px] text-primary/70">
+                                                <div className="min-w-0 truncate">{child.product_name}</div>
+                                                <div className="shrink-0">x{child.quantity || 1}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : null}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            ) : null}
+        </div>
+    );
+};
+
+const LeadColumnVisibilityPanel = ({
+    availableColumns,
+    visibleColumns,
+    toggleColumn,
+    resetDefault,
+    saveAsDefault,
+    onClose,
+}) => (
+    <div className="border-t border-primary/10 bg-[#F8FAFC] px-4 py-4">
+        <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+                <div className="text-[13px] font-black text-primary">Ẩn / hiện cột</div>
+                <div className="text-[12px] text-primary/55">Kéo tiêu đề cột trực tiếp trên bảng để đổi vị trí, kéo mép phải của cột để đổi độ rộng.</div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={resetDefault} className={buttonClassName}>
+                    Khôi phục
+                </button>
+                <button type="button" onClick={saveAsDefault} className={buttonClassName}>
+                    Lưu mặc định
+                </button>
+                <button type="button" onClick={onClose} className={`${buttonClassName} bg-primary text-white hover:bg-primary/90 hover:text-white`}>
+                    Xong
+                </button>
+            </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-5">
+            {availableColumns.map((column) => (
+                <label key={column.id} className={`flex items-center gap-2 rounded-sm border px-3 py-2 text-[13px] transition-all ${visibleColumns.includes(column.id) ? 'border-primary/20 bg-white text-primary shadow-sm' : 'border-primary/10 bg-white/60 text-primary/45'}`}>
+                    <input
+                        type="checkbox"
+                        checked={visibleColumns.includes(column.id)}
+                        onChange={() => toggleColumn(column.id)}
+                        className="size-4 accent-primary"
+                    />
+                    <span>{column.label}</span>
+                </label>
+            ))}
+        </div>
+    </div>
+);
 
 const FilterPanel = ({ filters, draftFilters, statuses, tags, onDraftChange, onApply, onReset }) => (
     <div className="grid gap-4 border-t border-primary/10 bg-[#f8fafc] px-4 py-4 lg:grid-cols-[1.2fr_1fr_1fr_1fr_auto]">
@@ -699,6 +1099,7 @@ const LeadList = () => {
     const [pagination, setPagination] = useState({ current_page: 1, last_page: 1, per_page: 20, total: 0 });
     const [latestId, setLatestId] = useState(0);
     const [filtersOpen, setFiltersOpen] = useState(false);
+    const [columnPanelOpen, setColumnPanelOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [notificationsOpen, setNotificationsOpen] = useState(false);
     const [soundSettingsOpen, setSoundSettingsOpen] = useState(false);
@@ -713,6 +1114,19 @@ const LeadList = () => {
     const [highlightedLeadId, setHighlightedLeadId] = useState(null);
     const [pendingFocusLeadId, setPendingFocusLeadId] = useState(null);
     const [expandedBundleIds, setExpandedBundleIds] = useState(() => new Set());
+
+    const {
+        availableColumns,
+        visibleColumns,
+        renderedColumns,
+        columnWidths,
+        toggleColumn,
+        handleColumnResize,
+        handleHeaderDragStart,
+        handleHeaderDrop,
+        resetDefault,
+        saveAsDefault,
+    } = useTableColumns('lead_list', LEAD_COLUMNS);
 
     const notificationPanelRef = useRef(null);
     const latestIdRef = useRef(0);
@@ -732,6 +1146,14 @@ const LeadList = () => {
         [statuses]
     );
     const unreadNotificationCount = unreadNotifications.length;
+    const leadTableWidth = useMemo(
+        () => renderedColumns.reduce((total, column) => {
+            const width = columnWidths[column.id] || column.minWidth || 0;
+            const numericWidth = typeof width === 'string' ? parseInt(width, 10) : Number(width || 0);
+            return total + numericWidth;
+        }, 0),
+        [columnWidths, renderedColumns]
+    );
 
     useEffect(() => {
         const timer = window.setTimeout(() => {
@@ -1042,6 +1464,138 @@ const LeadList = () => {
         });
     };
 
+    const normalizedTabItems = useMemo(() => ([
+        { id: '', label: 'Tất cả', count: totalAcrossStatuses },
+        ...statuses.map((status) => ({
+            id: String(status.id),
+            label: formatStatusLabel(status.name, status.code),
+            count: Number(status.count || 0),
+        })),
+    ]), [statuses, totalAcrossStatuses]);
+
+    const renderLeadTableCell = useCallback((lead, columnId) => {
+        switch (columnId) {
+        case 'placed_at':
+            return (
+                <div className="text-[13px] text-[#0F172A]">
+                    <div>{lead.placed_date || '-'}</div>
+                    <div className="mt-1 font-semibold text-primary/60">{lead.placed_time || '-'}</div>
+                    {lead.order_number ? (
+                        <div className="mt-2 truncate text-[11px] font-bold text-primary/45" title={lead.order_number}>{lead.order_number}</div>
+                    ) : null}
+                </div>
+            );
+        case 'product':
+            return <CompactProductCell lead={lead} expandedBundleIds={expandedBundleIds} onToggleBundle={handleToggleBundle} />;
+        case 'customer_name':
+            return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.customer_name || 'Khách chưa có tên'}>{lead.customer_name || 'Khách chưa có tên'}</div>;
+        case 'phone':
+            return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.phone || '-'}>{lead.phone || '-'}</div>;
+        case 'address':
+            return <div className="text-[13px] leading-5 text-[#0F172A]" title={lead.address || '-'}>{lead.address || '-'}</div>;
+        case 'tag':
+            return <span className="inline-flex rounded-full border border-primary/10 bg-primary/[0.04] px-3 py-1 text-[11px] font-bold text-primary">{lead.tag || 'Website'}</span>;
+        case 'status':
+            return (
+                <select
+                    value={lead.status_config?.id || ''}
+                    onChange={(event) => handleLeadStatusChange(lead, event.target.value)}
+                    className={`${inputClassName} min-w-[160px]`}
+                >
+                    {statuses.map((status) => (
+                        <option key={status.id} value={status.id}>{formatStatusLabel(status.name, status.code)}</option>
+                    ))}
+                </select>
+            );
+        case 'notes':
+            return (
+                <button type="button" onClick={() => setNotesLead(lead)} className="w-full text-left">
+                    <div className="text-[12px] font-bold text-primary">Chi tiết</div>
+                    <div className="mt-1 truncate text-[13px] text-primary/60" title={lead.latest_note_excerpt || 'Chưa có ghi chú'}>
+                        {lead.latest_note_excerpt || 'Chưa có ghi chú'}
+                    </div>
+                </button>
+            );
+        case 'link':
+            return lead.link_url ? (
+                <a
+                    href={lead.link_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-[12px] font-bold text-primary transition-all hover:text-brick"
+                    title="Mở link"
+                >
+                    Mở
+                    <span className="material-symbols-outlined text-[17px]">open_in_new</span>
+                </a>
+            ) : <span className="text-[13px] text-primary/40">Không có link</span>;
+        default:
+            return null;
+        }
+    }, [expandedBundleIds, statuses]);
+
+    const renderLeadTable = () => (
+        <div className="lead-table-scrollbar min-h-0 flex-1 overflow-auto">
+            <table className="min-h-full table-fixed border-collapse" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
+                <thead>
+                    <tr className="lead-table-head sticky top-0 z-10 border-b border-primary/10 text-left shadow-sm">
+                        {renderedColumns.map((column, index) => (
+                            <th
+                                key={column.id}
+                                draggable
+                                onDragStart={(event) => handleHeaderDragStart(event, index)}
+                                onDragOver={(event) => event.preventDefault()}
+                                onDrop={(event) => handleHeaderDrop(event, index)}
+                                className="group relative border-r border-primary/10 px-4 py-3 text-[12px] font-bold text-primary last:border-r-0"
+                                style={{ width: columnWidths[column.id] || column.minWidth, minWidth: columnWidths[column.id] || column.minWidth }}
+                                title="Kéo để đổi vị trí cột"
+                            >
+                                <div className="truncate pr-3">{column.label}</div>
+                                <span
+                                    onMouseDown={(event) => handleColumnResize(column.id, event)}
+                                    className="absolute right-0 top-0 h-full w-2 cursor-col-resize opacity-0 transition-opacity group-hover:opacity-100"
+                                    title="Kéo để đổi độ rộng cột"
+                                />
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody>
+                    {loading ? (
+                        <tr>
+                            <td colSpan={renderedColumns.length || 1} className="px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                Đang tải danh sách lead...
+                            </td>
+                        </tr>
+                    ) : leads.length === 0 ? (
+                        <tr>
+                            <td colSpan={renderedColumns.length || 1} className="px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                Không tìm thấy lead phù hợp với bộ lọc hiện tại.
+                            </td>
+                        </tr>
+                    ) : leads.map((lead) => (
+                        <tr
+                            key={lead.id}
+                            id={`lead-row-${lead.id}`}
+                            className={`border-b border-primary/10 align-top transition-all ${highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-white hover:bg-primary/[0.025]'}`}
+                            onDoubleClick={() => handleOpenOrderForm(lead)}
+                        >
+                            {renderedColumns.map((column) => (
+                                <td
+                                    key={`${lead.id}-${column.id}`}
+                                    className="px-4 py-3 align-top text-[13px]"
+                                    style={{ width: columnWidths[column.id] || column.minWidth, minWidth: columnWidths[column.id] || column.minWidth }}
+                                >
+                                    {renderLeadTableCell(lead, column.id)}
+                                </td>
+                            ))}
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+
     const tabItems = useMemo(() => ([
         { id: '', label: 'Tất cả', count: totalAcrossStatuses },
         ...statuses.map((status) => ({ id: String(status.id), label: status.name, count: Number(status.count || 0) })),
@@ -1053,25 +1607,22 @@ const LeadList = () => {
                 .lead-table-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
                 .lead-table-scrollbar::-webkit-scrollbar-track { background: #F0F4F8; }
                 .lead-table-scrollbar::-webkit-scrollbar-thumb { background: #1B365D; border: 2px solid #F0F4F8; border-radius: 5px; }
-                .lead-table-head { font-size: 11px; font-weight: 900; color: #1B365D; text-transform: uppercase; letter-spacing: 0.15em; background-color: #F0F4F8; }
+                .lead-table-head { font-size: 11px; font-weight: 900; color: #1B365D; letter-spacing: 0.02em; background-color: #F0F4F8; }
             `}</style>
             <div className="mx-auto flex min-h-[calc(100vh-48px)] max-w-[1700px] flex-col gap-5">
-                <div className="space-y-1">
-                    <h1 className="text-[34px] font-black uppercase tracking-[0.04em] text-primary">Xử lý lead</h1>
-                    <p className="text-[13px] font-semibold uppercase tracking-[0.18em] text-primary/45">
-                        Lead đơn hàng từ website đổ realtime về sale dashboard
-                    </p>
+                <div>
+                    <h1 className="text-[15px] font-black uppercase tracking-[0.1em] text-primary">Xử lý lead</h1>
                 </div>
 
                 <div className="flex flex-wrap gap-3">
-                    {tabItems.map((item) => {
+                    {normalizedTabItems.map((item) => {
                         const active = String(filters.status || '') === String(item.id || '');
                         return (
                             <button
                                 key={String(item.id || 'all')}
                                 type="button"
                                 onClick={() => handleStatusTabClick(item.id)}
-                                className={`rounded-full border px-4 py-3 text-[12px] font-black uppercase tracking-[0.08em] transition-all ${
+                                className={`rounded-full border px-4 py-2.5 text-[13px] font-bold transition-all ${
                                     active
                                         ? 'border-primary bg-primary text-white shadow-sm'
                                         : 'border-primary/10 bg-white text-primary/70 hover:border-primary/25 hover:text-primary'
@@ -1227,19 +1778,20 @@ const LeadList = () => {
                                 ) : null}
                             </div>
 
-                            <button type="button" onClick={() => setFiltersOpen((prev) => !prev)} className={buttonClassName}>
+                            <button type="button" onClick={() => setFiltersOpen((prev) => !prev)} className={iconButtonClassName} title="Bộ lọc">
                                 <span className="material-symbols-outlined text-[18px]">filter_alt</span>
-                                Bộ lọc
                             </button>
 
-                            <button type="button" onClick={() => setSettingsOpen(true)} className={buttonClassName}>
+                            <button type="button" onClick={() => setColumnPanelOpen((prev) => !prev)} className={iconButtonClassName} title="Ẩn / hiện cột">
+                                <span className="material-symbols-outlined text-[18px]">view_column</span>
+                            </button>
+
+                            <button type="button" onClick={() => setSettingsOpen(true)} className={iconButtonClassName} title="Cài đặt lead">
                                 <span className="material-symbols-outlined text-[18px]">settings</span>
-                                Cài đặt lead
                             </button>
 
-                            <button type="button" onClick={handleRefresh} className={buttonClassName}>
+                            <button type="button" onClick={handleRefresh} className={iconButtonClassName} title="Làm mới">
                                 <span className="material-symbols-outlined text-[18px]">refresh</span>
-                                Làm mới
                             </button>
                         </div>
 
@@ -1271,6 +1823,20 @@ const LeadList = () => {
                         />
                     ) : null}
 
+                    {columnPanelOpen ? (
+                        <LeadColumnVisibilityPanel
+                            availableColumns={availableColumns}
+                            visibleColumns={visibleColumns}
+                            toggleColumn={toggleColumn}
+                            resetDefault={resetDefault}
+                            saveAsDefault={saveAsDefault}
+                            onClose={() => setColumnPanelOpen(false)}
+                        />
+                    ) : null}
+
+                    {renderLeadTable()}
+
+                    {false ? (
                     <div className="lead-table-scrollbar min-h-0 flex-1 overflow-auto">
                         <table className="min-h-full min-w-full table-fixed border-collapse">
                             <thead>
@@ -1363,6 +1929,7 @@ const LeadList = () => {
                             </tbody>
                         </table>
                     </div>
+                    ) : null}
 
                     <div className="flex flex-col gap-4 border-t border-primary/10 bg-white px-4 py-4 md:flex-row md:items-center md:justify-between">
                         <div className="text-[13px] font-semibold text-primary/60">

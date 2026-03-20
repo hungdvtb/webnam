@@ -2161,7 +2161,93 @@ const ProductForm = () => {
     };
 
 
+    const selectedDomain = useMemo(() => (
+        domains.find(d => String(d.id) === String(formData.site_domain_id))
+        || domains.find(d => d.is_default)
+        || { domain: 'di-san.com' }
+    ), [domains, formData.site_domain_id]);
+
+    const previewSlug = useMemo(() => (
+        String((showSlugModal ? tempSlug : formData.slug) || formData.slug || '').trim()
+    ), [formData.slug, showSlugModal, tempSlug]);
+
+    const baseProductLink = useMemo(() => {
+        if (!previewSlug) {
+            return '';
+        }
+
+        return `https://${selectedDomain.domain}/product/${previewSlug}`;
+    }, [previewSlug, selectedDomain]);
+
+    const buildTrackingLink = useCallback((url, source) => {
+        if (!url) {
+            return '';
+        }
+
+        try {
+            const trackingUrl = new URL(url);
+            trackingUrl.searchParams.set('utm_source', source);
+            return trackingUrl.toString();
+        } catch (error) {
+            return `${url}${url.includes('?') ? '&' : '?'}utm_source=${encodeURIComponent(source)}`;
+        }
+    }, []);
+
+    const trackingLinks = useMemo(() => ([
+        {
+            key: 'facebook',
+            label: 'Link Facebook',
+            helper: 'utm_source=facebook',
+            url: buildTrackingLink(baseProductLink, 'facebook'),
+        },
+        {
+            key: 'google',
+            label: 'Link Google',
+            helper: 'utm_source=google',
+            url: buildTrackingLink(baseProductLink, 'google'),
+        },
+        {
+            key: 'tiktok',
+            label: 'Link TikTok',
+            helper: 'utm_source=tiktok',
+            url: buildTrackingLink(baseProductLink, 'tiktok'),
+        },
+    ]), [baseProductLink, buildTrackingLink]);
+
+    const copyTextToClipboard = useCallback((value, successMessage) => {
+        if (!value) {
+            showToast({ message: 'Sản phẩm chưa có đường dẫn link (slug).', type: 'warning' });
+            return;
+        }
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(value)
+                .then(() => {
+                    showToast({ message: successMessage, type: 'success' });
+                })
+                .catch(err => {
+                    console.error('Copy failed:', err);
+                    showToast({ message: 'Lỗi khi sao chép link.', type: 'error' });
+                });
+            return;
+        }
+
+        const textArea = document.createElement('textarea');
+        textArea.value = value;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            showToast({ message: successMessage, type: 'success' });
+        } catch (err) {
+            showToast({ message: 'Trình duyệt không hỗ trợ sao chép tự động.', type: 'error' });
+        }
+        document.body.removeChild(textArea);
+    }, [showToast]);
+
     const handleCopyLink = () => {
+        copyTextToClipboard(baseProductLink, 'Đã sao chép link hiển thị của sản phẩm!');
+        return;
         const slug = formData.slug;
         if (!slug) {
             showToast({ message: 'Sản phẩm chưa có đường dẫn link (slug).', type: 'warning' });
@@ -4063,6 +4149,44 @@ const ProductForm = () => {
                                         <span className="material-symbols-outlined text-[16px] text-stone/30 group-hover/link:text-gold transition-colors">content_copy</span>
                                     </div>
                                     <p className="text-[10px] text-stone/40 mt-2 italic">* Đây là đường dẫn tĩnh để khách hàng truy cập trực tiếp vào sản phẩm.</p>
+                                </div>
+
+                                <div className="mb-6 rounded-sm border border-gold/10 bg-[#fcfaf7] p-4">
+                                    <div className="mb-3 flex items-center justify-between gap-3">
+                                        <div>
+                                            <h4 className="text-[12px] font-black uppercase tracking-[0.14em] text-primary">Link tracking quảng cáo</h4>
+                                            <p className="mt-1 text-[11px] text-stone/50">
+                                                Hệ thống tự sinh 3 link phụ từ link sản phẩm hiện tại theo UTM.
+                                            </p>
+                                        </div>
+                                        <span className="rounded-full bg-primary/[0.06] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-primary">
+                                            Tự động
+                                        </span>
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        {trackingLinks.map((trackingLink) => (
+                                            <div key={trackingLink.key} className="rounded-sm border border-stone/10 bg-white p-3 shadow-sm">
+                                                <div className="mb-2 flex items-center justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <div className="text-[12px] font-bold text-primary">{trackingLink.label}</div>
+                                                        <div className="text-[10px] font-medium text-stone/45">{trackingLink.helper}</div>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => copyTextToClipboard(trackingLink.url, `Đã sao chép ${trackingLink.label.toLowerCase()}!`)}
+                                                        className="inline-flex items-center gap-1.5 rounded-sm border border-gold/15 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-primary transition-all hover:border-gold hover:bg-gold/10"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                                                        Copy
+                                                    </button>
+                                                </div>
+                                                <div className="truncate text-[12px] text-stone/65" title={trackingLink.url || 'Chưa có link tracking'}>
+                                                    {trackingLink.url || 'Sản phẩm cần có domain và slug để sinh link tracking.'}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
 
                                 <div className="space-y-6">

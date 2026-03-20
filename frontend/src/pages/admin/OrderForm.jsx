@@ -1520,6 +1520,10 @@ const OrderForm = () => {
                     <span>{leadConversionSummary.tag || 'Website'}</span>
                 </div>
                 <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                    <span className="font-bold text-primary/55">Nguồn</span>
+                    <span>{leadConversionSummary.source || leadConversionSummary.tag || 'Website'}</span>
+                </div>
+                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
                     <span className="font-bold text-primary/55">Landing URL</span>
                     <div className="min-w-0 break-all">
                         {leadConversionSummary.landing_url ? <a href={leadConversionSummary.landing_url} target="_blank" rel="noreferrer" className="text-primary hover:text-brick">{leadConversionSummary.landing_url}</a> : <span>-</span>}
@@ -1536,8 +1540,16 @@ const OrderForm = () => {
                     <span className="break-all">{leadConversionSummary.referrer || '-'}</span>
                 </div>
                 <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
-                    <span className="font-bold text-primary/55">UTM</span>
-                    <span>{[leadConversionSummary.utm_source, leadConversionSummary.utm_medium, leadConversionSummary.utm_campaign].filter(Boolean).join(' / ') || '-'}</span>
+                    <span className="font-bold text-primary/55">UTM source</span>
+                    <span>{leadConversionSummary.utm_source || '-'}</span>
+                </div>
+                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                    <span className="font-bold text-primary/55">UTM medium</span>
+                    <span>{leadConversionSummary.utm_medium || '-'}</span>
+                </div>
+                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                    <span className="font-bold text-primary/55">UTM campaign</span>
+                    <span>{leadConversionSummary.utm_campaign || '-'}</span>
                 </div>
                 <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
                     <span className="font-bold text-primary/55">Link sản phẩm</span>

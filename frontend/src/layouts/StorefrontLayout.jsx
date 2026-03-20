@@ -239,7 +239,22 @@ export const LeadFormModal = ({ show, onClose, product, source = 'website' }) =>
         if (!form.customer_name.trim() || !form.phone.trim()) return;
         setSubmitting(true);
         try {
-            await api.post('/storefront/lead', { ...form, product_id: product?.id, source });
+            const attribution = rememberLeadAttribution({ source_label: source });
+            await api.post('/storefront/lead', {
+                ...form,
+                product_id: product?.id,
+                product_name: product?.name || '',
+                source: attribution.source || source,
+                landing_url: attribution.landing_url || attribution.first_url || window.location.href,
+                current_url: attribution.current_url || window.location.href,
+                referrer: attribution.referrer || document.referrer || '',
+                utm_source: attribution.utm_source || '',
+                utm_medium: attribution.utm_medium || '',
+                utm_campaign: attribution.utm_campaign || '',
+                utm_content: attribution.utm_content || '',
+                utm_term: attribution.utm_term || '',
+                raw_query: attribution.raw_query || '',
+            });
             trackLead(product ? 'Product Inquiry' : 'General Inquiry');
             setSuccess(true);
             setTimeout(() => {
@@ -307,6 +322,7 @@ const StorefrontLayout = () => {
     const [siteInfo, setSiteInfo] = useState(null);
     const [headerConfig, setHeaderConfig] = useState(buildHeaderConfig({}));
     const [footerConfig, setFooterConfig] = useState(buildFooterConfig({}));
+    const location = useLocation();
 
     useEffect(() => {
         rememberLeadAttribution();
@@ -333,7 +349,7 @@ const StorefrontLayout = () => {
         };
 
         load();
-    }, []);
+    }, [location.pathname, location.search, location.hash]);
 
     const hasTopNotice = Boolean((headerConfig?.topNoticeText || '').trim());
 

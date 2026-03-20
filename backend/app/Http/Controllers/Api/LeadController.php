@@ -378,12 +378,13 @@ class LeadController extends Controller
             'discount' => (float) $lead->discount_amount,
             'shipping_fee' => (float) ($payload['shipping_fee'] ?? 0),
             'total_amount' => (float) $lead->total_amount,
-            'source' => $lead->tag ?: ($payload['source'] ?? 'Website'),
+            'source' => $conversionData['source'] ?? ($lead->tag ?: ($payload['source'] ?? 'Website')),
             'type' => $payload['type'] ?? 'Le',
             'shipment_status' => $payload['shipment_status'] ?? 'Chua giao',
             'status' => 'new',
             'items' => $items,
             'conversion_summary' => [
+                'source' => $conversionData['source'] ?? $lead->tag ?? ($payload['source'] ?? 'Website'),
                 'tag' => $lead->tag,
                 'landing_url' => $conversionData['landing_url'] ?? null,
                 'current_url' => $conversionData['current_url'] ?? null,
@@ -396,6 +397,7 @@ class LeadController extends Controller
             'custom_attributes' => array_filter([
                 'lead_number' => $lead->lead_number,
                 'lead_tag' => $lead->tag,
+                'source' => $conversionData['source'] ?? $lead->tag ?? ($payload['source'] ?? 'Website'),
                 'landing_url' => $conversionData['landing_url'] ?? null,
                 'current_url' => $conversionData['current_url'] ?? null,
                 'referrer' => $conversionData['referrer'] ?? null,

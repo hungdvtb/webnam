@@ -146,6 +146,7 @@ const Checkout = () => {
                 discount_amount: discountAmount,
                 discount: discountAmount,
                 total: finalTotal,
+                source: attribution.source || attribution.source_display || 'Direct',
                 landing_url: attribution.landing_url || attribution.first_url || window.location.href,
                 current_url: window.location.href,
                 referrer: attribution.referrer || document.referrer || '',
@@ -162,7 +163,7 @@ const Checkout = () => {
                     product_name: item.product?.name || '',
                     product_sku: item.product?.sku || '',
                     product_slug: item.product?.slug || '',
-                    product_url: `${window.location.origin}/old/details/${item.product_id}`,
+                    product_url: `${window.location.origin}/san-pham/${item.product?.slug || item.product_id}`,
                     unit_price: item.price,
                 })),
                 custom_attributes: {

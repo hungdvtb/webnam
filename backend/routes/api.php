@@ -42,6 +42,7 @@ Route::get('/menus/code/{code}', [\App\Http\Controllers\Api\MenuController::clas
 Route::get('/menus/active', [\App\Http\Controllers\Api\MenuController::class , 'getActive']);
 Route::get('/thumbnail', [ProductImageController::class , 'thumbnail']);
 Route::get('/media/proxy', [MediaController::class, 'proxy']);
+Route::post('/shipments/carriers/viettel-post/webhook', [\App\Http\Controllers\Api\ShipmentController::class, 'processViettelPostWebhook']);
 
 
 // Protected routes
@@ -129,6 +130,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/bulk-delete', [\App\Http\Controllers\Api\OrderController::class , 'bulkDelete']);
     Route::post('/orders/bulk-restore', [\App\Http\Controllers\Api\OrderController::class , 'bulkRestore']);
     Route::post('/orders/bulk-duplicate', [\App\Http\Controllers\Api\OrderController::class , 'bulkDuplicate']);
+    Route::post('/orders/dispatch/preview', [\App\Http\Controllers\Api\OrderController::class , 'dispatchPreview']);
+    Route::post('/orders/dispatch', [\App\Http\Controllers\Api\OrderController::class , 'dispatch']);
+    Route::get('/orders/shipping-alerts', [\App\Http\Controllers\Api\OrderController::class , 'shippingAlerts']);
+    Route::get('/orders/connected-carriers', [\App\Http\Controllers\Api\OrderController::class , 'connectedCarriers']);
 
     // Order Statuses
     Route::get('/order-statuses', [\App\Http\Controllers\Api\OrderStatusController::class , 'index']);
@@ -146,6 +151,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/carrier-mappings/carriers/reorder', [\App\Http\Controllers\Api\CarrierStatusMappingController::class , 'updateCarriersSort']);
     Route::post('/carrier-mappings/carriers/{code}/toggle-visibility', [\App\Http\Controllers\Api\CarrierStatusMappingController::class , 'toggleCarrierVisibility']);
     Route::put('/carrier-mappings/carriers/{code}', [\App\Http\Controllers\Api\CarrierStatusMappingController::class , 'updateCarrier']);
+    Route::get('/shipping-settings', [\App\Http\Controllers\Api\ShippingSettingsController::class , 'index']);
+    Route::put('/shipping-settings/integrations/{carrierCode}', [\App\Http\Controllers\Api\ShippingSettingsController::class , 'updateIntegration']);
+    Route::post('/shipping-settings/integrations/{carrierCode}/test', [\App\Http\Controllers\Api\ShippingSettingsController::class , 'testIntegration']);
 
     // Customer management
     Route::get('/customers', [\App\Http\Controllers\Api\CustomerController::class , 'index']);
@@ -200,6 +208,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/shipments/{id}/restore', [\App\Http\Controllers\Api\ShipmentController::class , 'restore']);
     Route::delete('/shipments/{id}', [\App\Http\Controllers\Api\ShipmentController::class , 'destroy']);
     Route::post('/shipments/bulk-status', [\App\Http\Controllers\Api\ShipmentController::class , 'bulkUpdateStatus']);
+    Route::post('/shipments/reconcile', [\App\Http\Controllers\Api\ShipmentController::class , 'bulkReconcile']);
+    Route::post('/shipments/sync', [\App\Http\Controllers\Api\ShipmentController::class , 'syncCarrierShipments']);
     Route::post('/shipments/carrier-callback', [\App\Http\Controllers\Api\ShipmentController::class , 'processCarrierCallback']);
 
     // Order shipping status check

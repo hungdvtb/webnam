@@ -105,6 +105,10 @@ export const orderApi = {
     bulkRestore: (ids) => api.post('/orders/bulk-restore', { ids }),
     bulkDuplicate: (ids) => api.post('/orders/bulk-duplicate', { ids }),
     bulkUpdate: (data) => api.post('/orders/bulk-update', data),
+    dispatchPreview: (data) => api.post('/orders/dispatch/preview', data),
+    dispatch: (data) => api.post('/orders/dispatch', data),
+    getShippingAlerts: (params) => api.get('/orders/shipping-alerts', { params }),
+    getConnectedCarriers: () => api.get('/orders/connected-carriers'),
 };
 
 export const leadApi = {
@@ -222,9 +226,17 @@ export const shipmentApi = {
     restore: (id) => api.post(`/shipments/${id}/restore`),
     addNote: (id, data) => api.post(`/shipments/${id}/notes`, data),
     markReconciled: (id, data) => api.post(`/shipments/${id}/reconcile`, data),
+    bulkReconcile: (data) => api.post('/shipments/reconcile', data),
     getStats: (params) => api.get('/shipments/stats', { params }),
     getCarriers: () => api.get('/shipments/carriers'),
     bulkUpdateStatus: (data) => api.post('/shipments/bulk-status', data),
+    sync: (data) => api.post('/shipments/sync', data),
+};
+
+export const shippingApi = {
+    getSettings: () => api.get('/shipping-settings'),
+    updateIntegration: (carrierCode, data) => api.put(`/shipping-settings/integrations/${carrierCode}`, data),
+    testIntegration: (carrierCode) => api.post(`/shipping-settings/integrations/${carrierCode}/test`),
 };
 
 export const authApi = {

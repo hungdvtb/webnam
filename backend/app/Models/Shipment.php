@@ -10,23 +10,24 @@ class Shipment extends Model
     use \App\Traits\BelongsToAccount, SoftDeletes;
 
     protected $fillable = [
-        'order_id', 'warehouse_id', 'shipment_number', 'tracking_number',
+        'order_id', 'integration_id', 'warehouse_id', 'shipment_number', 'tracking_number',
         'carrier_code', 'carrier_name', 'carrier_tracking_code', 'order_code', 'channel',
         'customer_id', 'customer_name', 'customer_phone', 'customer_address',
         'customer_ward', 'customer_district', 'customer_province',
         'sender_name', 'sender_phone', 'sender_address',
         'status', 'shipment_status', 'shipment_sub_status', 'order_status_snapshot',
-        'carrier_status_raw', 'carrier_status_mapped',
+        'carrier_status_raw', 'carrier_status_mapped', 'carrier_status_code', 'carrier_status_text',
         'cod_amount', 'shipping_cost', 'service_fee', 'return_fee', 'insurance_fee', 'other_fee',
         'reconciled_amount', 'actual_received_amount', 'reconciliation_diff_amount',
         'reconciliation_status', 'cod_status',
         'attempt_delivery_count', 'failed_reason', 'failed_reason_code',
-        'internal_note', 'notes', 'risk_flag', 'priority_level',
+        'internal_note', 'notes', 'risk_flag', 'priority_level', 'problem_code', 'problem_message',
         'created_by', 'assigned_to',
         'shipped_at', 'picked_at', 'in_transit_at', 'out_for_delivery_at',
         'delivered_at', 'delivery_failed_at', 'returning_at', 'returned_at',
-        'reconciled_at', 'canceled_at', 'last_synced_at',
-        'raw_tracking_payload', 'extra_data', 'account_id',
+        'reconciled_at', 'last_reconciled_at', 'canceled_at', 'last_synced_at', 'problem_detected_at',
+        'last_webhook_received_at', 'external_order_number',
+        'raw_tracking_payload', 'dispatch_payload', 'dispatch_response', 'extra_data', 'account_id',
     ];
 
     protected $casts = [
@@ -48,9 +49,14 @@ class Shipment extends Model
         'returning_at' => 'datetime',
         'returned_at' => 'datetime',
         'reconciled_at' => 'datetime',
+        'last_reconciled_at' => 'datetime',
         'canceled_at' => 'datetime',
         'last_synced_at' => 'datetime',
+        'problem_detected_at' => 'datetime',
+        'last_webhook_received_at' => 'datetime',
         'raw_tracking_payload' => 'json',
+        'dispatch_payload' => 'json',
+        'dispatch_response' => 'json',
         'extra_data' => 'json',
         'attempt_delivery_count' => 'integer',
     ];
@@ -64,6 +70,11 @@ class Shipment extends Model
     public function warehouse()
     {
         return $this->belongsTo(Warehouse::class);
+    }
+
+    public function integration()
+    {
+        return $this->belongsTo(ShippingIntegration::class, 'integration_id');
     }
 
     public function items()

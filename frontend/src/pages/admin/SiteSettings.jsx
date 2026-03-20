@@ -4,6 +4,8 @@ import { cmsApi, mediaApi, quoteTemplateApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 import { createDefaultHeaderMenus, normalizeHeaderMenus } from '../../utils/headerSettings';
 import { createDefaultFooterMenuGroups, normalizeFooterMenuGroups } from '../../utils/footerSettings';
+import { useSearchParams } from 'react-router-dom';
+import ShippingSettingsPanel from '../../components/admin/ShippingSettingsPanel';
 
 const defaultSettings = {
     site_name: '',
@@ -180,9 +182,11 @@ const ImageUploadCard = ({ imageUrl, onUpload, onRemove, emptyLabel, previewClas
 
 const SiteSettings = () => {
     const { showModal } = useUI();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [activeTab, setActiveTab] = useState('contact');
+    const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'contact');
+    const [shippingSubTab, setShippingSubTab] = useState(searchParams.get('shippingTab') || 'integrations');
     const [settings, setSettings] = useState(defaultSettings);
     const [domains, setDomains] = useState([]);
     const [newDomain, setNewDomain] = useState('');
@@ -247,6 +251,14 @@ const SiteSettings = () => {
         fetchDomains();
         fetchQuoteTemplates();
     }, [fetchSettings, fetchDomains, fetchQuoteTemplates]);
+
+    useEffect(() => {
+        const next = new URLSearchParams(searchParams);
+        next.set('tab', activeTab);
+        if (activeTab === 'shipping') next.set('shippingTab', shippingSubTab);
+        else next.delete('shippingTab');
+        setSearchParams(next, { replace: true });
+    }, [activeTab, searchParams, setSearchParams, shippingSubTab]);
 
     const handleChange = (e) => {
         const { name, value } = e.target;
@@ -602,6 +614,18 @@ const SiteSettings = () => {
         { id: 'domains', title: 'Quản lý tên miền', icon: 'language' },
         { id: 'bank', title: 'Cài đặt STK', icon: 'account_balance' },
         { id: 'quote', title: 'Báo giá', icon: 'image' },
+        { id: 'shipping', title: 'CÃ i Ä‘áº·t váº­n chuyá»ƒn', icon: 'local_shipping' },
+    ];
+
+    const settingsTabs = [
+        { id: 'contact', title: 'Liên hệ & Mạng xã hội', icon: 'contact_support' },
+        { id: 'header', title: 'Cài đặt Header', icon: 'web' },
+        { id: 'footer', title: 'Cài đặt Footer', icon: 'bottom_panel_open' },
+        { id: 'pixel', title: 'Pixel & Tracking', icon: 'analytics' },
+        { id: 'domains', title: 'Quản lý tên miền', icon: 'language' },
+        { id: 'bank', title: 'Cài đặt STK', icon: 'account_balance' },
+        { id: 'quote', title: 'Báo giá', icon: 'image' },
+        { id: 'shipping', title: 'Cài đặt vận chuyển', icon: 'local_shipping' },
     ];
 
     return (
@@ -621,7 +645,7 @@ const SiteSettings = () => {
                     <p className="text-[10px] font-black text-primary/40 uppercase tracking-[0.2em] mt-1 italic font-sans">Quản lý liên hệ, thanh toán và mẫu báo giá</p>
                 </div>
 
-                {activeTab !== 'domains' && (
+                {activeTab !== 'domains' && activeTab !== 'shipping' && (
                     <button
                         onClick={handleSubmit}
                         disabled={saving}
@@ -638,7 +662,7 @@ const SiteSettings = () => {
             </div>
 
             <div className="flex gap-8 mb-6 border-b border-primary/10">
-                {tabs.map((tab) => (
+                {settingsTabs.map((tab) => (
                     <button
                         key={tab.id}
                         type="button"
@@ -1409,6 +1433,13 @@ const SiteSettings = () => {
                                 </div>
                             </SectionCard>
                         </div>
+                    )}
+
+                    {activeTab === 'shipping' && (
+                        <ShippingSettingsPanel
+                            initialTab={shippingSubTab}
+                            onTabChange={setShippingSubTab}
+                        />
                     )}
                 </div>
             </div>

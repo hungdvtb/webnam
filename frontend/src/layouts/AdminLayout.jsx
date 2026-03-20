@@ -8,14 +8,14 @@ const AdminLayout = () => {
     const { user, logout, loading } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
-    const [isSettingsOpen, setIsSettingsOpen] = React.useState(location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users'));
+    const [isSettingsOpen, setIsSettingsOpen] = React.useState(location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users') || location.pathname.startsWith('/admin/settings'));
     const [isOrdersOpen, setIsOrdersOpen] = React.useState(location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads'));
     const [isDesignOpen, setIsDesignOpen] = React.useState(location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/blog'));
 
     const isOrderForm = location.pathname.startsWith('/admin/orders/new') || location.pathname.startsWith('/admin/orders/edit');
 
     React.useEffect(() => {
-        if (location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users')) setIsSettingsOpen(true);
+        if (location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users') || location.pathname.startsWith('/admin/settings')) setIsSettingsOpen(true);
         if (location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads')) setIsOrdersOpen(true);
         if (location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/blog')) setIsDesignOpen(true);
     }, [location.pathname]);
@@ -148,10 +148,10 @@ const AdminLayout = () => {
                                     )}
                                     {canAccess('orders') && (
                                         <Link 
-                                            to="/admin/carrier-mappings" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/carrier-mappings' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
+                                            to="/admin/settings?tab=shipping&shippingTab=integrations" 
+                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/carrier-mappings' || (location.pathname === '/admin/settings' && location.search.includes('tab=shipping')) ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
                                         >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/carrier-mappings' ? 'text-gold' : 'group-hover:text-gold'}`}>sync_alt</span>
+                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/carrier-mappings' || (location.pathname === '/admin/settings' && location.search.includes('tab=shipping')) ? 'text-gold' : 'group-hover:text-gold'}`}>local_shipping</span>
                                             <span className="font-sans text-xs font-medium tracking-wide">Mapping vận chuyển</span>
                                         </Link>
                                     )}

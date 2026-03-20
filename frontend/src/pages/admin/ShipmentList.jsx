@@ -130,6 +130,9 @@ const ShipmentList = () => {
 
     const [showColumnSettings, setShowColumnSettings] = useState(false);
     const columnSettingsRef = useRef(null);
+    const [notification, setNotification] = useState(null);
+    const [bulkReconciling, setBulkReconciling] = useState(false);
+    const [bulkSyncing, setBulkSyncing] = useState(false);
 
     const {
         visibleColumns,
@@ -194,6 +197,25 @@ const ShipmentList = () => {
         const t = setTimeout(() => fetchShipments(1), 400);
         return () => clearTimeout(t);
     }, [filters, sortConfig]);
+    useEffect(() => {
+        if (!notification) return undefined;
+        const timer = window.setTimeout(() => setNotification(null), 3500);
+        return () => window.clearTimeout(timer);
+    }, [notification]);
+
+    useEffect(() => {
+        const intervalId = window.setInterval(async () => {
+            try {
+                await shipmentApi.sync({ mode: 'active' });
+                fetchShipments(pagination.current_page);
+                fetchStats();
+            } catch (error) {
+                console.error('Shipment auto sync failed', error);
+            }
+        }, 30000);
+
+        return () => window.clearInterval(intervalId);
+    }, [fetchShipments, fetchStats, pagination.current_page]);
 
     const handleSort = (columnId) => {
         const validSortColumns = ['id', 'shipment_number', 'order_code', 'shipment_status', 'cod_amount', 'shipping_cost', 'actual_received_amount', 'created_at', 'carrier_name'];
@@ -247,6 +269,50 @@ const ShipmentList = () => {
             fetchShipments(pagination.current_page);
             fetchStats();
         } catch { alert('Lỗi cập nhật hàng loạt!'); }
+    };
+
+    const handleBulkReconcileSelected = async () => {
+        if (!selectedIds.length) return;
+        setBulkReconciling(true);
+        try {
+            const response = await shipmentApi.bulkReconcile({ shipment_ids: selectedIds });
+            setNotification({
+                type: 'success',
+                message: response.data?.message || `Đã đối soát ${response.data?.success_count || selectedIds.length} vận đơn.`,
+            });
+            setSelectedIds([]);
+            fetchShipments(pagination.current_page);
+            fetchStats();
+        } catch (error) {
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể đối soát các vận đơn đã chọn.',
+            });
+        } finally {
+            setBulkReconciling(false);
+        }
+    };
+
+    const handleSyncShipments = async (mode = 'selected') => {
+        const shipmentIds = mode === 'selected' ? selectedIds : [];
+        if (mode === 'selected' && shipmentIds.length === 0) return;
+        setBulkSyncing(true);
+        try {
+            const response = await shipmentApi.sync(mode === 'selected' ? { shipment_ids: shipmentIds, mode } : { mode });
+            setNotification({
+                type: 'success',
+                message: response.data?.message || 'Đã đồng bộ trạng thái vận đơn.',
+            });
+            fetchShipments(mode === 'selected' ? pagination.current_page : 1);
+            fetchStats();
+        } catch (error) {
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể đồng bộ vận đơn.',
+            });
+        } finally {
+            setBulkSyncing(false);
+        }
     };
 
     const openDetail = async (id) => {
@@ -317,6 +383,15 @@ const ShipmentList = () => {
 
     return (
         <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full">
+            {notification && (
+                <div className={`fixed top-6 right-6 z-[100] p-4 rounded-sm shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-4 duration-300 ${notification.type === 'error' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-green-50 text-green-700 border border-green-200'}`}>
+                    <span className="material-symbols-outlined">{notification.type === 'error' ? 'error' : 'check_circle'}</span>
+                    <span className="font-bold">{notification.message}</span>
+                    <button onClick={() => setNotification(null)} className="ml-2 opacity-50 hover:opacity-100">
+                        <span className="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+            )}
             {/* Header */}
             <div className="flex-none pb-4 space-y-4">
                 <div className="flex justify-between items-center">
@@ -350,6 +425,24 @@ const ShipmentList = () => {
                                 <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>refresh</span>
                             </button>
                         </div>
+
+                            <button
+                                onClick={() => handleSyncShipments(selectedIds.length > 0 ? 'selected' : 'active')}
+                                className={`p-1.5 border transition-all flex items-center justify-center rounded-sm w-9 h-9 ${(bulkSyncing || selectedIds.length > 0) ? 'bg-primary/10 text-primary border-primary/20 hover:bg-primary/15' : 'bg-white text-primary border-gold/20 hover:bg-gold/5'}`}
+                                title={selectedIds.length > 0 ? 'Đồng bộ vận đơn đã chọn' : 'Đồng bộ vận đơn đang hoạt động'}
+                                disabled={bulkSyncing}
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${bulkSyncing ? 'animate-spin' : ''}`}>sync</span>
+                            </button>
+                            <button
+                                onClick={handleBulkReconcileSelected}
+                                className={`h-9 px-3 rounded-sm border flex items-center gap-2 text-[12px] font-black uppercase tracking-wide transition-all ${selectedIds.length > 0 ? 'bg-primary text-white border-primary hover:bg-primary/90' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}
+                                title="Đối soát"
+                                disabled={selectedIds.length === 0 || bulkReconciling}
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${bulkReconciling ? 'animate-spin' : ''}`}>account_balance</span>
+                                Đối soát
+                            </button>
 
                         {/* Bulk actions */}
                         {selectedIds.length > 0 && (

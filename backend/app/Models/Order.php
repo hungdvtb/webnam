@@ -15,10 +15,14 @@ class Order extends Model
         'shipping_address', 'province', 'district', 'ward', 'notes', 'account_id',
         'source', 'type', 'shipment_status', 'shipping_fee', 'discount', 'cost_total', 'customer_id',
         'shipping_status', 'shipping_synced_at', 'shipping_status_source',
+        'shipping_carrier_code', 'shipping_carrier_name', 'shipping_tracking_code',
+        'shipping_dispatched_at', 'shipping_issue_code', 'shipping_issue_message', 'shipping_issue_detected_at',
     ];
 
     protected $casts = [
         'shipping_synced_at' => 'datetime',
+        'shipping_dispatched_at' => 'datetime',
+        'shipping_issue_detected_at' => 'datetime',
     ];
 
     public function items()

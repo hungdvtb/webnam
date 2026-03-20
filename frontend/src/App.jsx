@@ -43,7 +43,6 @@ import BlogImport from './pages/admin/BlogImport';
 import SiteSettings from './pages/admin/SiteSettings';
 import UserList from './pages/admin/UserList';
 import OrderStatusSettings from './pages/admin/OrderStatusSettings';
-import CarrierMappingSettings from './pages/admin/CarrierMappingSettings';
 import LeadList from './pages/admin/LeadList';
 
 import { AuthProvider } from './context/AuthContext';
@@ -155,7 +154,7 @@ function App() {
                 <Route path="users" element={<UserList />} />
                 <Route path="reports" element={<ReportDashboard />} />
                 <Route path="order-status-settings" element={<OrderStatusSettings />} />
-                <Route path="carrier-mappings" element={<CarrierMappingSettings />} />
+                <Route path="carrier-mappings" element={<Navigate to="/admin/settings?tab=shipping&shippingTab=mapping" replace />} />
                 <Route path="orders/:id" element={<OrderDetail />} />
               </Route>
             </Routes>

@@ -11,26 +11,23 @@ class CarrierStatusMappingController extends Controller
 {
     public function index(Request $request)
     {
-        $query = CarrierStatusMapping::query()->orderBy('carrier_code')->orderBy('sort_order');
+        $accountId = $request->header('X-Account-Id');
+        $query = CarrierStatusMapping::query()
+            ->where(function ($scoped) use ($accountId) {
+                $scoped->where('account_id', $accountId)
+                    ->orWhereNull('account_id');
+            })
+            ->orderBy('carrier_code')
+            ->orderByRaw('CASE WHEN account_id IS NULL THEN 1 ELSE 0 END')
+            ->orderBy('sort_order');
 
         if ($request->carrier_code) {
             $query->where('carrier_code', $request->carrier_code);
         }
 
         $mappings = $query->get();
-        
-        // Return all carriers with counts for management
-        $carriers = Carrier::orderBy('sort_order')->orderBy('name')
-            ->withCount([
-                'mappings', 
-                'rawStatuses as unmapped_count' => function ($query) {
-                    $query->where('is_mapped', false);
-                }
-            ])
-            ->get();
 
         // Dynamic order statuses from database
-        $accountId = $request->header('X-Account-Id');
         $orderStatuses = \App\Models\OrderStatus::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('is_active', true)
@@ -38,9 +35,22 @@ class CarrierStatusMappingController extends Controller
             ->get(['id', 'code', 'name', 'color', 'sort_order', 'is_system']);
 
         // Preparation for unknown statuses discovery (for specific carrier if requested or all)
-        $discoveredStatuses = \App\Models\CarrierRawStatus::where('is_mapped', false)
+        $discoveredStatuses = \App\Models\CarrierRawStatus::query()
+            ->where(function ($scoped) use ($accountId) {
+                $scoped->where('account_id', $accountId)
+                    ->orWhereNull('account_id');
+            })
+            ->where('is_mapped', false)
             ->orderBy('last_seen_at', 'desc')
             ->get();
+
+        $mappingCounts = $mappings->groupBy('carrier_code')->map->count();
+        $unmappedCounts = $discoveredStatuses->groupBy('carrier_code')->map->count();
+        $carriers = Carrier::orderBy('sort_order')->orderBy('name')->get()->map(function ($carrier) use ($mappingCounts, $unmappedCounts) {
+            $carrier->mappings_count = (int) ($mappingCounts[$carrier->code] ?? 0);
+            $carrier->unmapped_count = (int) ($unmappedCounts[$carrier->code] ?? 0);
+            return $carrier;
+        });
 
         return response()->json([
             'mappings' => $mappings,
@@ -81,20 +91,30 @@ class CarrierStatusMappingController extends Controller
 
         $exists = CarrierStatusMapping::where('carrier_code', $request->carrier_code)
             ->where('carrier_raw_status', $request->carrier_raw_status)
+            ->where(function ($scoped) use ($request) {
+                $scoped->where('account_id', $request->header('X-Account-Id'))
+                    ->orWhereNull('account_id');
+            })
             ->exists();
 
         if ($exists) {
             return response()->json(['message' => 'Mapping này đã tồn tại cho hãng VC này.'], 422);
         }
 
-        $mapping = CarrierStatusMapping::create($request->only([
+        $mapping = CarrierStatusMapping::create(array_merge($request->only([
             'carrier_code', 'carrier_raw_status', 'internal_shipment_status',
             'mapped_order_status', 'is_terminal', 'sort_order', 'is_active', 'description',
+        ]), [
+            'account_id' => $request->header('X-Account-Id'),
         ]));
 
         // If this was a discovered status, mark it as mapped
         \App\Models\CarrierRawStatus::where('carrier_code', $request->carrier_code)
             ->where('raw_status', $request->carrier_raw_status)
+            ->where(function ($scoped) use ($request) {
+                $scoped->where('account_id', $request->header('X-Account-Id'))
+                    ->orWhereNull('account_id');
+            })
             ->update(['is_mapped' => true, 'mapping_id' => $mapping->id]);
 
         return response()->json($mapping, 201);

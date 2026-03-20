@@ -36,9 +36,9 @@ class CarrierStatusMapper
      *
      * @return array ['shipment_status' => string, 'order_status' => string, 'is_terminal' => bool]
      */
-    public function mapCarrierStatus(string $carrierCode, string $rawStatus): array
+    public function mapCarrierStatus(string $carrierCode, string $rawStatus, ?int $accountId = null): array
     {
-        $mapping = $this->getMapping($carrierCode, $rawStatus);
+        $mapping = $this->getMapping($carrierCode, $rawStatus, $accountId);
 
         if ($mapping) {
             return [
@@ -77,14 +77,21 @@ class CarrierStatusMapper
     /**
      * Get mapping from database (cached)
      */
-    private function getMapping(string $carrierCode, string $rawStatus): ?CarrierStatusMapping
+    private function getMapping(string $carrierCode, string $rawStatus, ?int $accountId = null): ?CarrierStatusMapping
     {
-        $cacheKey = "carrier_mapping:{$carrierCode}:{$rawStatus}";
+        $scope = $accountId ?: 'global';
+        $cacheKey = "carrier_mapping:{$scope}:{$carrierCode}:{$rawStatus}";
 
-        return Cache::remember($cacheKey, 3600, function () use ($carrierCode, $rawStatus) {
+        return Cache::remember($cacheKey, 3600, function () use ($carrierCode, $rawStatus, $accountId) {
             return CarrierStatusMapping::where('carrier_code', $carrierCode)
                 ->where('carrier_raw_status', $rawStatus)
                 ->where('is_active', true)
+                ->when($accountId, function ($query) use ($accountId) {
+                    $query->where(function ($scoped) use ($accountId) {
+                        $scoped->where('account_id', $accountId)
+                            ->orWhereNull('account_id');
+                    })->orderByRaw('CASE WHEN account_id IS NULL THEN 1 ELSE 0 END');
+                })
                 ->first();
         });
     }
@@ -92,10 +99,16 @@ class CarrierStatusMapper
     /**
      * Get all mappings for a carrier
      */
-    public function getCarrierMappings(string $carrierCode): \Illuminate\Database\Eloquent\Collection
+    public function getCarrierMappings(string $carrierCode, ?int $accountId = null): \Illuminate\Database\Eloquent\Collection
     {
         return CarrierStatusMapping::where('carrier_code', $carrierCode)
             ->where('is_active', true)
+            ->when($accountId, function ($query) use ($accountId) {
+                $query->where(function ($scoped) use ($accountId) {
+                    $scoped->where('account_id', $accountId)
+                        ->orWhereNull('account_id');
+                })->orderByRaw('CASE WHEN account_id IS NULL THEN 1 ELSE 0 END');
+            })
             ->orderBy('sort_order')
             ->get();
     }

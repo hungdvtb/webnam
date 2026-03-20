@@ -21,7 +21,7 @@ const CARRIER_ICONS = {
     ghn: '🟠', ghtk: '🟢', viettel_post: '🔴', jt: '🟡', shopee_express: '🟤',
 };
 
-const CarrierMappingSettings = () => {
+const CarrierMappingSettings = ({ embedded = false }) => {
     const [allMappings, setAllMappings] = useState([]);
     const [carriers, setCarriers] = useState([]);
     const [orderStatuses, setOrderStatuses] = useState([]);
@@ -162,7 +162,7 @@ const CarrierMappingSettings = () => {
     );
 
     return (
-        <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-4 z-10 w-full h-full overflow-hidden">
+        <div className={`${embedded ? 'flex flex-col bg-transparent animate-fade-in w-full h-full overflow-hidden' : 'absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-4 z-10 w-full h-full overflow-hidden'}`}>
             {/* ═══ Header ═══ */}
             <div className="flex items-center justify-between mb-4 shrink-0 px-2">
                 <div>

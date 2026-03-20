@@ -8,6 +8,9 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Customer;
 use App\Models\Invoice;
+use App\Models\ShippingIntegration;
+use App\Services\Shipping\ShipmentDispatchService;
+use App\Services\Shipping\ShippingAlertService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -43,7 +46,10 @@ class OrderController extends Controller
             ->where('account_id', $accountId)
             ->select([
                 'id', 'order_number', 'total_price', 'status', 'customer_name', 
-                'customer_phone', 'shipping_address', 'province', 'district', 'ward', 'created_at', 'notes'
+                'customer_phone', 'shipping_address', 'province', 'district', 'ward', 'created_at', 'notes',
+                'shipping_status', 'shipping_carrier_code', 'shipping_carrier_name',
+                'shipping_tracking_code', 'shipping_dispatched_at',
+                'shipping_issue_code', 'shipping_issue_message', 'shipping_issue_detected_at',
             ]);
 
         // Eager load only what is needed for the table
@@ -52,7 +58,8 @@ class OrderController extends Controller
             'items.product:id,name,sku',
             'customer:id,name,phone',
             'attributeValues:id,order_id,attribute_id,value',
-            'attributeValues.attribute:id,name,code'
+            'attributeValues.attribute:id,name,code',
+            'activeShipment:id,order_id,shipment_number,carrier_name,carrier_tracking_code,shipment_status,problem_code,problem_message,problem_detected_at'
         ]);
 
         if ($request->input('trashed') == '1') {
@@ -68,6 +75,7 @@ class OrderController extends Controller
                     ->orWhere('customer_phone', 'like', "{$search}%")
                     ->orWhere('shipping_address', 'like', "%{$search}%")
                     ->orWhere('notes', 'like', "%{$search}%")
+                    ->orWhere('shipping_tracking_code', 'like', "%{$search}%")
                     // Product-level: search by snapshot SKU/name stored in order_items
                     ->orWhereHas('items', function($iq) use ($search) {
                         $iq->where('product_sku_snapshot', 'like', "%{$search}%")
@@ -101,6 +109,15 @@ class OrderController extends Controller
         })
         ->when($request->filled('created_at_to'), function($q) use ($request) {
             $q->whereDate('created_at', '<=', $request->created_at_to);
+        })
+        ->when($request->filled('shipping_carrier_code'), function($q) use ($request) {
+            $q->where('shipping_carrier_code', $request->shipping_carrier_code);
+        })
+        ->when($request->filled('shipping_dispatched_from'), function($q) use ($request) {
+            $q->whereDate('shipping_dispatched_at', '>=', $request->shipping_dispatched_from);
+        })
+        ->when($request->filled('shipping_dispatched_to'), function($q) use ($request) {
+            $q->whereDate('shipping_dispatched_at', '<=', $request->shipping_dispatched_to);
         });
 
         // Optimize Dynamic Attribute Filters (EAV) using JOIN for large data
@@ -127,7 +144,7 @@ class OrderController extends Controller
                 })
                 ->orderBy('order_statuses.sort_order', $sortOrder);
         } else {
-            $validSortFields = ['id', 'order_number', 'customer_name', 'created_at', 'total_price', 'status'];
+            $validSortFields = ['id', 'order_number', 'customer_name', 'created_at', 'total_price', 'status', 'shipping_dispatched_at'];
             $field = in_array($sortBy, $validSortFields) ? $sortBy : 'created_at';
             $query->orderBy($field, $sortOrder);
         }
@@ -616,5 +633,72 @@ class OrderController extends Controller
         });
 
         return response()->json(['message' => 'Cập nhật hàng loạt thành công']);
+    }
+    public function dispatchPreview(Request $request, ShipmentDispatchService $dispatchService)
+    {
+        $validated = $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer|exists:orders,id',
+            'carrier_code' => 'required|string|max:50',
+        ]);
+
+        $orders = Order::query()
+            ->whereIn('id', $validated['order_ids'])
+            ->with(['items.product'])
+            ->get();
+
+        if ($orders->isEmpty()) {
+            return response()->json(['message' => 'Khong tim thay don hang can gui.'], 404);
+        }
+
+        return response()->json($dispatchService->preview($orders, $validated['carrier_code']));
+    }
+
+    public function dispatch(Request $request, ShipmentDispatchService $dispatchService)
+    {
+        $validated = $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer|exists:orders,id',
+            'carrier_code' => 'required|string|max:50',
+        ]);
+
+        $orders = Order::query()
+            ->whereIn('id', $validated['order_ids'])
+            ->with(['items.product'])
+            ->get();
+
+        if ($orders->isEmpty()) {
+            return response()->json(['message' => 'Khong tim thay don hang can gui.'], 404);
+        }
+
+        return response()->json($dispatchService->dispatch($orders, $validated['carrier_code'], Auth::id()));
+    }
+
+    public function shippingAlerts(Request $request, ShippingAlertService $shippingAlertService)
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+        $perPage = min(max((int) $request->input('per_page', 20), 1), 50);
+        $alerts = $shippingAlertService->activeAlerts($accountId, $perPage);
+
+        return response()->json([
+            'data' => $alerts->items(),
+            'total' => $alerts->total(),
+            'current_page' => $alerts->currentPage(),
+            'last_page' => $alerts->lastPage(),
+        ]);
+    }
+
+    public function connectedCarriers(Request $request)
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+
+        return response()->json(
+            ShippingIntegration::query()
+                ->where('account_id', $accountId)
+                ->where('is_enabled', true)
+                ->where('connection_status', 'connected')
+                ->orderBy('carrier_name')
+                ->get(['carrier_code', 'carrier_name', 'connection_status', 'is_enabled'])
+        );
     }
 }

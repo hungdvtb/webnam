@@ -27,6 +27,11 @@ class Carrier extends Model
         return $this->hasMany(CarrierStatusMapping::class, 'carrier_code', 'code');
     }
 
+    public function integrations()
+    {
+        return $this->hasMany(ShippingIntegration::class, 'carrier_code', 'code');
+    }
+
     public function shipments()
     {
         return $this->hasMany(Shipment::class, 'carrier_code', 'code');

@@ -10,6 +10,8 @@ use App\Models\ShipmentItem;
 use App\Models\ShipmentNote;
 use App\Models\ShipmentStatusLog;
 use App\Models\InventoryItem;
+use App\Models\ShippingIntegration;
+use App\Services\Shipping\ShipmentDispatchService;
 use App\Services\Shipping\ShipmentStatusSyncService;
 use App\Services\Shipping\ShipmentTransitionGuard;
 use Illuminate\Http\Request;
@@ -29,7 +31,7 @@ class ShipmentController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Shipment::with(['order:id,order_number,customer_name,customer_phone,status,total_price,shipping_status,shipping_status_source', 'warehouse:id,name', 'carrier:id,code,name,logo']);
+        $query = Shipment::with(['order:id,order_number,customer_name,customer_phone,status,total_price,shipping_status,shipping_status_source,shipping_issue_code,shipping_issue_message', 'warehouse:id,name', 'carrier:id,code,name,logo', 'integration:id,carrier_code,carrier_name,connection_status']);
 
         // Search
         if ($search = $request->search) {
@@ -457,6 +459,7 @@ class ShipmentController extends Controller
             'reconciliation_diff_amount' => $diff,
             'reconciliation_status' => abs($diff) < 1 ? 'reconciled' : 'mismatch',
             'reconciled_at' => now(),
+            'last_reconciled_at' => now(),
         ]);
 
         \App\Models\ShipmentReconciliation::create([
@@ -496,5 +499,123 @@ class ShipmentController extends Controller
         $shipment = Shipment::withTrashed()->findOrFail($id);
         $shipment->restore();
         return response()->json($shipment);
+    }
+
+    public function bulkReconcile(Request $request, ShipmentDispatchService $dispatchService)
+    {
+        $validated = $request->validate([
+            'shipment_ids' => 'required|array|min:1',
+            'shipment_ids.*' => 'integer|exists:shipments,id',
+        ]);
+
+        $results = [];
+        $successCount = 0;
+        $failedCount = 0;
+
+        foreach (Shipment::query()->whereIn('id', $validated['shipment_ids'])->get() as $shipment) {
+            try {
+                $dispatchService->createAutomaticReconciliation($shipment, auth()->id());
+                $successCount++;
+                $results[] = [
+                    'shipment_id' => $shipment->id,
+                    'shipment_number' => $shipment->shipment_number,
+                    'success' => true,
+                ];
+            } catch (\Throwable $e) {
+                $failedCount++;
+                $results[] = [
+                    'shipment_id' => $shipment->id,
+                    'shipment_number' => $shipment->shipment_number,
+                    'success' => false,
+                    'message' => $e->getMessage(),
+                ];
+            }
+        }
+
+        return response()->json([
+            'success_count' => $successCount,
+            'failed_count' => $failedCount,
+            'results' => $results,
+        ]);
+    }
+
+    public function syncCarrierShipments(Request $request)
+    {
+        $validated = $request->validate([
+            'shipment_ids' => 'nullable|array',
+            'shipment_ids.*' => 'integer|exists:shipments,id',
+            'mode' => 'nullable|string|in:selected,active',
+        ]);
+
+        $query = Shipment::query();
+        if (($validated['mode'] ?? 'selected') === 'active') {
+            $query->whereIn('shipment_status', ['waiting_pickup', 'picked_up', 'in_transit', 'out_for_delivery', 'delivery_failed', 'returning']);
+        } elseif (!empty($validated['shipment_ids'])) {
+            $query->whereIn('id', $validated['shipment_ids']);
+        } else {
+            return response()->json(['message' => 'Chưa có vận đơn cần đồng bộ.'], 422);
+        }
+
+        $shipments = $query->get();
+
+        return response()->json([
+            'message' => 'Danh sách vận đơn đã được refresh từ dữ liệu webhook/API mới nhất.',
+            'count' => $shipments->count(),
+            'shipments' => $shipments->map(fn ($shipment) => [
+                'id' => $shipment->id,
+                'shipment_number' => $shipment->shipment_number,
+                'shipment_status' => $shipment->shipment_status,
+                'last_synced_at' => optional($shipment->last_synced_at)->format('Y-m-d H:i:s'),
+            ])->values(),
+        ]);
+    }
+
+    public function processViettelPostWebhook(Request $request)
+    {
+        $payload = $request->all();
+        $trackingNumber = (string) ($payload['ORDER_NUMBER'] ?? '');
+        $orderReference = (string) ($payload['ORDER_REFERENCE'] ?? '');
+        $rawStatus = (string) ($payload['ORDER_STATUS'] ?? '');
+
+        if ($trackingNumber === '' || $rawStatus === '') {
+            return response()->json(['message' => 'Thiếu ORDER_NUMBER hoặc ORDER_STATUS.'], 422);
+        }
+
+        $shipment = Shipment::query()
+            ->where(function ($query) use ($trackingNumber, $orderReference) {
+                $query->where('tracking_number', $trackingNumber)
+                    ->orWhere('carrier_tracking_code', $trackingNumber);
+
+                if ($orderReference !== '') {
+                    $query->orWhere('external_order_number', $orderReference)
+                        ->orWhere('order_code', $orderReference);
+                }
+            })
+            ->latest('id')
+            ->first();
+
+        if (!$shipment) {
+            return response()->json(['message' => 'Không tìm thấy vận đơn tương ứng.'], 404);
+        }
+
+        $shipment->forceFill([
+            'tracking_number' => $shipment->tracking_number ?: $trackingNumber,
+            'carrier_tracking_code' => $shipment->carrier_tracking_code ?: $trackingNumber,
+            'carrier_status_code' => $rawStatus,
+            'carrier_status_text' => 'Webhook ViettelPost',
+            'raw_tracking_payload' => $payload,
+            'last_webhook_received_at' => now(),
+            'cod_amount' => is_numeric($payload['MONEY_COLLECTION'] ?? null) ? (float) $payload['MONEY_COLLECTION'] : $shipment->cod_amount,
+            'shipping_cost' => is_numeric($payload['MONEY_TOTAL'] ?? null) ? (float) $payload['MONEY_TOTAL'] : $shipment->shipping_cost,
+            'service_fee' => is_numeric($payload['MONEY_FEECOD'] ?? null) ? (float) $payload['MONEY_FEECOD'] : $shipment->service_fee,
+            'last_synced_at' => now(),
+        ])->save();
+
+        $result = $this->syncService->processCarrierStatus($shipment, $rawStatus, $payload);
+
+        return response()->json([
+            'message' => 'Webhook đã được xử lý.',
+            'result' => $result,
+        ]);
     }
 }

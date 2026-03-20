@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class CarrierRawStatus extends Model
 {
     protected $fillable = [
+        'account_id',
         'carrier_code',
         'raw_status',
         'first_seen_at',

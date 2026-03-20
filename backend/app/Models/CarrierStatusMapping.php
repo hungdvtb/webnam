@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class CarrierStatusMapping extends Model
 {
     protected $fillable = [
-        'carrier_code', 'carrier_raw_status', 'internal_shipment_status',
+        'account_id', 'carrier_code', 'carrier_raw_status', 'internal_shipment_status',
         'mapped_order_status', 'is_terminal', 'sort_order', 'is_active', 'description',
     ];
 

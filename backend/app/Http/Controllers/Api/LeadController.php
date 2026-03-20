@@ -7,12 +7,18 @@ use App\Models\Lead;
 use App\Models\LeadNote;
 use App\Models\LeadStatus;
 use App\Models\Product;
+use App\Services\Leads\LeadBundleResolver;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 
 class LeadController extends Controller
 {
+    public function __construct(
+        protected LeadBundleResolver $bundleResolver
+    ) {
+    }
+
     protected function accountId(Request $request): int
     {
         return (int) $request->header('X-Account-Id');
@@ -72,6 +78,40 @@ class LeadController extends Controller
     protected function transformLead(Lead $lead): array
     {
         $status = $lead->statusConfig;
+        $resolvedItems = $lead->items->map(function ($item) use ($lead) {
+            $resolved = $this->bundleResolver->resolveStoredLeadItem($item, $lead);
+
+            return [
+                'id' => $item->id,
+                'product_id' => $item->product_id,
+                'product_name' => $resolved['display_name'] ?: $item->product_name,
+                'product_sku' => $item->product_sku,
+                'product_slug' => $item->product_slug,
+                'product_url' => $item->product_url,
+                'quantity' => $item->quantity,
+                'unit_price' => (float) $item->unit_price,
+                'line_total' => (float) $item->line_total,
+                'options' => $item->options,
+                'bundle_items' => $resolved['bundle_children'],
+                'bundle_option_title' => $resolved['bundle_option_title'],
+                'bundle_subtotal' => (float) $resolved['bundle_subtotal'],
+                'is_bundle' => (bool) $resolved['is_bundle'],
+            ];
+        })->values();
+
+        $resolvedProductSummary = $resolvedItems
+            ->map(function (array $item) {
+                $name = trim((string) ($item['product_name'] ?? ''));
+                $quantity = max(1, (int) ($item['quantity'] ?? 1));
+
+                if ($name === '') {
+                    return null;
+                }
+
+                return $quantity > 1 ? "{$name} x{$quantity}" : $name;
+            })
+            ->filter()
+            ->implode(' | ');
 
         return [
             'id' => $lead->id,
@@ -80,8 +120,8 @@ class LeadController extends Controller
             'phone' => $lead->phone,
             'email' => $lead->email,
             'address' => $lead->address,
-            'product_summary' => $lead->product_summary,
-            'product_summary_short' => $lead->product_summary_short,
+            'product_summary' => $resolvedProductSummary ?: $lead->product_summary,
+            'product_summary_short' => $resolvedProductSummary ?: $lead->product_summary_short,
             'product_name' => $lead->product_name,
             'tag' => $lead->tag,
             'link_url' => $lead->link_url,
@@ -103,19 +143,7 @@ class LeadController extends Controller
                 'color' => $status->color,
                 'blocks_order_create' => (bool) $status->blocks_order_create,
             ] : null,
-            'items' => $lead->items->map(fn ($item) => [
-                'id' => $item->id,
-                'product_id' => $item->product_id,
-                'product_name' => $item->product_name,
-                'product_sku' => $item->product_sku,
-                'product_slug' => $item->product_slug,
-                'product_url' => $item->product_url,
-                'quantity' => $item->quantity,
-                'unit_price' => (float) $item->unit_price,
-                'line_total' => (float) $item->line_total,
-                'options' => $item->options,
-                'bundle_items' => $item->bundle_items,
-            ])->values(),
+            'items' => $resolvedItems,
             'conversion_data' => $lead->conversion_data ?: [],
             'payload_snapshot' => $lead->payload_snapshot ?: [],
         ];
@@ -127,7 +155,7 @@ class LeadController extends Controller
         $statuses = LeadStatus::ensureDefaultsForAccount($accountId);
 
         $query = Lead::query()
-            ->with(['statusConfig', 'latestNote', 'items', 'order:id,order_number'])
+            ->with(['statusConfig', 'latestNote', 'items.product', 'order:id,order_number'])
             ->where('account_id', $accountId);
 
         $this->applyLeadFilters($query, $request);
@@ -183,7 +211,7 @@ class LeadController extends Controller
     {
         $lead = Lead::query()
             ->where('account_id', $this->accountId($request))
-            ->with(['statusConfig', 'items', 'notesTimeline.user', 'order:id,order_number'])
+            ->with(['statusConfig', 'items.product', 'notesTimeline.user', 'order:id,order_number'])
             ->findOrFail($id);
 
         return response()->json($this->transformLead($lead) + [
@@ -233,7 +261,7 @@ class LeadController extends Controller
         }
 
         $lead->save();
-        $lead->load(['statusConfig', 'items', 'order:id,order_number']);
+        $lead->load(['statusConfig', 'items.product', 'order:id,order_number']);
 
         return response()->json($this->transformLead($lead));
     }
@@ -310,7 +338,7 @@ class LeadController extends Controller
         $items = Lead::query()
             ->where('account_id', $accountId)
             ->where('id', '>', $afterId)
-            ->with(['statusConfig', 'items', 'order:id,order_number'])
+            ->with(['statusConfig', 'items.product', 'order:id,order_number'])
             ->orderBy('id')
             ->limit(20)
             ->get();
@@ -331,18 +359,9 @@ class LeadController extends Controller
         $payload = $lead->payload_snapshot ?: [];
         $conversionData = $lead->conversion_data ?: [];
 
-        $items = $lead->items->map(function ($item) {
-            $product = $item->product ?: Product::find($item->product_id);
-            return [
-                'product_id' => $item->product_id,
-                'name' => $item->product_name,
-                'sku' => $item->product_sku,
-                'quantity' => $item->quantity,
-                'price' => (float) $item->unit_price,
-                'cost_price' => (float) ($product?->cost_price ?? 0),
-                'options' => $item->options,
-            ];
-        })->values();
+        $items = collect($lead->items)
+            ->flatMap(fn ($item) => $this->bundleResolver->expandLeadItemForOrderDraft($item, $lead))
+            ->values();
 
         return response()->json([
             'lead_id' => $lead->id,

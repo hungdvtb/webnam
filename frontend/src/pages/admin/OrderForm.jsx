@@ -954,6 +954,17 @@ const OrderForm = () => {
             }
 
             setLeadConversionSummary(draft.conversion_summary || null);
+            const draftItems = (draft.items || []).map((item) => ({
+                product_id: item.product_id,
+                name: item.name || item.product_name || `Sản phẩm #${item.product_id}`,
+                sku: item.sku || item.product_sku || 'N/A',
+                quantity: Number(item.quantity) || 1,
+                price: Number(item.price) || 0,
+                cost_price: Number(item.cost_price) || 0,
+                options: item.options || {}
+            }));
+            const draftCostTotal = draftItems.reduce((sum, item) => sum + (Number(item.cost_price || 0) * Number(item.quantity || 0)), 0);
+
             setFormData((prev) => syncShippingAddress({
                 ...prev,
                 customer_name: draft.customer_name || '',
@@ -974,19 +985,11 @@ const OrderForm = () => {
                 type: draft.type || 'Lẻ',
                 shipment_status: draft.shipment_status || 'Chưa giao',
                 notes: draft.notes || '',
-                items: (draft.items || []).map((item) => ({
-                    product_id: item.product_id,
-                    name: item.name || item.product_name || `Sản phẩm #${item.product_id}`,
-                    sku: item.sku || item.product_sku || 'N/A',
-                    quantity: Number(item.quantity) || 1,
-                    price: Number(item.price) || 0,
-                    cost_price: Number(item.cost_price) || 0,
-                    options: item.options || {}
-                })),
+                items: draftItems,
                 custom_attributes: draft.custom_attributes || {},
                 shipping_fee: Number(draft.shipping_fee) || 0,
                 discount: Number(draft.discount) || 0,
-                cost_total: 0,
+                cost_total: draftCostTotal,
                 status: draft.status || 'new'
             }));
             setRegionType(draft.district ? 'old' : 'new');
@@ -1501,7 +1504,7 @@ const OrderForm = () => {
     const quoteTotalQuantity = formData.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
     const quoteSubtotal = calculateSubtotal();
     const leadConversionCard = leadConversionSummary ? (
-        <div className="mt-4 max-w-[680px] rounded-sm border border-primary/10 bg-white p-4 shadow-sm">
+        <div className="w-full rounded-sm border border-primary/10 bg-white p-4 shadow-sm">
             <div className="mb-[10px] flex items-center gap-2.5 border-b border-primary/10 pb-3">
                 <span className="material-symbols-outlined text-primary/40 text-[18px]">conversion_path</span>
                 <h3 className="font-sans text-[15px] font-bold uppercase tracking-tight text-primary">Thông tin chuyển đổi</h3>
@@ -1628,7 +1631,7 @@ const OrderForm = () => {
                 </div>
             </div>
 
-            <form id="order-form" onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-[65%_35%] gap-[10px] flex-1 min-h-0">
+            <form id="order-form" onSubmit={handleSubmit} className="grid grid-cols-1 gap-[10px] flex-1 min-h-0 xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.95fr)]">
                 {/* Left Section: Product Management & Custom Attributes */}
                 <div className="flex flex-col gap-[10px] max-w-full min-w-0">
                     <div className="bg-white border border-primary/10 p-4 shadow-sm rounded-sm">
@@ -1923,9 +1926,21 @@ const OrderForm = () => {
                                                             return (
                                                <td key={colId} className="py-2.5 px-4 border border-primary/10 relative group/cell">
                                                     <p className="text-primary font-bold text-[13px] leading-tight truncate max-w-[300px]">{item.name}</p>
+                                                    {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
+                                                        <div className="mt-1 max-w-[320px] truncate text-[11px] font-semibold text-primary/55">
+                                                            {item.options?.bundle_parent_name ? `Từ bundle: ${item.options.bundle_parent_name}` : 'Từ bundle'}
+                                                            {item.options?.bundle_option_title ? ` - ${item.options.bundle_option_title}` : ''}
+                                                        </div>
+                                                    ) : null}
                                                     {/* Tooltip */}
                                                     <div className="absolute bottom-full left-4 mb-2 bg-slate-900 text-white p-3 rounded shadow-2xl opacity-0 group-hover/cell:opacity-100 pointer-events-none transition-all z-50 w-80 text-[12px] font-bold border border-white/10 scale-95 group-hover/cell:scale-100 origin-bottom-left leading-relaxed">
-                                                        {item.name}
+                                                        <div>{item.name}</div>
+                                                        {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
+                                                            <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/80">
+                                                                {item.options?.bundle_parent_name ? `Bundle gốc: ${item.options.bundle_parent_name}` : 'Bundle gốc'}
+                                                                {item.options?.bundle_option_title ? ` - ${item.options.bundle_option_title}` : ''}
+                                                            </div>
+                                                        ) : null}
                                                         <div className="absolute top-full left-4 w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-t-[5px] border-t-slate-900"></div>
                                                     </div>
                                                 </td>
@@ -2068,8 +2083,6 @@ const OrderForm = () => {
                         </div>
                     </div>
                 </div>
-
-                {leadConversionCard}
 
                 {/* Right Section: Sidebar Metadata */}
                 <div className="w-full min-w-0 max-w-full flex flex-col gap-[10px]">
@@ -2284,6 +2297,8 @@ const OrderForm = () => {
                         </div>
                         </div>
                     </div>
+
+                    {leadConversionCard}
                 </div>
             </form>
 

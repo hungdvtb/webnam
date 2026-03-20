@@ -11,6 +11,7 @@ const buttonClassName = 'inline-flex h-10 items-center gap-2 rounded-sm border b
 const iconButtonClassName = 'relative inline-flex size-10 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/70 shadow-sm transition-all hover:border-primary/30 hover:text-primary';
 const MAX_NOTIFICATION_ITEMS = 12;
 const emptyFilters = { status: '', tag: '', date_from: '', date_to: '' };
+const leadNotificationSettingsKey = 'lead_notification_sound_settings';
 
 const formatMoney = (value) => `${new Intl.NumberFormat('vi-VN').format(Number(value) || 0)} đ`;
 
@@ -25,6 +26,28 @@ const normalizeSearchText = (value) => String(value ?? '')
     .replace(/[đĐ]/g, 'd')
     .toLowerCase()
     .trim();
+
+const normalizeSearchTextSafe = (value) => String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toLowerCase()
+    .trim();
+
+const getLeadProductSummary = (lead) => {
+    if (Array.isArray(lead?.items) && lead.items.length > 0) {
+        return lead.items
+            .map((item) => {
+                const name = item?.product_name || item?.product_sku || '';
+                const quantity = Math.max(1, Number(item?.quantity || 1));
+                return name ? `${name}${quantity > 1 ? ` x${quantity}` : ''}` : '';
+            })
+            .filter(Boolean)
+            .join(' | ');
+    }
+
+    return lead?.product_summary || '';
+};
 
 const areFiltersEqual = (left, right) => (
     left.status === right.status
@@ -52,7 +75,7 @@ const buildQueryParams = (page, filters, quickSearch) => {
 };
 
 const leadMatchesSearch = (lead, search) => {
-    const normalizedSearch = normalizeSearchText(search);
+    const normalizedSearch = normalizeSearchTextSafe(search);
     if (!normalizedSearch) return true;
 
     const values = [
@@ -71,7 +94,7 @@ const leadMatchesSearch = (lead, search) => {
             : []),
     ];
 
-    return values.some((value) => normalizeSearchText(value).includes(normalizedSearch));
+    return values.some((value) => normalizeSearchTextSafe(value).includes(normalizedSearch));
 };
 
 const leadMatchesFilters = (lead, filters, quickSearch) => {
@@ -122,27 +145,124 @@ const mergeNotificationItems = (incoming, current) => {
         .slice(0, MAX_NOTIFICATION_ITEMS);
 };
 
-const ProductCell = ({ lead }) => {
-    if (Array.isArray(lead?.items) && lead.items.length > 0) {
-        return (
-            <div className="space-y-1">
-                {lead.items.slice(0, 2).map((item) => (
-                    <div key={item.id || `${item.product_sku}-${item.product_name}`} className="text-[13px] text-[#0F172A]">
-                        <span className="font-semibold">{item.product_name || item.product_sku || 'Không có sản phẩm'}</span>
-                        {item.product_sku ? <span className="text-primary/50"> ({item.product_sku})</span> : null}
-                        <span className="text-primary/60"> x{item.quantity || 1}</span>
-                    </div>
-                ))}
-                {lead.items.length > 2 ? (
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-primary/45">
-                        +{lead.items.length - 2} sản phẩm khác
-                    </div>
-                ) : null}
-            </div>
-        );
+const getStoredNotificationSettings = () => {
+    if (typeof window === 'undefined') {
+        return { enabled: true, useDefault: true, customAudioDataUrl: '' };
     }
 
-    return <div className="text-[13px] text-primary/50">{lead?.product_summary || 'Không có sản phẩm'}</div>;
+    try {
+        const raw = window.localStorage.getItem(leadNotificationSettingsKey);
+        if (!raw) return { enabled: true, useDefault: true, customAudioDataUrl: '' };
+
+        const parsed = JSON.parse(raw);
+        return {
+            enabled: parsed?.enabled !== false,
+            useDefault: parsed?.useDefault !== false,
+            customAudioDataUrl: typeof parsed?.customAudioDataUrl === 'string' ? parsed.customAudioDataUrl : '',
+        };
+    } catch (error) {
+        console.error('Failed to read lead notification settings', error);
+        return { enabled: true, useDefault: true, customAudioDataUrl: '' };
+    }
+};
+
+const playDefaultNotificationSound = async (audioContextRef) => {
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) return;
+
+    const context = audioContextRef.current || new AudioContextCtor();
+    audioContextRef.current = context;
+
+    if (context.state === 'suspended') {
+        await context.resume();
+    }
+
+    const oscillator = context.createOscillator();
+    const gainNode = context.createGain();
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(880, context.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(660, context.currentTime + 0.18);
+    gainNode.gain.setValueAtTime(0.0001, context.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.18, context.currentTime + 0.02);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.28);
+    oscillator.connect(gainNode);
+    gainNode.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.3);
+};
+
+const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
+    if (!Array.isArray(lead?.items) || lead.items.length === 0) {
+        return <div className="text-[13px] text-primary/50">{lead?.product_summary || 'Không có sản phẩm'}</div>;
+    }
+
+    return (
+        <div className="space-y-2.5">
+            {lead.items.slice(0, 2).map((item) => {
+                const bundleKey = `${lead.id}-${item.id}`;
+                const isExpanded = expandedBundleIds.has(bundleKey);
+                const bundleChildren = Array.isArray(item.bundle_items) ? item.bundle_items : [];
+
+                return (
+                    <div key={item.id || `${item.product_sku}-${item.product_name}`} className="rounded-sm border border-primary/10 bg-white px-3 py-2 shadow-sm">
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                                <div className="text-[13px] font-bold text-[#0F172A]">{item.product_name || item.product_sku || 'Không có sản phẩm'}</div>
+                                <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-primary/45">
+                                    {item.product_sku ? <span>{item.product_sku}</span> : null}
+                                    <span>x{item.quantity || 1}</span>
+                                    {item.is_bundle && item.bundle_option_title ? <span>{item.bundle_option_title}</span> : null}
+                                    {item.is_bundle ? <span className="rounded-sm bg-primary/[0.06] px-1.5 py-0.5 text-primary">Bundle</span> : null}
+                                </div>
+                            </div>
+
+                            {item.is_bundle && bundleChildren.length > 0 ? (
+                                <button
+                                    type="button"
+                                    onClick={() => onToggleBundle(bundleKey)}
+                                    className="inline-flex h-8 items-center gap-1 rounded-sm border border-primary/10 px-2 text-[11px] font-black uppercase tracking-[0.08em] text-primary transition-all hover:border-primary/30"
+                                >
+                                    <span className="material-symbols-outlined text-[16px]">{isExpanded ? 'expand_less' : 'expand_more'}</span>
+                                    {isExpanded ? 'Ẩn món' : 'Xem món'}
+                                </button>
+                            ) : null}
+                        </div>
+
+                        {item.is_bundle ? (
+                            <div className="mt-2 text-[12px] font-semibold text-primary/60">
+                                Giá bộ: <span className="font-black text-primary">{formatMoney(item.bundle_subtotal || item.line_total || 0)}</span>
+                            </div>
+                        ) : null}
+
+                        {item.is_bundle && bundleChildren.length > 0 && isExpanded ? (
+                            <div className="mt-3 space-y-2 border-t border-primary/10 pt-3">
+                                {bundleChildren.map((child, index) => (
+                                    <div key={`${bundleKey}-${child.product_id || index}`} className="flex items-start justify-between gap-3 text-[12px] text-[#0F172A]">
+                                        <div className="min-w-0">
+                                            <div className="font-semibold">{child.product_name}</div>
+                                            <div className="mt-1 text-[11px] uppercase tracking-[0.08em] text-primary/45">
+                                                {child.product_sku || 'N/A'} x{child.quantity || 1}
+                                            </div>
+                                        </div>
+                                        <div className="shrink-0 text-right text-[11px] font-bold text-primary/60">
+                                            <div>{formatMoney(child.unit_price || 0)}</div>
+                                            <div className="mt-1 text-primary">{formatMoney(child.line_total || 0)}</div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : null}
+                    </div>
+                );
+            })}
+
+            {lead.items.length > 2 ? (
+                <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-primary/45">
+                    +{lead.items.length - 2} sản phẩm khác
+                </div>
+            ) : null}
+        </div>
+    );
 };
 
 const FilterPanel = ({ filters, draftFilters, statuses, tags, onDraftChange, onApply, onReset }) => (
@@ -581,9 +701,10 @@ const LeadList = () => {
     const [filtersOpen, setFiltersOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [notificationsOpen, setNotificationsOpen] = useState(false);
+    const [soundSettingsOpen, setSoundSettingsOpen] = useState(false);
     const [notesLead, setNotesLead] = useState(null);
-    const [newLeadItems, setNewLeadItems] = useState([]);
-    const [newLeadCount, setNewLeadCount] = useState(0);
+    const [unreadNotifications, setUnreadNotifications] = useState([]);
+    const [soundSettings, setSoundSettings] = useState(() => getStoredNotificationSettings());
     const [page, setPage] = useState(parsePageParam(searchParams.get('page')));
     const [filters, setFilters] = useState(() => buildFiltersFromParams(searchParams));
     const [draftFilters, setDraftFilters] = useState(() => buildFiltersFromParams(searchParams));
@@ -591,6 +712,7 @@ const LeadList = () => {
     const [debouncedQuickSearch, setDebouncedQuickSearch] = useState(searchParams.get('search') || '');
     const [highlightedLeadId, setHighlightedLeadId] = useState(null);
     const [pendingFocusLeadId, setPendingFocusLeadId] = useState(null);
+    const [expandedBundleIds, setExpandedBundleIds] = useState(() => new Set());
 
     const notificationPanelRef = useRef(null);
     const latestIdRef = useRef(0);
@@ -602,11 +724,14 @@ const LeadList = () => {
     const fetchSeqRef = useRef(0);
     const abortControllerRef = useRef(null);
     const highlightTimeoutRef = useRef(null);
+    const audioElementRef = useRef(null);
+    const audioContextRef = useRef(null);
 
     const totalAcrossStatuses = useMemo(
         () => statuses.reduce((sum, status) => sum + Number(status.count || 0), 0),
         [statuses]
     );
+    const unreadNotificationCount = unreadNotifications.length;
 
     useEffect(() => {
         const timer = window.setTimeout(() => {
@@ -636,6 +761,11 @@ const LeadList = () => {
     useEffect(() => { latestIdRef.current = latestId; }, [latestId]);
 
     useEffect(() => {
+        if (typeof window === 'undefined') return;
+        window.localStorage.setItem(leadNotificationSettingsKey, JSON.stringify(soundSettings));
+    }, [soundSettings]);
+
+    useEffect(() => {
         const nextParams = buildQueryParams(page, filters, debouncedQuickSearch);
         const nextSearchString = nextParams.toString();
         const currentSearchString = location.search.startsWith('?') ? location.search.slice(1) : location.search;
@@ -660,6 +790,27 @@ const LeadList = () => {
 
         return true;
     }, []);
+
+    const playLeadNotificationSound = useCallback(async () => {
+        if (!soundSettings.enabled) return;
+
+        try {
+            if (!soundSettings.useDefault && soundSettings.customAudioDataUrl) {
+                if (!audioElementRef.current) {
+                    audioElementRef.current = new Audio();
+                }
+
+                audioElementRef.current.src = soundSettings.customAudioDataUrl;
+                audioElementRef.current.currentTime = 0;
+                await audioElementRef.current.play();
+                return;
+            }
+
+            await playDefaultNotificationSound(audioContextRef);
+        } catch (error) {
+            console.error('Failed to play lead notification sound', error);
+        }
+    }, [soundSettings]);
 
     const reloadSettings = useCallback(async () => {
         try {
@@ -759,12 +910,22 @@ const LeadList = () => {
                 if (nextLatestId > latestIdRef.current) setLatestId(nextLatestId);
                 if (!incoming.length) return;
 
-                setNewLeadItems((prev) => mergeNotificationItems(incoming, prev));
-                setNewLeadCount((prev) => prev + incoming.length);
+                let newlyQueued = [];
+                setUnreadNotifications((prev) => {
+                    const prevIds = new Set(prev.map((lead) => lead.id));
+                    newlyQueued = incoming.filter((lead) => !prevIds.has(lead.id));
+                    return mergeNotificationItems(newlyQueued, prev);
+                });
+
+                if (newlyQueued.length === 0) {
+                    return;
+                }
+
+                playLeadNotificationSound();
                 showToast({
-                    message: incoming.length === 1
+                    message: newlyQueued.length === 1
                         ? 'Có 1 lead mới vừa vào bảng xử lý.'
-                        : `Có ${incoming.length} lead mới vừa vào bảng xử lý.`,
+                        : `Có ${newlyQueued.length} lead mới vừa vào bảng xử lý.`,
                     type: 'info',
                     duration: 2500,
                 });
@@ -772,7 +933,7 @@ const LeadList = () => {
                 const activePage = pageRef.current;
                 const activeFilters = filtersRef.current;
                 const activeSearch = searchRef.current;
-                const matchedIncoming = incoming.filter((lead) => leadMatchesFilters(lead, activeFilters, activeSearch));
+                const matchedIncoming = newlyQueued.filter((lead) => leadMatchesFilters(lead, activeFilters, activeSearch));
 
                 if (activePage === 1 && matchedIncoming.length > 0) {
                     setLeads((prev) => mergeLeadCollections(matchedIncoming, prev, paginationRef.current.per_page || 20));
@@ -791,7 +952,7 @@ const LeadList = () => {
             isDisposed = true;
             window.clearInterval(intervalId);
         };
-    }, [fetchLeads, showToast]);
+    }, [fetchLeads, playLeadNotificationSound, showToast]);
 
     useEffect(() => {
         if (!pendingFocusLeadId) return;
@@ -830,6 +991,7 @@ const LeadList = () => {
             const response = await leadApi.update(lead.id, { lead_status_id: Number(nextStatusId) });
             const updatedLead = response.data;
             setLeads((prev) => prev.map((item) => (item.id === lead.id ? updatedLead : item)));
+            setUnreadNotifications((prev) => prev.filter((item) => item.id !== lead.id));
             fetchLeads(pageRef.current, { silent: true, replaceData: false });
             showToast({ message: 'Đã cập nhật trạng thái lead.', type: 'success', duration: 1500 });
         } catch (error) {
@@ -845,12 +1007,13 @@ const LeadList = () => {
         }
 
         const returnTo = encodeURIComponent(`${location.pathname}${location.search}`);
+        setUnreadNotifications((prev) => prev.filter((item) => item.id !== lead.id));
         navigate(`/admin/orders/new?lead_id=${lead.id}&return_to=${returnTo}`);
     };
 
     const handleNotificationItemClick = (lead) => {
         setNotificationsOpen(false);
-        setNewLeadCount(0);
+        setUnreadNotifications((prev) => prev.filter((item) => item.id !== lead.id));
 
         const existsInCurrentPage = leadsRef.current.some((item) => item.id === lead.id);
         if (pageRef.current !== 1 || !existsInCurrentPage) {
@@ -870,14 +1033,29 @@ const LeadList = () => {
         )));
     };
 
+    const handleToggleBundle = (bundleKey) => {
+        setExpandedBundleIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(bundleKey)) next.delete(bundleKey);
+            else next.add(bundleKey);
+            return next;
+        });
+    };
+
     const tabItems = useMemo(() => ([
         { id: '', label: 'Tất cả', count: totalAcrossStatuses },
         ...statuses.map((status) => ({ id: String(status.id), label: status.name, count: Number(status.count || 0) })),
     ]), [statuses, totalAcrossStatuses]);
 
     return (
-        <div className="min-h-full bg-[#fcfcfa] p-6">
-            <div className="mx-auto max-w-[1600px] space-y-5">
+        <div className="min-h-screen bg-[#fcfcfa] p-6">
+            <style>{`
+                .lead-table-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
+                .lead-table-scrollbar::-webkit-scrollbar-track { background: #F0F4F8; }
+                .lead-table-scrollbar::-webkit-scrollbar-thumb { background: #1B365D; border: 2px solid #F0F4F8; border-radius: 5px; }
+                .lead-table-head { font-size: 11px; font-weight: 900; color: #1B365D; text-transform: uppercase; letter-spacing: 0.15em; background-color: #F0F4F8; }
+            `}</style>
+            <div className="mx-auto flex min-h-[calc(100vh-48px)] max-w-[1700px] flex-col gap-5">
                 <div className="space-y-1">
                     <h1 className="text-[34px] font-black uppercase tracking-[0.04em] text-primary">Xử lý lead</h1>
                     <p className="text-[13px] font-semibold uppercase tracking-[0.18em] text-primary/45">
@@ -905,9 +1083,9 @@ const LeadList = () => {
                     })}
                 </div>
 
-                <div className="overflow-hidden rounded-sm border border-primary/10 bg-white shadow-sm">
-                    <div className="flex flex-col gap-3 border-b border-primary/10 px-4 py-4 xl:flex-row xl:items-center xl:justify-between">
-                        <div className="flex flex-wrap items-center gap-2">
+                <div className="flex min-h-[calc(100vh-250px)] flex-1 flex-col overflow-hidden rounded-md border border-primary/10 bg-white shadow-xl">
+                    <div className="flex flex-col gap-3 border-b border-primary/10 bg-[#F8FAFC] px-4 py-4 xl:flex-row xl:items-center xl:justify-between">
+                        <div className="flex flex-wrap items-center gap-2 xl:shrink-0">
                             <div className="relative" ref={notificationPanelRef}>
                                 <button
                                     type="button"
@@ -916,29 +1094,29 @@ const LeadList = () => {
                                     title="Thông báo lead mới"
                                 >
                                     <span className="material-symbols-outlined text-[20px]">notifications</span>
-                                    {newLeadCount > 0 ? (
+                                    {unreadNotificationCount > 0 ? (
                                         <span className="absolute -right-1 -top-1 inline-flex min-w-[20px] items-center justify-center rounded-full bg-brick px-1.5 py-0.5 text-[10px] font-black text-white">
-                                            {newLeadCount > 99 ? '99+' : newLeadCount}
+                                            {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
                                         </span>
                                     ) : null}
                                 </button>
 
                                 {notificationsOpen ? (
-                                    <div className="absolute left-0 top-[calc(100%+10px)] z-30 w-[360px] rounded-sm border border-primary/10 bg-white shadow-2xl">
+                                    <div className="absolute left-0 top-[calc(100%+10px)] z-30 w-[380px] rounded-sm border border-primary/10 bg-white shadow-2xl">
                                         <div className="flex items-center justify-between border-b border-primary/10 px-4 py-3">
                                             <div>
                                                 <div className="text-[13px] font-black uppercase tracking-[0.08em] text-primary">Lead mới về</div>
                                                 <div className="text-[12px] text-primary/55">Badge sẽ tự xóa khi bạn đánh dấu đã xem.</div>
                                             </div>
-                                            <button type="button" onClick={() => setNewLeadCount(0)} className="text-[12px] font-bold text-primary hover:text-brick">
+                                            <button type="button" onClick={() => setUnreadNotifications([])} className="text-[12px] font-bold text-primary hover:text-brick">
                                                 Đã xem
                                             </button>
                                         </div>
 
                                         <div className="max-h-[360px] overflow-y-auto">
-                                            {newLeadItems.length === 0 ? (
+                                            {unreadNotifications.length === 0 ? (
                                                 <div className="px-4 py-6 text-center text-[13px] text-primary/55">Chưa có lead mới.</div>
-                                            ) : newLeadItems.map((lead) => (
+                                            ) : unreadNotifications.map((lead) => (
                                                 <button
                                                     key={lead.id}
                                                     type="button"
@@ -948,13 +1126,102 @@ const LeadList = () => {
                                                     <div className="min-w-0">
                                                         <div className="truncate text-[13px] font-bold text-[#0F172A]">{lead.customer_name || 'Khách chưa có tên'}</div>
                                                         <div className="mt-1 text-[12px] text-primary/60">{lead.phone || 'Chưa có số điện thoại'}</div>
-                                                        <div className="mt-1 truncate text-[12px] text-primary/50">{lead.product_summary || 'Không có sản phẩm'}</div>
+                                                        <div className="mt-1 truncate text-[12px] text-primary/50">{getLeadProductSummary(lead) || 'Không có sản phẩm'}</div>
                                                     </div>
                                                     <div className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.08em] text-primary/45">
                                                         {lead.placed_time || lead.placed_date || 'Mới'}
                                                     </div>
                                                 </button>
                                             ))}
+                                        </div>
+
+                                        <div className="space-y-3 border-t border-primary/10 bg-[#F8FAFC] px-4 py-4">
+                                            <button
+                                                type="button"
+                                                onClick={() => setSoundSettingsOpen((prev) => !prev)}
+                                                className="flex w-full items-center justify-between text-left"
+                                            >
+                                                <div>
+                                                    <div className="text-[12px] font-black uppercase tracking-[0.08em] text-primary">Âm thanh thông báo</div>
+                                                    <div className="text-[12px] text-primary/55">
+                                                        {soundSettings.enabled ? (soundSettings.useDefault ? 'Đang dùng âm mặc định' : 'Đang dùng file tùy chọn') : 'Đang tắt âm thanh'}
+                                                    </div>
+                                                </div>
+                                                <span className="material-symbols-outlined text-[18px] text-primary/45">{soundSettingsOpen ? 'expand_less' : 'expand_more'}</span>
+                                            </button>
+
+                                            {soundSettingsOpen ? (
+                                                <div className="space-y-3">
+                                                    <label className="flex items-center gap-2 text-[13px] text-[#0F172A]">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={soundSettings.enabled}
+                                                            onChange={(event) => setSoundSettings((prev) => ({ ...prev, enabled: event.target.checked }))}
+                                                        />
+                                                        Bật âm thanh khi có lead mới
+                                                    </label>
+
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setSoundSettings((prev) => ({ ...prev, useDefault: true }))}
+                                                            className={buttonClassName}
+                                                        >
+                                                            Dùng âm mặc định
+                                                        </button>
+
+                                                        <button
+                                                            type="button"
+                                                            onClick={playLeadNotificationSound}
+                                                            className={buttonClassName}
+                                                        >
+                                                            Phát thử
+                                                        </button>
+
+                                                        {!soundSettings.useDefault && soundSettings.customAudioDataUrl ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setSoundSettings((prev) => ({
+                                                                    ...prev,
+                                                                    useDefault: true,
+                                                                    customAudioDataUrl: '',
+                                                                }))}
+                                                                className={buttonClassName}
+                                                            >
+                                                                Xóa file
+                                                            </button>
+                                                        ) : null}
+                                                    </div>
+
+                                                    <label className="block">
+                                                        <span className="mb-1 block text-[11px] font-black uppercase tracking-[0.08em] text-primary/55">Chọn file âm thanh</span>
+                                                        <input
+                                                            type="file"
+                                                            accept="audio/*"
+                                                            className={`${inputClassName} h-auto py-2`}
+                                                            onChange={(event) => {
+                                                                const file = event.target.files?.[0];
+                                                                if (!file) return;
+
+                                                                const reader = new FileReader();
+                                                                reader.onload = () => {
+                                                                    setSoundSettings({
+                                                                        enabled: true,
+                                                                        useDefault: false,
+                                                                        customAudioDataUrl: typeof reader.result === 'string' ? reader.result : '',
+                                                                    });
+                                                                };
+                                                                reader.readAsDataURL(file);
+                                                            }}
+                                                        />
+                                                        <span className="mt-2 block text-[12px] text-primary/55">
+                                                            {soundSettings.useDefault || !soundSettings.customAudioDataUrl
+                                                                ? 'Chưa chọn file âm thanh riêng.'
+                                                                : 'Đã lưu file âm thanh tùy chọn cho chuông lead.'}
+                                                        </span>
+                                                    </label>
+                                                </div>
+                                            ) : null}
                                         </div>
                                     </div>
                                 ) : null}
@@ -976,7 +1243,7 @@ const LeadList = () => {
                             </button>
                         </div>
 
-                        <div className="w-full xl:ml-auto xl:max-w-[420px]">
+                        <div className="w-full xl:min-w-0 xl:flex-1">
                             <div className="relative">
                                 <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">search</span>
                                 <input
@@ -986,7 +1253,7 @@ const LeadList = () => {
                                         setPage(1);
                                     }}
                                     className={`${inputClassName} pl-10`}
-                                    placeholder="Tìm nhanh theo khách, SĐT, địa chỉ, mã đơn, ghi chú, sản phẩm..."
+                                    placeholder="Tìm nhanh theo tên khách, SĐT, địa chỉ, mã đơn, ghi chú, tên sản phẩm, mã sản phẩm..."
                                 />
                             </div>
                         </div>
@@ -1004,31 +1271,31 @@ const LeadList = () => {
                         />
                     ) : null}
 
-                    <div className="overflow-x-auto">
-                        <table className="min-w-full table-fixed border-collapse">
+                    <div className="lead-table-scrollbar min-h-0 flex-1 overflow-auto">
+                        <table className="min-h-full min-w-full table-fixed border-collapse">
                             <thead>
-                                <tr className="border-b border-primary/10 bg-[#f8fafc] text-left">
-                                    <th className="px-4 py-4 text-[11px] font-black uppercase tracking-[0.08em] text-primary/45">Thời gian đặt</th>
-                                    <th className="px-4 py-4 text-[11px] font-black uppercase tracking-[0.08em] text-primary/45">Sản phẩm</th>
-                                    <th className="px-4 py-4 text-[11px] font-black uppercase tracking-[0.08em] text-primary/45">Tên khách hàng</th>
-                                    <th className="px-4 py-4 text-[11px] font-black uppercase tracking-[0.08em] text-primary/45">Số điện thoại</th>
-                                    <th className="px-4 py-4 text-[11px] font-black uppercase tracking-[0.08em] text-primary/45">Địa chỉ</th>
-                                    <th className="px-4 py-4 text-[11px] font-black uppercase tracking-[0.08em] text-primary/45">Tag</th>
-                                    <th className="px-4 py-4 text-[11px] font-black uppercase tracking-[0.08em] text-primary/45">Trạng thái đơn</th>
-                                    <th className="px-4 py-4 text-[11px] font-black uppercase tracking-[0.08em] text-primary/45">Ghi chú</th>
-                                    <th className="px-4 py-4 text-[11px] font-black uppercase tracking-[0.08em] text-primary/45">Link</th>
+                                <tr className="lead-table-head sticky top-0 z-10 border-b border-primary/10 text-left shadow-sm">
+                                    <th className="px-4 py-4">Thời gian đặt</th>
+                                    <th className="px-4 py-4">Sản phẩm</th>
+                                    <th className="px-4 py-4">Tên khách hàng</th>
+                                    <th className="px-4 py-4">Số điện thoại</th>
+                                    <th className="px-4 py-4">Địa chỉ</th>
+                                    <th className="px-4 py-4">Tag</th>
+                                    <th className="px-4 py-4">Trạng thái đơn</th>
+                                    <th className="px-4 py-4">Ghi chú</th>
+                                    <th className="px-4 py-4">Link</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {loading ? (
                                     <tr>
-                                        <td colSpan={9} className="px-4 py-14 text-center text-[13px] font-semibold text-primary/55">
+                                        <td colSpan={9} className="px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
                                             Đang tải danh sách lead...
                                         </td>
                                     </tr>
                                 ) : leads.length === 0 ? (
                                     <tr>
-                                        <td colSpan={9} className="px-4 py-14 text-center text-[13px] font-semibold text-primary/55">
+                                        <td colSpan={9} className="px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
                                             Không tìm thấy lead phù hợp với bộ lọc hiện tại.
                                         </td>
                                     </tr>
@@ -1048,7 +1315,9 @@ const LeadList = () => {
                                                 <div className="mt-2 text-[11px] font-black uppercase tracking-[0.08em] text-primary/40">{lead.order_number}</div>
                                             ) : null}
                                         </td>
-                                        <td className="px-4 py-4"><ProductCell lead={lead} /></td>
+                                        <td className="px-4 py-4">
+                                            <ProductCell lead={lead} expandedBundleIds={expandedBundleIds} onToggleBundle={handleToggleBundle} />
+                                        </td>
                                         <td className="px-4 py-4 text-[13px] font-semibold text-[#0F172A]">{lead.customer_name || 'Khách chưa có tên'}</td>
                                         <td className="px-4 py-4 text-[13px] font-semibold text-[#0F172A]">{lead.phone || '-'}</td>
                                         <td className="px-4 py-4 text-[13px] text-[#0F172A]">{lead.address || '-'}</td>
@@ -1095,7 +1364,7 @@ const LeadList = () => {
                         </table>
                     </div>
 
-                    <div className="flex flex-col gap-4 border-t border-primary/10 px-4 py-4 md:flex-row md:items-center md:justify-between">
+                    <div className="flex flex-col gap-4 border-t border-primary/10 bg-white px-4 py-4 md:flex-row md:items-center md:justify-between">
                         <div className="text-[13px] font-semibold text-primary/60">
                             Tổng giá trị lead đang xem: <span className="font-black text-primary">{formatMoney(leads.reduce((sum, lead) => sum + Number(lead.total_amount || 0), 0))}</span>
                         </div>

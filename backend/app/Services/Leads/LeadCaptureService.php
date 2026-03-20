@@ -19,6 +19,7 @@ class LeadCaptureService
         $accountId = (int) $request->header('X-Account-Id');
         $statuses = LeadStatus::ensureDefaultsForAccount($accountId);
         $defaultStatus = $statuses->firstWhere('is_default', true) ?: $statuses->first();
+        $bundleResolver = app(LeadBundleResolver::class);
 
         $itemsPayload = collect($request->input('items', []));
         $products = Product::query()
@@ -26,7 +27,7 @@ class LeadCaptureService
             ->get()
             ->keyBy('id');
 
-        $normalizedItems = $itemsPayload->values()->map(function ($item, $index) use ($products) {
+        $normalizedItems = $itemsPayload->values()->map(function ($item, $index) use ($products, $bundleResolver, $request, $itemsPayload) {
             $product = $products->get((int) Arr::get($item, 'product_id'));
             $quantity = max(1, (int) Arr::get($item, 'quantity', 1));
             $unitPrice = (float) (Arr::get($item, 'unit_price') ?? Arr::get($item, 'price') ?? $product?->current_price ?? $product?->price ?? 0);
@@ -35,7 +36,7 @@ class LeadCaptureService
             $productSlug = (string) (Arr::get($item, 'product_slug') ?: $product?->slug ?: '');
             $productUrl = (string) (Arr::get($item, 'product_url') ?: '');
 
-            return [
+            $normalizedItem = [
                 'sort_order' => $index + 1,
                 'product_id' => $product?->id,
                 'product_name' => $productName,
@@ -48,6 +49,20 @@ class LeadCaptureService
                 'options' => Arr::get($item, 'options'),
                 'bundle_items' => Arr::get($item, 'sub_items') ?: Arr::get($item, 'bundle_items'),
             ];
+
+            $expectedSubtotal = null;
+            if ($itemsPayload->count() === 1) {
+                $expectedSubtotal = max(
+                    0,
+                    (float) ($request->input('total') ?? $request->input('total_amount') ?? 0)
+                    + (float) ($request->input('discount') ?? $request->input('discount_amount') ?? 0)
+                    - (float) ($request->input('shipping_fee') ?? 0)
+                );
+            }
+
+            return $bundleResolver->hydrateIncomingItem($normalizedItem, $product, [
+                'expected_subtotal' => $expectedSubtotal,
+            ]);
         });
 
         $productSummary = $this->buildProductSummary($normalizedItems->all());

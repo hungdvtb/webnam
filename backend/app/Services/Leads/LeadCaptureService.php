@@ -31,7 +31,7 @@ class LeadCaptureService
             $quantity = max(1, (int) Arr::get($item, 'quantity', 1));
             $unitPrice = (float) (Arr::get($item, 'unit_price') ?? Arr::get($item, 'price') ?? $product?->current_price ?? $product?->price ?? 0);
             $lineTotal = $unitPrice * $quantity;
-            $productName = (string) (Arr::get($item, 'product_name') ?: $product?->name ?: 'S?n ph?m website');
+            $productName = (string) (Arr::get($item, 'product_name') ?: $product?->name ?: 'San pham website');
             $productSlug = (string) (Arr::get($item, 'product_slug') ?: $product?->slug ?: '');
             $productUrl = (string) (Arr::get($item, 'product_url') ?: '');
 
@@ -169,11 +169,11 @@ class LeadCaptureService
     public function buildProductSummary(array $items): array
     {
         if (empty($items)) {
-            return ['short' => 'Không có s?n ph?m', 'full' => 'Không có s?n ph?m'];
+            return ['short' => 'Khong co san pham', 'full' => 'Khong co san pham'];
         }
 
         $rows = collect($items)->map(function ($item) {
-            $name = trim((string) ($item['product_name'] ?? 'S?n ph?m website'));
+            $name = trim((string) ($item['product_name'] ?? 'San pham website'));
             $qty = (int) ($item['quantity'] ?? 1);
             $sku = trim((string) ($item['product_sku'] ?? ''));
             return $sku ? sprintf('%s (%s) x%d', $name, $sku, $qty) : sprintf('%s x%d', $name, $qty);
@@ -182,7 +182,7 @@ class LeadCaptureService
         $full = $rows->implode('; ');
         $short = $rows->take(2)->implode('; ');
         if ($rows->count() > 2) {
-            $short .= sprintf(' +%d s?n ph?m', $rows->count() - 2);
+            $short .= sprintf(' +%d san pham', $rows->count() - 2);
         }
 
         return [

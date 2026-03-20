@@ -409,6 +409,7 @@ const OrderForm = () => {
     const queryParams = new URLSearchParams(location.search);
     const duplicateFromId = queryParams.get('duplicate_from');
     const leadId = queryParams.get('lead_id');
+    const returnTo = queryParams.get('return_to');
     const isEdit = !!id;
     const navigate = useNavigate();
     const { user } = useAuth();
@@ -435,6 +436,20 @@ const OrderForm = () => {
     const [leadConversionSummary, setLeadConversionSummary] = useState(null);
     const captureRef = useRef(null);
     const quoteCaptureRef = useRef(null);
+
+    const navigateBackToLead = useCallback(() => {
+        if (returnTo && returnTo.startsWith('/admin/')) {
+            navigate(returnTo);
+            return;
+        }
+
+        if (leadId) {
+            navigate('/admin/leads');
+            return;
+        }
+
+        navigate('/admin/orders');
+    }, [leadId, navigate, returnTo]);
 
     const COLUMN_DEFS = {
         stt: { label: 'STT', width: 'w-12', align: 'center' },
@@ -684,8 +699,8 @@ const OrderForm = () => {
     }, [syncShippingAddress]);
 
     const handleCancel = useCallback(() => {
-        navigate('/admin/orders');
-    }, [navigate]);
+        navigateBackToLead();
+    }, [navigateBackToLead]);
 
     useEffect(() => {
         const handleKeyDown = (e) => {
@@ -934,7 +949,7 @@ const OrderForm = () => {
                     content: 'Lead này đã ở trạng thái Đã tạo đơn nên không mở lại form tạo đơn.',
                     type: 'warning'
                 });
-                navigate('/admin/leads');
+                navigateBackToLead();
                 return;
             }
 
@@ -982,7 +997,7 @@ const OrderForm = () => {
                 content: 'Không thể tải dữ liệu lead để tạo đơn.',
                 type: 'error'
             });
-            navigate('/admin/leads');
+            navigateBackToLead();
         } finally {
             setLoading(false);
         }
@@ -1448,7 +1463,11 @@ const OrderForm = () => {
             } else {
                 await orderApi.store(payload);
             }
-            navigate('/admin/orders');
+            if (!isEdit && (leadId || returnTo)) {
+                navigateBackToLead();
+            } else {
+                navigate('/admin/orders');
+            }
         } catch (error) {
             console.error("Error saving order:", error);
             if (error.response?.data?.errors) {
@@ -1481,6 +1500,51 @@ const OrderForm = () => {
     ));
     const quoteTotalQuantity = formData.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
     const quoteSubtotal = calculateSubtotal();
+    const leadConversionCard = leadConversionSummary ? (
+        <div className="mt-4 max-w-[680px] rounded-sm border border-primary/10 bg-white p-4 shadow-sm">
+            <div className="mb-[10px] flex items-center gap-2.5 border-b border-primary/10 pb-3">
+                <span className="material-symbols-outlined text-primary/40 text-[18px]">conversion_path</span>
+                <h3 className="font-sans text-[15px] font-bold uppercase tracking-tight text-primary">Thông tin chuyển đổi</h3>
+            </div>
+
+            <div className="space-y-3 text-[13px] text-slate-700">
+                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                    <span className="font-bold text-primary/55">Lead</span>
+                    <span>{formData.custom_attributes?.lead_number || `#${leadId}`}</span>
+                </div>
+                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                    <span className="font-bold text-primary/55">Tag</span>
+                    <span>{leadConversionSummary.tag || 'Website'}</span>
+                </div>
+                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                    <span className="font-bold text-primary/55">Landing URL</span>
+                    <div className="min-w-0 break-all">
+                        {leadConversionSummary.landing_url ? <a href={leadConversionSummary.landing_url} target="_blank" rel="noreferrer" className="text-primary hover:text-brick">{leadConversionSummary.landing_url}</a> : <span>-</span>}
+                    </div>
+                </div>
+                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                    <span className="font-bold text-primary/55">Trang đặt</span>
+                    <div className="min-w-0 break-all">
+                        {leadConversionSummary.current_url ? <a href={leadConversionSummary.current_url} target="_blank" rel="noreferrer" className="text-primary hover:text-brick">{leadConversionSummary.current_url}</a> : <span>-</span>}
+                    </div>
+                </div>
+                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                    <span className="font-bold text-primary/55">Referrer</span>
+                    <span className="break-all">{leadConversionSummary.referrer || '-'}</span>
+                </div>
+                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                    <span className="font-bold text-primary/55">UTM</span>
+                    <span>{[leadConversionSummary.utm_source, leadConversionSummary.utm_medium, leadConversionSummary.utm_campaign].filter(Boolean).join(' / ') || '-'}</span>
+                </div>
+                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
+                    <span className="font-bold text-primary/55">Link sản phẩm</span>
+                    <div className="min-w-0 break-all">
+                        {leadConversionSummary.product_link ? <a href={leadConversionSummary.product_link} target="_blank" rel="noreferrer" className="text-primary hover:text-brick">{leadConversionSummary.product_link}</a> : <span>-</span>}
+                    </div>
+                </div>
+            </div>
+        </div>
+    ) : null;
 
     if (loading) return <div className="p-8 text-center italic text-primary">Đang tải dữ liệu...</div>;
 
@@ -2005,56 +2069,10 @@ const OrderForm = () => {
                     </div>
                 </div>
 
+                {leadConversionCard}
+
                 {/* Right Section: Sidebar Metadata */}
                 <div className="w-full min-w-0 max-w-full flex flex-col gap-[10px]">
-                    {leadConversionSummary ? (
-                        <div className="bg-white border border-primary/10 p-4 shadow-sm rounded-sm">
-                            <div className="flex items-center gap-2.5 mb-[10px] border-b border-primary/10 pb-3">
-                                <span className="material-symbols-outlined text-primary/40 text-[18px]">conversion_path</span>
-                                <h3 className="font-sans text-[15px] font-bold text-primary uppercase tracking-tight">Thông tin chuyển đổi</h3>
-                            </div>
-
-                            <div className="space-y-3 text-[13px] text-slate-700">
-                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
-                                    <span className="font-bold text-primary/55">Lead</span>
-                                    <span>{formData.custom_attributes?.lead_number || `#${leadId}`}</span>
-                                </div>
-                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
-                                    <span className="font-bold text-primary/55">Tag</span>
-                                    <span>{leadConversionSummary.tag || 'Website'}</span>
-                                </div>
-                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
-                                    <span className="font-bold text-primary/55">Landing URL</span>
-                                    <div className="min-w-0 break-all">
-                                        {leadConversionSummary.landing_url ? <a href={leadConversionSummary.landing_url} target="_blank" rel="noreferrer" className="text-primary hover:text-brick">{leadConversionSummary.landing_url}</a> : <span>-</span>}
-                                    </div>
-                                </div>
-                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
-                                    <span className="font-bold text-primary/55">Trang đặt</span>
-                                    <div className="min-w-0 break-all">
-                                        {leadConversionSummary.current_url ? <a href={leadConversionSummary.current_url} target="_blank" rel="noreferrer" className="text-primary hover:text-brick">{leadConversionSummary.current_url}</a> : <span>-</span>}
-                                    </div>
-                                </div>
-                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
-                                    <span className="font-bold text-primary/55">Referrer</span>
-                                    <span className="break-all">{leadConversionSummary.referrer || '-'}</span>
-                                </div>
-                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
-                                    <span className="font-bold text-primary/55">UTM</span>
-                                    <span>
-                                        {[leadConversionSummary.utm_source, leadConversionSummary.utm_medium, leadConversionSummary.utm_campaign].filter(Boolean).join(' / ') || '-'}
-                                    </span>
-                                </div>
-                                <div className="grid grid-cols-[112px_minmax(0,1fr)] gap-3">
-                                    <span className="font-bold text-primary/55">Link sản phẩm</span>
-                                    <div className="min-w-0 break-all">
-                                        {leadConversionSummary.product_link ? <a href={leadConversionSummary.product_link} target="_blank" rel="noreferrer" className="text-primary hover:text-brick">{leadConversionSummary.product_link}</a> : <span>-</span>}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    ) : null}
-
                     <div className="bg-white border border-primary/10 p-4 shadow-sm rounded-sm">
                         <div className="flex items-center gap-2.5 mb-[10px] border-b border-primary/10 pb-3">
                             <span className="material-symbols-outlined text-primary/40 text-[18px]">assignment</span>
@@ -2258,7 +2276,7 @@ const OrderForm = () => {
                         <div className="pt-6">
                             <button
                                 type="button"
-                                onClick={() => navigate('/admin/orders')}
+                                onClick={handleCancel}
                                 className="w-full bg-primary/5 text-primary/40 font-sans font-bold text-[12px] py-4 hover:bg-primary/10 transition-all border border-primary/10 rounded-sm uppercase tracking-widest"
                             >
                                 Quay về danh sách

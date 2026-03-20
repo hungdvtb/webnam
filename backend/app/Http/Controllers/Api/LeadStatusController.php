@@ -109,7 +109,7 @@ class LeadStatusController extends Controller
     {
         $status = LeadStatus::query()->withCount('leads')->findOrFail($id);
         if ($status->leads_count > 0) {
-            return response()->json(['message' => 'Không th? xóa tr?ng thái dang du?c lead s? d?ng.'], 422);
+            return response()->json(['message' => 'Khong the xoa trang thai dang duoc lead su dung.'], 422);
         }
 
         $status->delete();

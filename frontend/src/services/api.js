@@ -108,7 +108,7 @@ export const orderApi = {
 };
 
 export const leadApi = {
-    getAll: (params) => api.get('/leads', { params }),
+    getAll: (params, signal) => api.get('/leads', { params, signal }),
     getOne: (id) => api.get(`/leads/${id}`),
     update: (id, data) => api.put(`/leads/${id}`, data),
     destroy: (id) => api.delete(`/leads/${id}`),

@@ -36,16 +36,16 @@ class LeadStatus extends Model
     public static function defaultDefinitions(): array
     {
         return [
-            ['name' => 'Ğon m?i', 'code' => 'don-moi', 'color' => '#2563eb', 'sort_order' => 1, 'is_default' => true, 'blocks_order_create' => false],
-            ['name' => 'Ğã t?o don', 'code' => 'da-tao-don', 'color' => '#059669', 'sort_order' => 2, 'is_default' => false, 'blocks_order_create' => true],
+            ['name' => 'Don moi', 'code' => 'don-moi', 'color' => '#2563eb', 'sort_order' => 1, 'is_default' => true, 'blocks_order_create' => false],
+            ['name' => 'Da tao don', 'code' => 'da-tao-don', 'color' => '#059669', 'sort_order' => 2, 'is_default' => false, 'blocks_order_create' => true],
             ['name' => 'KNM1', 'code' => 'knm1', 'color' => '#7c3aed', 'sort_order' => 3, 'is_default' => false, 'blocks_order_create' => false],
             ['name' => 'KNM2', 'code' => 'knm2', 'color' => '#8b5cf6', 'sort_order' => 4, 'is_default' => false, 'blocks_order_create' => false],
             ['name' => 'KNM3', 'code' => 'knm3', 'color' => '#a855f7', 'sort_order' => 5, 'is_default' => false, 'blocks_order_create' => false],
-            ['name' => 'H?y don', 'code' => 'huy-don', 'color' => '#dc2626', 'sort_order' => 6, 'is_default' => false, 'blocks_order_create' => false],
+            ['name' => 'Huy don', 'code' => 'huy-don', 'color' => '#dc2626', 'sort_order' => 6, 'is_default' => false, 'blocks_order_create' => false],
             ['name' => 'Sai sdt', 'code' => 'sai-sdt', 'color' => '#ef4444', 'sort_order' => 7, 'is_default' => false, 'blocks_order_create' => false],
-            ['name' => 'Ch? xem l?i', 'code' => 'cho-xem-lai', 'color' => '#f59e0b', 'sort_order' => 8, 'is_default' => false, 'blocks_order_create' => false],
-            ['name' => 'H?n g?i l?i', 'code' => 'hen-goi-lai', 'color' => '#0ea5e9', 'sort_order' => 9, 'is_default' => false, 'blocks_order_create' => false],
-            ['name' => 'Ğã ch?t', 'code' => 'da-chot', 'color' => '#14b8a6', 'sort_order' => 10, 'is_default' => false, 'blocks_order_create' => false],
+            ['name' => 'Cho xem lai', 'code' => 'cho-xem-lai', 'color' => '#f59e0b', 'sort_order' => 8, 'is_default' => false, 'blocks_order_create' => false],
+            ['name' => 'Hen goi lai', 'code' => 'hen-goi-lai', 'color' => '#0ea5e9', 'sort_order' => 9, 'is_default' => false, 'blocks_order_create' => false],
+            ['name' => 'Da chot', 'code' => 'da-chot', 'color' => '#14b8a6', 'sort_order' => 10, 'is_default' => false, 'blocks_order_create' => false],
         ];
     }
 

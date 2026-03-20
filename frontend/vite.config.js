@@ -8,6 +8,14 @@ export default defineConfig({
     include: ['quill-image-resize-module-react', 'react-quill-new'],
   },
   server: {
+    host: '127.0.0.1',
     port: 3003,
-  }
+    strictPort: true,
+    hmr: {
+      host: '127.0.0.1',
+      port: 3003,
+      clientPort: 3003,
+      protocol: 'ws',
+    },
+  },
 })

@@ -29,9 +29,15 @@ class LeadController extends Controller
                     ->orWhere('email', 'like', "%{$search}%")
                     ->orWhere('address', 'like', "%{$search}%")
                     ->orWhere('product_summary', 'like', "%{$search}%")
+                    ->orWhere('latest_note_excerpt', 'like', "%{$search}%")
                     ->orWhere('tag', 'like', "%{$search}%")
                     ->orWhere('link_url', 'like', "%{$search}%")
-                    ->orWhereHas('order', fn (Builder $orderQuery) => $orderQuery->where('order_number', 'like', "%{$search}%"));
+                    ->orWhereHas('order', fn (Builder $orderQuery) => $orderQuery->where('order_number', 'like', "%{$search}%"))
+                    ->orWhereHas('notesTimeline', fn (Builder $noteQuery) => $noteQuery->where('content', 'like', "%{$search}%"))
+                    ->orWhereHas('items', function (Builder $itemQuery) use ($search) {
+                        $itemQuery->where('product_name', 'like', "%{$search}%")
+                            ->orWhere('product_sku', 'like', "%{$search}%");
+                    });
             });
         }
 
@@ -269,10 +275,9 @@ class LeadController extends Controller
 
         $validated = $request->validate([
             'content' => 'required|string|max:5000',
-            'staff_name' => 'nullable|string|max:120',
         ]);
 
-        $staffName = trim((string) ($validated['staff_name'] ?? auth()->user()?->name ?? 'Nh�n vi�n'));
+        $staffName = trim((string) (auth()->user()?->name ?? 'Nhân viên'));
 
         $note = LeadNote::create([
             'account_id' => $lead->account_id,
@@ -355,8 +360,8 @@ class LeadController extends Controller
             'shipping_fee' => (float) ($payload['shipping_fee'] ?? 0),
             'total_amount' => (float) $lead->total_amount,
             'source' => $lead->tag ?: ($payload['source'] ?? 'Website'),
-            'type' => $payload['type'] ?? 'L?',
-            'shipment_status' => $payload['shipment_status'] ?? 'Ch?a giao',
+            'type' => $payload['type'] ?? 'Le',
+            'shipment_status' => $payload['shipment_status'] ?? 'Chua giao',
             'status' => 'new',
             'items' => $items,
             'conversion_summary' => [

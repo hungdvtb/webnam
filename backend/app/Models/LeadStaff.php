@@ -9,6 +9,8 @@ class LeadStaff extends Model
 {
     use BelongsToAccount;
 
+    protected $table = 'lead_staffs';
+
     protected $fillable = [
         'account_id',
         'user_id',

@@ -278,8 +278,9 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
             return (
                 <select
                     value={lead.status_config?.id || ''}
+                    title={formatStatusLabel(lead.status_config?.name || lead.status, lead.status_config?.code)}
                     onChange={(event) => handleLeadStatusChange(lead, event.target.value)}
-                    className={`${inputClassName} min-w-[160px]`}
+                    className={`${inputClassName} w-full min-w-0 max-w-full`}
                 >
                     {statuses.map((status) => (
                         <option key={status.id} value={status.id}>{formatStatusLabel(status.name, status.code)}</option>
@@ -345,8 +346,9 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
             return (
                 <select
                     value={lead.status_config?.id || ''}
+                    title={formatStatusLabel(lead.status_config?.name || lead.status, lead.status_config?.code)}
                     onChange={(event) => handleLeadStatusChange(lead, event.target.value)}
-                    className={`${inputClassName} min-w-[160px]`}
+                    className={`${inputClassName} w-full min-w-0 max-w-full`}
                 >
                     {statuses.map((status) => (
                         <option key={status.id} value={status.id}>{formatStatusLabel(status.name, status.code)}</option>
@@ -404,9 +406,11 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                                 <div className="truncate pr-3">{column.label}</div>
                                 <span
                                     onMouseDown={(event) => handleColumnResize(column.id, event)}
-                                    className="absolute right-0 top-0 h-full w-2 cursor-col-resize opacity-0 transition-opacity group-hover:opacity-100"
+                                    className="absolute right-[-6px] top-1/2 z-20 flex h-[70%] w-3 -translate-y-1/2 cursor-col-resize items-center justify-center rounded-full bg-primary/10 opacity-70 shadow-sm ring-1 ring-primary/10 transition-all hover:w-4 hover:bg-primary/20 hover:opacity-100 active:w-4 active:bg-primary/25"
                                     title="Kéo để đổi độ rộng cột"
-                                />
+                                >
+                                    <span className="h-full w-[3px] rounded-full bg-primary/35 transition-all hover:bg-primary/70" />
+                                </span>
                             </th>
                         ))}
                     </tr>
@@ -434,7 +438,7 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                             {renderedColumns.map((column) => (
                                 <td
                                     key={`${lead.id}-${column.id}`}
-                                    className="px-4 py-3 align-top text-[13px]"
+                                    className="overflow-hidden px-4 py-3 align-top text-[13px]"
                                     style={{
                                         width: columnWidths[column.id] || column.minWidth,
                                         minWidth: columnWidths[column.id] || column.minWidth,
@@ -1499,8 +1503,9 @@ const LeadList = () => {
             return (
                 <select
                     value={lead.status_config?.id || ''}
+                    title={formatStatusLabel(lead.status_config?.name || lead.status, lead.status_config?.code)}
                     onChange={(event) => handleLeadStatusChange(lead, event.target.value)}
-                    className={`${inputClassName} min-w-[160px]`}
+                    className={`${inputClassName} w-full min-w-0 max-w-full`}
                 >
                     {statuses.map((status) => (
                         <option key={status.id} value={status.id}>{formatStatusLabel(status.name, status.code)}</option>
@@ -1547,15 +1552,17 @@ const LeadList = () => {
                                 onDragOver={(event) => event.preventDefault()}
                                 onDrop={(event) => handleHeaderDrop(event, index)}
                                 className="group relative border-r border-primary/10 px-4 py-3 text-[12px] font-bold text-primary last:border-r-0"
-                                style={{ width: columnWidths[column.id] || column.minWidth, minWidth: columnWidths[column.id] || column.minWidth }}
+                                style={{ width: columnWidths[column.id] || column.minWidth, minWidth: columnWidths[column.id] || column.minWidth, maxWidth: columnWidths[column.id] || column.minWidth }}
                                 title="Kéo để đổi vị trí cột"
                             >
                                 <div className="truncate pr-3">{column.label}</div>
                                 <span
                                     onMouseDown={(event) => handleColumnResize(column.id, event)}
-                                    className="absolute right-0 top-0 h-full w-2 cursor-col-resize opacity-0 transition-opacity group-hover:opacity-100"
+                                    className="absolute right-[-6px] top-1/2 z-20 flex h-[70%] w-3 -translate-y-1/2 cursor-col-resize items-center justify-center rounded-full bg-primary/10 opacity-70 shadow-sm ring-1 ring-primary/10 transition-all hover:w-4 hover:bg-primary/20 hover:opacity-100 active:w-4 active:bg-primary/25"
                                     title="Kéo để đổi độ rộng cột"
-                                />
+                                >
+                                    <span className="h-full w-[3px] rounded-full bg-primary/35 transition-all hover:bg-primary/70" />
+                                </span>
                             </th>
                         ))}
                     </tr>
@@ -1583,8 +1590,8 @@ const LeadList = () => {
                             {renderedColumns.map((column) => (
                                 <td
                                     key={`${lead.id}-${column.id}`}
-                                    className="px-4 py-3 align-top text-[13px]"
-                                    style={{ width: columnWidths[column.id] || column.minWidth, minWidth: columnWidths[column.id] || column.minWidth }}
+                                    className="overflow-hidden px-4 py-3 align-top text-[13px]"
+                                    style={{ width: columnWidths[column.id] || column.minWidth, minWidth: columnWidths[column.id] || column.minWidth, maxWidth: columnWidths[column.id] || column.minWidth }}
                                 >
                                     {renderLeadTableCell(lead, column.id)}
                                 </td>

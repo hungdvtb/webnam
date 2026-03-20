@@ -8,14 +8,14 @@ const AdminLayout = () => {
     const { user, logout, loading } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
-    const [isSettingsOpen, setIsSettingsOpen] = React.useState(location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users') || location.pathname.startsWith('/admin/settings'));
+    const [isSettingsOpen, setIsSettingsOpen] = React.useState(location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users') || location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/shipping-settings'));
     const [isOrdersOpen, setIsOrdersOpen] = React.useState(location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads'));
     const [isDesignOpen, setIsDesignOpen] = React.useState(location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/blog'));
 
     const isOrderForm = location.pathname.startsWith('/admin/orders/new') || location.pathname.startsWith('/admin/orders/edit');
 
     React.useEffect(() => {
-        if (location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users') || location.pathname.startsWith('/admin/settings')) setIsSettingsOpen(true);
+        if (location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users') || location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/shipping-settings')) setIsSettingsOpen(true);
         if (location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads')) setIsOrdersOpen(true);
         if (location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/blog')) setIsDesignOpen(true);
     }, [location.pathname]);
@@ -58,6 +58,7 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/warehouses')) return 'warehouses';
         if (path.startsWith('/admin/attributes')) return 'attributes';
         if (path.startsWith('/admin/carrier-mappings')) return 'settings';
+        if (path.startsWith('/admin/shipping-settings')) return 'settings';
         if (path.startsWith('/admin/settings')) return 'settings';
         if (path.startsWith('/admin/shipments')) return 'orders';
         if (path.startsWith('/admin/menus')) return 'menus';
@@ -93,7 +94,7 @@ const AdminLayout = () => {
                     )}
 
                     {/* Collapsible Settings Menu */}
-                    {(canAccess('attributes') || canAccess('settings') || canAccess('users')) && (
+                    {(canAccess('attributes') || canAccess('settings') || canAccess('users') || canAccess('orders')) && (
                         <div className="space-y-1">
                             <button 
                                 onClick={() => setIsSettingsOpen(!isSettingsOpen)}
@@ -117,6 +118,15 @@ const AdminLayout = () => {
                                         >
                                             <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/settings' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>web</span>
                                             <span className="font-sans text-xs font-medium tracking-wide">Cài đặt web</span>
+                                        </Link>
+                                    )}
+                                    {false && (
+                                        <Link 
+                                            to="/admin/shipping-settings" 
+                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/shipping-settings' || location.pathname === '/admin/carrier-mappings' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
+                                        >
+                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/shipping-settings' || location.pathname === '/admin/carrier-mappings' ? 'text-gold' : 'group-hover:text-gold'}`}>local_shipping</span>
+                                            <span className="font-sans text-xs font-medium tracking-wide">Cài đặt vận chuyển</span>
                                         </Link>
                                     )}
                                     {canAccess('attributes') && (
@@ -148,11 +158,11 @@ const AdminLayout = () => {
                                     )}
                                     {canAccess('orders') && (
                                         <Link 
-                                            to="/admin/settings?tab=shipping&shippingTab=integrations" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/carrier-mappings' || (location.pathname === '/admin/settings' && location.search.includes('tab=shipping')) ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
+                                            to="/admin/shipping-settings" 
+                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/shipping-settings' || location.pathname === '/admin/carrier-mappings' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
                                         >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/carrier-mappings' || (location.pathname === '/admin/settings' && location.search.includes('tab=shipping')) ? 'text-gold' : 'group-hover:text-gold'}`}>local_shipping</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Mapping vận chuyển</span>
+                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/shipping-settings' || location.pathname === '/admin/carrier-mappings' ? 'text-gold' : 'group-hover:text-gold'}`}>local_shipping</span>
+                                            <span className="font-sans text-xs font-medium tracking-wide">Cài đặt vận chuyển</span>
                                         </Link>
                                     )}
                                 </div>

@@ -1,5 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 
+const parseWidthValue = (value, fallback = 0) => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string') {
+        const parsed = Number.parseInt(value.replace('px', ''), 10);
+        return Number.isFinite(parsed) ? parsed : fallback;
+    }
+    return fallback;
+};
+
 /**
  * Custom hook to manage table columns (visibility, reordering, resizing, persistence)
  * @param {string} storageKey - Unique key for localStorage
@@ -13,6 +22,11 @@ export const useTableColumns = (storageKey, defaultColumns) => {
         return saved ? JSON.parse(saved) : {};
     });
     const [draggedItemIndex, setDraggedItemIndex] = useState(null);
+
+    const getColumnMinWidth = useCallback((colId) => {
+        const matchedColumn = defaultColumns.find((column) => column.id === colId);
+        return Math.max(parseWidthValue(matchedColumn?.minWidth, 120), 80);
+    }, [defaultColumns]);
 
     useEffect(() => {
         const savedOrder = localStorage.getItem(`${storageKey}_column_order`);
@@ -48,6 +62,22 @@ export const useTableColumns = (storageKey, defaultColumns) => {
         }
     }, [storageKey, defaultColumns]);
 
+    useEffect(() => {
+        setColumnWidths((prev) => {
+            const next = Object.entries(prev || {}).reduce((accumulator, [colId, width]) => {
+                accumulator[colId] = Math.max(getColumnMinWidth(colId), parseWidthValue(width, getColumnMinWidth(colId)));
+                return accumulator;
+            }, {});
+
+            if (JSON.stringify(next) !== JSON.stringify(prev || {})) {
+                localStorage.setItem(`${storageKey}_column_widths`, JSON.stringify(next));
+                return next;
+            }
+
+            return prev;
+        });
+    }, [getColumnMinWidth, storageKey]);
+
     const renderedColumns = useMemo(() => {
         return availableColumns.filter(col => visibleColumns.includes(col.id));
     }, [availableColumns, visibleColumns]);
@@ -64,11 +94,15 @@ export const useTableColumns = (storageKey, defaultColumns) => {
         e.preventDefault();
         e.stopPropagation();
         const startX = e.clientX;
-        const startWidth = columnWidths[colId] || e.currentTarget.parentElement.offsetWidth;
+        const minWidth = getColumnMinWidth(colId);
+        const startWidth = Math.max(
+            minWidth,
+            parseWidthValue(columnWidths[colId], 0) || e.currentTarget.parentElement.offsetWidth
+        );
         
         let currentWidth = startWidth;
         const onMouseMove = (moveEvent) => {
-            currentWidth = Math.max(30, startWidth + (moveEvent.clientX - startX));
+            currentWidth = Math.max(minWidth, startWidth + (moveEvent.clientX - startX));
             setColumnWidths(prev => ({ ...prev, [colId]: currentWidth }));
         };
         
@@ -84,7 +118,7 @@ export const useTableColumns = (storageKey, defaultColumns) => {
         
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
-    }, [columnWidths, storageKey]);
+    }, [columnWidths, getColumnMinWidth, storageKey]);
 
     const handleHeaderDragStart = useCallback((e, index) => {
         setDraggedItemIndex(index);

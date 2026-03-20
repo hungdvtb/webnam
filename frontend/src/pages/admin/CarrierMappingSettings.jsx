@@ -153,7 +153,7 @@ const CarrierMappingSettings = ({ embedded = false }) => {
     };
 
     if (loading && carriers.length === 0) return (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#fcfcfa] z-20">
+        <div className={`${embedded ? 'flex min-h-[320px] items-center justify-center rounded-2xl bg-[#fcfcfa]' : 'absolute inset-0 flex items-center justify-center bg-[#fcfcfa] z-20'}`}>
             <div className="text-center space-y-4">
                 <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto"></div>
                 <p className="text-[11px] font-bold text-stone-600 uppercase tracking-widest">Đang tải dữ liệu...</p>
@@ -162,7 +162,7 @@ const CarrierMappingSettings = ({ embedded = false }) => {
     );
 
     return (
-        <div className={`${embedded ? 'flex flex-col bg-transparent animate-fade-in w-full h-full overflow-hidden' : 'absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-4 z-10 w-full h-full overflow-hidden'}`}>
+        <div className={`${embedded ? 'flex min-h-full flex-col bg-transparent animate-fade-in w-full' : 'absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-4 z-10 w-full h-full overflow-hidden'}`}>
             {/* ═══ Header ═══ */}
             <div className="flex items-center justify-between mb-4 shrink-0 px-2">
                 <div>

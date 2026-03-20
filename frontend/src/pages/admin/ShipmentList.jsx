@@ -56,12 +56,13 @@ const fmtDate = (d) => d ? new Date(d).toLocaleDateString('vi-VN') : '-';
 const fmtDateTime = (d) => d ? `${new Date(d).toLocaleDateString('vi-VN')} ${new Date(d).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` : '-';
 
 // ── Badge Component ──
-const StatusBadge = ({ code, list }) => {
+const StatusBadge = ({ code, list, className = '' }) => {
     const s = getStatus(code, list);
     return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-black uppercase tracking-wider whitespace-nowrap border transition-all"
+        <span className={`inline-flex max-w-full items-center gap-1 overflow-hidden px-2.5 py-1 rounded-md text-[11px] font-black uppercase tracking-wider border transition-all ${className}`}
+            title={s.label}
             style={{ backgroundColor: `${s.color}12`, color: s.color, borderColor: `${s.color}30` }}>
-            {s.label}
+            <span className="truncate">{s.label}</span>
         </span>
     );
 };
@@ -436,12 +437,11 @@ const ShipmentList = () => {
                             </button>
                             <button
                                 onClick={handleBulkReconcileSelected}
-                                className={`h-9 px-3 rounded-sm border flex items-center gap-2 text-[12px] font-black uppercase tracking-wide transition-all ${selectedIds.length > 0 ? 'bg-primary text-white border-primary hover:bg-primary/90' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}
-                                title="Đối soát"
+                                className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary text-white border-primary hover:bg-primary/90' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}
+                                title="Đối soát vận đơn đã chọn"
                                 disabled={selectedIds.length === 0 || bulkReconciling}
                             >
                                 <span className={`material-symbols-outlined text-[18px] ${bulkReconciling ? 'animate-spin' : ''}`}>account_balance</span>
-                                Đối soát
                             </button>
 
                         {/* Bulk actions */}
@@ -541,10 +541,10 @@ const ShipmentList = () => {
             </div>
 
             {/* Table */}
-            <div className="flex-1 bg-white border border-stone/20 shadow-xl overflow-auto rounded-md relative table-scrollbar">
+            <div className="flex-1 min-h-0 bg-white border border-stone/20 shadow-xl overflow-auto rounded-md relative table-scrollbar">
                 <table
                     className="text-left border-collapse border-spacing-0 border border-stone/20 table-fixed min-w-full"
-                    style={{ width: `${totalTableWidth}px` }}
+                    style={{ width: `${totalTableWidth}px`, minWidth: '100%' }}
                 >
                     <thead className="bg-[#fcfcfa] font-ui text-[11px] font-black text-slate-500 uppercase tracking-[0.1em] sticky top-0 z-20 shadow-sm border-b border-stone/20">
                         <tr>
@@ -562,10 +562,11 @@ const ShipmentList = () => {
                                     className={`px-3 py-2.5 bg-[#fcfcfa] border border-stone/20 cursor-move hover:bg-gold/5 transition-colors relative group ${col.align === 'center' ? 'text-center' : col.align === 'right' ? 'text-right' : ''}`}
                                     style={{
                                         width: columnWidths[col.id] || col.minWidth,
-                                        minWidth: col.id === 'actions' ? col.minWidth : '10px'
+                                        minWidth: columnWidths[col.id] || col.minWidth,
+                                        maxWidth: columnWidths[col.id] || col.minWidth
                                     }}
                                 >
-                                    <div className={`flex items-center gap-1.5 ${col.align === 'center' ? 'justify-center' : col.align === 'right' ? 'justify-end' : ''}`}>
+                                    <div className={`flex min-w-0 items-center gap-1.5 ${col.align === 'center' ? 'justify-center' : col.align === 'right' ? 'justify-end' : ''}`}>
                                         {col.id !== 'actions' && (
                                             <span className="material-symbols-outlined text-[14px] opacity-20 group-hover:opacity-100 transition-opacity text-gold">drag_indicator</span>
                                         )}
@@ -577,10 +578,10 @@ const ShipmentList = () => {
                                     {col.id !== 'actions' && (
                                         <div
                                             onMouseDown={(e) => handleColumnResize(col.id, e)}
-                                            className="absolute right-0 top-0 bottom-0 w-6 cursor-col-resize hover:bg-primary/5 z-10 transition-colors group/resizer flex items-center justify-center translate-x-1/2"
+                                            className="absolute right-[-6px] top-0 bottom-0 z-20 flex w-4 cursor-col-resize items-center justify-center transition-colors group/resizer"
                                             title="Kéo để chỉnh kích thước"
                                         >
-                                            <div className="w-[3px] h-8 bg-stone/20 group-hover/resizer:bg-primary/50 transition-colors rounded-full" />
+                                            <div className="h-9 w-[3px] rounded-full bg-stone/25 transition-all group-hover/resizer:h-11 group-hover/resizer:bg-primary/60 group-active/resizer:bg-primary" />
                                         </div>
                                     )}
                                 </th>
@@ -599,13 +600,14 @@ const ShipmentList = () => {
                                     {renderedColumns.map((col) => {
                                         const cellStyle = {
                                             width: columnWidths[col.id] || col.minWidth,
-                                            minWidth: col.id === 'actions' ? col.minWidth : '10px'
+                                            minWidth: columnWidths[col.id] || col.minWidth,
+                                            maxWidth: columnWidths[col.id] || col.minWidth
                                         };
 
                                         if (col.id === 'shipment_number') return (
-                                            <td key={col.id} style={cellStyle} className="px-3 py-2.5 border border-stone/20">
-                                                <div className="flex items-center gap-1 group/copy">
-                                                    <span className="font-black text-primary text-[13px] tracking-tight truncate">{shp.shipment_number}</span>
+                                            <td key={col.id} style={cellStyle} className="overflow-hidden px-3 py-2.5 border border-stone/20">
+                                                <div className="flex min-w-0 items-center gap-1 group/copy">
+                                                    <span className="min-w-0 truncate font-black text-primary text-[13px] tracking-tight">{shp.shipment_number}</span>
                                                     <button onClick={(e) => handleCopy(shp.shipment_number, e)}
                                                         className={`shrink-0 transition-all ${copiedText === shp.shipment_number ? 'text-green-500' : 'text-stone/20 hover:text-gold opacity-0 group-hover/copy:opacity-100'}`}>
                                                         <span className="material-symbols-outlined text-[14px]">{copiedText === shp.shipment_number ? 'check_circle' : 'content_copy'}</span>
@@ -616,27 +618,27 @@ const ShipmentList = () => {
                                         );
 
                                         if (col.id === 'order_code') return (
-                                            <td key={col.id} style={cellStyle} className="px-3 py-2.5 border border-stone/20">
+                                            <td key={col.id} style={cellStyle} className="overflow-hidden px-3 py-2.5 border border-stone/20">
                                                 <span className="font-bold text-primary text-[12px] truncate">{shp.order_code || shp.order?.order_number || '-'}</span>
                                             </td>
                                         );
 
                                         if (col.id === 'carrier_name') return (
-                                            <td key={col.id} style={cellStyle} className="px-3 py-2.5 border border-stone/20">
+                                            <td key={col.id} style={cellStyle} className="overflow-hidden px-3 py-2.5 border border-stone/20">
                                                 <span className="text-[12px] font-bold text-stone-700 truncate">{shp.carrier_name || shp.carrier?.name || '-'}</span>
                                             </td>
                                         );
 
                                         if (col.id === 'customer_name') return (
-                                            <td key={col.id} style={cellStyle} className="px-3 py-2.5 border border-stone/20">
+                                            <td key={col.id} style={cellStyle} className="overflow-hidden px-3 py-2.5 border border-stone/20">
                                                 <span className="font-bold text-primary text-[13px] truncate block">{shp.customer_name || shp.order?.customer_name || '-'}</span>
                                             </td>
                                         );
 
                                         if (col.id === 'customer_phone') return (
-                                            <td key={col.id} style={cellStyle} className="px-3 py-2.5 border border-stone/20">
-                                                <div className="flex items-center gap-1 group/phone">
-                                                    <span className="text-[13px] font-bold text-stone/80 truncate">{shp.customer_phone || shp.order?.customer_phone || '-'}</span>
+                                            <td key={col.id} style={cellStyle} className="overflow-hidden px-3 py-2.5 border border-stone/20">
+                                                <div className="flex min-w-0 items-center gap-1 group/phone">
+                                                    <span className="min-w-0 truncate text-[13px] font-bold text-stone/80">{shp.customer_phone || shp.order?.customer_phone || '-'}</span>
                                                     {(shp.customer_phone || shp.order?.customer_phone) && (
                                                         <button onClick={(e) => handleCopy(shp.customer_phone || shp.order?.customer_phone, e)}
                                                             className={`shrink-0 transition-all ${copiedText === (shp.customer_phone || shp.order?.customer_phone) ? 'text-green-500' : 'text-stone/20 hover:text-gold opacity-0 group-hover/phone:opacity-100'}`}>
@@ -648,11 +650,11 @@ const ShipmentList = () => {
                                         );
 
                                         if (col.id === 'shipment_status') return (
-                                            <td key={col.id} style={cellStyle} className="px-3 py-2.5 border border-stone/20 text-center relative">
+                                            <td key={col.id} style={cellStyle} className="overflow-hidden px-3 py-2.5 border border-stone/20 text-center relative">
                                                 <button data-status-btn onClick={(e) => { e.stopPropagation(); setStatusMenuId(statusMenuId === shp.id ? null : shp.id); }}
-                                                    className="inline-flex items-center gap-1 rounded-md transition-all hover:ring-2 hover:ring-offset-1 active:scale-95 cursor-pointer"
+                                                    className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-md transition-all hover:ring-2 hover:ring-offset-1 active:scale-95 cursor-pointer"
                                                     style={{ backgroundColor: `${st.color}12`, color: st.color, borderColor: `${st.color}30`, border: '1px solid' }}>
-                                                    <span className="px-2 py-1 text-[10px] font-black tracking-wider whitespace-nowrap">{st.label}</span>
+                                                    <span className="max-w-full truncate px-2 py-1 text-[10px] font-black tracking-wider">{st.label}</span>
                                                     <span className={`material-symbols-outlined text-[14px] mr-1 transition-all ${statusMenuId === shp.id ? 'rotate-180' : 'opacity-40'}`}>expand_more</span>
                                                 </button>
                                                 {statusMenuId === shp.id && (
@@ -684,11 +686,11 @@ const ShipmentList = () => {
                                         );
 
                                         if (col.id === 'reconciliation_status') return (
-                                            <td key={col.id} style={cellStyle} className="px-3 py-2.5 border border-stone/20 text-center"><StatusBadge code={shp.reconciliation_status} list={RECONCILIATION_STATUSES} /></td>
+                                            <td key={col.id} style={cellStyle} className="overflow-hidden px-3 py-2.5 border border-stone/20 text-center"><StatusBadge code={shp.reconciliation_status} list={RECONCILIATION_STATUSES} className="mx-auto" /></td>
                                         );
 
                                         if (col.id === 'created_at') return (
-                                            <td key={col.id} style={cellStyle} className="px-3 py-2.5 border border-stone/20 text-stone text-[13px]">
+                                            <td key={col.id} style={cellStyle} className="overflow-hidden px-3 py-2.5 border border-stone/20 text-stone text-[13px]">
                                                 <div className="flex flex-col"><span>{fmtDate(shp.created_at)}</span></div>
                                             </td>
                                         );

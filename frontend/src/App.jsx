@@ -41,6 +41,7 @@ import BlogList from './pages/admin/BlogList';
 import BlogForm from './pages/admin/BlogForm';
 import BlogImport from './pages/admin/BlogImport';
 import SiteSettings from './pages/admin/SiteSettings';
+import ShippingSettingsPage from './pages/admin/ShippingSettingsPage';
 import UserList from './pages/admin/UserList';
 import OrderStatusSettings from './pages/admin/OrderStatusSettings';
 import LeadList from './pages/admin/LeadList';
@@ -151,10 +152,11 @@ function App() {
                 <Route path="blog/import" element={<BlogImport />} />
                 <Route path="blog/edit/:id" element={<BlogForm />} />
                 <Route path="settings" element={<SiteSettings />} />
+                <Route path="shipping-settings" element={<ShippingSettingsPage />} />
                 <Route path="users" element={<UserList />} />
                 <Route path="reports" element={<ReportDashboard />} />
                 <Route path="order-status-settings" element={<OrderStatusSettings />} />
-                <Route path="carrier-mappings" element={<Navigate to="/admin/settings?tab=shipping&shippingTab=mapping" replace />} />
+                <Route path="carrier-mappings" element={<Navigate to="/admin/shipping-settings?tab=mapping" replace />} />
                 <Route path="orders/:id" element={<OrderDetail />} />
               </Route>
             </Routes>

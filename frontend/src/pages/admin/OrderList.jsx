@@ -1025,10 +1025,9 @@ const OrderList = () => {
                                 onClick={openDispatchModal}
                                 disabled={selectedIds.length === 0}
                                 title="Gửi đơn vị vận chuyển"
-                                className={`h-9 px-3 rounded-sm border flex items-center gap-2 text-[12px] font-black uppercase tracking-wide transition-all ${selectedIds.length > 0 ? 'bg-primary text-white border-primary hover:bg-primary/90' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}
+                                className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary text-white border-primary hover:bg-primary/90' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}
                             >
                                 <span className="material-symbols-outlined text-[18px]">local_shipping</span>
-                                Gửi vận chuyển
                             </button>
                         )}
 

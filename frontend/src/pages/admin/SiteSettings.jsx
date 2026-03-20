@@ -5,7 +5,6 @@ import { useUI } from '../../context/UIContext';
 import { createDefaultHeaderMenus, normalizeHeaderMenus } from '../../utils/headerSettings';
 import { createDefaultFooterMenuGroups, normalizeFooterMenuGroups } from '../../utils/footerSettings';
 import { useSearchParams } from 'react-router-dom';
-import ShippingSettingsPanel from '../../components/admin/ShippingSettingsPanel';
 
 const defaultSettings = {
     site_name: '',
@@ -185,8 +184,7 @@ const SiteSettings = () => {
     const [searchParams, setSearchParams] = useSearchParams();
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'contact');
-    const [shippingSubTab, setShippingSubTab] = useState(searchParams.get('shippingTab') || 'integrations');
+    const [activeTab, setActiveTab] = useState(searchParams.get('tab') === 'shipping' ? 'contact' : (searchParams.get('tab') || 'contact'));
     const [settings, setSettings] = useState(defaultSettings);
     const [domains, setDomains] = useState([]);
     const [newDomain, setNewDomain] = useState('');
@@ -255,10 +253,9 @@ const SiteSettings = () => {
     useEffect(() => {
         const next = new URLSearchParams(searchParams);
         next.set('tab', activeTab);
-        if (activeTab === 'shipping') next.set('shippingTab', shippingSubTab);
-        else next.delete('shippingTab');
+        next.delete('shippingTab');
         setSearchParams(next, { replace: true });
-    }, [activeTab, searchParams, setSearchParams, shippingSubTab]);
+    }, [activeTab, searchParams, setSearchParams]);
 
     const handleChange = (e) => {
         const { name, value } = e.target;
@@ -625,7 +622,6 @@ const SiteSettings = () => {
         { id: 'domains', title: 'Quản lý tên miền', icon: 'language' },
         { id: 'bank', title: 'Cài đặt STK', icon: 'account_balance' },
         { id: 'quote', title: 'Báo giá', icon: 'image' },
-        { id: 'shipping', title: 'Cài đặt vận chuyển', icon: 'local_shipping' },
     ];
 
     return (
@@ -645,7 +641,7 @@ const SiteSettings = () => {
                     <p className="text-[10px] font-black text-primary/40 uppercase tracking-[0.2em] mt-1 italic font-sans">Quản lý liên hệ, thanh toán và mẫu báo giá</p>
                 </div>
 
-                {activeTab !== 'domains' && activeTab !== 'shipping' && (
+                {activeTab !== 'domains' && (
                     <button
                         onClick={handleSubmit}
                         disabled={saving}
@@ -1435,12 +1431,6 @@ const SiteSettings = () => {
                         </div>
                     )}
 
-                    {activeTab === 'shipping' && (
-                        <ShippingSettingsPanel
-                            initialTab={shippingSubTab}
-                            onTabChange={setShippingSubTab}
-                        />
-                    )}
                 </div>
             </div>
         </div>

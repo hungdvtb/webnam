@@ -64,6 +64,10 @@ const ShippingSettingsPanel = ({ initialTab = 'integrations', onTabChange }) => 
     }, [activeTab, onTabChange]);
 
     useEffect(() => {
+        setActiveTab((current) => (current === initialTab ? current : initialTab));
+    }, [initialTab]);
+
+    useEffect(() => {
         const fetchSettings = async () => {
             setLoading(true);
             try {
@@ -188,8 +192,8 @@ const ShippingSettingsPanel = ({ initialTab = 'integrations', onTabChange }) => 
     }
 
     return (
-        <div className="space-y-6">
-            <div className="flex gap-6 border-b border-primary/10">
+        <div className="flex h-full min-h-0 flex-col">
+            <div className="shrink-0 flex gap-6 border-b border-primary/10">
                 {tabs.map((tab) => (
                     <button
                         key={tab.id}
@@ -205,6 +209,9 @@ const ShippingSettingsPanel = ({ initialTab = 'integrations', onTabChange }) => 
                     </button>
                 ))}
             </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                <div className="space-y-6 pb-6 pt-6">
 
             {message && (
                 <div className={`rounded-sm border px-4 py-3 text-[13px] font-bold ${
@@ -431,6 +438,8 @@ const ShippingSettingsPanel = ({ initialTab = 'integrations', onTabChange }) => 
                     </SectionCard>
                 </div>
             )}
+                </div>
+            </div>
         </div>
     );
 };

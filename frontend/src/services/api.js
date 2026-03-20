@@ -83,7 +83,7 @@ export const accountApi = {
 };
 
 export const warehouseApi = {
-    getAll: () => api.get('/warehouses'),
+    getAll: (params) => api.get('/warehouses', params ? { params } : {}),
     getOne: (id) => api.get(`/warehouses/${id}`),
     store: (data) => api.post('/warehouses', data),
     update: (id, data) => api.put(`/warehouses/${id}`, data),

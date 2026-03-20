@@ -30,25 +30,55 @@ class ViettelPostAddressService
         $districtName = trim((string) Arr::get($address, 'district'));
         $wardName = trim((string) Arr::get($address, 'ward'));
 
-        if ($provinceName === '' || $districtName === '' || $wardName === '') {
-            throw new RuntimeException('Thiếu tỉnh/huyện/xã để map địa chỉ ViettelPost.');
+        if ($provinceName === '' || $wardName === '') {
+            throw new RuntimeException('Thieu tinh/thanh va phuong/xa de map dia chi ViettelPost.');
         }
 
-        $province = $this->matchByName($this->getProvinces($integration), $provinceName, ['PROVINCE_NAME', 'provinceName', 'name']);
+        $province = $this->matchByName(
+            $this->getProvinces($integration),
+            $provinceName,
+            ['PROVINCE_NAME', 'provinceName', 'name']
+        );
+
         if (!$province) {
-            throw new RuntimeException("Không map được tỉnh/thành ViettelPost cho '{$provinceName}'.");
+            throw new RuntimeException("Khong map duoc tinh/thanh ViettelPost cho '{$provinceName}'.");
         }
 
         $provinceId = (int) ($province['PROVINCE_ID'] ?? $province['provinceId'] ?? $province['id'] ?? 0);
-        $district = $this->matchByName($this->getDistricts($integration, $provinceId), $districtName, ['DISTRICT_NAME', 'districtName', 'name']);
+        $districts = $this->getDistricts($integration, $provinceId);
+
+        $district = $districtName !== ''
+            ? $this->matchByName($districts, $districtName, ['DISTRICT_NAME', 'districtName', 'name'])
+            : null;
+
         if (!$district) {
-            throw new RuntimeException("Không map được quận/huyện ViettelPost cho '{$districtName}'.");
+            $inferred = $this->inferDistrictFromWard($integration, $districts, $wardName);
+            $district = $inferred['district'] ?? null;
+        }
+
+        if (!$district) {
+            $districtLabel = $districtName !== '' ? $districtName : "xa/phuong '{$wardName}'";
+            throw new RuntimeException("Khong map duoc quan/huyen ViettelPost cho {$districtLabel}.");
         }
 
         $districtId = (int) ($district['DISTRICT_ID'] ?? $district['districtId'] ?? $district['id'] ?? 0);
-        $ward = $this->matchByName($this->getWards($integration, $districtId), $wardName, ['WARDS_NAME', 'wardName', 'name']);
+        $ward = $this->matchByName(
+            $this->getWards($integration, $districtId),
+            $wardName,
+            ['WARDS_NAME', 'wardName', 'name']
+        );
+
         if (!$ward) {
-            throw new RuntimeException("Không map được phường/xã ViettelPost cho '{$wardName}'.");
+            $inferred = $this->inferDistrictFromWard($integration, [$district], $wardName);
+            if ($inferred) {
+                $district = $inferred['district'];
+                $districtId = (int) ($district['DISTRICT_ID'] ?? $district['districtId'] ?? $district['id'] ?? 0);
+                $ward = $inferred['ward'];
+            }
+        }
+
+        if (!$ward) {
+            throw new RuntimeException("Khong map duoc phuong/xa ViettelPost cho '{$wardName}'.");
         }
 
         return [
@@ -88,6 +118,31 @@ class ViettelPostAddressService
         );
     }
 
+    private function inferDistrictFromWard(ShippingIntegration $integration, array $districts, string $wardName): ?array
+    {
+        foreach ($districts as $district) {
+            $districtId = (int) ($district['DISTRICT_ID'] ?? $district['districtId'] ?? $district['id'] ?? 0);
+            if ($districtId <= 0) {
+                continue;
+            }
+
+            $ward = $this->matchByName(
+                $this->getWards($integration, $districtId),
+                $wardName,
+                ['WARDS_NAME', 'wardName', 'name']
+            );
+
+            if ($ward) {
+                return [
+                    'district' => $district,
+                    'ward' => $ward,
+                ];
+            }
+        }
+
+        return null;
+    }
+
     private function matchByName(array $items, string $expected, array $keys): ?array
     {
         $normalizedExpected = $this->normalize($expected);
@@ -104,7 +159,15 @@ class ViettelPostAddressService
         foreach ($items as $item) {
             foreach ($keys as $key) {
                 $candidate = trim((string) ($item[$key] ?? ''));
-                if ($candidate !== '' && str_contains($this->normalize($candidate), $normalizedExpected)) {
+                if ($candidate === '') {
+                    continue;
+                }
+
+                $normalizedCandidate = $this->normalize($candidate);
+                if (
+                    str_contains($normalizedCandidate, $normalizedExpected)
+                    || str_contains($normalizedExpected, $normalizedCandidate)
+                ) {
                     return $item;
                 }
             }
@@ -118,6 +181,7 @@ class ViettelPostAddressService
         return Str::of(Str::ascii($value))
             ->lower()
             ->replace(['-', ',', '.'], ' ')
+            ->replaceMatches('/\b(thanh pho|tp|tinh|quan|q|huyen|h|thi xa|tx|thi tran|tt|phuong|p|xa|x)\b/u', ' ')
             ->replaceMatches('/\s+/', ' ')
             ->trim()
             ->value();

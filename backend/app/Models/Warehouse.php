@@ -17,6 +17,12 @@ class Warehouse extends Model
         'email',
         'address',
         'city',
+        'province_name',
+        'district_name',
+        'ward_name',
+        'province_id',
+        'district_id',
+        'ward_id',
         'is_active',
     ];
 
@@ -28,5 +34,10 @@ class Warehouse extends Model
     public function inventoryItems()
     {
         return $this->hasMany(InventoryItem::class);
+    }
+
+    public function shippingIntegrations()
+    {
+        return $this->hasMany(ShippingIntegration::class, 'default_warehouse_id');
     }
 }

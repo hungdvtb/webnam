@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { orderApi, attributeApi, orderStatusApi, default as api } from '../../services/api';
+import { orderApi, attributeApi, orderStatusApi, warehouseApi, default as api } from '../../services/api';
 import { useNavigate, Link } from 'react-router-dom';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
@@ -312,8 +312,11 @@ const ShippingAlertsPopover = ({ alerts, unreadCount, onClose, onOpenOrder, onMa
 const ShippingDispatchModal = ({
     open,
     carriers,
+    warehouses,
     carrierCode,
     onCarrierChange,
+    warehouseId,
+    onWarehouseChange,
     preview,
     loadingPreview,
     submitting,
@@ -325,7 +328,7 @@ const ShippingDispatchModal = ({
     return createPortal(
         <div className="fixed inset-0 z-[120] flex items-center justify-center p-6">
             <div className="absolute inset-0 bg-primary/40 backdrop-blur-[2px]" onClick={onClose} />
-            <div className="relative w-full max-w-3xl rounded-sm bg-white shadow-2xl border border-primary/10 overflow-hidden">
+            <div className="relative w-full max-w-4xl rounded-sm bg-white shadow-2xl border border-primary/10 overflow-hidden">
                 <div className="px-6 py-4 border-b border-primary/10 flex items-center justify-between gap-4 bg-primary/[0.02]">
                     <div>
                         <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/40">Gửi đơn vị vận chuyển</p>
@@ -336,22 +339,63 @@ const ShippingDispatchModal = ({
                     </button>
                 </div>
                 <div className="p-6 space-y-5">
-                    <div>
-                        <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Đơn vị vận chuyển</label>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                            {carriers.map((carrier) => (
-                                <button
-                                    key={carrier.carrier_code}
-                                    type="button"
-                                    onClick={() => onCarrierChange(carrier.carrier_code)}
-                                    className={`rounded-sm border px-4 py-3 text-left transition-all ${
-                                        carrierCode === carrier.carrier_code ? 'border-primary bg-primary/[0.04] shadow-sm' : 'border-primary/10 hover:border-primary/30'
-                                    }`}
-                                >
-                                    <p className="text-[13px] font-black text-primary">{carrier.carrier_name}</p>
-                                    <p className="text-[11px] text-primary/40 mt-1">{carrier.webhook_url || 'Đã kết nối API'}</p>
-                                </button>
-                            ))}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Đơn vị vận chuyển</label>
+                            <div className="grid grid-cols-1 gap-3">
+                                {carriers.map((carrier) => (
+                                    <button
+                                        key={carrier.carrier_code}
+                                        type="button"
+                                        onClick={() => onCarrierChange(carrier.carrier_code)}
+                                        className={`rounded-sm border px-4 py-3 text-left transition-all ${
+                                            carrierCode === carrier.carrier_code ? 'border-primary bg-primary/[0.04] shadow-sm' : 'border-primary/10 hover:border-primary/30'
+                                        }`}
+                                    >
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div>
+                                                <p className="text-[13px] font-black text-primary">{carrier.carrier_name}</p>
+                                                <p className="text-[11px] text-primary/40 mt-1">{carrier.webhook_url || 'Đã kết nối API'}</p>
+                                            </div>
+                                            {carrier.default_warehouse_name && (
+                                                <span className="px-2 py-1 rounded-full bg-primary/[0.06] text-primary text-[10px] font-black">
+                                                    {carrier.default_warehouse_name}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        <div>
+                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Kho gửi hàng</label>
+                            <select
+                                value={warehouseId || ''}
+                                onChange={(e) => onWarehouseChange(e.target.value)}
+                                className="w-full h-11 rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary"
+                            >
+                                <option value="">Dùng kho mặc định đã cấu hình</option>
+                                {warehouses.map((warehouse) => (
+                                    <option key={warehouse.id} value={warehouse.id}>
+                                        {warehouse.name}{warehouse.is_active ? '' : ' (Tạm ngưng)'}
+                                    </option>
+                                ))}
+                            </select>
+                            <div className="mt-3 rounded-sm border border-primary/10 bg-white px-4 py-3 min-h-[92px]">
+                                {preview?.warehouse ? (
+                                    <>
+                                        <p className="text-[13px] font-black text-primary">{preview.warehouse.name}</p>
+                                        <p className="text-[12px] text-primary/60 mt-1">
+                                            {preview.warehouse.contact_name || 'Chưa có người phụ trách'}{preview.warehouse.phone ? ` - ${preview.warehouse.phone}` : ''}
+                                        </p>
+                                        <p className="text-[12px] text-primary/50 mt-1">
+                                            {preview.warehouse.address || 'Chưa có địa chỉ'}{preview.warehouse.address ? ' - ' : ''}{[preview.warehouse.ward_name, preview.warehouse.district_name, preview.warehouse.province_name].filter(Boolean).join(', ')}
+                                        </p>
+                                    </>
+                                ) : (
+                                    <p className="text-[12px] text-primary/45 font-bold">Chưa chọn kho override. Hệ thống sẽ dùng kho mặc định của đơn vị vận chuyển nếu đã cấu hình.</p>
+                                )}
+                            </div>
                         </div>
                     </div>
                     <div className="rounded-sm border border-primary/10 bg-[#fcfcfa] p-4">
@@ -471,6 +515,8 @@ const OrderList = () => {
     const [dispatchSubmitting, setDispatchSubmitting] = useState(false);
     const [connectedCarriers, setConnectedCarriers] = useState([]);
     const [selectedCarrierCode, setSelectedCarrierCode] = useState('');
+    const [dispatchWarehouses, setDispatchWarehouses] = useState([]);
+    const [selectedWarehouseId, setSelectedWarehouseId] = useState('');
     const [searchHistory, setSearchHistory] = useState(() => {
         const saved = localStorage.getItem('order_search_history');
         return saved ? JSON.parse(saved) : [];
@@ -697,6 +743,15 @@ const OrderList = () => {
     }, [fetchShippingAlerts]);
 
     useEffect(() => {
+        if (!dispatchModalOpen || !selectedCarrierCode) return;
+        const activeCarrier = connectedCarriers.find((carrier) => carrier.carrier_code === selectedCarrierCode);
+        setSelectedWarehouseId((current) => {
+            if (current) return current;
+            return activeCarrier?.default_warehouse_id ? String(activeCarrier.default_warehouse_id) : '';
+        });
+    }, [dispatchModalOpen, selectedCarrierCode, connectedCarriers]);
+
+    useEffect(() => {
         if (!dispatchModalOpen || !selectedCarrierCode || selectedIds.length === 0) return;
 
         const loadPreview = async () => {
@@ -705,6 +760,7 @@ const OrderList = () => {
                 const response = await orderApi.dispatchPreview({
                     order_ids: selectedIds,
                     carrier_code: selectedCarrierCode,
+                    warehouse_id: selectedWarehouseId || null,
                 });
                 setDispatchPreview(response.data);
             } catch (error) {
@@ -719,7 +775,7 @@ const OrderList = () => {
         };
 
         loadPreview();
-    }, [dispatchModalOpen, selectedCarrierCode, selectedIds]);
+    }, [dispatchModalOpen, selectedCarrierCode, selectedIds, selectedWarehouseId]);
 
     const handleTempFilterChange = (e) => {
         const { name, value } = e.target;
@@ -776,17 +832,30 @@ const OrderList = () => {
 
     const handleRefresh = () => fetchOrders(1);
 
+    const handleDispatchCarrierChange = (carrierCode) => {
+        setSelectedCarrierCode(carrierCode);
+        const nextCarrier = connectedCarriers.find((carrier) => carrier.carrier_code === carrierCode);
+        setSelectedWarehouseId(nextCarrier?.default_warehouse_id ? String(nextCarrier.default_warehouse_id) : '');
+    };
+
     const openDispatchModal = async () => {
         if (!selectedIds.length) return;
         try {
-            const response = await orderApi.getConnectedCarriers();
-            const carriers = response.data || [];
+            const [carrierResponse, warehouseResponse] = await Promise.all([
+                orderApi.getConnectedCarriers(),
+                warehouseApi.getAll({ active_only: 1 }),
+            ]);
+            const carriers = carrierResponse.data || [];
+            const warehouses = warehouseResponse.data || [];
             setConnectedCarriers(carriers);
+            setDispatchWarehouses(warehouses);
             if (!carriers.length) {
                 setNotification({ type: 'error', message: 'Chưa có đơn vị vận chuyển nào được kết nối API.' });
                 return;
             }
-            setSelectedCarrierCode((current) => current || carriers[0].carrier_code);
+            const fallbackCarrier = carriers.find((carrier) => carrier.carrier_code === selectedCarrierCode) || carriers[0];
+            setSelectedCarrierCode(fallbackCarrier.carrier_code);
+            setSelectedWarehouseId(fallbackCarrier.default_warehouse_id ? String(fallbackCarrier.default_warehouse_id) : '');
             setDispatchModalOpen(true);
         } catch (error) {
             setNotification({ type: 'error', message: error.response?.data?.message || 'Không thể tải danh sách đơn vị vận chuyển.' });
@@ -797,6 +866,7 @@ const OrderList = () => {
         setDispatchModalOpen(false);
         setDispatchPreview(null);
         setDispatchPreviewLoading(false);
+        setSelectedWarehouseId('');
     };
 
     const handleDispatchOrders = async () => {
@@ -806,6 +876,7 @@ const OrderList = () => {
             const response = await orderApi.dispatch({
                 order_ids: selectedIds,
                 carrier_code: selectedCarrierCode,
+                warehouse_id: selectedWarehouseId || null,
             });
             const { success_count = 0, failed_count = 0 } = response.data || {};
             setNotification({
@@ -1561,8 +1632,11 @@ const OrderList = () => {
             <ShippingDispatchModal
                 open={dispatchModalOpen}
                 carriers={connectedCarriers}
+                warehouses={dispatchWarehouses}
                 carrierCode={selectedCarrierCode}
-                onCarrierChange={setSelectedCarrierCode}
+                onCarrierChange={handleDispatchCarrierChange}
+                warehouseId={selectedWarehouseId}
+                onWarehouseChange={setSelectedWarehouseId}
                 preview={dispatchPreview}
                 loadingPreview={dispatchPreviewLoading}
                 submitting={dispatchSubmitting}

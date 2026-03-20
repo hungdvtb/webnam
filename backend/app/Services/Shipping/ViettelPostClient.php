@@ -5,7 +5,6 @@ namespace App\Services\Shipping;
 use App\Models\ShippingIntegration;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Arr;
-use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -56,66 +55,26 @@ class ViettelPostClient
 
     public function authenticate(ShippingIntegration $integration, bool $forceRefresh = false): string
     {
-        if (!$forceRefresh && $integration->access_token && $integration->token_expires_at && $integration->token_expires_at->isFuture()) {
-            return (string) $integration->access_token;
+        $authMode = (string) data_get($integration->config_json, 'auth_mode', 'api_key');
+
+        if ($authMode !== 'api_key') {
+            throw new RuntimeException('Che do dang nhap username/password da duoc tat. Vui long dung API key / token ViettelPost.');
         }
 
-        $username = trim((string) $integration->username);
-        $password = trim((string) $this->decryptPassword($integration));
-
-        if ($username === '' || $password === '') {
-            throw new RuntimeException('Thiếu tài khoản hoặc mật khẩu ViettelPost.');
+        $token = trim((string) $integration->access_token);
+        if ($token === '') {
+            throw new RuntimeException('Chua cau hinh API key / token ViettelPost.');
         }
 
-        $login = $this->baseRequest($integration)
-            ->post($this->buildUrl($integration, '/v2/user/Login'), [
-                'USERNAME' => $username,
-                'PASSWORD' => $password,
-            ])
-            ->throw()
-            ->json();
-
-        $tempToken = $this->extractToken($login);
-        if (!$tempToken) {
-            throw new RuntimeException('Không lấy được token tạm từ ViettelPost.');
+        if ($integration->connection_status !== 'connected' || $forceRefresh) {
+            $integration->forceFill([
+                'connection_status' => 'connected',
+                'last_tested_at' => now(),
+                'last_error_message' => null,
+            ])->save();
         }
 
-        $ownerConnect = $this->baseRequest($integration)
-            ->withHeaders(['Token' => $tempToken])
-            ->post($this->buildUrl($integration, '/v2/user/ownerconnect'), [
-                'USERNAME' => $username,
-                'PASSWORD' => $password,
-            ])
-            ->throw()
-            ->json();
-
-        $accessToken = $this->extractToken($ownerConnect);
-        if (!$accessToken) {
-            throw new RuntimeException('Không lấy được access token ViettelPost.');
-        }
-
-        $integration->forceFill([
-            'access_token' => $accessToken,
-            'token_expires_at' => now()->addHours(20),
-            'connection_status' => 'connected',
-            'last_tested_at' => now(),
-            'last_error_message' => null,
-        ])->save();
-
-        return $accessToken;
-    }
-
-    public function decryptPassword(ShippingIntegration $integration): string
-    {
-        if (!$integration->password_encrypted) {
-            return '';
-        }
-
-        try {
-            return (string) Crypt::decryptString($integration->password_encrypted);
-        } catch (\Throwable $e) {
-            return (string) $integration->password_encrypted;
-        }
+        return $token;
     }
 
     public function request(ShippingIntegration $integration, string $method, string $path, array $payload = [], ?string $token = null): array
@@ -138,11 +97,11 @@ class ViettelPostClient
                 ?: Arr::get($json, 'error')
                 ?: Arr::get($json, 'status')
                 ?: $response->body();
-            throw new RuntimeException('ViettelPost API lỗi: ' . $message);
+            throw new RuntimeException('ViettelPost API loi: ' . $message);
         }
 
         if ((int) Arr::get($json, 'status') >= 400) {
-            $message = Arr::get($json, 'message') ?: Arr::get($json, 'error') ?: 'Phản hồi không hợp lệ từ ViettelPost.';
+            $message = Arr::get($json, 'message') ?: Arr::get($json, 'error') ?: 'Phan hoi khong hop le tu ViettelPost.';
             throw new RuntimeException($message);
         }
 
@@ -192,6 +151,9 @@ class ViettelPostClient
     {
         return Http::acceptJson()
             ->asJson()
+            ->withOptions([
+                'verify' => $this->resolveVerifyOption($integration),
+            ])
             ->timeout((int) data_get($integration->config_json, 'timeout', 30))
             ->retry(1, 300);
     }
@@ -200,5 +162,38 @@ class ViettelPostClient
     {
         $base = rtrim((string) ($integration->api_base_url ?: 'https://partner.viettelpost.vn'), '/');
         return $base . '/' . ltrim($path, '/');
+    }
+
+    private function resolveVerifyOption(ShippingIntegration $integration): bool|string
+    {
+        $verifySsl = data_get($integration->config_json, 'verify_ssl');
+        if ($verifySsl === false || $verifySsl === 'false' || $verifySsl === 0 || $verifySsl === '0') {
+            return false;
+        }
+
+        $configuredBundle = data_get($integration->config_json, 'ca_bundle_path');
+        if (is_string($configuredBundle) && is_file($configuredBundle)) {
+            return $configuredBundle;
+        }
+
+        $envBundle = env('SHIPPING_CA_BUNDLE_PATH');
+        if (is_string($envBundle) && $envBundle !== '' && is_file($envBundle)) {
+            return $envBundle;
+        }
+
+        $candidates = array_filter([
+            'C:\\xampp\\apache\\bin\\curl-ca-bundle.crt',
+            'C:\\xampp\\php\\extras\\ssl\\cacert.pem',
+            ini_get('curl.cainfo') ?: null,
+            ini_get('openssl.cafile') ?: null,
+        ]);
+
+        foreach ($candidates as $candidate) {
+            if (is_string($candidate) && is_file($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return app()->environment('local') ? false : true;
     }
 }

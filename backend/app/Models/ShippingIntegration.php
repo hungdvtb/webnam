@@ -28,6 +28,7 @@ class ShippingIntegration extends Model
         'sender_ward_id',
         'default_service_code',
         'default_service_add',
+        'default_warehouse_id',
         'webhook_url',
         'config_json',
         'last_tested_at',
@@ -49,5 +50,10 @@ class ShippingIntegration extends Model
     public function shipments()
     {
         return $this->hasMany(Shipment::class, 'integration_id');
+    }
+
+    public function defaultWarehouse()
+    {
+        return $this->belongsTo(Warehouse::class, 'default_warehouse_id');
     }
 }

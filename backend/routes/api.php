@@ -56,11 +56,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/cart/update', [CartController::class , 'update']);
     Route::post('/cart/remove', [CartController::class , 'remove']);
 
-    // Order routes
-    Route::get('/orders', [OrderController::class , 'index']);
-    Route::get('/orders/{id}', [OrderController::class , 'show']);
-    Route::post('/orders', [OrderController::class , 'store']);
-
     // Admin Product routes
     Route::post('/products', [ProductController::class , 'store']);
     Route::delete('/products/bulk-delete', [ProductController::class , 'bulkDelete']);
@@ -120,20 +115,20 @@ Route::middleware('auth:sanctum')->group(function () {
     // Order management
     Route::get('/orders', [\App\Http\Controllers\Api\OrderController::class , 'index']);
     Route::post('/orders', [\App\Http\Controllers\Api\OrderController::class , 'store']);
-    Route::get('/orders/{id}', [\App\Http\Controllers\Api\OrderController::class , 'show']);
-    Route::put('/orders/{id}/status', [\App\Http\Controllers\Api\OrderController::class , 'updateStatus']);
-    Route::put('/orders/{id}', [\App\Http\Controllers\Api\OrderController::class , 'update']);
-    Route::delete('/orders/{id}', [\App\Http\Controllers\Api\OrderController::class , 'destroy']);
-    Route::post('/orders/{id}/duplicate', [\App\Http\Controllers\Api\OrderController::class , 'duplicate']);
-    Route::post('/orders/{id}/restore', [\App\Http\Controllers\Api\OrderController::class , 'restore']);
+    Route::get('/orders/connected-carriers', [\App\Http\Controllers\Api\OrderController::class , 'connectedCarriers']);
+    Route::get('/orders/shipping-alerts', [\App\Http\Controllers\Api\OrderController::class , 'shippingAlerts']);
+    Route::post('/orders/dispatch/preview', [\App\Http\Controllers\Api\OrderController::class , 'dispatchPreview']);
+    Route::post('/orders/dispatch', [\App\Http\Controllers\Api\OrderController::class , 'dispatch']);
+    Route::get('/orders/{id}', [\App\Http\Controllers\Api\OrderController::class , 'show'])->whereNumber('id');
+    Route::put('/orders/{id}/status', [\App\Http\Controllers\Api\OrderController::class , 'updateStatus'])->whereNumber('id');
+    Route::put('/orders/{id}', [\App\Http\Controllers\Api\OrderController::class , 'update'])->whereNumber('id');
+    Route::delete('/orders/{id}', [\App\Http\Controllers\Api\OrderController::class , 'destroy'])->whereNumber('id');
+    Route::post('/orders/{id}/duplicate', [\App\Http\Controllers\Api\OrderController::class , 'duplicate'])->whereNumber('id');
+    Route::post('/orders/{id}/restore', [\App\Http\Controllers\Api\OrderController::class , 'restore'])->whereNumber('id');
     Route::post('/orders/bulk-update', [\App\Http\Controllers\Api\OrderController::class , 'bulkUpdate']);
     Route::post('/orders/bulk-delete', [\App\Http\Controllers\Api\OrderController::class , 'bulkDelete']);
     Route::post('/orders/bulk-restore', [\App\Http\Controllers\Api\OrderController::class , 'bulkRestore']);
     Route::post('/orders/bulk-duplicate', [\App\Http\Controllers\Api\OrderController::class , 'bulkDuplicate']);
-    Route::post('/orders/dispatch/preview', [\App\Http\Controllers\Api\OrderController::class , 'dispatchPreview']);
-    Route::post('/orders/dispatch', [\App\Http\Controllers\Api\OrderController::class , 'dispatch']);
-    Route::get('/orders/shipping-alerts', [\App\Http\Controllers\Api\OrderController::class , 'shippingAlerts']);
-    Route::get('/orders/connected-carriers', [\App\Http\Controllers\Api\OrderController::class , 'connectedCarriers']);
 
     // Order Statuses
     Route::get('/order-statuses', [\App\Http\Controllers\Api\OrderStatusController::class , 'index']);
@@ -218,7 +213,7 @@ Route::middleware('auth:sanctum')->group(function () {
             $syncService = app(\App\Services\Shipping\ShipmentStatusSyncService::class);
             return response()->json($syncService->canManuallyEditOrderShipping($order));
         }
-        );
+        )->whereNumber('id');
 
         // Promotions & Marketing
         Route::get('/coupons', [\App\Http\Controllers\Api\CouponController::class , 'index']);

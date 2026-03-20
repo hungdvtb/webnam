@@ -3,9 +3,10 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Warehouse;
 use App\Models\InventoryItem;
+use App\Models\Warehouse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class WarehouseController extends Controller
 {
@@ -16,7 +17,13 @@ class WarehouseController extends Controller
             return response()->json(['message' => 'Account ID required'], 400);
         }
 
-        $warehouses = Warehouse::where('account_id', $accountId)->get();
+        $warehouses = Warehouse::query()
+            ->where('account_id', $accountId)
+            ->when($request->boolean('active_only'), fn ($query) => $query->where('is_active', true))
+            ->orderByDesc('is_active')
+            ->orderBy('name')
+            ->get();
+
         return response()->json($warehouses);
     }
 
@@ -35,6 +42,13 @@ class WarehouseController extends Controller
             'email' => 'nullable|email',
             'address' => 'nullable|string',
             'city' => 'nullable|string',
+            'province_name' => 'nullable|string|max:255',
+            'district_name' => 'nullable|string|max:255',
+            'ward_name' => 'nullable|string|max:255',
+            'province_id' => 'nullable|integer',
+            'district_id' => 'nullable|integer',
+            'ward_id' => 'nullable|integer',
+            'is_active' => 'nullable|boolean',
         ]);
 
         $warehouse = Warehouse::create(array_merge(
@@ -47,17 +61,28 @@ class WarehouseController extends Controller
 
     public function show($id)
     {
-        $warehouse = Warehouse::with('inventoryItems.product')->findOrFail($id);
+        $warehouse = $this->findWarehouse(request(), $id)->load('inventoryItems.product');
         return response()->json($warehouse);
     }
 
     public function update(Request $request, $id)
     {
-        $warehouse = Warehouse::findOrFail($id);
+        $warehouse = $this->findWarehouse($request, $id);
         
         $request->validate([
             'name' => 'sometimes|required|string|max:255',
-            'code' => 'sometimes|required|string|unique:warehouses,code,' . $id,
+            'code' => ['sometimes', 'required', 'string', Rule::unique('warehouses', 'code')->ignore($id)],
+            'contact_name' => 'nullable|string',
+            'phone' => 'nullable|string',
+            'email' => 'nullable|email',
+            'address' => 'nullable|string',
+            'city' => 'nullable|string',
+            'province_name' => 'nullable|string|max:255',
+            'district_name' => 'nullable|string|max:255',
+            'ward_name' => 'nullable|string|max:255',
+            'province_id' => 'nullable|integer',
+            'district_id' => 'nullable|integer',
+            'ward_id' => 'nullable|integer',
             'is_active' => 'boolean',
         ]);
 
@@ -65,15 +90,16 @@ class WarehouseController extends Controller
         return response()->json($warehouse);
     }
 
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
-        $warehouse = Warehouse::findOrFail($id);
+        $warehouse = $this->findWarehouse($request, $id);
         $warehouse->delete();
         return response()->json(['message' => 'Warehouse deleted']);
     }
 
     public function getInventory(Request $request, $id)
     {
+        $this->findWarehouse($request, $id);
         $inventory = InventoryItem::where('warehouse_id', $id)
             ->with('product')
             ->get();
@@ -82,6 +108,7 @@ class WarehouseController extends Controller
 
     public function updateInventory(Request $request, $id)
     {
+        $this->findWarehouse($request, $id);
         $request->validate([
             'product_id' => 'required|exists:products,id',
             'qty' => 'required|integer',
@@ -98,5 +125,15 @@ class WarehouseController extends Controller
         $product->update(['stock_quantity' => $totalStock]);
 
         return response()->json($inventory);
+    }
+
+    private function findWarehouse(Request $request, int|string $id): Warehouse
+    {
+        $accountId = $request->header('X-Account-Id');
+        abort_unless($accountId, 400, 'Account ID required');
+
+        return Warehouse::query()
+            ->where('account_id', $accountId)
+            ->findOrFail($id);
     }
 }

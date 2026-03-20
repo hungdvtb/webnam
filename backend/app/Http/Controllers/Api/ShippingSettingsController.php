@@ -5,20 +5,43 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Carrier;
 use App\Models\ShippingIntegration;
-use App\Services\Shipping\ViettelPostAddressService;
+use App\Models\Warehouse;
 use App\Services\Shipping\ViettelPostClient;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Crypt;
 
 class ShippingSettingsController extends Controller
 {
     public function index(Request $request)
     {
         $accountId = (int) $request->header('X-Account-Id');
+
         $integrations = ShippingIntegration::query()
             ->where('account_id', $accountId)
+            ->with('defaultWarehouse:id,name')
             ->get()
             ->keyBy('carrier_code');
+
+        $warehouses = Warehouse::query()
+            ->where('account_id', $accountId)
+            ->orderByDesc('is_active')
+            ->orderBy('name')
+            ->get([
+                'id',
+                'name',
+                'code',
+                'contact_name',
+                'phone',
+                'email',
+                'address',
+                'city',
+                'province_name',
+                'district_name',
+                'ward_name',
+                'province_id',
+                'district_id',
+                'ward_id',
+                'is_active',
+            ]);
 
         $carriers = Carrier::query()
             ->orderBy('sort_order')
@@ -27,6 +50,11 @@ class ShippingSettingsController extends Controller
             ->map(function (Carrier $carrier) use ($integrations) {
                 $integration = $integrations->get($carrier->code);
                 $config = (array) ($integration?->config_json ?? []);
+                $effectiveStatus = $integration?->connection_status ?? 'disconnected';
+                $hasApiKey = (bool) $integration?->access_token;
+                if (($integration?->is_enabled ?? false) && $hasApiKey && $effectiveStatus === 'disconnected') {
+                    $effectiveStatus = 'configured';
+                }
 
                 return [
                     'carrier_code' => $carrier->code,
@@ -37,10 +65,10 @@ class ShippingSettingsController extends Controller
                     'supports_api' => $carrier->code === 'viettel_post',
                     'integration' => [
                         'is_enabled' => (bool) ($integration?->is_enabled ?? false),
-                        'connection_status' => $integration?->connection_status ?? 'disconnected',
+                        'connection_status' => $effectiveStatus,
                         'api_base_url' => $integration?->api_base_url ?: 'https://partner.viettelpost.vn',
-                        'username' => $integration?->username,
-                        'has_password' => (bool) $integration?->password_encrypted,
+                        'auth_mode' => $config['auth_mode'] ?? 'api_key',
+                        'has_api_key' => $hasApiKey,
                         'sender_name' => $integration?->sender_name,
                         'sender_phone' => $integration?->sender_phone,
                         'sender_address' => $integration?->sender_address,
@@ -52,6 +80,8 @@ class ShippingSettingsController extends Controller
                         'sender_ward_id' => $integration?->sender_ward_id,
                         'default_service_code' => $integration?->default_service_code,
                         'default_service_add' => $integration?->default_service_add,
+                        'default_warehouse_id' => $integration?->default_warehouse_id,
+                        'default_warehouse_name' => $integration?->defaultWarehouse?->name,
                         'webhook_url' => $integration?->webhook_url,
                         'last_tested_at' => optional($integration?->last_tested_at)?->format('Y-m-d H:i:s'),
                         'last_error_message' => $integration?->last_error_message,
@@ -62,22 +92,20 @@ class ShippingSettingsController extends Controller
 
         return response()->json([
             'carriers' => $carriers,
+            'warehouses' => $warehouses,
         ]);
     }
 
-    public function updateIntegration(
-        Request $request,
-        string $carrierCode,
-        ViettelPostAddressService $addressService
-    ) {
+    public function updateIntegration(Request $request, string $carrierCode)
+    {
         $accountId = (int) $request->header('X-Account-Id');
         $carrier = Carrier::query()->where('code', $carrierCode)->firstOrFail();
 
         $validated = $request->validate([
             'is_enabled' => 'nullable|boolean',
             'api_base_url' => 'nullable|url',
-            'username' => 'nullable|string|max:255',
-            'password' => 'nullable|string|max:255',
+            'auth_mode' => 'nullable|string|in:api_key',
+            'api_key' => 'nullable|string|max:4000',
             'sender_name' => 'nullable|string|max:255',
             'sender_phone' => 'nullable|string|max:30',
             'sender_address' => 'nullable|string',
@@ -86,6 +114,7 @@ class ShippingSettingsController extends Controller
             'sender_ward_name' => 'nullable|string|max:255',
             'default_service_code' => 'nullable|string|max:30',
             'default_service_add' => 'nullable|string|max:50',
+            'default_warehouse_id' => 'nullable|integer',
             'webhook_url' => 'nullable|url',
         ]);
 
@@ -100,45 +129,70 @@ class ShippingSettingsController extends Controller
                 $configJson[$key] = $validated[$key];
             }
         }
+        $configJson['auth_mode'] = $validated['auth_mode'] ?? ($configJson['auth_mode'] ?? 'api_key');
+
+        $defaultWarehouse = null;
+        if (!empty($validated['default_warehouse_id'])) {
+            $defaultWarehouse = Warehouse::query()
+                ->where('account_id', $accountId)
+                ->find($validated['default_warehouse_id']);
+
+            if (!$defaultWarehouse) {
+                return response()->json(['message' => 'Kho mac dinh khong hop le cho tai khoan hien tai.'], 422);
+            }
+        }
 
         $integration->fill([
             'carrier_name' => $carrier->name,
             'is_enabled' => (bool) ($validated['is_enabled'] ?? $integration->is_enabled),
             'api_base_url' => $validated['api_base_url'] ?? $integration->api_base_url ?? 'https://partner.viettelpost.vn',
-            'username' => $validated['username'] ?? $integration->username,
-            'sender_name' => $validated['sender_name'] ?? $integration->sender_name,
-            'sender_phone' => $validated['sender_phone'] ?? $integration->sender_phone,
-            'sender_address' => $validated['sender_address'] ?? $integration->sender_address,
+            'username' => null,
             'default_service_code' => $validated['default_service_code'] ?? $integration->default_service_code,
             'default_service_add' => $validated['default_service_add'] ?? $integration->default_service_add,
+            'default_warehouse_id' => $defaultWarehouse?->id,
             'webhook_url' => $validated['webhook_url'] ?? $integration->webhook_url,
             'config_json' => $configJson,
         ]);
 
-        if (!empty($validated['password'])) {
-            $integration->password_encrypted = Crypt::encryptString($validated['password']);
+        if ($defaultWarehouse) {
+            $integration->sender_name = $defaultWarehouse->contact_name ?: $defaultWarehouse->name;
+            $integration->sender_phone = $defaultWarehouse->phone;
+            $integration->sender_address = $defaultWarehouse->address;
+            $integration->sender_province_id = $defaultWarehouse->province_id;
+            $integration->sender_district_id = $defaultWarehouse->district_id;
+            $integration->sender_ward_id = $defaultWarehouse->ward_id;
+            $configJson['sender_province_name'] = $defaultWarehouse->province_name;
+            $configJson['sender_district_name'] = $defaultWarehouse->district_name;
+            $configJson['sender_ward_name'] = $defaultWarehouse->ward_name;
+            $integration->config_json = $configJson;
+        } else {
+            $integration->sender_name = $validated['sender_name'] ?? $integration->sender_name;
+            $integration->sender_phone = $validated['sender_phone'] ?? $integration->sender_phone;
+            $integration->sender_address = $validated['sender_address'] ?? $integration->sender_address;
         }
 
-        if (
-            ($configJson['sender_province_name'] ?? '')
-            && ($configJson['sender_district_name'] ?? '')
-            && ($configJson['sender_ward_name'] ?? '')
-            && $carrierCode === 'viettel_post'
-        ) {
-            $resolved = $addressService->resolveSenderIds($integration, [
-                'province' => $configJson['sender_province_name'],
-                'district' => $configJson['sender_district_name'],
-                'ward' => $configJson['sender_ward_name'],
-            ]);
+        if (array_key_exists('api_key', $validated) && trim((string) $validated['api_key']) !== '') {
+            $integration->access_token = trim((string) $validated['api_key']);
+            $integration->token_expires_at = null;
+            $integration->password_encrypted = null;
+        }
 
-            $integration->sender_province_id = $resolved['province_id'];
-            $integration->sender_district_id = $resolved['district_id'];
-            $integration->sender_ward_id = $resolved['ward_id'];
+        $hasToken = filled($integration->access_token);
+        if ($integration->is_enabled && $hasToken) {
+            if ($integration->connection_status !== 'connected') {
+                $integration->connection_status = 'configured';
+            }
+            $integration->last_error_message = null;
+        } elseif (!$integration->is_enabled) {
+            $integration->connection_status = 'disconnected';
         }
 
         $integration->save();
 
-        return response()->json(['message' => 'Đã lưu cài đặt vận chuyển.', 'integration' => $integration->fresh()]);
+        return response()->json([
+            'message' => 'Da luu cai dat van chuyen.',
+            'integration' => $integration->fresh('defaultWarehouse'),
+        ]);
     }
 
     public function testIntegration(Request $request, string $carrierCode, ViettelPostClient $viettelPostClient)
@@ -151,7 +205,7 @@ class ShippingSettingsController extends Controller
 
         try {
             if ($carrierCode !== 'viettel_post') {
-                throw new \RuntimeException('Hãng này chưa hỗ trợ test kết nối API.');
+                throw new \RuntimeException('Hang nay chua ho tro test ket noi API.');
             }
 
             $result = $viettelPostClient->testConnection($integration);
@@ -163,7 +217,7 @@ class ShippingSettingsController extends Controller
             ])->save();
 
             return response()->json([
-                'message' => 'Kết nối ViettelPost thành công.',
+                'message' => 'Ket noi ViettelPost thanh cong.',
                 'meta' => [
                     'provinces_count' => $result['provinces_count'],
                 ],

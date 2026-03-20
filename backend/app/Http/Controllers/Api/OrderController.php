@@ -640,6 +640,7 @@ class OrderController extends Controller
             'order_ids' => 'required|array|min:1',
             'order_ids.*' => 'integer|exists:orders,id',
             'carrier_code' => 'required|string|max:50',
+            'warehouse_id' => 'nullable|integer|exists:warehouses,id',
         ]);
 
         $orders = Order::query()
@@ -651,7 +652,9 @@ class OrderController extends Controller
             return response()->json(['message' => 'Khong tim thay don hang can gui.'], 404);
         }
 
-        return response()->json($dispatchService->preview($orders, $validated['carrier_code']));
+        return response()->json(
+            $dispatchService->preview($orders, $validated['carrier_code'], $validated['warehouse_id'] ?? null)
+        );
     }
 
     public function dispatch(Request $request, ShipmentDispatchService $dispatchService)
@@ -660,6 +663,7 @@ class OrderController extends Controller
             'order_ids' => 'required|array|min:1',
             'order_ids.*' => 'integer|exists:orders,id',
             'carrier_code' => 'required|string|max:50',
+            'warehouse_id' => 'nullable|integer|exists:warehouses,id',
         ]);
 
         $orders = Order::query()
@@ -671,7 +675,14 @@ class OrderController extends Controller
             return response()->json(['message' => 'Khong tim thay don hang can gui.'], 404);
         }
 
-        return response()->json($dispatchService->dispatch($orders, $validated['carrier_code'], Auth::id()));
+        return response()->json(
+            $dispatchService->dispatch(
+                $orders,
+                $validated['carrier_code'],
+                Auth::id(),
+                $validated['warehouse_id'] ?? null
+            )
+        );
     }
 
     public function shippingAlerts(Request $request, ShippingAlertService $shippingAlertService)
@@ -696,9 +707,39 @@ class OrderController extends Controller
             ShippingIntegration::query()
                 ->where('account_id', $accountId)
                 ->where('is_enabled', true)
-                ->where('connection_status', 'connected')
+                ->where(function ($query) {
+                    $query
+                        ->where('connection_status', 'connected')
+                        ->orWhere('connection_status', 'configured')
+                        ->orWhereNotNull('access_token');
+                })
                 ->orderBy('carrier_name')
-                ->get(['carrier_code', 'carrier_name', 'connection_status', 'is_enabled'])
+                ->with('defaultWarehouse:id,name')
+                ->get([
+                    'carrier_code',
+                    'carrier_name',
+                    'connection_status',
+                    'is_enabled',
+                    'access_token',
+                    'webhook_url',
+                    'default_warehouse_id',
+                ])
+                ->map(function (ShippingIntegration $integration) {
+                    $effectiveStatus = $integration->connection_status ?: 'configured';
+                    if ($integration->is_enabled && filled($integration->access_token) && $effectiveStatus === 'disconnected') {
+                        $effectiveStatus = 'configured';
+                    }
+
+                    return [
+                        'carrier_code' => $integration->carrier_code,
+                        'carrier_name' => $integration->carrier_name,
+                        'connection_status' => $effectiveStatus,
+                        'is_enabled' => $integration->is_enabled,
+                        'webhook_url' => $integration->webhook_url,
+                        'default_warehouse_id' => $integration->default_warehouse_id,
+                        'default_warehouse_name' => $integration->defaultWarehouse?->name,
+                    ];
+                })
         );
     }
 }

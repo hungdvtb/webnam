@@ -15,12 +15,15 @@ class ImportItem extends Model
         'supplier_product_price_id',
         'product_name_snapshot',
         'product_sku_snapshot',
+        'supplier_product_code_snapshot',
+        'unit_name_snapshot',
         'quantity',
         'unit_cost',
         'supplier_price_snapshot',
         'price_was_updated',
         'line_total',
         'notes',
+        'sort_order',
     ];
 
     protected $casts = [

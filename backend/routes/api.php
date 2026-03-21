@@ -205,6 +205,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/inventory/suppliers/{id}/prices/bulk', [InventoryController::class, 'bulkUpsertSupplierPrices'])->whereNumber('id');
     Route::put('/inventory/suppliers/{id}/prices/{priceId}', [InventoryController::class, 'updateSupplierPrice'])->whereNumber('id')->whereNumber('priceId');
     Route::delete('/inventory/suppliers/{id}/prices/{priceId}', [InventoryController::class, 'destroySupplierPrice'])->whereNumber('id')->whereNumber('priceId');
+    Route::get('/inventory/units', [InventoryController::class, 'inventoryUnits']);
+    Route::post('/inventory/units', [InventoryController::class, 'storeInventoryUnit']);
+    Route::get('/inventory/import-statuses', [InventoryController::class, 'importStatuses']);
+    Route::post('/inventory/import-statuses', [InventoryController::class, 'storeImportStatus']);
+    Route::put('/inventory/import-statuses/{id}', [InventoryController::class, 'updateImportStatus'])->whereNumber('id');
+    Route::post('/inventory/import-invoices/analyze', [InventoryController::class, 'analyzeImportInvoice']);
+    Route::get('/inventory/import-invoices/{id}', [InventoryController::class, 'showInvoiceAnalysis'])->whereNumber('id');
     Route::get('/inventory/imports', [InventoryController::class, 'imports']);
     Route::post('/inventory/imports', [InventoryController::class, 'storeImport']);
     Route::put('/inventory/imports/{id}', [InventoryController::class, 'updateImport'])->whereNumber('id');

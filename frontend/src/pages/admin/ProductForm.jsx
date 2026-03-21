@@ -379,6 +379,7 @@ const ProductForm = () => {
     const [typeConfirmed, setTypeConfirmed] = useState(true);
     const [categories, setCategories] = useState([]);
     const [suppliers, setSuppliers] = useState([]);
+    const [inventoryUnits, setInventoryUnits] = useState([]);
     const [suggestedProducts, setSuggestedProducts] = useState([]);
     const [suggestedBundleProducts, setSuggestedBundleProducts] = useState([]);
     const [searchingRelated, setSearchingRelated] = useState(false);
@@ -417,6 +418,7 @@ const ProductForm = () => {
         expected_cost: '',
         cost_price: '',
         weight: '',
+        inventory_unit_id: '',
         supplier_ids: [],
         supplier_product_code: '',
         description: '',
@@ -468,6 +470,7 @@ const ProductForm = () => {
         expected_cost: 150,
         current_cost: 150,
         weight: 100,
+        unit: 96,
         supplier_product_code: 180,
         stock: 100,
         actions: 60
@@ -808,6 +811,7 @@ const ProductForm = () => {
     useEffect(() => {
         fetchCategories();
         fetchSuppliers();
+        fetchInventoryUnits();
         fetchRelatedData();
         if (isEdit) {
             fetchProduct();
@@ -815,6 +819,15 @@ const ProductForm = () => {
         fetchBlogPosts();
         fetchDomains();
     }, [id, isEdit]);
+
+    useEffect(() => {
+        if (!inventoryUnits.length) return;
+        setFormData((prev) => {
+            if (prev.inventory_unit_id) return prev;
+            const preferred = inventoryUnits.find((unit) => unit.is_default) || inventoryUnits[0];
+            return preferred ? { ...prev, inventory_unit_id: String(preferred.id) } : prev;
+        });
+    }, [inventoryUnits]);
     useEffect(() => {
         return () => {
             // Cleanup object URLs to avoid memory leaks
@@ -869,6 +882,40 @@ const ProductForm = () => {
             setSuppliers(response.data?.data || []);
         } catch (error) {
             console.error("Error fetching suppliers", error);
+        }
+    };
+
+    const fetchInventoryUnits = async () => {
+        try {
+            const response = await inventoryApi.getUnits();
+            setInventoryUnits(Array.isArray(response.data) ? response.data : []);
+        } catch (error) {
+            console.error("Error fetching inventory units", error);
+        }
+    };
+
+    const handleCreateInventoryUnit = async (initialValue = '') => {
+        const nextName = window.prompt('Nhập đơn vị tính mới', initialValue)?.trim();
+        if (!nextName) return null;
+
+        try {
+            const response = await inventoryApi.createUnit({ name: nextName });
+            const unit = response.data;
+
+            setInventoryUnits((prev) => {
+                const exists = prev.some((item) => String(item.id) === String(unit.id));
+                return exists
+                    ? prev
+                    : [...prev, unit].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'vi'));
+            });
+
+            setFormData((prev) => ({ ...prev, inventory_unit_id: String(unit.id) }));
+            showToast({ message: `Đã thêm ĐVT "${unit.name}".`, type: 'success' });
+            return unit;
+        } catch (error) {
+            console.error("Error creating inventory unit", error);
+            showToast({ message: 'Không thể tạo đơn vị tính mới.', type: 'error' });
+            return null;
         }
     };
 
@@ -1041,6 +1088,7 @@ const ProductForm = () => {
             expected_cost: formData.expected_cost,
             current_cost: '',
             weight: formData.weight,
+            inventory_unit_id: formData.inventory_unit_id || '',
             stock: 10,
             attributes: {},
             label: 'Biến thể tùy chỉnh'
@@ -1062,6 +1110,7 @@ const ProductForm = () => {
                 expected_cost: data.expected_cost ? Math.floor(data.expected_cost) : '',
                 cost_price: data.cost_price ? Math.floor(data.cost_price) : '',
                 weight: data.weight || '',
+                inventory_unit_id: data.inventory_unit_id ? String(data.inventory_unit_id) : '',
                 supplier_ids: Array.isArray(data.supplier_ids)
                     ? data.supplier_ids.map((value) => String(value))
                     : Array.isArray(data.suppliers)
@@ -1215,6 +1264,7 @@ const ProductForm = () => {
                         expected_cost: Math.floor(v.expected_cost || 0),
                         current_cost: Math.floor(v.cost_price || 0),
                         weight: v.weight ?? '',
+                        inventory_unit_id: v.inventory_unit_id ? String(v.inventory_unit_id) : (data.inventory_unit_id ? String(data.inventory_unit_id) : ''),
                         supplier_product_code: v.supplier_product_code || '',
                         stock: v.stock_quantity ?? 0,
                         sku: v.sku ?? '',
@@ -1734,6 +1784,7 @@ const ProductForm = () => {
                 expected_cost: formData.expected_cost,
                 current_cost: '',
                 weight: formData.weight,
+                inventory_unit_id: formData.inventory_unit_id || '',
                 stock: 10,
                 attributes: combo,
                 label: `${formData.name} - ${attrLabel}`
@@ -2142,6 +2193,7 @@ const ProductForm = () => {
                     submitData.append(`variants[${idx}][price]`, v.price);
                     submitData.append(`variants[${idx}][expected_cost]`, v.expected_cost || '');
                     submitData.append(`variants[${idx}][weight]`, v.weight || '');
+                    submitData.append(`variants[${idx}][inventory_unit_id]`, v.inventory_unit_id || formData.inventory_unit_id || '');
                     submitData.append(`variants[${idx}][stock_quantity]`, v.stock);
 
                     if (v.image_file) {
@@ -2542,7 +2594,7 @@ const ProductForm = () => {
                             <SectionTitle icon="payments" title="Giá và thông số" />
                             <div className="grid grid-cols-1 gap-y-8">
                                 <div className="grid grid-cols-1 gap-4">
-                                    <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+                                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_auto_auto_minmax(0,1.8fr)]">
                                         <Field label="Giá bán lẻ (VNĐ)" className={`border-brick/30 bg-brick/[0.02] ${formData.price_type === 'sum' ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
                                             <div className="flex items-center w-full">
                                                 <input
@@ -2582,7 +2634,7 @@ const ProductForm = () => {
                                                 <span className="font-bold text-primary opacity-30 ml-2">₫</span>
                                             </div>
                                         </Field>
-                                        <Field label="Khối lượng sản phẩm" className="border-primary/20 bg-stone/5">
+                                        <Field label="Khối lượng SP" className="border-primary/20 bg-stone/5 lg:min-w-[128px]">
                                             <div className="flex items-center w-full">
                                                 <input
                                                     type="text"
@@ -2593,6 +2645,29 @@ const ProductForm = () => {
                                                     className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]"
                                                 />
                                                 <span className="font-bold text-primary opacity-30 ml-2 italic">gram</span>
+                                            </div>
+                                        </Field>
+                                        <Field label="ĐVT" className="border-primary/20 bg-stone/5 lg:min-w-[140px]">
+                                            <div className="flex items-center gap-2 w-full">
+                                                <select
+                                                    name="inventory_unit_id"
+                                                    value={formData.inventory_unit_id || ''}
+                                                    onChange={(e) => setFormData((prev) => ({ ...prev, inventory_unit_id: e.target.value }))}
+                                                    className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
+                                                >
+                                                    <option value="">Chọn ĐVT</option>
+                                                    {inventoryUnits.map((unit) => (
+                                                        <option key={unit.id} value={unit.id}>{unit.name}</option>
+                                                    ))}
+                                                </select>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleCreateInventoryUnit()}
+                                                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-primary/15 bg-white text-primary/70 transition hover:border-primary/35 hover:text-primary"
+                                                    title="Thêm đơn vị tính"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">add</span>
+                                                </button>
                                             </div>
                                         </Field>
                                         <Field label="Nhà cung cấp" className="border-primary/20 bg-stone/5">
@@ -3061,8 +3136,12 @@ const ProductForm = () => {
                                                         <div onMouseDown={(e) => handleVariantColumnResize('current_cost', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
                                                     </th>
                                                     <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.weight }}>
-                                                        Khối lượng
+                                                        Khối lượng SP
                                                         <div onMouseDown={(e) => handleVariantColumnResize('weight', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
+                                                    </th>
+                                                    <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.unit }}>
+                                                        ĐVT
+                                                        <div onMouseDown={(e) => handleVariantColumnResize('unit', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
                                                     </th>
                                                     <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.supplier_product_code }}>
                                                         Mã hàng NCC
@@ -3205,6 +3284,28 @@ const ProductForm = () => {
                                                                     />
                                                                     <span className="absolute right-2 text-[9px] opacity-30 font-bold italic">gram</span>
                                                                 </div>
+                                                            </td>
+                                                            <td className="px-4 py-3 border-r border-stone/20">
+                                                                <select
+                                                                    className="w-full bg-stone/5 border border-transparent focus:border-purple-300 focus:bg-white px-2 py-2 rounded text-[12px] font-bold text-primary text-center transition-all"
+                                                                    value={v.inventory_unit_id || ''}
+                                                                    onChange={async (e) => {
+                                                                        if (e.target.value === '__create__') {
+                                                                            const newUnit = await handleCreateInventoryUnit();
+                                                                            if (newUnit) {
+                                                                                handleVariantChange(index, 'inventory_unit_id', String(newUnit.id));
+                                                                            }
+                                                                            return;
+                                                                        }
+                                                                        handleVariantChange(index, 'inventory_unit_id', e.target.value);
+                                                                    }}
+                                                                >
+                                                                    <option value="">ĐVT</option>
+                                                                    {inventoryUnits.map((unit) => (
+                                                                        <option key={unit.id} value={unit.id}>{unit.name}</option>
+                                                                    ))}
+                                                                    <option value="__create__">+ Thêm mới</option>
+                                                                </select>
                                                             </td>
                                                             <td className="px-4 py-3 border-r border-stone/20">
                                                                 <input

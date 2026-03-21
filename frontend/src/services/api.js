@@ -29,6 +29,12 @@ api.interceptors.request.use((config) => {
     return config;
 });
 
+const multipartConfig = (data) => (
+    data instanceof FormData
+        ? { headers: { 'Content-Type': 'multipart/form-data' } }
+        : undefined
+);
+
 export const productApi = {
     getAll: (params) => api.get('/products', { params }),
     getOne: (id) => api.get(`/products/${id}`),
@@ -175,9 +181,16 @@ export const inventoryApi = {
     bulkSupplierPrices: (supplierId, data) => api.post(`/inventory/suppliers/${supplierId}/prices/bulk`, data),
     updateSupplierPrice: (supplierId, priceId, data) => api.put(`/inventory/suppliers/${supplierId}/prices/${priceId}`, data),
     deleteSupplierPrice: (supplierId, priceId) => api.delete(`/inventory/suppliers/${supplierId}/prices/${priceId}`),
+    getUnits: (params) => api.get('/inventory/units', params ? { params } : {}),
+    createUnit: (data) => api.post('/inventory/units', data),
+    getImportStatuses: (params) => api.get('/inventory/import-statuses', params ? { params } : {}),
+    createImportStatus: (data) => api.post('/inventory/import-statuses', data),
+    updateImportStatus: (id, data) => api.put(`/inventory/import-statuses/${id}`, data),
+    analyzeImportInvoice: (data) => api.post('/inventory/import-invoices/analyze', data, multipartConfig(data)),
+    getImportInvoiceAnalysis: (id) => api.get(`/inventory/import-invoices/${id}`),
     getImports: (params) => api.get('/inventory/imports', { params }),
-    createImport: (data) => api.post('/inventory/imports', data),
-    updateImport: (id, data) => api.put(`/inventory/imports/${id}`, data),
+    createImport: (data) => api.post('/inventory/imports', data, multipartConfig(data)),
+    updateImport: (id, data) => api.put(`/inventory/imports/${id}`, data, multipartConfig(data)),
     deleteImport: (id) => api.delete(`/inventory/imports/${id}`),
     getImport: (id) => api.get(`/inventory/imports/${id}`),
     getDocuments: (type, params) => api.get(`/inventory/documents/${type}`, { params }),

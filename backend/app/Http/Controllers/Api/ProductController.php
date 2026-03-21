@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\InventoryUnit;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\BulkUpdateLog;
@@ -30,6 +31,7 @@ class ProductController extends Controller
             'categories:id,name',
             'supplier:id,name,code',
             'suppliers:id,name,code',
+            'unit:id,name',
             'siteDomain:id,domain,is_active,is_default',
             'images:id,product_id,image_url,is_primary,file_name,file_size',
             'superAttributes:id,name,code,frontend_type',
@@ -37,26 +39,29 @@ class ProductController extends Controller
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:id,name,code,frontend_type',
             'linkedProducts' => function ($q) {
-                $q->select(['products.id', 'products.sku', 'products.supplier_product_code', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
+                $q->select(['products.id', 'products.sku', 'products.supplier_product_code', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
                     ->with([
+                        'unit:id,name',
                         'images:id,product_id,image_url,is_primary',
                         'attributeValues:id,product_id,attribute_id,value',
                         'attributeValues.attribute:id,name,code',
                     ]);
             },
             'groupedItems' => function ($q) {
-                $q->select(['products.id', 'products.sku', 'products.supplier_product_code', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
+                $q->select(['products.id', 'products.sku', 'products.supplier_product_code', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'price', 'cost_price'])
                     ->with([
+                        'unit:id,name',
                         'images:id,product_id,image_url,is_primary',
                         'attributeValues:id,product_id,attribute_id,value',
                     ]);
             },
             'bundleItems' => function ($q) {
-                $q->select(['products.id', 'products.sku', 'products.supplier_product_code', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
+                $q->select(['products.id', 'products.sku', 'products.supplier_product_code', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
+                        'unit:id,name',
                         'images:id,product_id,image_url,is_primary',
                         'attributeValues:id,product_id,attribute_id,value',
                     ]);
@@ -202,7 +207,7 @@ class ProductController extends Controller
         $query = Product::query()
             ->select([
             'id', 'sku', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
-            'supplier_id', 'supplier_product_code',
+            'supplier_id', 'supplier_product_code', 'inventory_unit_id',
             'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title'
         ])
             ->withCount('suppliers')
@@ -211,13 +216,16 @@ class ProductController extends Controller
             'category:id,name',
             'supplier:id,name,code',
             'suppliers:id,name,code',
+            'unit:id,name',
             'siteDomain:id,domain',
             'images:id,product_id,image_url,is_primary',
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
-            'variations:id,sku,supplier_product_code,name,price,expected_cost,cost_price,stock_quantity,type',
+            'variations:id,sku,supplier_product_code,name,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id',
+            'variations.unit:id,name',
             'variations.images:id,product_id,image_url,is_primary',
-            'groupedItems:id,sku,name,price,expected_cost,cost_price,stock_quantity,type',
+            'groupedItems:id,sku,name,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id',
+            'groupedItems.unit:id,name',
             'groupedItems.images:id,product_id,image_url,is_primary'
         ]);
 
@@ -597,6 +605,7 @@ class ProductController extends Controller
             'is_new' => 'boolean',
             'stock_quantity' => 'integer|min:0',
             'weight' => 'nullable|string',
+            'inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'sku' => 'nullable|string|unique:products,sku',
             'supplier_product_code' => 'nullable|string|max:255',
             'meta_title' => 'nullable|string',
@@ -631,6 +640,8 @@ class ProductController extends Controller
             'main_image' => 'nullable|image',
             'images' => 'nullable|array',
             'images.*' => 'image',
+            'variants' => 'nullable|array',
+            'variants.*.inventory_unit_id' => 'nullable|exists:inventory_units,id',
         ], [
             'type.required' => 'Vui lòng chọn loại sản phẩm.',
             'name.required' => 'Vui lòng nhập tên tác phẩm nghệ thuật.',
@@ -790,6 +801,7 @@ class ProductController extends Controller
                     'price' => $vData['price'],
                     'expected_cost' => $vData['expected_cost'] ?? null,
                     'weight' => $vData['weight'] ?? null,
+                    'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
                     'supplier_id' => $supplierIds[0] ?? $product->supplier_id,
                     'stock_quantity' => $vData['stock_quantity'] ?? 0,
                     'category_id' => $product->category_id,
@@ -905,6 +917,7 @@ class ProductController extends Controller
             'is_new' => 'boolean',
             'stock_quantity' => 'nullable|integer|min:0',
             'weight' => 'nullable|string',
+            'inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'sku' => 'nullable|string|unique:products,sku,' . $id,
             'supplier_product_code' => 'nullable|string|max:255',
             'status' => 'nullable|boolean',
@@ -935,6 +948,8 @@ class ProductController extends Controller
             'super_attribute_ids.*' => 'exists:attributes,id',
             // EAV custom values
             'custom_attributes' => 'nullable|array',
+            'variants' => 'nullable|array',
+            'variants.*.inventory_unit_id' => 'nullable|exists:inventory_units,id',
         ], [
             'name.required' => 'Tên sản phẩm không được để trống.',
             'price.required' => 'Giá bán không được để trống.',
@@ -1112,6 +1127,7 @@ class ProductController extends Controller
                         'price' => $vData['price'],
                         'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
+                        'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
                         'supplier_id' => $supplierIds[0] ?? $product->supplier_id,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                     ]);
@@ -1169,6 +1185,7 @@ class ProductController extends Controller
                         'price' => $vData['price'],
                         'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
+                        'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
                         'supplier_id' => $supplierIds[0] ?? $product->supplier_id,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                         'category_id' => $product->category_id,

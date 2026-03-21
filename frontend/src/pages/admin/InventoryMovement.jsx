@@ -20,19 +20,25 @@ const iconButton = (active) => `inline-flex h-8 w-8 items-center justify-center 
 const compactIconButton = (active) => `inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border transition ${active ? 'border-primary/35 bg-primary/10 text-primary' : 'border-transparent bg-transparent text-primary/55 hover:border-primary/15 hover:bg-primary/[0.05] hover:text-primary'}`;
 const checkboxClass = 'size-4 rounded border-primary/20 accent-primary';
 
-const tabs = [
+const topTabs = [
     ['overview', 'Tổng quan'],
     ['products', 'Sản phẩm'],
     ['suppliers', 'Nhà cung cấp'],
     ['supplierPrices', 'Giá nhập từng nhà'],
-    ['imports', 'Phiếu nhập'],
-    ['exports', 'Phiếu xuất bán'],
-    ['returns', 'Phiếu hàng hoàn'],
-    ['damaged', 'Phiếu hàng hỏng'],
-    ['adjustments', 'Phiếu điều chỉnh'],
+    ['documents', 'Phiếu'],
     ['lots', 'Lô hàng'],
     ['trash', 'Thùng rác'],
 ];
+
+const documentTabs = [
+    ['imports', 'Phiếu nhập'],
+    ['exports', 'Phiếu xuất'],
+    ['returns', 'Phiếu hoàn'],
+    ['damaged', 'Phiếu hỏng'],
+    ['adjustments', 'Phiếu điều chỉnh'],
+];
+
+const isDocumentTab = (tabKey) => documentTabs.some(([key]) => key === tabKey);
 
 const documentTypeMap = { returns: 'return', damaged: 'damaged', adjustments: 'adjustment' };
 const documentTitleMap = { returns: 'Phiếu hàng hoàn', damaged: 'Phiếu hàng hỏng', adjustments: 'Phiếu điều chỉnh' };
@@ -111,10 +117,14 @@ const createLine = (overrides = {}) => ({
     product_id: '',
     product_name: '',
     product_sku: '',
+    supplier_product_code: '',
     quantity: '1',
+    unit_name: '',
     unit_cost: '',
     notes: '',
-    update_supplier_price: false,
+    update_supplier_price: true,
+    mapping_status: 'manual',
+    mapping_label: '',
     stock_bucket: 'sellable',
     direction: 'in',
     ...overrides,
@@ -147,6 +157,7 @@ const mapSupplierCatalogEntry = (item) => ({
     sku: item.sku || '-',
     supplier_product_code: item.supplier_product_code || '',
     name: item.name || '-',
+    unit_name: item.unit_name || item.unit?.name || '',
     parent_name: item.parent_name || null,
     parent_sku: item.parent_sku || null,
     category_name: item.category_name || null,
@@ -169,20 +180,53 @@ const mapSupplierCatalogEntry = (item) => ({
 const createImportForm = (data = null) => ({
     id: data?.id || null,
     supplier_id: data?.supplier_id ? String(data.supplier_id) : '',
+    inventory_import_status_id: data?.inventory_import_status_id ? String(data.inventory_import_status_id) : '',
     import_date: data?.import_date ? String(data.import_date).slice(0, 10) : todayValue,
     notes: data?.notes || '',
-    update_supplier_prices: Boolean(data?.update_supplier_prices),
+    update_supplier_prices: data?.update_supplier_prices ?? true,
+    entry_mode: data?.entry_mode || 'manual',
+    extra_charge_percent: data?.extra_charge_percent != null ? String(data.extra_charge_percent) : '0',
+    invoice_analysis_log_id: data?.invoice_analysis_log_id ? String(data.invoice_analysis_log_id) : (data?.invoiceAnalysisLogs?.[0]?.id ? String(data.invoiceAnalysisLogs[0].id) : ''),
+    invoice_number: data?.invoice_number || data?.invoiceAnalysisLogs?.[0]?.analysis_result?.raw_invoice?.invoice_number || '',
+    analysis_log: data?.invoiceAnalysisLogs?.[0] || null,
+    attachments: Array.isArray(data?.attachments)
+        ? data.attachments.map((attachment) => ({
+            id: attachment.id,
+            invoice_analysis_log_id: attachment.invoice_analysis_log_id || null,
+            source_type: attachment.source_type || 'manual',
+            disk: attachment.disk || 'public',
+            file_path: attachment.file_path,
+            original_name: attachment.original_name || 'Tệp đính kèm',
+            mime_type: attachment.mime_type || null,
+            file_size: attachment.file_size || 0,
+            url: attachment.url || null,
+        }))
+        : [],
+    local_attachment_files: [],
     items: (data?.items || []).length
         ? data.items.map((item) => createLine({
             product_id: item.product_id,
             product_name: item.product?.name || item.product_name_snapshot || '',
             product_sku: item.product?.sku || item.product_sku_snapshot || '',
+            supplier_product_code: item.supplier_product_code_snapshot || item.product?.supplier_product_code || '',
             quantity: String(item.quantity || 1),
+            unit_name: item.unit_name_snapshot || item.product?.unit?.name || item.product?.unit_name || '',
             unit_cost: String(Math.round(Number(item.unit_cost || 0))),
             notes: item.notes || '',
-            update_supplier_price: Boolean(item.price_was_updated),
+            update_supplier_price: data?.update_supplier_prices ?? true,
+            mapping_status: item.product_id ? 'matched' : 'manual',
+            mapping_label: item.product_id ? 'Đã map sản phẩm' : '',
         }))
         : [createLine()],
+});
+
+const createImportStatusForm = (status = null) => ({
+    id: status?.id || null,
+    name: status?.name || '',
+    color: status?.color || '#10B981',
+    affects_inventory: Boolean(status?.affects_inventory),
+    is_active: status?.is_active ?? true,
+    is_default: Boolean(status?.is_default),
 });
 
 const createDocumentForm = (tabKey, data = null) => ({
@@ -246,6 +290,7 @@ const importColumns = [
     { id: 'code', label: 'Mã phiếu', minWidth: 150 },
     { id: 'supplier', label: 'Nhà cung cấp', minWidth: 220 },
     { id: 'date', label: 'Ngày nhập', minWidth: 150 },
+    { id: 'status', label: 'Trạng thái', minWidth: 150 },
     { id: 'line_count', label: 'Số dòng', minWidth: 90, align: 'right' },
     { id: 'qty', label: 'Tổng số lượng', minWidth: 110, align: 'right' },
     { id: 'amount', label: 'Tổng tiền', minWidth: 130, align: 'right' },
@@ -352,6 +397,7 @@ const inventorySortColumnMaps = {
         code: 'code',
         supplier: 'supplier',
         date: 'date',
+        status: 'status',
         line_count: 'line_count',
         qty: 'qty',
         amount: 'amount',
@@ -436,6 +482,19 @@ const CellText = ({ primary, secondary = null, mono = false }) => (
         <div className={`truncate font-semibold text-primary ${mono ? 'font-mono text-[12px]' : ''}`}>{primary}</div>
         {secondary ? <div className="mt-0.5 truncate text-[11px] text-primary/45">{secondary}</div> : null}
     </div>
+);
+
+const StatusPill = ({ label, color = '#94A3B8', subtle = null }) => (
+    <span
+        className="inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-black tracking-[0.08em] uppercase"
+        style={{
+            color,
+            borderColor: color,
+            backgroundColor: subtle || `${color}12`,
+        }}
+    >
+        {label}
+    </span>
 );
 
 const IndeterminateCheckbox = ({ checked, indeterminate = false, onChange, disabled = false, title = '' }) => {
@@ -712,6 +771,7 @@ const InventoryMovement = () => {
     const [supplierSummary, setSupplierSummary] = useState(null);
     const [selectedSupplierId, setSelectedSupplierId] = useState(null);
     const [supplierCatalog, setSupplierCatalog] = useState([]);
+    const [importStatuses, setImportStatuses] = useState([]);
     const [imports, setImports] = useState([]);
     const [exportsData, setExportsData] = useState([]);
     const [returnsData, setReturnsData] = useState([]);
@@ -735,6 +795,7 @@ const InventoryMovement = () => {
         overview: false, products: false, suppliers: false, supplierCatalog: false, imports: false, exports: false,
         returns: false, damaged: false, adjustments: false, lots: false, trash: false, saving: false,
         supplierModal: false, supplierPriceModal: false, importModal: false, documentModal: false,
+        importStatuses: false, importStatusModal: false, invoiceAnalysis: false,
     });
 
     const [openPanels, setOpenPanels] = useState({
@@ -756,7 +817,7 @@ const InventoryMovement = () => {
     const [supplierCatalogFilters, setSupplierCatalogFilters] = useState({ sku: '', name: '', category_id: '', type: '', variant_scope: '', missing_supplier_price: '', multiple_suppliers: '' });
     const [supplierQuickSearch, setSupplierQuickSearch] = useState('');
     const [simpleFilters, setSimpleFilters] = useState({
-        imports: { search: '', date_from: '', date_to: '' },
+        imports: { search: '', date_from: '', date_to: '', inventory_import_status_id: '', entry_mode: '' },
         exports: { search: '', date_from: '', date_to: '' },
         returns: { search: '', date_from: '', date_to: '' },
         damaged: { search: '', date_from: '', date_to: '' },
@@ -776,9 +837,11 @@ const InventoryMovement = () => {
     const [bulkNote, setBulkNote] = useState('');
     const [pasteText, setPasteText] = useState('');
     const [showPasteBox, setShowPasteBox] = useState(false);
+    const [createMenuOpen, setCreateMenuOpen] = useState(false);
     const [supplierModal, setSupplierModal] = useState({ open: false, form: createSupplierForm() });
     const [supplierPriceModal, setSupplierPriceModal] = useState({ open: false, form: createSupplierPriceForm() });
     const [importModal, setImportModal] = useState({ open: false, form: createImportForm() });
+    const [importStatusModal, setImportStatusModal] = useState({ open: false, form: createImportStatusForm() });
     const [documentModal, setDocumentModal] = useState({ open: false, tabKey: 'returns', form: createDocumentForm('returns') });
     const [pageSizes, setPageSizes] = useState(() => ({
         products: getStoredPageSize('products'),
@@ -834,6 +897,105 @@ const InventoryMovement = () => {
         return nextSize;
     };
 
+    const parsePercentValue = (value) => {
+        const normalized = String(value ?? '').replace(',', '.').replace(/[^0-9.]/g, '');
+        const parsed = Number(normalized);
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    const flattenSupplierRows = (items = []) => {
+        const rows = [];
+        items.forEach((item) => {
+            if (Array.isArray(item.variants) && item.variants.length) {
+                item.variants.forEach((variant) => rows.push(variant));
+                return;
+            }
+            rows.push(item);
+        });
+        return rows;
+    };
+
+    const getDefaultImportStatus = () => importStatuses.find((status) => status.is_default) || importStatuses[0] || null;
+
+    const syncImportItemsFromSupplier = async (supplierId) => {
+        const numericSupplierId = Number(supplierId || 0);
+        if (!numericSupplierId) return;
+
+        const lines = importModal.form.items.filter((item) => item.product_id);
+        if (!lines.length) return;
+
+        try {
+            const response = await inventoryApi.getSupplierPrices(numericSupplierId, { per_page: 500 });
+            const flattened = flattenSupplierRows((response.data.data || []).map((item) => mapSupplierCatalogEntry(item)));
+            const priceMap = new Map(flattened.map((row) => [Number(row.product_id || row.id), row]));
+
+            setImportModal((prev) => ({
+                ...prev,
+                form: {
+                    ...prev.form,
+                    items: prev.form.items.map((item) => {
+                        const matched = priceMap.get(Number(item.product_id));
+                        if (!matched) return item;
+                        return {
+                            ...item,
+                            supplier_product_code: matched.supplier_product_code || item.supplier_product_code,
+                            unit_name: matched.unit_name || item.unit_name,
+                            unit_cost: matched.unit_cost != null ? String(Math.round(Number(matched.unit_cost || 0))) : item.unit_cost,
+                        };
+                    }),
+                },
+            }));
+        } catch (error) {
+            // Leave manual values untouched if the supplier price library cannot be loaded.
+        }
+    };
+
+    const buildImportPayloadItems = (items) => items
+        .filter((item) => item.product_id)
+        .map((item) => ({
+            product_id: Number(item.product_id),
+            quantity: Number(item.quantity || 0),
+            unit_cost: Number(item.unit_cost || 0),
+            supplier_product_code: item.supplier_product_code || null,
+            unit_name: item.unit_name || null,
+            notes: item.notes || null,
+            update_supplier_price: Boolean(item.update_supplier_price),
+        }))
+        .filter((item) => item.product_id && item.quantity > 0);
+
+    const buildImportSubmitData = (form) => {
+        const payload = new FormData();
+        payload.append('supplier_id', String(Number(form.supplier_id)));
+        if (form.inventory_import_status_id) {
+            payload.append('inventory_import_status_id', String(Number(form.inventory_import_status_id)));
+        }
+        payload.append('import_date', form.import_date || todayValue);
+        payload.append('notes', form.notes || '');
+        payload.append('entry_mode', form.entry_mode || 'manual');
+        payload.append('extra_charge_percent', String(parsePercentValue(form.extra_charge_percent)));
+        payload.append('update_supplier_prices', form.update_supplier_prices ? '1' : '0');
+        if (form.invoice_analysis_log_id) {
+            payload.append('invoice_analysis_log_id', String(Number(form.invoice_analysis_log_id)));
+        }
+        payload.append('items', JSON.stringify(buildImportPayloadItems(form.items)));
+        payload.append('attachments', JSON.stringify(
+            (form.attachments || []).map((attachment) => ({
+                id: attachment.id || null,
+                invoice_analysis_log_id: attachment.invoice_analysis_log_id || null,
+                source_type: attachment.source_type || 'manual',
+                disk: attachment.disk || 'public',
+                file_path: attachment.file_path,
+                original_name: attachment.original_name || 'Tệp đính kèm',
+                mime_type: attachment.mime_type || null,
+                file_size: attachment.file_size || 0,
+            }))
+        ));
+        (form.local_attachment_files || []).forEach((file) => {
+            payload.append('attachment_files[]', file);
+        });
+        return payload;
+    };
+
     const updateLine = (setter, index, field, value) => {
         setter((prev) => ({
             ...prev,
@@ -865,7 +1027,11 @@ const InventoryMovement = () => {
                     product_id: product.id,
                     product_name: product.name,
                     product_sku: product.sku,
+                    supplier_product_code: product.supplier_product_code || item.supplier_product_code || '',
+                    unit_name: product.unit_name || product.unit?.name || item.unit_name || '',
                     unit_cost: String(Math.round(Number(product.supplier_unit_cost ?? product.current_cost ?? product.expected_cost ?? 0))),
+                    mapping_status: 'matched',
+                    mapping_label: item.mapping_status === 'unmatched' ? 'Đã map thủ công' : 'Đã chọn sản phẩm',
                 } : item),
             },
         }));
@@ -933,6 +1099,18 @@ const InventoryMovement = () => {
         }
     };
 
+    const fetchImportStatuses = async () => {
+        setFlag('importStatuses', true);
+        try {
+            const response = await inventoryApi.getImportStatuses({ active_only: 0 });
+            setImportStatuses(Array.isArray(response.data) ? response.data : []);
+        } catch (error) {
+            fail(error, 'Không thể tải trạng thái phiếu nhập.');
+        } finally {
+            setFlag('importStatuses', false);
+        }
+    };
+
     const refreshSupplierCatalog = async () => {
         if (!selectedSupplierId) return;
         setPriceDrafts({});
@@ -991,6 +1169,7 @@ const InventoryMovement = () => {
 
         loadCategories();
         fetchOverview();
+        fetchImportStatuses();
     }, []);
 
     useEffect(() => {
@@ -1071,6 +1250,20 @@ const InventoryMovement = () => {
             setSupplierCatalogPagination(emptyPagination);
         }
     }, [activeTab, selectedSupplierId]);
+
+    useEffect(() => {
+        if (!importModal.open) return;
+        if (importModal.form.inventory_import_status_id || importStatuses.length === 0) return;
+        const defaultStatus = getDefaultImportStatus();
+        if (!defaultStatus) return;
+        setImportModal((prev) => ({
+            ...prev,
+            form: {
+                ...prev.form,
+                inventory_import_status_id: String(defaultStatus.id),
+            },
+        }));
+    }, [importModal.open, importModal.form.inventory_import_status_id, importStatuses]);
 
     useEffect(() => {
         setSelectedPriceIds({});
@@ -1615,13 +1808,208 @@ const InventoryMovement = () => {
         setActiveTab('supplierPrices');
     };
 
+    const openImportStatusManager = (status = null) => {
+        setImportStatusModal({
+            open: true,
+            form: createImportStatusForm(status),
+        });
+    };
+
+    const saveImportStatus = async () => {
+        const form = importStatusModal.form;
+        if (!form.name.trim()) {
+            return showToast({ type: 'warning', message: 'Vui lòng nhập tên trạng thái phiếu nhập.' });
+        }
+
+        setFlag('importStatusModal', true);
+        try {
+            let response;
+            const payload = {
+                name: form.name.trim(),
+                color: form.color || '#10B981',
+                affects_inventory: form.affects_inventory ? 1 : 0,
+                is_active: form.is_active ? 1 : 0,
+                is_default: form.is_default ? 1 : 0,
+            };
+
+            if (form.id) {
+                response = await inventoryApi.updateImportStatus(form.id, payload);
+                showToast({ type: 'success', message: 'Đã cập nhật trạng thái phiếu nhập.' });
+            } else {
+                response = await inventoryApi.createImportStatus(payload);
+                showToast({ type: 'success', message: 'Đã tạo trạng thái phiếu nhập.' });
+            }
+
+            await fetchImportStatuses();
+            setImportStatusModal({ open: false, form: createImportStatusForm() });
+            if (response?.data?.id) {
+                setImportModal((prev) => ({
+                    ...prev,
+                    form: {
+                        ...prev.form,
+                        inventory_import_status_id: String(response.data.id),
+                    },
+                }));
+            }
+        } catch (error) {
+            fail(error, 'Không thể lưu trạng thái phiếu nhập.');
+        } finally {
+            setFlag('importStatusModal', false);
+        }
+    };
+
+    const handleImportSupplierChange = async (supplierId) => {
+        setImportModal((prev) => ({
+            ...prev,
+            form: {
+                ...prev.form,
+                supplier_id: supplierId,
+            },
+        }));
+
+        if (supplierId) {
+            await syncImportItemsFromSupplier(supplierId);
+        }
+    };
+
+    const addImportAttachmentFiles = (fileList) => {
+        const files = Array.from(fileList || []);
+        if (!files.length) return;
+        setImportModal((prev) => {
+            const existingKeys = new Set((prev.form.local_attachment_files || []).map((file) => `${file.name}_${file.size}_${file.lastModified}`));
+            const nextFiles = files.filter((file) => !existingKeys.has(`${file.name}_${file.size}_${file.lastModified}`));
+            return {
+                ...prev,
+                form: {
+                    ...prev.form,
+                    local_attachment_files: [...(prev.form.local_attachment_files || []), ...nextFiles],
+                },
+            };
+        });
+    };
+
+    const removeImportAttachment = (attachmentIndex) => {
+        setImportModal((prev) => ({
+            ...prev,
+            form: {
+                ...prev.form,
+                attachments: prev.form.attachments.filter((_, index) => index !== attachmentIndex),
+            },
+        }));
+    };
+
+    const removeLocalImportFile = (fileIndex) => {
+        setImportModal((prev) => ({
+            ...prev,
+            form: {
+                ...prev.form,
+                local_attachment_files: prev.form.local_attachment_files.filter((_, index) => index !== fileIndex),
+            },
+        }));
+    };
+
+    const analyzeInvoiceFile = async (file) => {
+        if (!file) return;
+
+        setFlag('invoiceAnalysis', true);
+        try {
+            const submitData = new FormData();
+            if (importModal.form.supplier_id) {
+                submitData.append('supplier_id', String(Number(importModal.form.supplier_id)));
+            }
+            submitData.append('invoice_file', file);
+
+            const response = await inventoryApi.analyzeImportInvoice(submitData);
+            const draft = response.data?.draft || {};
+            const log = response.data?.log || null;
+            const defaultStatus = getDefaultImportStatus();
+            const subtotalAmount = Number(draft.subtotal_amount || 0);
+            const totalAmount = Number(draft.total_amount || subtotalAmount);
+            const extraChargePercent = subtotalAmount > 0
+                ? Math.max(0, ((totalAmount - subtotalAmount) / subtotalAmount) * 100)
+                : 0;
+
+            setImportModal((prev) => ({
+                ...prev,
+                open: true,
+                form: {
+                    ...prev.form,
+                    supplier_id: prev.form.supplier_id || (draft.supplier_id ? String(draft.supplier_id) : ''),
+                    inventory_import_status_id: prev.form.inventory_import_status_id || (defaultStatus ? String(defaultStatus.id) : ''),
+                    import_date: draft.import_date || prev.form.import_date || todayValue,
+                    notes: prev.form.notes || draft.notes || '',
+                    entry_mode: 'invoice_ai',
+                    extra_charge_percent: String(Math.round(extraChargePercent * 100) / 100),
+                    invoice_analysis_log_id: log?.id ? String(log.id) : prev.form.invoice_analysis_log_id,
+                    invoice_number: draft.invoice_number || prev.form.invoice_number || '',
+                    analysis_log: log || prev.form.analysis_log,
+                    attachments: log ? [
+                        ...prev.form.attachments.filter((attachment) => Number(attachment.invoice_analysis_log_id || 0) !== Number(log.id)),
+                        {
+                            invoice_analysis_log_id: log.id,
+                            source_type: 'invoice',
+                            disk: log.disk || 'public',
+                            file_path: log.file_path,
+                            original_name: log.source_name || file.name,
+                            mime_type: log.mime_type || file.type || null,
+                            file_size: log.file_size || file.size || 0,
+                            url: log.file_url || null,
+                        },
+                    ] : prev.form.attachments,
+                    items: (draft.items || []).length
+                        ? draft.items.map((item) => createLine({
+                            key: item.row_key || undefined,
+                            product_id: item.product_id || '',
+                            product_name: item.product_name || '',
+                            product_sku: item.sku || '',
+                            supplier_product_code: item.supplier_product_code || '',
+                            quantity: String(item.quantity || 1),
+                            unit_name: item.unit_name || '',
+                            unit_cost: String(Math.round(Number(item.unit_cost || 0))),
+                            notes: item.notes || '',
+                            update_supplier_price: true,
+                            mapping_status: item.mapping_status || (item.product_id ? 'matched' : 'unmatched'),
+                            mapping_label: item.mapping_label || '',
+                        }))
+                        : prev.form.items,
+                },
+            }));
+
+            showToast({
+                type: Array.isArray(draft.unmatched_lines) && draft.unmatched_lines.length ? 'warning' : 'success',
+                message: Array.isArray(draft.unmatched_lines) && draft.unmatched_lines.length
+                    ? `Đã tạo bản nháp từ hóa đơn. Còn ${draft.unmatched_lines.length} dòng chưa map sản phẩm.`
+                    : 'Đã đọc hóa đơn và tạo bản nháp phiếu nhập.',
+            });
+        } catch (error) {
+            fail(error, 'Không thể đọc hóa đơn đầu vào.');
+        } finally {
+            setFlag('invoiceAnalysis', false);
+        }
+    };
+
     const openCreateImport = async () => {
         await ensureSuppliersLoaded();
-        setImportModal({ open: true, form: createImportForm({ supplier_id: selectedSupplierId || null }) });
+        if (!importStatuses.length) {
+            await fetchImportStatuses();
+        }
+        const defaultStatus = getDefaultImportStatus();
+        setActiveTab('imports');
+        setImportModal({
+            open: true,
+            form: createImportForm({
+                supplier_id: selectedSupplierId || null,
+                inventory_import_status_id: defaultStatus?.id || null,
+                update_supplier_prices: true,
+            }),
+        });
     };
 
     const openEditImport = async (row) => {
         await ensureSuppliersLoaded();
+        if (!importStatuses.length) {
+            await fetchImportStatuses();
+        }
         setFlag('importModal', true);
         try {
             const response = await inventoryApi.getImport(row.id);
@@ -1636,18 +2024,19 @@ const InventoryMovement = () => {
     const saveImport = async () => {
         const form = importModal.form;
         if (!form.supplier_id) return showToast({ type: 'warning', message: 'Vui lòng chọn nhà cung cấp.' });
-        const items = form.items.filter((item) => item.product_id).map((item) => ({
-            product_id: Number(item.product_id),
-            quantity: Number(item.quantity || 0),
-            unit_cost: Number(item.unit_cost || 0),
-            notes: item.notes || null,
-            update_supplier_price: Boolean(item.update_supplier_price),
-        })).filter((item) => item.product_id && item.quantity > 0);
+        if (!form.inventory_import_status_id) return showToast({ type: 'warning', message: 'Vui lòng chọn trạng thái phiếu nhập.' });
+
+        const pendingMappedLines = form.items.filter((item) => !item.product_id && (item.product_name || item.product_sku || item.supplier_product_code || item.unit_cost || item.notes));
+        if (pendingMappedLines.length) {
+            return showToast({ type: 'warning', message: 'Còn dòng chưa map sản phẩm. Hãy chọn tay trước khi lưu phiếu nhập.' });
+        }
+
+        const items = buildImportPayloadItems(form.items);
         if (!items.length) return showToast({ type: 'warning', message: 'Phiếu nhập cần ít nhất một dòng sản phẩm.' });
 
         setFlag('saving', true);
         try {
-            const payload = { supplier_id: Number(form.supplier_id), import_date: form.import_date, notes: form.notes || null, update_supplier_prices: Boolean(form.update_supplier_prices), items };
+            const payload = buildImportSubmitData(form);
             if (form.id) {
                 await inventoryApi.updateImport(form.id, payload);
                 showToast({ type: 'success', message: 'Đã cập nhật phiếu nhập.' });
@@ -1655,7 +2044,15 @@ const InventoryMovement = () => {
                 await inventoryApi.createImport(payload);
                 showToast({ type: 'success', message: 'Đã tạo phiếu nhập.' });
             }
-            setImportModal({ open: false, form: createImportForm() });
+
+            const defaultStatus = getDefaultImportStatus();
+            setImportModal({
+                open: false,
+                form: createImportForm({
+                    inventory_import_status_id: defaultStatus?.id || null,
+                    update_supplier_prices: true,
+                }),
+            });
             fetchImports(importPagination.current_page || 1);
             fetchProducts(productPagination.current_page || 1);
             fetchOverview();
@@ -2060,6 +2457,17 @@ const InventoryMovement = () => {
         if (columnId === 'code') return <CellText primary={row.import_number} mono />;
         if (columnId === 'supplier') return <CellText primary={row.supplier?.name || row.supplier_name || '-'} />;
         if (columnId === 'date') return formatDateTime(row.import_date);
+        if (columnId === 'status') {
+            const status = row.statusConfig;
+            return (
+                <div className="space-y-1">
+                    <StatusPill label={status?.name || row.status || 'Chưa có trạng thái'} color={status?.color || '#94A3B8'} />
+                    <div className="text-[11px] text-primary/45">
+                        {row.entry_mode === 'invoice_ai' ? 'AI đọc hóa đơn' : 'Nhập tay'}
+                    </div>
+                </div>
+            );
+        }
         if (columnId === 'line_count') return formatNumber(row.items_count || 0);
         if (columnId === 'qty') return formatNumber(row.total_quantity || 0);
         if (columnId === 'amount') return formatCurrency(row.total_amount || 0);
@@ -2120,10 +2528,42 @@ const InventoryMovement = () => {
 
     const renderSimpleTab = (tabKey) => {
         const filters = simpleFilters[tabKey];
-        const columns = tabKey === 'imports' ? importColumns : tabKey === 'exports' ? exportColumns : tabKey === 'lots' ? lotColumns : tabKey === 'trash' ? trashColumns : documentColumns;
-        const renderCell = tabKey === 'imports' ? renderImportCell : tabKey === 'exports' ? renderExportCell : tabKey === 'lots' ? renderLotCell : tabKey === 'trash' ? renderTrashCell : (row, columnId) => renderDocumentCell(row, columnId, tabKey);
+        const isImportTab = tabKey === 'imports';
+        const columns = isImportTab ? importColumns : tabKey === 'exports' ? exportColumns : tabKey === 'lots' ? lotColumns : tabKey === 'trash' ? trashColumns : documentColumns;
+        const renderCell = isImportTab ? renderImportCell : tabKey === 'exports' ? renderExportCell : tabKey === 'lots' ? renderLotCell : tabKey === 'trash' ? renderTrashCell : (row, columnId) => renderDocumentCell(row, columnId, tabKey);
         const sortMap = ['returns', 'damaged', 'adjustments'].includes(tabKey) ? inventorySortColumnMaps.documents : inventorySortColumnMaps[tabKey];
-        const extraActions = <>{tabKey === 'imports' ? <button type="button" onClick={openCreateImport} className={primaryButton}>Tạo phiếu</button> : null}{tabKey === 'exports' ? <button type="button" onClick={() => navigate('/admin/orders/new')} className={primaryButton}>Tạo phiếu</button> : null}{['returns', 'damaged', 'adjustments'].includes(tabKey) ? <button type="button" onClick={() => openCreateDocument(tabKey)} className={primaryButton}>Tạo phiếu</button> : null}</>;
+        const extraActions = (
+            <>
+                {isImportTab ? (
+                    <>
+                        <button type="button" onClick={openImportStatusManager} className={ghostButton}>Trạng thái</button>
+                        <button type="button" onClick={openCreateImport} className={primaryButton}>Tạo phiếu</button>
+                    </>
+                ) : null}
+                {tabKey === 'exports' ? <button type="button" onClick={() => navigate('/admin/orders/new')} className={primaryButton}>Tạo phiếu</button> : null}
+                {['returns', 'damaged', 'adjustments'].includes(tabKey) ? <button type="button" onClick={() => openCreateDocument(tabKey)} className={primaryButton}>Tạo phiếu</button> : null}
+            </>
+        );
+        const filterPanel = openPanels[tabKey].filters ? (
+            <FilterPanel actions={<button type="button" onClick={() => tabFetch[tabKey](1)} className={primaryButton}>Lọc</button>}>
+                <input value={filters.search} onChange={(event) => setSimpleFilters((prev) => ({ ...prev, [tabKey]: { ...prev[tabKey], search: event.target.value } }))} placeholder="Tìm nhanh" className={`w-[240px] ${inputClass}`} />
+                <input type="date" value={filters.date_from} onChange={(event) => setSimpleFilters((prev) => ({ ...prev, [tabKey]: { ...prev[tabKey], date_from: event.target.value } }))} className={`w-[145px] ${inputClass}`} />
+                <input type="date" value={filters.date_to} onChange={(event) => setSimpleFilters((prev) => ({ ...prev, [tabKey]: { ...prev[tabKey], date_to: event.target.value } }))} className={`w-[145px] ${inputClass}`} />
+                {isImportTab ? (
+                    <>
+                        <select value={filters.inventory_import_status_id} onChange={(event) => setSimpleFilters((prev) => ({ ...prev, imports: { ...prev.imports, inventory_import_status_id: event.target.value } }))} className={`w-[190px] ${selectClass}`}>
+                            <option value="">Tất cả trạng thái</option>
+                            {importStatuses.map((status) => <option key={status.id} value={status.id}>{status.name}</option>)}
+                        </select>
+                        <select value={filters.entry_mode} onChange={(event) => setSimpleFilters((prev) => ({ ...prev, imports: { ...prev.imports, entry_mode: event.target.value } }))} className={`w-[170px] ${selectClass}`}>
+                            <option value="">Tất cả cách tạo</option>
+                            <option value="manual">Nhập tay</option>
+                            <option value="invoice_ai">AI đọc hóa đơn</option>
+                        </select>
+                    </>
+                ) : null}
+            </FilterPanel>
+        ) : null;
 
         return (
             <div className="space-y-3">
@@ -2137,7 +2577,7 @@ const InventoryMovement = () => {
                         ]}
                         actions={extraActions}
                     />
-                    {openPanels[tabKey].filters ? <FilterPanel actions={<button type="button" onClick={() => tabFetch[tabKey](1)} className={primaryButton}>Lọc</button>}><input value={filters.search} onChange={(event) => setSimpleFilters((prev) => ({ ...prev, [tabKey]: { ...prev[tabKey], search: event.target.value } }))} placeholder="Tìm nhanh" className={`w-[240px] ${inputClass}`} /><input type="date" value={filters.date_from} onChange={(event) => setSimpleFilters((prev) => ({ ...prev, [tabKey]: { ...prev[tabKey], date_from: event.target.value } }))} className={`w-[145px] ${inputClass}`} /><input type="date" value={filters.date_to} onChange={(event) => setSimpleFilters((prev) => ({ ...prev, [tabKey]: { ...prev[tabKey], date_to: event.target.value } }))} className={`w-[145px] ${inputClass}`} /></FilterPanel> : null}
+                    {filterPanel}
                     {openPanels[tabKey].stats ? <SummaryPanel items={simpleSummaryMap[tabKey] || []} /> : null}
                     <InventoryTable storageKey={`inventory_${tabKey}_table_${inventoryTableStorageVersion}`} columns={columns} rows={tabRows[tabKey]} renderCell={renderCell} loading={tabLoading[tabKey]} pagination={tabPagination[tabKey]} onPageChange={tabFetch[tabKey]} footer={`Kết quả: ${formatNumber(tabPagination[tabKey].total)}`} settingsOpen={openPanels[tabKey].columns} onCloseSettings={() => togglePanel(tabKey, 'columns')} currentPerPage={pageSizes[tabKey]} onPerPageChange={(value) => {
                         const nextSize = updatePageSize(tabKey, value);
@@ -2304,20 +2744,97 @@ const InventoryMovement = () => {
         </div>
     );
 
-    const importLineTotal = useMemo(() => importModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unit_cost || 0), 0), [importModal.form.items]);
+    const importSubtotal = useMemo(
+        () => importModal.form.items.reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.unit_cost || 0)), 0),
+        [importModal.form.items]
+    );
+    const importSurchargeAmount = useMemo(
+        () => importSubtotal * (parsePercentValue(importModal.form.extra_charge_percent) / 100),
+        [importModal.form.extra_charge_percent, importSubtotal]
+    );
+    const importLineTotal = useMemo(
+        () => importSubtotal + importSurchargeAmount,
+        [importSubtotal, importSurchargeAmount]
+    );
     const documentLineTotal = useMemo(() => documentModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unit_cost || 0), 0), [documentModal.form.items]);
+    const createSlipActions = [
+        { key: 'imports', label: 'Phiếu nhập', icon: 'inventory_2', onClick: async () => { setCreateMenuOpen(false); await openCreateImport(); } },
+        { key: 'exports', label: 'Phiếu xuất', icon: 'shopping_cart', onClick: () => { setCreateMenuOpen(false); navigate('/admin/orders/new'); } },
+        { key: 'returns', label: 'Phiếu hoàn', icon: 'assignment_return', onClick: async () => { setCreateMenuOpen(false); setActiveTab('returns'); await openCreateDocument('returns'); } },
+        { key: 'damaged', label: 'Phiếu hỏng', icon: 'broken_image', onClick: async () => { setCreateMenuOpen(false); setActiveTab('damaged'); await openCreateDocument('damaged'); } },
+        { key: 'adjustments', label: 'Phiếu điều chỉnh', icon: 'tune', onClick: async () => { setCreateMenuOpen(false); setActiveTab('adjustments'); await openCreateDocument('adjustments'); } },
+    ];
+    const documentWorkspace = isDocumentTab(activeTab) ? (
+        <div className="space-y-3">
+            <div className={`${panelClass} p-2`}>
+                <div className="flex flex-wrap gap-2">
+                    {documentTabs.map(([key, label]) => (
+                        <button
+                            key={key}
+                            type="button"
+                            onClick={() => setActiveTab(key)}
+                            className={`h-10 shrink-0 rounded-sm border px-4 text-[12px] font-black transition ${activeTab === key ? 'border-primary bg-primary text-white' : 'border-primary/15 bg-white text-primary hover:border-primary/35 hover:bg-primary/[0.03]'}`}
+                        >
+                            {label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+            {renderSimpleTab(activeTab)}
+        </div>
+    ) : null;
 
     return (
         <div className="space-y-4 px-5 pb-6 pt-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="text-[16px] font-black uppercase tracking-[0.18em] text-primary">Quản lý kho</div>
-                <div className="flex flex-wrap items-center gap-2">
-                    <button type="button" onClick={() => navigate('/admin/products/new')} className={primaryButton}><span className="material-symbols-outlined text-[18px]">add</span>Tạo sản phẩm</button>
-                    <button type="button" onClick={openCreateImport} className={ghostButton}><span className="material-symbols-outlined text-[18px]">inventory_2</span>Tạo phiếu nhập</button>
-                    <button type="button" onClick={() => navigate('/admin/orders/new')} className={ghostButton}><span className="material-symbols-outlined text-[18px]">shopping_cart</span>Tạo phiếu xuất</button>
+                <div className="relative flex flex-wrap items-center gap-2">
+                    <button type="button" onClick={() => setCreateMenuOpen((prev) => !prev)} className={primaryButton}>
+                        <span className="material-symbols-outlined text-[18px]">add</span>
+                        Tạo phiếu
+                        <span className="material-symbols-outlined text-[18px]">{createMenuOpen ? 'expand_less' : 'expand_more'}</span>
+                    </button>
+                    {createMenuOpen ? (
+                        <div className="absolute right-0 top-full z-30 mt-2 min-w-[220px] overflow-hidden rounded-sm border border-primary/10 bg-white shadow-xl">
+                            {createSlipActions.map((action) => (
+                                <button
+                                    key={action.key}
+                                    type="button"
+                                    onClick={action.onClick}
+                                    className="flex w-full items-center gap-2 border-b border-primary/10 px-3 py-2.5 text-left text-[13px] font-semibold text-primary transition last:border-b-0 hover:bg-primary/[0.04]"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">{action.icon}</span>
+                                    {action.label}
+                                </button>
+                            ))}
+                        </div>
+                    ) : null}
                 </div>
             </div>
-            <div className={`${panelClass} p-2`}><div className="flex flex-nowrap gap-2 overflow-x-auto">{tabs.map(([key, label]) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-10 shrink-0 rounded-sm border px-4 text-[12px] font-black transition ${activeTab === key ? 'border-primary bg-primary text-white' : 'border-primary/15 bg-white text-primary hover:border-primary/35 hover:bg-primary/[0.03]'}`}>{label}</button>)}</div></div>
+            <div className={`${panelClass} p-2`}>
+                <div className="flex flex-nowrap gap-2 overflow-x-auto">
+                    {topTabs.map(([key, label]) => {
+                        const selected = key === 'documents' ? isDocumentTab(activeTab) : activeTab === key;
+                        return (
+                            <button
+                                key={key}
+                                type="button"
+                                onClick={() => {
+                                    setCreateMenuOpen(false);
+                                    if (key === 'documents') {
+                                        setActiveTab(isDocumentTab(activeTab) ? activeTab : 'imports');
+                                        return;
+                                    }
+                                    setActiveTab(key);
+                                }}
+                                className={`h-10 shrink-0 rounded-sm border px-4 text-[12px] font-black transition ${selected ? 'border-primary bg-primary text-white' : 'border-primary/15 bg-white text-primary hover:border-primary/35 hover:bg-primary/[0.03]'}`}
+                            >
+                                {label}
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
             {activeTab === 'overview' ? <div className={panelClass}><PanelHeader title="Tổng quan kho" toggles={[{ id: 'overview_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.overview.stats, onClick: () => togglePanel('overview', 'stats') }]} />{openPanels.overview.stats ? <SummaryPanel items={overviewItems} /> : null}</div> : null}
             {activeTab === 'products' ? <div className={panelClass}><PanelHeader title="Sản phẩm kho" toggles={[{ id: 'products_filters', icon: 'filter_alt', label: 'Bộ lọc', active: openPanels.products.filters, onClick: () => togglePanel('products', 'filters') }, { id: 'products_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.products.stats, onClick: () => togglePanel('products', 'stats') }, { id: 'products_columns', icon: 'view_column', label: 'Cài đặt cột', active: openPanels.products.columns, onClick: () => togglePanel('products', 'columns') }]} actions={<button type="button" onClick={() => navigate('/admin/products/new')} className={primaryButton}>Tạo sản phẩm</button>} />{openPanels.products.filters ? <FilterPanel actions={<button type="button" onClick={() => fetchProducts(1)} className={primaryButton}>Lọc</button>}><input value={productFilters.search} onChange={(event) => setProductFilters((prev) => ({ ...prev, search: event.target.value }))} placeholder="Tìm mã hoặc tên" className={`w-[220px] ${inputClass}`} /><select value={productFilters.status} onChange={(event) => setProductFilters((prev) => ({ ...prev, status: event.target.value }))} className={`w-[150px] ${selectClass}`}><option value="">Tất cả trạng thái bán</option><option value="active">Đang bán</option><option value="inactive">Ngừng bán</option></select><select value={productFilters.cost_source} onChange={(event) => setProductFilters((prev) => ({ ...prev, cost_source: event.target.value }))} className={`w-[170px] ${selectClass}`}><option value="">Tất cả trạng thái giá</option><option value="actual">Đang dùng giá vốn</option><option value="expected">Đang dùng giá dự kiến</option><option value="empty">Chưa có giá</option></select><select value={productFilters.type} onChange={(event) => setProductFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[165px] ${selectClass}`}><option value="">Tất cả loại sản phẩm</option><option value="simple">Sản phẩm thường</option><option value="configurable">Sản phẩm có biến thể</option></select><select value={productFilters.category_id} onChange={(event) => setProductFilters((prev) => ({ ...prev, category_id: event.target.value }))} className={`w-[165px] ${selectClass}`}><option value="">Tất cả danh mục</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select><select value={productFilters.variant_scope} onChange={(event) => setProductFilters((prev) => ({ ...prev, variant_scope: event.target.value }))} className={`w-[165px] ${selectClass}`}><option value="">Có biến thể / không</option><option value="has_variants">Có biến thể</option><option value="no_variants">Không có biến thể</option><option value="only_variants">Chỉ biến thể con</option><option value="roots">Chỉ sản phẩm gốc</option></select><input type="date" value={productFilters.date_from} onChange={(event) => setProductFilters((prev) => ({ ...prev, date_from: event.target.value }))} className={`w-[145px] ${inputClass}`} /><input type="date" value={productFilters.date_to} onChange={(event) => setProductFilters((prev) => ({ ...prev, date_to: event.target.value }))} className={`w-[145px] ${inputClass}`} /></FilterPanel> : null}{openPanels.products.stats ? <SummaryPanel items={productSummaryItems} /> : null}<InventoryTable storageKey={`inventory_products_table_${inventoryTableStorageVersion}`} columns={productColumns} rows={products} renderCell={productCell} loading={loading.products} pagination={productPagination} onPageChange={fetchProducts} footer={`Kết quả: ${formatNumber(productPagination.total)} mã`} settingsOpen={openPanels.products.columns} onCloseSettings={() => togglePanel('products', 'columns')} currentPerPage={pageSizes.products} onPerPageChange={(value) => fetchProducts(1, updatePageSize('products', value))} sortConfig={sortConfigs.products} onSort={(columnId) => handleTableSort('products', columnId)} sortColumnMap={inventorySortColumnMaps.products} /></div> : null}
             {activeTab === 'suppliers' ? suppliersTabContent : null}
@@ -2465,9 +2982,275 @@ const InventoryMovement = () => {
                     </div>
                 </div>
             ) : null}
-            {['imports', 'exports', 'returns', 'damaged', 'adjustments', 'lots', 'trash'].includes(activeTab) ? renderSimpleTab(activeTab) : null}
+            {isDocumentTab(activeTab) ? documentWorkspace : null}
+            {['lots', 'trash'].includes(activeTab) ? renderSimpleTab(activeTab) : null}
             <ModalShell open={supplierModal.open} title={supplierModal.form.id ? 'Sửa nhà cung cấp' : 'Thêm nhà cung cấp'} onClose={() => setSupplierModal({ open: false, form: createSupplierForm() })} maxWidth="max-w-3xl" footer={<div className="flex justify-end gap-2"><button type="button" onClick={() => setSupplierModal({ open: false, form: createSupplierForm() })} className={ghostButton}>Hủy</button><button type="button" onClick={saveSupplier} className={primaryButton} disabled={loading.supplierModal}>{loading.supplierModal ? 'Đang lưu' : 'Lưu nhà cung cấp'}</button></div>}><div className="grid gap-3 md:grid-cols-2"><input value={supplierModal.form.code} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, code: event.target.value } }))} placeholder="Mã nhà cung cấp" className={inputClass} /><input value={supplierModal.form.name} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, name: event.target.value } }))} placeholder="Tên nhà cung cấp" className={inputClass} /><input value={supplierModal.form.phone} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, phone: event.target.value } }))} placeholder="Số điện thoại" className={inputClass} /><input value={supplierModal.form.email} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, email: event.target.value } }))} placeholder="Email" className={inputClass} /><input value={supplierModal.form.address} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, address: event.target.value } }))} placeholder="Địa chỉ" className={`md:col-span-2 ${inputClass}`} /><textarea value={supplierModal.form.notes} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú" className="min-h-[120px] rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary md:col-span-2" /><label className="inline-flex items-center gap-2 text-[13px] font-semibold text-primary"><input type="checkbox" checked={supplierModal.form.status} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, status: event.target.checked } }))} className="size-4 accent-primary" />Đang sử dụng</label></div></ModalShell>
-            <ModalShell open={importModal.open} title={importModal.form.id ? 'Sửa phiếu nhập' : 'Tạo phiếu nhập'} onClose={() => setImportModal({ open: false, form: createImportForm() })} footer={<div className="flex items-center justify-between gap-3"><div className="text-[13px] font-black text-primary">Tổng phiếu: {formatCurrency(importLineTotal)}</div><div className="flex gap-2"><button type="button" onClick={() => setImportModal({ open: false, form: createImportForm() })} className={ghostButton}>Hủy</button><button type="button" onClick={saveImport} className={primaryButton} disabled={loading.saving}>{loading.saving ? 'Đang lưu' : 'Lưu phiếu nhập'}</button></div></div>}><div className="space-y-4"><div className="grid gap-3 md:grid-cols-3"><select value={importModal.form.supplier_id} onChange={(event) => setImportModal((prev) => ({ ...prev, form: { ...prev.form, supplier_id: event.target.value } }))} className={selectClass}><option value="">Chọn nhà cung cấp</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select><input type="date" value={importModal.form.import_date} onChange={(event) => setImportModal((prev) => ({ ...prev, form: { ...prev.form, import_date: event.target.value } }))} className={inputClass} /><label className="inline-flex h-8 items-center gap-2 rounded-sm border border-primary/15 px-3 text-[13px] font-semibold text-primary"><input type="checkbox" checked={importModal.form.update_supplier_prices} onChange={(event) => setImportModal((prev) => ({ ...prev, form: { ...prev.form, update_supplier_prices: event.target.checked } }))} className="size-4 accent-primary" />Cập nhật lại bảng giá</label></div><ProductLookupInput supplierId={importModal.form.supplier_id ? Number(importModal.form.supplier_id) : null} onSelect={(product) => { const index = importModal.form.items.findIndex((item) => !item.product_id); const targetIndex = index >= 0 ? index : importModal.form.items.length; if (index < 0) addLine(setImportModal); attachProductToLine(setImportModal, targetIndex, product); }} buttonLabel="Thêm vào phiếu" /><div className="overflow-hidden rounded-sm border border-primary/10"><table className="w-full border-collapse"><thead className="bg-[#f6f9fc]"><tr>{['Sản phẩm', 'Số lượng', 'Giá nhập', 'Cập nhật giá', 'Ghi chú', 'Xóa'].map((label) => <th key={label} className="border-b border-r border-primary/10 px-3 py-2.5 text-center text-[12px] font-bold text-primary">{label}</th>)}</tr></thead><tbody>{importModal.form.items.map((item, index) => <tr key={item.key}><td className="border-b border-r border-primary/10 px-3 py-2"><div className="space-y-2">{item.product_id ? <CellText primary={item.product_name || '-'} secondary={item.product_sku || '-'} /> : <div className="text-[12px] text-primary/45">Chưa chọn sản phẩm</div>}<ProductLookupInput supplierId={importModal.form.supplier_id ? Number(importModal.form.supplier_id) : null} onSelect={(product) => attachProductToLine(setImportModal, index, product)} placeholder="Đổi sản phẩm" buttonLabel="Chọn" /></div></td><td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.quantity} onChange={(event) => updateLine(setImportModal, index, 'quantity', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} /></td><td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.unit_cost} onChange={(event) => updateLine(setImportModal, index, 'unit_cost', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} /></td><td className="border-b border-r border-primary/10 px-3 py-2 text-center"><input type="checkbox" checked={item.update_supplier_price} onChange={(event) => updateLine(setImportModal, index, 'update_supplier_price', event.target.checked)} className="size-4 accent-primary" /></td><td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.notes} onChange={(event) => updateLine(setImportModal, index, 'notes', event.target.value)} className={`w-full ${inputClass}`} placeholder="Ghi chú" /></td><td className="border-b border-primary/10 px-3 py-2 text-center"><button type="button" onClick={() => removeLine(setImportModal, index)} className={dangerButton}>Xóa</button></td></tr>)}</tbody></table></div><div className="flex justify-between gap-2"><button type="button" onClick={() => addLine(setImportModal)} className={ghostButton}>Thêm dòng</button><textarea value={importModal.form.notes} onChange={(event) => setImportModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú phiếu nhập" className="min-h-[96px] flex-1 rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary" /></div></div></ModalShell>
+            <ModalShell
+                open={importModal.open}
+                title={importModal.form.id ? 'Sửa phiếu nhập' : 'Tạo phiếu nhập'}
+                onClose={() => setImportModal({ open: false, form: createImportForm({ inventory_import_status_id: getDefaultImportStatus()?.id || null, update_supplier_prices: true }) })}
+                maxWidth="max-w-[1280px]"
+                footer={(
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div className="grid gap-2 text-[13px] font-semibold text-primary/75 md:grid-cols-3">
+                            <div>Tổng tiền hàng: <span className="font-black text-primary">{formatCurrency(importSubtotal)}</span></div>
+                            <div>Phụ phí: <span className="font-black text-primary">{formatCurrency(importSurchargeAmount)}</span></div>
+                            <div>Tổng tiền đơn: <span className="font-black text-primary">{formatCurrency(importLineTotal)}</span></div>
+                        </div>
+                        <div className="flex gap-2">
+                            <button type="button" onClick={() => setImportModal({ open: false, form: createImportForm({ inventory_import_status_id: getDefaultImportStatus()?.id || null, update_supplier_prices: true }) })} className={ghostButton}>Hủy</button>
+                            <button type="button" onClick={saveImport} className={primaryButton} disabled={loading.saving}>{loading.saving ? 'Đang lưu' : 'Lưu phiếu nhập'}</button>
+                        </div>
+                    </div>
+                )}
+            >
+                <div className="space-y-4">
+                    <div className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)_160px_160px]">
+                        <select value={importModal.form.supplier_id} onChange={(event) => handleImportSupplierChange(event.target.value)} className={selectClass}>
+                            <option value="">Chọn nhà cung cấp</option>
+                            {suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
+                        </select>
+                        <div className="flex gap-2">
+                            <select value={importModal.form.inventory_import_status_id} onChange={(event) => setImportModal((prev) => ({ ...prev, form: { ...prev.form, inventory_import_status_id: event.target.value } }))} className={`flex-1 ${selectClass}`}>
+                                <option value="">Chọn trạng thái</option>
+                                {importStatuses.map((status) => <option key={status.id} value={status.id}>{status.name}</option>)}
+                            </select>
+                            <button type="button" onClick={() => openImportStatusManager(importStatuses.find((status) => String(status.id) === String(importModal.form.inventory_import_status_id)) || null)} className={ghostButton}>Sửa</button>
+                        </div>
+                        <input type="date" value={importModal.form.import_date} onChange={(event) => setImportModal((prev) => ({ ...prev, form: { ...prev.form, import_date: event.target.value } }))} className={inputClass} />
+                        <div className="flex items-center gap-2 rounded-sm border border-primary/15 bg-[#fbfcfe] px-3 text-[12px] font-bold text-primary">
+                            <span className="material-symbols-outlined text-[18px]">{importModal.form.entry_mode === 'invoice_ai' ? 'auto_awesome' : 'edit_square'}</span>
+                            {importModal.form.entry_mode === 'invoice_ai' ? 'AI đọc hóa đơn' : 'Nhập tay'}
+                        </div>
+                    </div>
+
+                    <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                        <div className="rounded-sm border border-primary/10 bg-[#fbfcfe] p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                    <div className="text-[13px] font-black text-primary">Đính kèm hóa đơn / chứng từ</div>
+                                    <div className="text-[11px] text-primary/45">Cho phép upload file hóa đơn điện tử hoặc ảnh hóa đơn mua hàng.</div>
+                                </div>
+                                <label className={ghostButton}>
+                                    <input type="file" multiple className="hidden" onChange={(event) => addImportAttachmentFiles(event.target.files)} />
+                                    Thêm file
+                                </label>
+                            </div>
+                            <div className="mt-3 space-y-2">
+                                {(importModal.form.attachments || []).length === 0 && (importModal.form.local_attachment_files || []).length === 0 ? <div className="rounded-sm border border-dashed border-primary/20 px-3 py-4 text-[12px] text-primary/45">Chưa có file đính kèm.</div> : null}
+                                {(importModal.form.attachments || []).map((attachment, index) => (
+                                    <div key={`stored_${attachment.id || attachment.file_path}_${index}`} className="flex items-center justify-between gap-3 rounded-sm border border-primary/10 bg-white px-3 py-2">
+                                        <div className="min-w-0">
+                                            <div className="truncate text-[13px] font-semibold text-primary">{attachment.original_name || 'Tệp đính kèm'}</div>
+                                            <div className="text-[11px] text-primary/45">{attachment.source_type === 'invoice' ? 'Từ hóa đơn AI' : 'Đính kèm thủ công'}</div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {attachment.url ? <a href={attachment.url} target="_blank" rel="noreferrer" className={ghostButton}>Xem</a> : null}
+                                            <button type="button" onClick={() => removeImportAttachment(index)} className={dangerButton}>Bỏ</button>
+                                        </div>
+                                    </div>
+                                ))}
+                                {(importModal.form.local_attachment_files || []).map((file, index) => (
+                                    <div key={`local_${file.name}_${file.size}_${file.lastModified}`} className="flex items-center justify-between gap-3 rounded-sm border border-primary/10 bg-white px-3 py-2">
+                                        <div className="min-w-0">
+                                            <div className="truncate text-[13px] font-semibold text-primary">{file.name}</div>
+                                            <div className="text-[11px] text-primary/45">{formatNumber(Math.round((file.size || 0) / 1024))} KB • sẽ upload khi lưu phiếu</div>
+                                        </div>
+                                        <button type="button" onClick={() => removeLocalImportFile(index)} className={dangerButton}>Bỏ</button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="rounded-sm border border-primary/10 bg-[#fbfcfe] p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                    <div className="text-[13px] font-black text-primary">Tạo bản nháp từ hóa đơn</div>
+                                    <div className="text-[11px] text-primary/45">Upload file hóa đơn để OCR/AI đọc mã hàng NCC, map sang sản phẩm nội bộ và dựng sẵn phiếu nhập.</div>
+                                </div>
+                                <label className={primaryButton}>
+                                    <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.txt,.csv,.json" className="hidden" onChange={(event) => analyzeInvoiceFile(event.target.files?.[0])} />
+                                    {loading.invoiceAnalysis ? 'Đang đọc hóa đơn' : 'Đọc hóa đơn'}
+                                </label>
+                            </div>
+                            <div className="mt-3 space-y-2">
+                                {importModal.form.analysis_log ? (
+                                    <div className="rounded-sm border border-primary/10 bg-white p-3">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <StatusPill label={importModal.form.analysis_log.status || 'processing'} color={importModal.form.analysis_log.status === 'failed' ? '#DC2626' : importModal.form.analysis_log.status === 'partial' ? '#F59E0B' : '#10B981'} />
+                                            <span className="text-[12px] font-semibold text-primary">{importModal.form.analysis_log.source_name || importModal.form.invoice_number || 'Hóa đơn đã đọc'}</span>
+                                        </div>
+                                        <div className="mt-2 text-[11px] text-primary/45">
+                                            {importModal.form.invoice_number ? `Số hóa đơn: ${importModal.form.invoice_number}` : 'Chưa có số hóa đơn'}{importModal.form.analysis_log.provider ? ` • ${importModal.form.analysis_log.provider}` : ''}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="rounded-sm border border-dashed border-primary/20 px-3 py-4 text-[12px] text-primary/45">Chưa có bản phân tích hóa đơn.</div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {importModal.form.items.some((item) => item.mapping_status === 'unmatched') ? (
+                        <div className="rounded-sm border border-amber-300 bg-amber-50 p-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <StatusPill label="Chưa map đủ" color="#D97706" subtle="#FEF3C7" />
+                                <div className="text-[13px] font-black text-amber-900">Có dòng chưa map sang sản phẩm nội bộ</div>
+                            </div>
+                            <div className="mt-2 space-y-1 text-[12px] text-amber-900/80">
+                                {importModal.form.items.filter((item) => item.mapping_status === 'unmatched').map((item) => (
+                                    <div key={`${item.key}_warning`}>
+                                        {item.supplier_product_code || 'Không có mã NCC'} • {item.product_name || 'Chưa có tên sản phẩm'}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : null}
+
+                    <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_240px_220px]">
+                        <ProductLookupInput
+                            supplierId={importModal.form.supplier_id ? Number(importModal.form.supplier_id) : null}
+                            onSelect={(product) => {
+                                const index = importModal.form.items.findIndex((item) => !item.product_id);
+                                const targetIndex = index >= 0 ? index : importModal.form.items.length;
+                                if (index < 0) addLine(setImportModal);
+                                attachProductToLine(setImportModal, targetIndex, product);
+                            }}
+                            buttonLabel="Thêm vào phiếu"
+                        />
+                        <label className="inline-flex h-10 items-center gap-2 rounded-sm border border-primary/15 bg-white px-3 text-[13px] font-semibold text-primary">
+                            <input
+                                type="checkbox"
+                                checked={Boolean(importModal.form.update_supplier_prices)}
+                                onChange={(event) => setImportModal((prev) => ({
+                                    ...prev,
+                                    form: {
+                                        ...prev.form,
+                                        update_supplier_prices: event.target.checked,
+                                        items: prev.form.items.map((item) => ({ ...item, update_supplier_price: event.target.checked })),
+                                    },
+                                }))}
+                                className="size-4 accent-primary"
+                            />
+                            Đồng bộ lại giá nhập dự kiến
+                        </label>
+                        <div className="flex items-center gap-2 rounded-sm border border-primary/15 bg-white px-3">
+                            <span className="text-[12px] font-bold text-primary/60">Phụ phí %</span>
+                            <input value={importModal.form.extra_charge_percent} onChange={(event) => setImportModal((prev) => ({ ...prev, form: { ...prev.form, extra_charge_percent: event.target.value.replace(/[^0-9.,]/g, '') } }))} className="h-8 w-full bg-transparent text-right text-[13px] font-semibold text-primary outline-none" placeholder="0" />
+                        </div>
+                    </div>
+
+                    <div className="overflow-hidden rounded-sm border border-primary/10">
+                        <table className="w-full border-collapse">
+                            <thead className="bg-[#f6f9fc]">
+                                <tr>
+                                    {['Tên sản phẩm', 'Mã SP', 'Mã NCC', 'Số lượng', 'ĐVT', 'Ghi chú', 'Giá nhập', 'Thành tiền', 'Xóa'].map((label) => (
+                                        <th key={label} className="border-b border-r border-primary/10 px-3 py-2.5 text-center text-[12px] font-bold text-primary last:border-r-0">{label}</th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {importModal.form.items.map((item, index) => (
+                                    <tr key={item.key} className={item.mapping_status === 'unmatched' ? 'bg-amber-50/60' : ''}>
+                                        <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
+                                            <div className="space-y-2">
+                                                {item.product_id ? (
+                                                    <CellText
+                                                        primary={item.product_name || '-'}
+                                                        secondary={item.mapping_label || 'Đã chọn sản phẩm'}
+                                                    />
+                                                ) : (
+                                                    <div className="space-y-1">
+                                                        <div className="text-[12px] font-semibold text-primary/80">{item.product_name || 'Chưa chọn sản phẩm'}</div>
+                                                        {item.mapping_status === 'unmatched' ? <StatusPill label="Chưa map" color="#D97706" subtle="#FEF3C7" /> : <div className="text-[11px] text-primary/45">Tìm và chọn sản phẩm nội bộ</div>}
+                                                    </div>
+                                                )}
+                                                <ProductLookupInput
+                                                    supplierId={importModal.form.supplier_id ? Number(importModal.form.supplier_id) : null}
+                                                    onSelect={(product) => attachProductToLine(setImportModal, index, product)}
+                                                    placeholder="Tìm theo mã hoặc tên"
+                                                    buttonLabel="Chọn"
+                                                />
+                                            </div>
+                                        </td>
+                                        <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
+                                            <input value={item.product_sku} onChange={(event) => updateLine(setImportModal, index, 'product_sku', event.target.value)} className={`w-full ${inputClass}`} placeholder="Mã sản phẩm" />
+                                        </td>
+                                        <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
+                                            <input value={item.supplier_product_code} onChange={(event) => updateLine(setImportModal, index, 'supplier_product_code', event.target.value)} className={`w-full ${inputClass}`} placeholder="Mã hàng NCC" />
+                                        </td>
+                                        <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
+                                            <input value={item.quantity} onChange={(event) => updateLine(setImportModal, index, 'quantity', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} />
+                                        </td>
+                                        <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
+                                            <input value={item.unit_name} onChange={(event) => updateLine(setImportModal, index, 'unit_name', event.target.value)} className={`w-full ${inputClass}`} placeholder="ĐVT" />
+                                        </td>
+                                        <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
+                                            <input value={item.notes} onChange={(event) => updateLine(setImportModal, index, 'notes', event.target.value)} className={`w-full ${inputClass}`} placeholder="Ghi chú từng dòng" />
+                                        </td>
+                                        <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
+                                            <input value={item.unit_cost} onChange={(event) => updateLine(setImportModal, index, 'unit_cost', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} placeholder="0" />
+                                        </td>
+                                        <td className="border-b border-r border-primary/10 px-3 py-2 text-right align-top text-[13px] font-black text-primary">
+                                            {formatCurrency(Number(item.quantity || 0) * Number(item.unit_cost || 0))}
+                                        </td>
+                                        <td className="border-b border-primary/10 px-3 py-2 text-center align-top">
+                                            <button type="button" onClick={() => removeLine(setImportModal, index)} className={dangerButton}>Xóa</button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <button type="button" onClick={() => addLine(setImportModal)} className={ghostButton}>Thêm dòng</button>
+                        <textarea value={importModal.form.notes} onChange={(event) => setImportModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú chung cho phiếu nhập" className="min-h-[110px] w-full rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary lg:max-w-[560px]" />
+                    </div>
+                </div>
+            </ModalShell>
+            <ModalShell
+                open={importStatusModal.open}
+                title={importStatusModal.form.id ? 'Sửa trạng thái phiếu nhập' : 'Tạo trạng thái phiếu nhập'}
+                onClose={() => setImportStatusModal({ open: false, form: createImportStatusForm() })}
+                maxWidth="max-w-3xl"
+                footer={(
+                    <div className="flex justify-between gap-2">
+                        <div className="flex flex-wrap gap-2">
+                            {importStatuses.map((status) => (
+                                <button key={status.id} type="button" onClick={() => setImportStatusModal({ open: true, form: createImportStatusForm(status) })} className={ghostButton}>
+                                    {status.name}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="flex gap-2">
+                            <button type="button" onClick={() => setImportStatusModal({ open: false, form: createImportStatusForm() })} className={ghostButton}>Đóng</button>
+                            <button type="button" onClick={saveImportStatus} className={primaryButton} disabled={loading.importStatusModal}>{loading.importStatusModal ? 'Đang lưu' : 'Lưu trạng thái'}</button>
+                        </div>
+                    </div>
+                )}
+            >
+                <div className="grid gap-3 md:grid-cols-2">
+                    <input value={importStatusModal.form.name} onChange={(event) => setImportStatusModal((prev) => ({ ...prev, form: { ...prev.form, name: event.target.value } }))} placeholder="Tên trạng thái" className={inputClass} />
+                    <div className="flex items-center gap-3 rounded-sm border border-primary/15 px-3">
+                        <span className="text-[12px] font-bold text-primary/60">Màu hiển thị</span>
+                        <input type="color" value={importStatusModal.form.color || '#10B981'} onChange={(event) => setImportStatusModal((prev) => ({ ...prev, form: { ...prev.form, color: event.target.value } }))} className="h-10 w-14 cursor-pointer border-0 bg-transparent p-0" />
+                        <StatusPill label={importStatusModal.form.name || 'Xem trước'} color={importStatusModal.form.color || '#10B981'} />
+                    </div>
+                    <label className="inline-flex items-center gap-2 rounded-sm border border-primary/15 px-3 py-2 text-[13px] font-semibold text-primary">
+                        <input type="checkbox" checked={importStatusModal.form.affects_inventory} onChange={(event) => setImportStatusModal((prev) => ({ ...prev, form: { ...prev.form, affects_inventory: event.target.checked } }))} className="size-4 accent-primary" />
+                        Trạng thái này cập nhật tồn kho
+                    </label>
+                    <label className="inline-flex items-center gap-2 rounded-sm border border-primary/15 px-3 py-2 text-[13px] font-semibold text-primary">
+                        <input type="checkbox" checked={importStatusModal.form.is_default} onChange={(event) => setImportStatusModal((prev) => ({ ...prev, form: { ...prev.form, is_default: event.target.checked } }))} className="size-4 accent-primary" />
+                        Đặt làm trạng thái mặc định
+                    </label>
+                    <label className="inline-flex items-center gap-2 rounded-sm border border-primary/15 px-3 py-2 text-[13px] font-semibold text-primary md:col-span-2">
+                        <input type="checkbox" checked={importStatusModal.form.is_active} onChange={(event) => setImportStatusModal((prev) => ({ ...prev, form: { ...prev.form, is_active: event.target.checked } }))} className="size-4 accent-primary" />
+                        Đang sử dụng
+                    </label>
+                </div>
+            </ModalShell>
             <ModalShell open={documentModal.open} title={documentModal.form.id ? `Sửa ${documentTitleMap[documentModal.tabKey]}` : `Tạo ${documentTitleMap[documentModal.tabKey]}`} onClose={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} footer={<div className="flex items-center justify-between gap-3"><div className="text-[13px] font-black text-primary">{documentModal.tabKey === 'damaged' ? `Tổng số lượng: ${formatNumber(documentModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}` : `Tổng giá trị tạm tính: ${formatCurrency(documentLineTotal)}`}</div><div className="flex gap-2"><button type="button" onClick={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} className={ghostButton}>Hủy</button><button type="button" onClick={saveDocument} className={primaryButton} disabled={loading.saving}>{loading.saving ? 'Đang lưu' : 'Lưu phiếu'}</button></div></div>}><div className="space-y-4"><div className="grid gap-3 md:grid-cols-3"><input type="date" value={documentModal.form.document_date} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, document_date: event.target.value } }))} className={inputClass} /><select value={documentModal.form.supplier_id} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, supplier_id: event.target.value } }))} className={selectClass}><option value="">Không gắn nhà cung cấp</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select><div className="flex items-center rounded-sm border border-primary/15 px-3 text-[13px] font-semibold text-primary">{documentTitleMap[documentModal.tabKey]}</div></div><ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => { const index = documentModal.form.items.findIndex((item) => !item.product_id); const targetIndex = index >= 0 ? index : documentModal.form.items.length; if (index < 0) addLine(setDocumentModal); attachProductToLine(setDocumentModal, targetIndex, product); }} buttonLabel="Thêm vào phiếu" /><div className="overflow-hidden rounded-sm border border-primary/10"><table className="w-full border-collapse"><thead className="bg-[#f6f9fc]"><tr>{['Sản phẩm', 'Số lượng', documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? 'Giá vốn' : null, documentModal.tabKey === 'adjustments' ? 'Loại tồn' : null, documentModal.tabKey === 'adjustments' ? 'Hướng' : null, 'Ghi chú', 'Xóa'].filter(Boolean).map((label) => <th key={label} className="border-b border-r border-primary/10 px-3 py-2.5 text-center text-[12px] font-bold text-primary">{label}</th>)}</tr></thead><tbody>{documentModal.form.items.map((item, index) => <tr key={item.key}><td className="border-b border-r border-primary/10 px-3 py-2"><div className="space-y-2">{item.product_id ? <CellText primary={item.product_name || '-'} secondary={item.product_sku || '-'} /> : <div className="text-[12px] text-primary/45">Chưa chọn sản phẩm</div>}<ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => attachProductToLine(setDocumentModal, index, product)} placeholder="Đổi sản phẩm" buttonLabel="Chọn" /></div></td><td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.quantity} onChange={(event) => updateLine(setDocumentModal, index, 'quantity', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} /></td>{documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.unit_cost} onChange={(event) => updateLine(setDocumentModal, index, 'unit_cost', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} /></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.stock_bucket} onChange={(event) => updateLine(setDocumentModal, index, 'stock_bucket', event.target.value)} className={`w-full ${selectClass}`}><option value="sellable">Tồn bán được</option><option value="damaged">Tồn hỏng</option></select></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.direction} onChange={(event) => updateLine(setDocumentModal, index, 'direction', event.target.value)} className={`w-full ${selectClass}`}><option value="in">Cộng</option><option value="out">Trừ</option></select></td> : null}<td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.notes} onChange={(event) => updateLine(setDocumentModal, index, 'notes', event.target.value)} className={`w-full ${inputClass}`} placeholder="Ghi chú" /></td><td className="border-b border-primary/10 px-3 py-2 text-center"><button type="button" onClick={() => removeLine(setDocumentModal, index)} className={dangerButton}>Xóa</button></td></tr>)}</tbody></table></div><div className="flex justify-between gap-2"><button type="button" onClick={() => addLine(setDocumentModal)} className={ghostButton}>Thêm dòng</button><textarea value={documentModal.form.notes} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú phiếu kho" className="min-h-[96px] flex-1 rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary" /></div></div></ModalShell>
         </div>
     );

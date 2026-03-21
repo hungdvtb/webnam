@@ -9,6 +9,9 @@ use App\Models\InventoryDocument;
 use App\Models\InventoryDocumentAllocation;
 use App\Models\InventoryDocumentItem;
 use App\Models\InventoryImport;
+use App\Models\InventoryImportAttachment;
+use App\Models\InventoryImportStatus;
+use App\Models\InventoryInvoiceAnalysisLog;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\Supplier;
@@ -23,9 +26,9 @@ class InventoryService
     public function createImport(array $payload, int $accountId, ?int $userId = null): InventoryImport
     {
         return DB::transaction(function () use ($payload, $accountId, $userId) {
-            $items = collect($payload['items'] ?? [])
-                ->filter(fn ($item) => (int) ($item['quantity'] ?? 0) > 0)
-                ->values();
+            $context = $this->prepareImportContext($payload, $accountId);
+            $status = $context['status'];
+            $items = $context['items'];
 
             if ($items->isEmpty()) {
                 throw ValidationException::withMessages([
@@ -33,13 +36,9 @@ class InventoryService
                 ]);
             }
 
-            $supplier = Supplier::query()->findOrFail((int) ($payload['supplier_id'] ?? 0));
-            $productIds = $items->pluck('product_id')->map(fn ($id) => (int) $id)->unique()->values()->all();
-            $products = Product::query()
-                ->whereIn('id', $productIds)
-                ->lockForUpdate()
-                ->get()
-                ->keyBy('id');
+            $supplier = $context['supplier'];
+            $productIds = $context['product_ids'];
+            $products = $context['products'];
 
             if (count($productIds) !== $products->count()) {
                 throw ValidationException::withMessages([
@@ -47,27 +46,30 @@ class InventoryService
                 ]);
             }
 
-            $supplierPrices = SupplierProductPrice::query()
-                ->where('supplier_id', $supplier->id)
-                ->whereIn('product_id', $productIds)
-                ->get()
-                ->keyBy('product_id');
+            $supplierPrices = $context['supplier_prices'];
 
-            $importDate = Carbon::parse($payload['import_date'] ?? now());
-            $totalQuantity = (int) $items->sum(fn ($item) => (int) $item['quantity']);
-            $totalAmount = round((float) $items->sum(fn ($item) => (float) $item['quantity'] * (float) $item['unit_cost']), 2);
+            $importDate = $context['import_date'];
+            $totalQuantity = $context['total_quantity'];
+            $totalAmount = $context['total_amount'];
 
             $import = InventoryImport::create([
                 'account_id' => $accountId,
                 'supplier_id' => $supplier->id,
+                'inventory_import_status_id' => $status->id,
                 'import_number' => $this->generateImportNumber($accountId),
                 'supplier_name' => trim((string) $supplier->name),
                 'import_date' => $importDate->toDateString(),
-                'status' => 'completed',
+                'status' => $status->code,
+                'entry_mode' => $context['entry_mode'],
                 'total_quantity' => $totalQuantity,
+                'subtotal_amount' => $context['subtotal_amount'],
+                'extra_charge_percent' => $context['extra_charge_percent'],
                 'total_amount' => $totalAmount,
                 'notes' => $payload['notes'] ?? null,
                 'created_by' => $userId ?? Auth::id(),
+                'inventory_applied_at' => $this->importAffectsInventory($status)
+                    ? $importDate->copy()->setTimeFrom(now())
+                    : null,
             ]);
 
             $touchedProductIds = [];
@@ -79,7 +81,7 @@ class InventoryService
                 $lineTotal = round($quantity * $unitCost, 2);
                 $supplierPrice = $supplierPrices->get($product->id);
                 $snapshotSupplierCost = $supplierPrice ? round((float) $supplierPrice->unit_cost, 2) : null;
-                $shouldUpdateSupplierPrice = (bool) ($item['update_supplier_price'] ?? $payload['update_supplier_prices'] ?? false);
+                $shouldUpdateSupplierPrice = (bool) ($item['update_supplier_price'] ?? $payload['update_supplier_prices'] ?? true);
                 $priceChanged = $snapshotSupplierCost === null || (float) $snapshotSupplierCost !== (float) $unitCost;
 
                 $importItem = ImportItem::create([
@@ -89,15 +91,19 @@ class InventoryService
                     'supplier_product_price_id' => $supplierPrice?->id,
                     'product_name_snapshot' => $product->name,
                     'product_sku_snapshot' => $product->sku,
+                    'supplier_product_code_snapshot' => $item['supplier_product_code'] ?? $product->supplier_product_code,
+                    'unit_name_snapshot' => $item['unit_name'] ?? $product->unit?->name,
                     'quantity' => $quantity,
                     'unit_cost' => $unitCost,
                     'supplier_price_snapshot' => $snapshotSupplierCost,
                     'price_was_updated' => $priceChanged && $shouldUpdateSupplierPrice,
                     'line_total' => $lineTotal,
                     'notes' => $item['notes'] ?? null,
+                    'sort_order' => $index + 1,
                 ]);
 
-                InventoryBatch::create([
+                if ($this->importAffectsInventory($status)) {
+                    InventoryBatch::create([
                     'account_id' => $accountId,
                     'product_id' => $product->id,
                     'import_id' => $import->id,
@@ -118,24 +124,23 @@ class InventoryService
                     ],
                 ]);
 
-                if ($shouldUpdateSupplierPrice || $supplierPrice === null) {
-                    $supplierPrices->put(
-                        $product->id,
-                        $this->upsertSupplierPrice($supplier, $product, $unitCost, $userId, $item['price_notes'] ?? null)
-                    );
+                }
+
+                if ($shouldUpdateSupplierPrice || $supplierPrice === null || $priceChanged) {
+                    $supplierPrice = $this->upsertSupplierPrice($supplier, $product, $unitCost, $userId, $item['price_notes'] ?? null);
+                    $supplierPrices->put($product->id, $supplierPrice);
+                    $importItem->forceFill([
+                        'supplier_product_price_id' => $supplierPrice->id,
+                    ])->save();
                 }
 
                 $touchedProductIds[] = $product->id;
             }
 
+            $this->syncImportAttachments($import, $payload, $accountId, $userId);
             $this->refreshProducts($touchedProductIds);
 
-            return $import->load([
-                'supplier:id,name,phone,email',
-                'items.product:id,sku,name',
-                'items.batch',
-                'creator:id,name',
-            ]);
+            return $this->loadImportRelations($import->fresh());
         });
     }
 
@@ -154,34 +159,56 @@ class InventoryService
     public function updateImport(InventoryImport $import, array $payload, int $accountId, ?int $userId = null): InventoryImport
     {
         return DB::transaction(function () use ($import, $payload, $accountId, $userId) {
-            $originalNumber = $import->import_number;
-            $originalCreatedAt = $import->created_at;
-
             $this->ensureImportCanBeReverted($import);
-            $this->revertImport($import);
-            $import->delete();
+            $context = $this->prepareImportContext($payload, $accountId);
+            $status = $context['status'];
+            $previousProductIds = $import->items()->pluck('product_id')->all();
 
-            $replacement = $this->createImport($payload, $accountId, $userId);
-            $replacement->forceFill([
-                'import_number' => $originalNumber,
-                'created_at' => $originalCreatedAt,
+            $this->revertImportInventory($import);
+            ImportItem::query()->where('import_id', $import->id)->delete();
+
+            $import->forceFill([
+                'supplier_id' => $context['supplier']->id,
+                'inventory_import_status_id' => $status->id,
+                'supplier_name' => trim((string) $context['supplier']->name),
+                'import_date' => $context['import_date']->toDateString(),
+                'status' => $status->code,
+                'entry_mode' => $context['entry_mode'],
+                'total_quantity' => $context['total_quantity'],
+                'subtotal_amount' => $context['subtotal_amount'],
+                'extra_charge_percent' => $context['extra_charge_percent'],
+                'total_amount' => $context['total_amount'],
+                'notes' => $payload['notes'] ?? null,
+                'inventory_applied_at' => $this->importAffectsInventory($status)
+                    ? $context['import_date']->copy()->setTimeFrom(now())
+                    : null,
             ])->save();
 
-            return $replacement->fresh([
-                'supplier:id,name,phone,email',
-                'items.product:id,sku,name',
-                'items.batch',
-                'creator:id,name',
-            ]);
+            $touchedProductIds = array_merge(
+                $previousProductIds,
+                $this->syncImportItems($import, $context, $userId)
+            );
+
+            $this->syncImportAttachments($import, $payload, $accountId, $userId);
+            $this->refreshProducts($touchedProductIds);
+
+            return $this->loadImportRelations($import->fresh());
         });
     }
 
     public function deleteImport(InventoryImport $import): void
     {
         DB::transaction(function () use ($import) {
+            $productIds = $import->items()->pluck('product_id')->all();
             $this->ensureImportCanBeReverted($import);
-            $this->revertImport($import);
+            $this->revertImportInventory($import);
+            InventoryImportAttachment::query()->where('import_id', $import->id)->delete();
+            InventoryInvoiceAnalysisLog::query()
+                ->where('import_id', $import->id)
+                ->update(['import_id' => null]);
+            ImportItem::query()->where('import_id', $import->id)->delete();
             $import->delete();
+            $this->refreshProducts($productIds);
         });
     }
 
@@ -363,6 +390,310 @@ class InventoryService
             });
     }
 
+    private function prepareImportContext(array $payload, int $accountId): array
+    {
+        $items = collect($payload['items'] ?? [])
+            ->map(function ($item) {
+                return [
+                    'product_id' => (int) ($item['product_id'] ?? 0),
+                    'quantity' => (int) ($item['quantity'] ?? 0),
+                    'unit_cost' => round((float) ($item['unit_cost'] ?? 0), 2),
+                    'notes' => $item['notes'] ?? null,
+                    'price_notes' => $item['price_notes'] ?? null,
+                    'supplier_product_code' => $item['supplier_product_code'] ?? null,
+                    'unit_name' => $item['unit_name'] ?? null,
+                    'update_supplier_price' => $item['update_supplier_price'] ?? null,
+                ];
+            })
+            ->filter(fn ($item) => $item['product_id'] > 0 && $item['quantity'] > 0)
+            ->values();
+
+        if ($items->isEmpty()) {
+            throw ValidationException::withMessages([
+                'items' => 'Phieu nhap can co it nhat 1 dong san pham hop le.',
+            ]);
+        }
+
+        $supplier = Supplier::query()->findOrFail((int) ($payload['supplier_id'] ?? 0));
+        $productIds = $items->pluck('product_id')->unique()->values()->all();
+        $products = Product::query()
+            ->with(['unit:id,name'])
+            ->whereIn('id', $productIds)
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('id');
+
+        if (count($productIds) !== $products->count()) {
+            throw ValidationException::withMessages([
+                'items' => 'Co san pham trong phieu nhap khong ton tai hoac khong thuoc cua hang hien tai.',
+            ]);
+        }
+
+        $supplierPrices = SupplierProductPrice::query()
+            ->where('supplier_id', $supplier->id)
+            ->whereIn('product_id', $productIds)
+            ->get()
+            ->keyBy('product_id');
+
+        $importDate = Carbon::parse($payload['import_date'] ?? now());
+        $subtotalAmount = round((float) $items->sum(fn ($item) => $item['quantity'] * $item['unit_cost']), 2);
+        $extraChargePercent = round((float) ($payload['extra_charge_percent'] ?? 0), 2);
+        $totalAmount = round($subtotalAmount + ($subtotalAmount * $extraChargePercent / 100), 2);
+
+        return [
+            'items' => $items,
+            'supplier' => $supplier,
+            'product_ids' => $productIds,
+            'products' => $products,
+            'supplier_prices' => $supplierPrices,
+            'import_date' => $importDate,
+            'status' => $this->resolveImportStatus($payload, $accountId),
+            'entry_mode' => $this->resolveImportEntryMode($payload),
+            'total_quantity' => (int) $items->sum('quantity'),
+            'subtotal_amount' => $subtotalAmount,
+            'extra_charge_percent' => $extraChargePercent,
+            'total_amount' => $totalAmount,
+        ];
+    }
+
+    private function resolveImportStatus(array $payload, int $accountId): InventoryImportStatus
+    {
+        $query = InventoryImportStatus::query()
+            ->where(function ($builder) use ($accountId) {
+                $builder
+                    ->whereNull('account_id')
+                    ->orWhere('account_id', $accountId);
+            })
+            ->where('is_active', true)
+            ->orderByRaw('CASE WHEN account_id = ? THEN 0 ELSE 1 END', [$accountId])
+            ->orderByDesc('is_default')
+            ->orderBy('sort_order')
+            ->orderBy('id');
+
+        $statusId = (int) ($payload['inventory_import_status_id'] ?? $payload['status_id'] ?? 0);
+        if ($statusId > 0) {
+            $status = (clone $query)->where('id', $statusId)->first();
+            if ($status) {
+                return $status;
+            }
+        }
+
+        $statusNeedle = trim((string) ($payload['status_code'] ?? $payload['status'] ?? ''));
+        if ($statusNeedle !== '') {
+            $needle = mb_strtolower($statusNeedle);
+            $status = (clone $query)->get()->first(function (InventoryImportStatus $item) use ($needle) {
+                return mb_strtolower((string) $item->code) === $needle
+                    || mb_strtolower((string) $item->name) === $needle;
+            });
+
+            if ($status) {
+                return $status;
+            }
+        }
+
+        $status = $query->first();
+        if (!$status) {
+            throw ValidationException::withMessages([
+                'inventory_import_status_id' => 'Chua co cau hinh trang thai phieu nhap.',
+            ]);
+        }
+
+        return $status;
+    }
+
+    private function resolveImportEntryMode(array $payload): string
+    {
+        $entryMode = trim((string) ($payload['entry_mode'] ?? ''));
+        if ($entryMode !== '') {
+            return $entryMode;
+        }
+
+        return !empty($payload['invoice_analysis_log_id']) ? 'invoice_ai' : 'manual';
+    }
+
+    private function syncImportItems(InventoryImport $import, array $context, ?int $userId = null): array
+    {
+        $touchedProductIds = [];
+        $status = $context['status'];
+        $items = $context['items'];
+        $products = $context['products'];
+        $supplierPrices = $context['supplier_prices'];
+        $supplier = $context['supplier'];
+        $importDate = $context['import_date'];
+
+        foreach ($items as $index => $item) {
+            $product = $products->get((int) $item['product_id']);
+            if (!$product) {
+                continue;
+            }
+
+            $quantity = (int) $item['quantity'];
+            $unitCost = round((float) $item['unit_cost'], 2);
+            $lineTotal = round($quantity * $unitCost, 2);
+            $supplierPrice = $supplierPrices->get($product->id);
+            $snapshotSupplierCost = $supplierPrice ? round((float) $supplierPrice->unit_cost, 2) : null;
+            $shouldUpdateSupplierPrice = (bool) ($item['update_supplier_price'] ?? true);
+            $priceChanged = $snapshotSupplierCost === null || (float) $snapshotSupplierCost !== (float) $unitCost;
+
+            $importItem = ImportItem::create([
+                'account_id' => $import->account_id,
+                'import_id' => $import->id,
+                'product_id' => $product->id,
+                'supplier_product_price_id' => $supplierPrice?->id,
+                'product_name_snapshot' => $product->name,
+                'product_sku_snapshot' => $product->sku,
+                'supplier_product_code_snapshot' => $item['supplier_product_code'] ?? $product->supplier_product_code,
+                'unit_name_snapshot' => $item['unit_name'] ?? $product->unit?->name,
+                'quantity' => $quantity,
+                'unit_cost' => $unitCost,
+                'supplier_price_snapshot' => $snapshotSupplierCost,
+                'price_was_updated' => $priceChanged && $shouldUpdateSupplierPrice,
+                'line_total' => $lineTotal,
+                'notes' => $item['notes'] ?? null,
+                'sort_order' => $index + 1,
+            ]);
+
+            if ($shouldUpdateSupplierPrice || $supplierPrice === null || $priceChanged) {
+                $supplierPrice = $this->upsertSupplierPrice($supplier, $product, $unitCost, $userId, $item['price_notes'] ?? null);
+                $supplierPrices->put($product->id, $supplierPrice);
+                $importItem->forceFill([
+                    'supplier_product_price_id' => $supplierPrice->id,
+                ])->save();
+            }
+
+            if ($this->importAffectsInventory($status)) {
+                InventoryBatch::create([
+                    'account_id' => $import->account_id,
+                    'product_id' => $product->id,
+                    'import_id' => $import->id,
+                    'import_item_id' => $importItem->id,
+                    'source_type' => 'import',
+                    'source_id' => $import->id,
+                    'batch_number' => $this->generateLotNumber($import->import_number, $index + 1),
+                    'received_at' => $importDate->copy()->setTimeFrom(now()),
+                    'quantity' => $quantity,
+                    'remaining_quantity' => $quantity,
+                    'unit_cost' => $unitCost,
+                    'status' => 'open',
+                    'meta' => [
+                        'supplier_id' => $supplier->id,
+                        'supplier_name' => $supplier->name,
+                        'source_label' => $import->import_number,
+                        'source_name' => 'Phieu nhap',
+                    ],
+                ]);
+            }
+
+            $touchedProductIds[] = $product->id;
+        }
+
+        return $touchedProductIds;
+    }
+
+    private function syncImportAttachments(InventoryImport $import, array $payload, int $accountId, ?int $userId = null): void
+    {
+        $attachments = collect($payload['attachments'] ?? [])
+            ->filter(fn ($attachment) => !empty($attachment['file_path']))
+            ->values();
+
+        $keepAttachmentIds = $attachments
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->values()
+            ->all();
+
+        $deleteQuery = InventoryImportAttachment::query()->where('import_id', $import->id);
+        if (!empty($keepAttachmentIds)) {
+            $deleteQuery->whereNotIn('id', $keepAttachmentIds);
+        }
+        $deleteQuery->delete();
+
+        foreach ($attachments as $attachment) {
+            $record = null;
+
+            if (!empty($attachment['id'])) {
+                $record = InventoryImportAttachment::query()
+                    ->where('import_id', $import->id)
+                    ->find((int) $attachment['id']);
+            }
+
+            if (!$record) {
+                $record = new InventoryImportAttachment();
+            }
+
+            $record->fill([
+                'account_id' => $accountId,
+                'import_id' => $import->id,
+                'invoice_analysis_log_id' => $attachment['invoice_analysis_log_id'] ?? null,
+                'source_type' => $attachment['source_type'] ?? 'manual',
+                'disk' => $attachment['disk'] ?? 'public',
+                'file_path' => $attachment['file_path'],
+                'original_name' => $attachment['original_name'] ?? basename((string) $attachment['file_path']),
+                'mime_type' => $attachment['mime_type'] ?? null,
+                'file_size' => $attachment['file_size'] ?? null,
+                'uploaded_by' => $userId ?? Auth::id(),
+            ]);
+            $record->save();
+        }
+
+        $analysisLogId = (int) ($payload['invoice_analysis_log_id'] ?? 0);
+        if ($analysisLogId <= 0) {
+            return;
+        }
+
+        $analysisLog = InventoryInvoiceAnalysisLog::query()->find($analysisLogId);
+        if (!$analysisLog) {
+            return;
+        }
+
+        $analysisLog->forceFill([
+            'supplier_id' => $import->supplier_id,
+            'import_id' => $import->id,
+        ])->save();
+
+        InventoryImportAttachment::query()->updateOrCreate(
+            [
+                'import_id' => $import->id,
+                'invoice_analysis_log_id' => $analysisLog->id,
+            ],
+            [
+                'account_id' => $accountId,
+                'source_type' => 'invoice',
+                'disk' => $analysisLog->disk,
+                'file_path' => $analysisLog->file_path,
+                'original_name' => $analysisLog->source_name,
+                'mime_type' => $analysisLog->mime_type,
+                'file_size' => $analysisLog->file_size,
+                'uploaded_by' => $userId ?? Auth::id(),
+            ]
+        );
+    }
+
+    private function loadImportRelations(InventoryImport $import): InventoryImport
+    {
+        return $import->load([
+            'supplier:id,name,phone,email,address',
+            'statusConfig:id,code,name,color,affects_inventory,is_default,is_system',
+            'items' => function ($builder) {
+                $builder->orderBy('sort_order')->orderBy('id');
+            },
+            'items.product:id,sku,name,price,stock_quantity,inventory_unit_id,supplier_product_code',
+            'items.product.unit:id,name',
+            'items.batch',
+            'items.supplierPrice:id,supplier_id,product_id,unit_cost,notes,updated_at',
+            'attachments:id,import_id,invoice_analysis_log_id,source_type,disk,file_path,original_name,mime_type,file_size,uploaded_by,created_at',
+            'attachments.invoiceAnalysisLog:id,status,provider',
+            'invoiceAnalysisLogs:id,import_id,supplier_id,source_name,status,provider,analysis_result,error_message,created_at',
+            'creator:id,name',
+        ]);
+    }
+
+    private function importAffectsInventory(?InventoryImportStatus $status): bool
+    {
+        return (bool) ($status?->affects_inventory ?? false);
+    }
+
     private function ensureImportCanBeReverted(InventoryImport $import): void
     {
         $batches = InventoryBatch::query()
@@ -375,19 +706,14 @@ class InventoryService
             if ((int) $batch->remaining_quantity !== (int) $batch->quantity || (int) $batch->allocations_count > 0 || (int) $batch->document_allocations_count > 0) {
                 throw ValidationException::withMessages([
                     'import' => 'Phiếu nhập đã phát sinh xuất hoặc điều chỉnh nên không thể sửa/xóa.',
-                ]);
+                    ]);
+                }
             }
         }
-    }
 
-    private function revertImport(InventoryImport $import): void
+    private function revertImportInventory(InventoryImport $import): void
     {
-        $productIds = $import->items()->pluck('product_id')->all();
-
         InventoryBatch::query()->where('import_id', $import->id)->delete();
-        ImportItem::query()->where('import_id', $import->id)->delete();
-
-        $this->refreshProducts($productIds);
     }
 
     private function ensureDocumentCanBeReverted(InventoryDocument $document): void

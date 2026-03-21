@@ -6,20 +6,28 @@ use App\Http\Controllers\Controller;
 use App\Models\InventoryBatch;
 use App\Models\InventoryDocument;
 use App\Models\InventoryImport;
+use App\Models\InventoryImportStatus;
+use App\Models\InventoryInvoiceAnalysisLog;
+use App\Models\InventoryUnit;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\Supplier;
 use App\Models\SupplierProductPrice;
+use App\Services\Inventory\InvoiceAnalysisService;
 use App\Services\Inventory\InventoryService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class InventoryController extends Controller
 {
-    public function __construct(private readonly InventoryService $inventoryService)
+    public function __construct(
+        private readonly InventoryService $inventoryService,
+        private readonly InvoiceAnalysisService $invoiceAnalysisService,
+    )
     {
     }
 
@@ -100,6 +108,7 @@ class InventoryController extends Controller
 
         $query->with([
             'category:id,name',
+            'unit:id,name',
             'parentConfigurable:id,name,sku',
             'suppliers:id,name,code',
             'supplierPrices' => function ($builder) {
@@ -120,6 +129,7 @@ class InventoryController extends Controller
                             'products.price',
                             'products.expected_cost',
                             'products.cost_price',
+                            'products.inventory_unit_id',
                             'products.stock_quantity',
                             'products.damaged_quantity',
                             'products.status',
@@ -130,6 +140,7 @@ class InventoryController extends Controller
                         ])
                         ->with([
                             'category:id,name',
+                            'unit:id,name',
                             'parentConfigurable:id,name,sku',
                             'suppliers:id,name,code',
                             'supplierPrices' => function ($priceBuilder) {
@@ -388,6 +399,7 @@ class InventoryController extends Controller
                 'products.price',
                 'products.expected_cost',
                 'products.cost_price',
+                'products.inventory_unit_id',
                 'products.stock_quantity',
                 'products.damaged_quantity',
                 'products.status',
@@ -412,6 +424,7 @@ class InventoryController extends Controller
             ->whereDoesntHave('parentConfigurable')
             ->with([
                 'category:id,name',
+                'unit:id,name',
                 'suppliers:id,name,code',
                 'supplierPrices' => function ($builder) {
                     $builder
@@ -428,6 +441,7 @@ class InventoryController extends Controller
                             'products.price',
                             'products.expected_cost',
                             'products.cost_price',
+                            'products.inventory_unit_id',
                             'products.stock_quantity',
                             'products.damaged_quantity',
                             'products.status',
@@ -441,6 +455,7 @@ class InventoryController extends Controller
                         })
                         ->with([
                             'category:id,name',
+                            'unit:id,name',
                             'parentConfigurable:id,name,sku',
                             'suppliers:id,name,code',
                             'supplierPrices' => function ($priceBuilder) {
@@ -730,11 +745,210 @@ class InventoryController extends Controller
         ]);
     }
 
+    public function inventoryUnits(Request $request)
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+
+        $units = InventoryUnit::query()
+            ->where(function ($builder) use ($accountId) {
+                $builder
+                    ->whereNull('account_id')
+                    ->orWhere('account_id', $accountId);
+            })
+            ->orderByRaw('CASE WHEN account_id = ? THEN 0 ELSE 1 END', [$accountId])
+            ->orderByDesc('is_default')
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get();
+
+        return response()->json($units);
+    }
+
+    public function storeInventoryUnit(Request $request)
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+        $validated = $request->validate([
+            'name' => 'required|string|max:80',
+        ]);
+
+        $name = trim((string) $validated['name']);
+        $normalizedName = Str::lower(Str::ascii($name));
+        $code = Str::upper(Str::slug($name, '_'));
+
+        $existing = InventoryUnit::query()
+            ->where(function ($builder) use ($accountId) {
+                $builder
+                    ->whereNull('account_id')
+                    ->orWhere('account_id', $accountId);
+            })
+            ->where('normalized_name', $normalizedName)
+            ->first();
+
+        if ($existing) {
+            return response()->json($existing);
+        }
+
+        $unit = InventoryUnit::create([
+            'account_id' => $accountId,
+            'name' => $name,
+            'normalized_name' => $normalizedName,
+            'code' => $code !== '' ? $code : Str::upper(Str::random(6)),
+            'is_default' => false,
+            'is_system' => false,
+            'sort_order' => (int) InventoryUnit::query()->where('account_id', $accountId)->max('sort_order') + 1,
+            'created_by' => auth()->id(),
+        ]);
+
+        return response()->json($unit, 201);
+    }
+
+    public function importStatuses(Request $request)
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+
+        $statuses = InventoryImportStatus::query()
+            ->where(function ($builder) use ($accountId) {
+                $builder
+                    ->whereNull('account_id')
+                    ->orWhere('account_id', $accountId);
+            })
+            ->when($request->boolean('active_only'), function ($builder) {
+                $builder->where('is_active', true);
+            })
+            ->orderByRaw('CASE WHEN account_id = ? THEN 0 ELSE 1 END', [$accountId])
+            ->orderByDesc('is_default')
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get();
+
+        return response()->json($statuses);
+    }
+
+    public function storeImportStatus(Request $request)
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+        $validated = $request->validate([
+            'name' => 'required|string|max:120',
+            'color' => ['nullable', 'string', 'max:20', 'regex:/^#?[0-9a-fA-F]{3,8}$/'],
+            'affects_inventory' => 'nullable|boolean',
+            'is_active' => 'nullable|boolean',
+            'is_default' => 'nullable|boolean',
+        ]);
+
+        $name = trim((string) $validated['name']);
+        $code = $this->uniqueImportStatusCode($name, $accountId);
+
+        if (!empty($validated['is_default'])) {
+            InventoryImportStatus::query()
+                ->where('account_id', $accountId)
+                ->update(['is_default' => false]);
+        }
+
+        $status = InventoryImportStatus::create([
+            'account_id' => $accountId,
+            'code' => $code,
+            'name' => $name,
+            'color' => $validated['color'] ?? '#1d4ed8',
+            'sort_order' => (int) InventoryImportStatus::query()->where('account_id', $accountId)->max('sort_order') + 1,
+            'is_default' => (bool) ($validated['is_default'] ?? false),
+            'is_system' => false,
+            'is_active' => (bool) ($validated['is_active'] ?? true),
+            'affects_inventory' => (bool) ($validated['affects_inventory'] ?? false),
+        ]);
+
+        return response()->json($status, 201);
+    }
+
+    public function updateImportStatus(Request $request, int $id)
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+        $validated = $request->validate([
+            'name' => 'required|string|max:120',
+            'color' => ['nullable', 'string', 'max:20', 'regex:/^#?[0-9a-fA-F]{3,8}$/'],
+            'affects_inventory' => 'nullable|boolean',
+            'is_active' => 'nullable|boolean',
+            'is_default' => 'nullable|boolean',
+        ]);
+
+        $status = InventoryImportStatus::query()
+            ->where(function ($builder) use ($accountId) {
+                $builder
+                    ->whereNull('account_id')
+                    ->orWhere('account_id', $accountId);
+            })
+            ->findOrFail($id);
+
+        if ($status->account_id === null) {
+            $status = InventoryImportStatus::firstOrNew([
+                'account_id' => $accountId,
+                'code' => $status->code,
+            ]);
+
+            if (!$status->exists) {
+                $status->fill([
+                    'sort_order' => (int) InventoryImportStatus::query()->where('account_id', $accountId)->max('sort_order') + 1,
+                    'is_system' => false,
+                ]);
+            }
+        }
+
+        if (!empty($validated['is_default'])) {
+            InventoryImportStatus::query()
+                ->where('account_id', $accountId)
+                ->where('id', '!=', $status->id ?: 0)
+                ->update(['is_default' => false]);
+        }
+
+        $status->fill([
+            'name' => trim((string) $validated['name']),
+            'color' => $validated['color'] ?? '#1d4ed8',
+            'is_default' => (bool) ($validated['is_default'] ?? $status->is_default),
+            'is_active' => (bool) ($validated['is_active'] ?? $status->is_active),
+            'affects_inventory' => (bool) ($validated['affects_inventory'] ?? $status->affects_inventory),
+        ]);
+        $status->save();
+
+        InventoryImport::query()
+            ->where('account_id', $accountId)
+            ->where('inventory_import_status_id', $id)
+            ->update([
+                'inventory_import_status_id' => $status->id,
+                'status' => $status->code,
+            ]);
+
+        return response()->json($status);
+    }
+
+    public function analyzeImportInvoice(Request $request)
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+        $validated = $request->validate([
+            'supplier_id' => 'nullable|integer|exists:suppliers,id',
+            'invoice_file' => 'required|file|max:12288|mimes:pdf,jpg,jpeg,png,webp,txt,csv,json',
+        ]);
+
+        return response()->json(
+            $this->invoiceAnalysisService->analyzeUploadedInvoice(
+                $request->file('invoice_file'),
+                $accountId,
+                $validated['supplier_id'] ?? null,
+                auth()->id()
+            )
+        );
+    }
+
+    public function showInvoiceAnalysis(int $id)
+    {
+        return response()->json(
+            $this->invoiceAnalysisService->getAnalysisLog($id)
+        );
+    }
+
     public function imports(Request $request)
     {
         $query = InventoryImport::query()
             ->withCount('items')
-            ->with(['supplier:id,name', 'creator:id,name'])
+            ->with(['supplier:id,name', 'creator:id,name', 'statusConfig:id,code,name,color,affects_inventory'])
             ->withSum('items as lines_total_amount', 'line_total');
 
         if ($request->filled('search')) {
@@ -753,6 +967,14 @@ class InventoryController extends Controller
             $query->where('supplier_id', (int) $request->input('supplier_id'));
         }
 
+        if ($request->filled('inventory_import_status_id')) {
+            $query->where('inventory_import_status_id', (int) $request->input('inventory_import_status_id'));
+        }
+
+        if ($request->filled('entry_mode')) {
+            $query->where('entry_mode', (string) $request->input('entry_mode'));
+        }
+
         if ($request->filled('date_from')) {
             $query->whereDate('import_date', '>=', $request->input('date_from'));
         }
@@ -767,6 +989,7 @@ class InventoryController extends Controller
             'code' => 'import_number',
             'supplier' => 'supplier_name',
             'date' => 'import_date',
+            'status' => 'inventory_import_status_id',
             'line_count' => 'items_count',
             'qty' => 'total_quantity',
             'amount' => 'total_amount',
@@ -781,19 +1004,7 @@ class InventoryController extends Controller
     public function storeImport(Request $request)
     {
         $accountId = (int) $request->header('X-Account-Id');
-        $validated = $request->validate([
-            'supplier_id' => 'required|integer|exists:suppliers,id',
-            'import_date' => 'required|date',
-            'notes' => 'nullable|string|max:5000',
-            'update_supplier_prices' => 'nullable|boolean',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.quantity' => 'required|integer|min:1',
-            'items.*.unit_cost' => 'required|numeric|min:0',
-            'items.*.update_supplier_price' => 'nullable|boolean',
-            'items.*.notes' => 'nullable|string|max:1000',
-            'items.*.price_notes' => 'nullable|string|max:1000',
-        ]);
+        $validated = $this->validatedImportPayload($request);
 
         $import = $this->inventoryService->createImport($validated, $accountId, auth()->id());
 
@@ -805,9 +1016,13 @@ class InventoryController extends Controller
         $import = InventoryImport::query()
             ->with([
                 'supplier:id,name,phone,email,address',
-                'items.product:id,sku,name,price,stock_quantity',
+                'statusConfig:id,code,name,color,affects_inventory',
+                'items.product:id,sku,name,price,stock_quantity,inventory_unit_id,supplier_product_code',
+                'items.product.unit:id,name',
                 'items.batch',
                 'items.supplierPrice',
+                'attachments',
+                'invoiceAnalysisLogs',
                 'creator:id,name',
             ])
             ->findOrFail($id);
@@ -819,19 +1034,7 @@ class InventoryController extends Controller
     {
         $accountId = (int) $request->header('X-Account-Id');
         $import = InventoryImport::query()->findOrFail($id);
-        $validated = $request->validate([
-            'supplier_id' => 'required|integer|exists:suppliers,id',
-            'import_date' => 'required|date',
-            'notes' => 'nullable|string|max:5000',
-            'update_supplier_prices' => 'nullable|boolean',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.quantity' => 'required|integer|min:1',
-            'items.*.unit_cost' => 'required|numeric|min:0',
-            'items.*.update_supplier_price' => 'nullable|boolean',
-            'items.*.notes' => 'nullable|string|max:1000',
-            'items.*.price_notes' => 'nullable|string|max:1000',
-        ]);
+        $validated = $this->validatedImportPayload($request);
 
         return response()->json(
             $this->inventoryService->updateImport($import, $validated, $accountId, auth()->id())
@@ -1261,6 +1464,7 @@ class InventoryController extends Controller
             'products.price',
             'products.expected_cost',
             'products.cost_price',
+            'products.inventory_unit_id',
             'products.stock_quantity',
             'products.damaged_quantity',
             'products.status',
@@ -1548,6 +1752,117 @@ class InventoryController extends Controller
             ->keyBy('product_id');
     }
 
+    private function validatedImportPayload(Request $request): array
+    {
+        $payload = $request->all();
+        $payload['items'] = $this->decodeJsonArrayInput($request->input('items', $payload['items'] ?? []));
+        $payload['attachments'] = $this->decodeJsonArrayInput($request->input('attachments', $payload['attachments'] ?? []));
+        $payload['attachments'] = array_merge(
+            is_array($payload['attachments']) ? $payload['attachments'] : [],
+            $this->storeImportAttachmentFiles($request)
+        );
+
+        if (($payload['invoice_analysis_log_id'] ?? null) === '') {
+            unset($payload['invoice_analysis_log_id']);
+        }
+
+        return validator($payload, [
+            'supplier_id' => 'required|integer|exists:suppliers,id',
+            'inventory_import_status_id' => 'nullable|integer|exists:inventory_import_statuses,id',
+            'import_date' => 'required|date',
+            'notes' => 'nullable|string|max:5000',
+            'entry_mode' => 'nullable|string|max:50',
+            'extra_charge_percent' => 'nullable|numeric|min:0|max:100000',
+            'invoice_analysis_log_id' => 'nullable|integer|exists:inventory_invoice_analysis_logs,id',
+            'update_supplier_prices' => 'nullable|boolean',
+            'attachments' => 'nullable|array',
+            'attachments.*.id' => 'nullable|integer',
+            'attachments.*.file_path' => 'required|string|max:1000',
+            'attachments.*.disk' => 'nullable|string|max:50',
+            'attachments.*.original_name' => 'nullable|string|max:255',
+            'attachments.*.mime_type' => 'nullable|string|max:150',
+            'attachments.*.file_size' => 'nullable|integer|min:0',
+            'attachments.*.source_type' => 'nullable|string|max:30',
+            'attachments.*.invoice_analysis_log_id' => 'nullable|integer|exists:inventory_invoice_analysis_logs,id',
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'required|integer|exists:products,id',
+            'items.*.quantity' => 'required|integer|min:1',
+            'items.*.unit_cost' => 'required|numeric|min:0',
+            'items.*.supplier_product_code' => 'nullable|string|max:255',
+            'items.*.unit_name' => 'nullable|string|max:80',
+            'items.*.update_supplier_price' => 'nullable|boolean',
+            'items.*.notes' => 'nullable|string|max:1000',
+            'items.*.price_notes' => 'nullable|string|max:1000',
+        ])->validate();
+    }
+
+    private function decodeJsonArrayInput($value): array
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+
+        if (!is_string($value) || trim($value) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($value, true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function storeImportAttachmentFiles(Request $request): array
+    {
+        $files = [];
+
+        foreach (['attachments', 'attachment_files'] as $key) {
+            $input = $request->file($key);
+            if (!$input) {
+                continue;
+            }
+
+            $stack = is_array($input) ? $input : [$input];
+            array_walk_recursive($stack, function ($file) use (&$files) {
+                if ($file instanceof \Illuminate\Http\UploadedFile) {
+                    $path = $file->store('uploads/inventory/import-attachments', 'public');
+                    $files[] = [
+                        'disk' => 'public',
+                        'file_path' => $path,
+                        'original_name' => $file->getClientOriginalName(),
+                        'mime_type' => $file->getMimeType(),
+                        'file_size' => $file->getSize(),
+                        'source_type' => 'manual',
+                    ];
+                }
+            });
+        }
+
+        return $files;
+    }
+
+    private function uniqueImportStatusCode(string $name, int $accountId): string
+    {
+        $base = Str::slug($name, '_');
+        $code = $base !== '' ? $base : 'status_' . Str::lower(Str::random(4));
+        $suffix = 1;
+
+        while (
+            InventoryImportStatus::query()
+                ->where(function ($builder) use ($accountId) {
+                    $builder
+                        ->whereNull('account_id')
+                        ->orWhere('account_id', $accountId);
+                })
+                ->where('code', $code)
+                ->exists()
+        ) {
+            $code = ($base !== '' ? $base : 'status') . '_' . $suffix;
+            $suffix++;
+        }
+
+        return $code;
+    }
+
     private function inventoryProductPayload(Product $product, ?SupplierProductPrice $supplierPrice = null, $supplierPriceMap = null): array
     {
         $currentCost = $product->cost_price !== null ? (float) $product->cost_price : null;
@@ -1564,6 +1879,8 @@ class InventoryController extends Controller
             'sku' => $product->sku,
             'supplier_product_code' => $product->supplier_product_code,
             'name' => $product->name,
+            'inventory_unit_id' => $product->inventory_unit_id ? (int) $product->inventory_unit_id : null,
+            'unit_name' => $product->relationLoaded('unit') ? $product->unit?->name : null,
             'price' => (float) ($product->price ?? 0),
             'stock_quantity' => (int) ($product->stock_quantity ?? 0),
             'damaged_quantity' => (int) ($product->damaged_quantity ?? 0),
@@ -1634,6 +1951,8 @@ class InventoryController extends Controller
             'sku' => $product->sku,
             'supplier_product_code' => $product->supplier_product_code,
             'name' => $product->name,
+            'inventory_unit_id' => $product->inventory_unit_id ? (int) $product->inventory_unit_id : null,
+            'unit_name' => $product->relationLoaded('unit') ? $product->unit?->name : null,
             'price' => (float) ($product->price ?? 0),
             'stock_quantity' => (int) ($product->stock_quantity ?? 0),
             'damaged_quantity' => (int) ($product->damaged_quantity ?? 0),

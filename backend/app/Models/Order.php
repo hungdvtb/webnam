@@ -13,7 +13,7 @@ class Order extends Model
         'user_id', 'order_number', 'total_price', 'status', 
         'customer_name', 'customer_email', 'customer_phone', 
         'shipping_address', 'province', 'district', 'ward', 'notes', 'account_id',
-        'source', 'type', 'shipment_status', 'shipping_fee', 'discount', 'cost_total', 'customer_id',
+        'source', 'type', 'shipment_status', 'shipping_fee', 'discount', 'cost_total', 'profit_total', 'customer_id',
         'shipping_status', 'shipping_synced_at', 'shipping_status_source',
         'shipping_carrier_code', 'shipping_carrier_name', 'shipping_tracking_code',
         'shipping_dispatched_at', 'shipping_issue_code', 'shipping_issue_message', 'shipping_issue_detected_at',
@@ -23,6 +23,8 @@ class Order extends Model
         'shipping_synced_at' => 'datetime',
         'shipping_dispatched_at' => 'datetime',
         'shipping_issue_detected_at' => 'datetime',
+        'cost_total' => 'decimal:2',
+        'profit_total' => 'decimal:2',
     ];
 
     public function items()

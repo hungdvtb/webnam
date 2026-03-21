@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CategoryController;
+use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductGroupController;
@@ -189,6 +190,34 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/stock-transfers', [\App\Http\Controllers\Api\StockTransferController::class , 'index']);
     Route::post('/stock-transfers', [\App\Http\Controllers\Api\StockTransferController::class , 'store']);
     Route::post('/stock-transfers/{id}/complete', [\App\Http\Controllers\Api\StockTransferController::class , 'complete']);
+
+    // Inventory management
+    Route::get('/inventory/dashboard', [InventoryController::class, 'dashboard']);
+    Route::get('/inventory/products', [InventoryController::class, 'products']);
+    Route::post('/inventory/products', [InventoryController::class, 'storeProduct']);
+    Route::put('/inventory/products/{id}', [InventoryController::class, 'updateProduct'])->whereNumber('id');
+    Route::get('/inventory/suppliers', [InventoryController::class, 'suppliers']);
+    Route::post('/inventory/suppliers', [InventoryController::class, 'storeSupplier']);
+    Route::put('/inventory/suppliers/{id}', [InventoryController::class, 'updateSupplier'])->whereNumber('id');
+    Route::delete('/inventory/suppliers/{id}', [InventoryController::class, 'destroySupplier'])->whereNumber('id');
+    Route::get('/inventory/suppliers/{id}/prices', [InventoryController::class, 'supplierPrices'])->whereNumber('id');
+    Route::post('/inventory/suppliers/{id}/prices', [InventoryController::class, 'storeSupplierPrice'])->whereNumber('id');
+    Route::post('/inventory/suppliers/{id}/prices/bulk', [InventoryController::class, 'bulkUpsertSupplierPrices'])->whereNumber('id');
+    Route::put('/inventory/suppliers/{id}/prices/{priceId}', [InventoryController::class, 'updateSupplierPrice'])->whereNumber('id')->whereNumber('priceId');
+    Route::delete('/inventory/suppliers/{id}/prices/{priceId}', [InventoryController::class, 'destroySupplierPrice'])->whereNumber('id')->whereNumber('priceId');
+    Route::get('/inventory/imports', [InventoryController::class, 'imports']);
+    Route::post('/inventory/imports', [InventoryController::class, 'storeImport']);
+    Route::put('/inventory/imports/{id}', [InventoryController::class, 'updateImport'])->whereNumber('id');
+    Route::delete('/inventory/imports/{id}', [InventoryController::class, 'destroyImport'])->whereNumber('id');
+    Route::get('/inventory/imports/{id}', [InventoryController::class, 'showImport'])->whereNumber('id');
+    Route::get('/inventory/documents/{type}', [InventoryController::class, 'documents']);
+    Route::post('/inventory/documents/{type}', [InventoryController::class, 'storeDocument']);
+    Route::put('/inventory/documents/{type}/{id}', [InventoryController::class, 'updateDocument'])->whereNumber('id');
+    Route::delete('/inventory/documents/{type}/{id}', [InventoryController::class, 'destroyDocument'])->whereNumber('id');
+    Route::get('/inventory/documents/{type}/{id}', [InventoryController::class, 'showDocument'])->whereNumber('id');
+    Route::get('/inventory/batches', [InventoryController::class, 'batches']);
+    Route::get('/inventory/exports', [InventoryController::class, 'exports']);
+    Route::get('/inventory/exports/{id}', [InventoryController::class, 'showExport'])->whereNumber('id');
 
     // Shipment management
     Route::get('/shipments', [\App\Http\Controllers\Api\ShipmentController::class , 'index']);

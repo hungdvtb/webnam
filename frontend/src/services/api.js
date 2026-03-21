@@ -161,6 +161,35 @@ export const stockApi = {
     completeTransfer: (id) => api.post(`/stock-transfers/${id}/complete`),
 };
 
+export const inventoryApi = {
+    getDashboard: (params) => api.get('/inventory/dashboard', { params }),
+    getProducts: (params) => api.get('/inventory/products', { params }),
+    createProduct: (data) => api.post('/inventory/products', data),
+    updateProduct: (id, data) => api.put(`/inventory/products/${id}`, data),
+    getSuppliers: (params) => api.get('/inventory/suppliers', { params }),
+    createSupplier: (data) => api.post('/inventory/suppliers', data),
+    updateSupplier: (id, data) => api.put(`/inventory/suppliers/${id}`, data),
+    deleteSupplier: (id) => api.delete(`/inventory/suppliers/${id}`),
+    getSupplierPrices: (supplierId, params) => api.get(`/inventory/suppliers/${supplierId}/prices`, { params }),
+    createSupplierPrice: (supplierId, data) => api.post(`/inventory/suppliers/${supplierId}/prices`, data),
+    bulkSupplierPrices: (supplierId, data) => api.post(`/inventory/suppliers/${supplierId}/prices/bulk`, data),
+    updateSupplierPrice: (supplierId, priceId, data) => api.put(`/inventory/suppliers/${supplierId}/prices/${priceId}`, data),
+    deleteSupplierPrice: (supplierId, priceId) => api.delete(`/inventory/suppliers/${supplierId}/prices/${priceId}`),
+    getImports: (params) => api.get('/inventory/imports', { params }),
+    createImport: (data) => api.post('/inventory/imports', data),
+    updateImport: (id, data) => api.put(`/inventory/imports/${id}`, data),
+    deleteImport: (id) => api.delete(`/inventory/imports/${id}`),
+    getImport: (id) => api.get(`/inventory/imports/${id}`),
+    getDocuments: (type, params) => api.get(`/inventory/documents/${type}`, { params }),
+    createDocument: (type, data) => api.post(`/inventory/documents/${type}`, data),
+    updateDocument: (type, id, data) => api.put(`/inventory/documents/${type}/${id}`, data),
+    deleteDocument: (type, id) => api.delete(`/inventory/documents/${type}/${id}`),
+    getDocument: (type, id) => api.get(`/inventory/documents/${type}/${id}`),
+    getBatches: (params) => api.get('/inventory/batches', { params }),
+    getExports: (params) => api.get('/inventory/exports', { params }),
+    getExport: (id) => api.get(`/inventory/exports/${id}`),
+};
+
 export const couponApi = {
     getAll: () => api.get('/coupons'),
     store: (data) => api.post('/coupons', data),

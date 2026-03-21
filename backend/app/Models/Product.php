@@ -10,8 +10,8 @@ class Product extends Model
     use \App\Traits\BelongsToAccount, SoftDeletes;
 
     protected $fillable = [
-        'type', 'name', 'slug', 'description', 'specifications', 'price', 'price_type', 'cost_price', 'special_price', 'special_price_from', 'special_price_to', 
-        'category_id', 'stock_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
+        'type', 'name', 'slug', 'description', 'specifications', 'price', 'price_type', 'cost_price', 'expected_cost', 'special_price', 'special_price_from', 'special_price_to', 
+        'category_id', 'stock_quantity', 'damaged_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
         'meta_title', 'meta_description', 'meta_keywords', 'weight', 'video_url', 'additional_info', 'bundle_title', 'site_domain_id'
     ];
 
@@ -26,7 +26,7 @@ class Product extends Model
         'is_featured' => false,
     ];
 
-    protected $appends = ['average_rating', 'current_price', 'main_image', 'primary_image'];
+    protected $appends = ['average_rating', 'current_price', 'main_image', 'primary_image', 'inventory_display_cost', 'inventory_cost_source'];
 
     public function reviews()
     {
@@ -171,6 +171,36 @@ class Product extends Model
                     ->withPivot(['quantity', 'is_required']);
     }
 
+    public function importItems()
+    {
+        return $this->hasMany(ImportItem::class);
+    }
+
+    public function inventoryBatches()
+    {
+        return $this->hasMany(InventoryBatch::class);
+    }
+
+    public function inventoryAllocations()
+    {
+        return $this->hasMany(InventoryBatchAllocation::class);
+    }
+
+    public function supplierPrices()
+    {
+        return $this->hasMany(SupplierProductPrice::class);
+    }
+
+    public function inventoryDocumentItems()
+    {
+        return $this->hasMany(InventoryDocumentItem::class);
+    }
+
+    public function orderItems()
+    {
+        return $this->hasMany(OrderItem::class);
+    }
+
     /**
      * Items in this product (if it's a grouped/bundle product)
      */
@@ -229,5 +259,15 @@ class Product extends Model
             $total += ($item->cost_price ?? 0) * $item->pivot->quantity;
         }
         return $total;
+    }
+
+    public function getInventoryDisplayCostAttribute()
+    {
+        return $this->cost_price ?? $this->expected_cost;
+    }
+
+    public function getInventoryCostSourceAttribute()
+    {
+        return $this->cost_price !== null ? 'current_cost' : 'expected_cost';
     }
 }

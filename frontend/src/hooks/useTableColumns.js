@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 const parseWidthValue = (value, fallback = 0) => {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -9,11 +9,6 @@ const parseWidthValue = (value, fallback = 0) => {
     return fallback;
 };
 
-/**
- * Custom hook to manage table columns (visibility, reordering, resizing, persistence)
- * @param {string} storageKey - Unique key for localStorage
- * @param {Array} defaultColumns - Initial column configuration
- */
 export const useTableColumns = (storageKey, defaultColumns) => {
     const [visibleColumns, setVisibleColumns] = useState([]);
     const [availableColumns, setAvailableColumns] = useState([]);
@@ -23,39 +18,39 @@ export const useTableColumns = (storageKey, defaultColumns) => {
     });
     const [draggedItemIndex, setDraggedItemIndex] = useState(null);
 
-    const getColumnMinWidth = useCallback((colId) => {
-        const matchedColumn = defaultColumns.find((column) => column.id === colId);
-        return Math.max(parseWidthValue(matchedColumn?.minWidth, 120), 80);
+    const getColumnMinWidth = useCallback((columnId) => {
+        const matchedColumn = defaultColumns.find((column) => column.id === columnId);
+        return Math.max(parseWidthValue(matchedColumn?.minWidth, 96), 56);
     }, [defaultColumns]);
 
     useEffect(() => {
         const savedOrder = localStorage.getItem(`${storageKey}_column_order`);
         let sortedColumns = [...defaultColumns];
+
         if (savedOrder) {
             const orderIds = JSON.parse(savedOrder);
-            sortedColumns = [...defaultColumns].sort((a, b) => {
-                const indexA = orderIds.indexOf(a.id);
-                const indexB = orderIds.indexOf(b.id);
-                if (indexA === -1 && indexB === -1) return 0;
-                if (indexA === -1) return 1;
-                if (indexB === -1) return -1;
-                return indexA - indexB;
+            sortedColumns = [...defaultColumns].sort((first, second) => {
+                const firstIndex = orderIds.indexOf(first.id);
+                const secondIndex = orderIds.indexOf(second.id);
+                if (firstIndex === -1 && secondIndex === -1) return 0;
+                if (firstIndex === -1) return 1;
+                if (secondIndex === -1) return -1;
+                return firstIndex - secondIndex;
             });
         }
+
         setAvailableColumns(sortedColumns);
 
         const savedVisible = localStorage.getItem(`${storageKey}_columns`);
-        const allIds = sortedColumns.map(c => c.id);
+        const allIds = sortedColumns.map((column) => column.id);
+
         if (savedVisible) {
             const savedIds = JSON.parse(savedVisible);
-            const missingIds = allIds.filter(id => !savedIds.includes(id));
-            if (missingIds.length > 0) {
-                 const updated = [...savedIds, ...missingIds];
-                 setVisibleColumns(updated);
-                 localStorage.setItem(`${storageKey}_columns`, JSON.stringify(updated));
-            } else {
-                setVisibleColumns(savedIds);
-            }
+            const nextVisible = allIds.filter((id) => savedIds.includes(id));
+            const missingIds = allIds.filter((id) => !nextVisible.includes(id));
+            const merged = [...nextVisible, ...missingIds];
+            setVisibleColumns(merged);
+            localStorage.setItem(`${storageKey}_columns`, JSON.stringify(merged));
         } else {
             setVisibleColumns(allIds);
             localStorage.setItem(`${storageKey}_columns`, JSON.stringify(allIds));
@@ -64,9 +59,10 @@ export const useTableColumns = (storageKey, defaultColumns) => {
 
     useEffect(() => {
         setColumnWidths((prev) => {
-            const next = Object.entries(prev || {}).reduce((accumulator, [colId, width]) => {
-                accumulator[colId] = Math.max(getColumnMinWidth(colId), parseWidthValue(width, getColumnMinWidth(colId)));
-                return accumulator;
+            const next = Object.entries(prev || {}).reduce((result, [columnId, width]) => {
+                const minWidth = getColumnMinWidth(columnId);
+                result[columnId] = Math.max(minWidth, parseWidthValue(width, minWidth));
+                return result;
             }, {});
 
             if (JSON.stringify(next) !== JSON.stringify(prev || {})) {
@@ -78,113 +74,117 @@ export const useTableColumns = (storageKey, defaultColumns) => {
         });
     }, [getColumnMinWidth, storageKey]);
 
-    const renderedColumns = useMemo(() => {
-        return availableColumns.filter(col => visibleColumns.includes(col.id));
-    }, [availableColumns, visibleColumns]);
+    const renderedColumns = useMemo(
+        () => availableColumns.filter((column) => visibleColumns.includes(column.id)),
+        [availableColumns, visibleColumns]
+    );
 
-    const toggleColumn = useCallback((colId) => {
-        setVisibleColumns(prev => {
-            const next = prev.includes(colId) ? prev.filter(id => id !== colId) : [...prev, colId];
+    const toggleColumn = useCallback((columnId) => {
+        setVisibleColumns((prev) => {
+            const next = prev.includes(columnId) ? prev.filter((id) => id !== columnId) : [...prev, columnId];
             localStorage.setItem(`${storageKey}_columns`, JSON.stringify(next));
             return next;
         });
     }, [storageKey]);
 
-    const handleColumnResize = useCallback((colId, e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const startX = e.clientX;
-        const minWidth = getColumnMinWidth(colId);
+    const handleColumnResize = useCallback((columnId, event) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const startX = event.clientX;
+        const minWidth = getColumnMinWidth(columnId);
         const startWidth = Math.max(
             minWidth,
-            parseWidthValue(columnWidths[colId], 0) || e.currentTarget.parentElement.offsetWidth
+            parseWidthValue(columnWidths[columnId], 0) || event.currentTarget.parentElement.offsetWidth
         );
-        
+
         let currentWidth = startWidth;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
         const onMouseMove = (moveEvent) => {
             currentWidth = Math.max(minWidth, startWidth + (moveEvent.clientX - startX));
-            setColumnWidths(prev => ({ ...prev, [colId]: currentWidth }));
+            setColumnWidths((prev) => ({ ...prev, [columnId]: currentWidth }));
         };
-        
+
         const onMouseUp = () => {
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
-            setColumnWidths(prev => {
-                const final = { ...prev, [colId]: currentWidth };
-                localStorage.setItem(`${storageKey}_column_widths`, JSON.stringify(final));
-                return final;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            setColumnWidths((prev) => {
+                const next = { ...prev, [columnId]: currentWidth };
+                localStorage.setItem(`${storageKey}_column_widths`, JSON.stringify(next));
+                return next;
             });
         };
-        
+
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
     }, [columnWidths, getColumnMinWidth, storageKey]);
 
-    const handleHeaderDragStart = useCallback((e, index) => {
+    const handleHeaderDragStart = useCallback((event, index) => {
         setDraggedItemIndex(index);
-        e.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.effectAllowed = 'move';
     }, []);
 
-    const handleHeaderDrop = useCallback((e, targetIndex) => {
-        e.preventDefault();
+    const handleHeaderDrop = useCallback((event, targetIndex) => {
+        event.preventDefault();
         if (draggedItemIndex === null || draggedItemIndex === targetIndex) return;
 
-        const currentRendered = availableColumns.filter(c => visibleColumns.includes(c.id));
-        const draggedCol = currentRendered[draggedItemIndex];
-        const targetCol = currentRendered[targetIndex];
+        const currentRendered = availableColumns.filter((column) => visibleColumns.includes(column.id));
+        const draggedColumn = currentRendered[draggedItemIndex];
+        const targetColumn = currentRendered[targetIndex];
+        if (!draggedColumn || !targetColumn) return;
 
-        if (!draggedCol || !targetCol) return;
+        const nextColumns = [...availableColumns];
+        const draggedAvailableIndex = nextColumns.findIndex((column) => column.id === draggedColumn.id);
+        nextColumns.splice(draggedAvailableIndex, 1);
+        const targetAvailableIndex = nextColumns.findIndex((column) => column.id === targetColumn.id);
+        nextColumns.splice(targetAvailableIndex, 0, draggedColumn);
 
-        const newAvailable = [...availableColumns];
-        const draggedIdxInAvailable = newAvailable.findIndex(c => c.id === draggedCol.id);
-        newAvailable.splice(draggedIdxInAvailable, 1);
-        
-        const targetIdxInAvailable = newAvailable.findIndex(c => c.id === targetCol.id);
-        newAvailable.splice(targetIdxInAvailable, 0, draggedCol);
-        
-        setAvailableColumns(newAvailable);
-        localStorage.setItem(`${storageKey}_column_order`, JSON.stringify(newAvailable.map(c => c.id)));
+        setAvailableColumns(nextColumns);
+        localStorage.setItem(`${storageKey}_column_order`, JSON.stringify(nextColumns.map((column) => column.id)));
         setDraggedItemIndex(null);
     }, [availableColumns, visibleColumns, draggedItemIndex, storageKey]);
 
-    const totalTableWidth = useMemo(() => {
-        return renderedColumns.reduce((acc, col) => {
-            const width = columnWidths[col.id] || col.minWidth;
-            const numericWidth = typeof width === 'string' ? parseInt(width.replace('px', '')) : (width || 0);
-            return acc + numericWidth;
-        }, 40); // 40px for checkbox column
-    }, [renderedColumns, columnWidths]);
+    const totalTableWidth = useMemo(() => renderedColumns.reduce((total, column) => {
+        const width = columnWidths[column.id] || column.minWidth;
+        return total + parseWidthValue(width, parseWidthValue(column.minWidth, 120));
+    }, 40), [renderedColumns, columnWidths]);
 
     const resetDefault = useCallback(() => {
-        const savedDefaultCols = localStorage.getItem(`${storageKey}_columns_default`);
+        const savedDefaultColumns = localStorage.getItem(`${storageKey}_columns_default`);
         const savedDefaultOrder = localStorage.getItem(`${storageKey}_column_order_default`);
         const savedDefaultWidths = localStorage.getItem(`${storageKey}_column_widths_default`);
 
-        if (savedDefaultCols) {
-            const cols = JSON.parse(savedDefaultCols);
-            setVisibleColumns(cols);
-            localStorage.setItem(`${storageKey}_columns`, JSON.stringify(cols));
+        if (savedDefaultColumns) {
+            const columns = JSON.parse(savedDefaultColumns);
+            setVisibleColumns(columns);
+            localStorage.setItem(`${storageKey}_columns`, JSON.stringify(columns));
         }
+
         if (savedDefaultOrder) {
             const orderIds = JSON.parse(savedDefaultOrder);
-            const newAvailable = [...defaultColumns].sort((a, b) => {
-                const idxA = orderIds.indexOf(a.id);
-                const idxB = orderIds.indexOf(b.id);
-                if (idxA === -1 && idxB === -1) return 0;
-                if (idxA === -1) return 1;
-                if (idxB === -1) return -1;
-                return idxA - idxB;
+            const nextColumns = [...defaultColumns].sort((first, second) => {
+                const firstIndex = orderIds.indexOf(first.id);
+                const secondIndex = orderIds.indexOf(second.id);
+                if (firstIndex === -1 && secondIndex === -1) return 0;
+                if (firstIndex === -1) return 1;
+                if (secondIndex === -1) return -1;
+                return firstIndex - secondIndex;
             });
-            setAvailableColumns(newAvailable);
+            setAvailableColumns(nextColumns);
             localStorage.setItem(`${storageKey}_column_order`, JSON.stringify(orderIds));
         }
+
         if (savedDefaultWidths) {
             const widths = JSON.parse(savedDefaultWidths);
             setColumnWidths(widths);
             localStorage.setItem(`${storageKey}_column_widths`, JSON.stringify(widths));
         }
 
-        if (!savedDefaultCols && !savedDefaultOrder && !savedDefaultWidths) {
+        if (!savedDefaultColumns && !savedDefaultOrder && !savedDefaultWidths) {
             localStorage.removeItem(`${storageKey}_column_order`);
             localStorage.removeItem(`${storageKey}_columns`);
             localStorage.removeItem(`${storageKey}_column_widths`);
@@ -194,9 +194,9 @@ export const useTableColumns = (storageKey, defaultColumns) => {
 
     const saveAsDefault = useCallback(() => {
         localStorage.setItem(`${storageKey}_columns_default`, JSON.stringify(visibleColumns));
-        localStorage.setItem(`${storageKey}_column_order_default`, JSON.stringify(availableColumns.map(c => c.id)));
+        localStorage.setItem(`${storageKey}_column_order_default`, JSON.stringify(availableColumns.map((column) => column.id)));
         localStorage.setItem(`${storageKey}_column_widths_default`, JSON.stringify(columnWidths));
-        alert('Đã lưu cấu hình mặc định của bạn!');
+        window.alert('Đã lưu cấu hình cột mặc định.');
     }, [storageKey, visibleColumns, availableColumns, columnWidths]);
 
     return {
@@ -212,6 +212,6 @@ export const useTableColumns = (storageKey, defaultColumns) => {
         resetDefault,
         saveAsDefault,
         setAvailableColumns,
-        setVisibleColumns
+        setVisibleColumns,
     };
 };

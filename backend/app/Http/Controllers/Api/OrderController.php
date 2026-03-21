@@ -9,6 +9,7 @@ use App\Models\OrderItem;
 use App\Models\Customer;
 use App\Models\Invoice;
 use App\Models\ShippingIntegration;
+use App\Services\Inventory\InventoryService;
 use App\Services\Shipping\ShipmentDispatchService;
 use App\Services\Shipping\ShippingAlertService;
 use Illuminate\Http\Request;
@@ -162,62 +163,36 @@ class OrderController extends Controller
         $request->validate([
             'lead_id' => 'nullable|integer|exists:leads,id',
         ]);
-        
-        // Use shorter log or skip if heavy
-        \Illuminate\Support\Facades\Log::info('Order Store Attempt', ['account_id' => $accountId, 'customer' => $request->customer_phone]);
 
-        return DB::transaction(function () use ($request, $accountId) {
+        $rawItems = [];
+        if ($request->has('items')) {
+            $rawItems = collect($request->items)
+                ->filter(fn ($item) => !empty($item['product_id']) && (int) ($item['quantity'] ?? 0) > 0)
+                ->values()
+                ->all();
+        } else {
+            $cart = Cart::with('items.product')->where('user_id', Auth::id())->first();
+            if (!$cart || !isset($cart->items) || $cart->items->isEmpty()) {
+                return response()->json(['message' => 'Cart is empty'], 400);
+            }
+
+            $rawItems = $cart->items->map(function ($item) {
+                $product = $item->product;
+                return [
+                    'product_id' => $item->product_id,
+                    'quantity' => $item->quantity,
+                    'price' => $product ? ($product->current_price ?? $item->price) : $item->price,
+                ];
+            })->all();
+        }
+
+        return DB::transaction(function () use ($request, $accountId, $rawItems) {
             $lead = null;
             if ($request->filled('lead_id')) {
                 $lead = \App\Models\Lead::query()
                     ->where('account_id', $accountId)
                     ->with('statusConfig')
                     ->findOrFail((int) $request->lead_id);
-            }
-
-            $items = [];
-            $totalPrice = 0;
-
-            if ($request->has('items')) {
-                $productIds = collect($request->items)->pluck('product_id')->filter()->unique()->toArray();
-                $products = \App\Models\Product::whereIn('id', $productIds)->get()->keyBy('id');
-
-                foreach ($request->items as $item) {
-                    $productId = data_get($item, 'product_id');
-                    if (!$productId) continue;
-
-                    $product = $products->get($productId);
-                    $price = (float) data_get($item, 'price', 0);
-                    $qty = (int) data_get($item, 'quantity', 0);
-
-                    $items[] = [
-                        'product_id' => $productId,
-                        'product_name_snapshot' => $product?->name,
-                        'product_sku_snapshot' => $product?->sku,
-                        'quantity' => $qty,
-                        'price' => $price,
-                        'cost_price' => (float) data_get($item, 'cost_price', 0),
-                    ];
-                    $totalPrice += ($price * $qty);
-                }
-            } else {
-                $cart = Cart::with('items.product')->where('user_id', Auth::id())->first();
-                if (!$cart || !isset($cart->items) || $cart->items->isEmpty()) {
-                    return response()->json(['message' => 'Cart is empty'], 400);
-                }
-                foreach ($cart->items as $item) {
-                    $product = $item->product;
-                    $price = $product ? ($product->current_price ?? $item->price) : $item->price;
-                    $items[] = [
-                        'product_id' => $item->product_id,
-                        'product_name_snapshot' => $product ? $product->name : null,
-                        'product_sku_snapshot' => $product ? $product->sku : null,
-                        'quantity' => $item->quantity,
-                        'price' => $price,
-                        'cost_price' => $product ? ($product->cost_price ?? 0) : 0,
-                    ];
-                    $totalPrice += ($price * $item->quantity);
-                }
             }
 
             // Customer creation/lookup optimized with index
@@ -233,7 +208,7 @@ class OrderController extends Controller
                 'customer_id' => $customer->id,
                 'lead_id' => $lead?->id,
                 'order_number' => $this->generateOrderNumber($accountId),
-                'total_price' => $totalPrice,
+                'total_price' => 0,
                 'status' => $request->status ?? (\App\Models\OrderStatus::where('account_id', $accountId)->where('is_default', true)->value('code') ?: 'new'),
                 'customer_name' => $request->customer_name,
                 'customer_email' => $request->customer_email,
@@ -248,33 +223,23 @@ class OrderController extends Controller
                 'shipment_status' => $request->shipment_status,
                 'shipping_fee' => $request->shipping_fee ?? 0,
                 'discount' => $request->discount ?? 0,
-                'cost_total' => array_sum(array_map(fn($item) => $item['cost_price'] * $item['quantity'], $items)),
+                'cost_total' => 0,
+                'profit_total' => 0,
             ]);
 
-            // Bulk Insert Order Items (much faster for multi-item orders)
-            if (!empty($items)) {
-                $now = now();
-                $orderItemData = array_map(function($item) use ($order, $accountId, $now) {
-                    return [
-                        'order_id' => $order->id,
-                        'account_id' => $accountId,
-                        'product_id' => $item['product_id'],
-                        'product_name_snapshot' => $item['product_name_snapshot'],
-                        'product_sku_snapshot' => $item['product_sku_snapshot'],
-                        'quantity' => $item['quantity'],
-                        'price' => $item['price'],
-                        'cost_price' => $item['cost_price'],
-                        'created_at' => $now,
-                        'updated_at' => $now,
-                    ];
-                }, $items);
-                OrderItem::insert($orderItemData);
+            $inventorySummary = app(InventoryService::class)->attachInventoryToOrder($order, $rawItems);
+            $finalTotal = round(
+                $inventorySummary['total_price']
+                + (float) ($request->shipping_fee ?? 0)
+                - (float) ($request->discount ?? 0),
+                2
+            );
 
-                // Efficient Inventory Update
-                foreach ($items as $item) {
-                    \App\Models\Product::where('id', $item['product_id'])->decrement('stock_quantity', $item['quantity']);
-                }
-            }
+            $order->update([
+                'total_price' => $finalTotal,
+                'cost_total' => $inventorySummary['cost_total'],
+                'profit_total' => round($finalTotal - $inventorySummary['cost_total'], 2),
+            ]);
 
             // Sync Order Attributes - optimized lookup
             if ($request->has('custom_attributes') && !empty($request->custom_attributes)) {
@@ -302,13 +267,13 @@ class OrderController extends Controller
 
             // Customer stats update
             $customer->increment('total_orders');
-            $customer->increment('total_spent', $totalPrice);
+            $customer->increment('total_spent', $finalTotal);
 
             // One-off invoice creation
             Invoice::create([
                 'order_id' => $order->id,
                 'invoice_number' => 'INV-' . strtoupper(Str::random(10)),
-                'amount' => $totalPrice,
+                'amount' => $finalTotal,
                 'status' => 'pending',
                 'due_date' => now()->addDays(3),
             ]);
@@ -344,7 +309,7 @@ class OrderController extends Controller
                 ])->save();
             }
 
-            return response()->json($order->load(['items', 'customer', 'attributeValues']), 201);
+            return response()->json($order->load(['items.product', 'customer', 'attributeValues.attribute']), 201);
         });
     }
 
@@ -398,29 +363,29 @@ class OrderController extends Controller
             $data = $request->only([
                 'order_number', 'customer_name', 'customer_email', 'customer_phone', 
                 'shipping_address', 'province', 'district', 'ward', 'notes', 'source', 
-                'type', 'shipment_status', 'shipping_fee', 'discount', 'cost_total', 'status'
+                'type', 'shipment_status', 'shipping_fee', 'discount', 'status'
             ]);
             
             $order->update($data);
 
             // Sync items if provided
             if ($request->has('items')) {
+                app(InventoryService::class)->releaseOrderInventory($order);
                 $order->items()->delete();
-                $totalPrice = 0;
-                foreach ($request->items as $item) {
-                    $order->items()->create([
-                        'account_id' => $order->account_id,
-                        'product_id' => $item['product_id'],
-                        'quantity' => $item['quantity'],
-                        'price' => $item['price'],
-                        'cost_price' => $item['cost_price'] ?? 0,
-                    ]);
-                    $totalPrice += $item['price'] * $item['quantity'];
-                }
-                
-                $finalTotal = $totalPrice + ($request->shipping_fee ?? 0) - ($request->discount ?? 0);
-                $order->update(['total_price' => $finalTotal]);
+                $inventorySummary = app(InventoryService::class)->attachInventoryToOrder($order, $request->items);
+                $itemRevenue = $inventorySummary['total_price'];
+                $costTotal = $inventorySummary['cost_total'];
+            } else {
+                $itemRevenue = (float) $order->items()->sum(DB::raw('price * quantity'));
+                $costTotal = (float) $order->items()->sum('cost_total');
             }
+
+            $finalTotal = round($itemRevenue + (float) ($order->shipping_fee ?? 0) - (float) ($order->discount ?? 0), 2);
+            $order->update([
+                'total_price' => $finalTotal,
+                'cost_total' => round($costTotal, 2),
+                'profit_total' => round($finalTotal - $costTotal, 2),
+            ]);
 
             // Sync Order EAV custom attributes
             if ($request->has('custom_attributes')) {
@@ -447,6 +412,7 @@ class OrderController extends Controller
     public function destroy($id)
     {
         $order = Order::findOrFail($id);
+        app(InventoryService::class)->releaseOrderInventory($order);
         $order->delete();
         return response()->json(['message' => 'Order deleted successfully']);
     }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+﻿import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { productApi, categoryApi, attributeApi, productImageApi, aiApi, blogApi, mediaApi, cmsApi } from '../../services/api';
@@ -438,6 +438,7 @@ const ProductForm = () => {
         category_ids: [],
         price: '',
         price_type: 'fixed',
+        expected_cost: '',
         cost_price: '',
         weight: '',
         description: '',
@@ -486,7 +487,8 @@ const ProductForm = () => {
         name: 320,
         sku: 200,
         price: 150,
-        cost_price: 150,
+        expected_cost: 150,
+        current_cost: 150,
         weight: 100,
         stock: 100,
         actions: 60
@@ -1033,7 +1035,8 @@ const ProductForm = () => {
             id: `manual_${Date.now()}`,
             sku: `${formData.sku}-${variants.length + 1}`,
             price: formData.price,
-            cost_price: formData.cost_price,
+            expected_cost: formData.expected_cost,
+            current_cost: '',
             weight: formData.weight,
             stock: 10,
             attributes: {},
@@ -1053,6 +1056,7 @@ const ProductForm = () => {
                 category_ids: data.categories ? data.categories.map(c => c.id) : [],
                 price: data.price ? Math.floor(data.price) : '',
                 price_type: data.price_type || 'fixed',
+                expected_cost: data.expected_cost ? Math.floor(data.expected_cost) : '',
                 cost_price: data.cost_price ? Math.floor(data.cost_price) : '',
                 weight: data.weight || '',
                 description: data.description || '',
@@ -1183,7 +1187,8 @@ const ProductForm = () => {
                     return {
                         ...v,
                         price: Math.floor(v.price),
-                        cost_price: Math.floor(v.cost_price || 0),
+                        expected_cost: Math.floor(v.expected_cost || 0),
+                        current_cost: Math.floor(v.cost_price || 0),
                         weight: v.weight || 0,
                         stock: v.stock_quantity,
                         attributes: attrs,
@@ -1698,7 +1703,8 @@ const ProductForm = () => {
                 id: `new_${Date.now()}_${index}`,
                 sku: `${formData.sku}-${skuSuffix}`,
                 price: formData.price,
-                cost_price: formData.cost_price,
+                expected_cost: formData.expected_cost,
+                current_cost: '',
                 weight: formData.weight,
                 stock: 10,
                 attributes: combo,
@@ -1712,7 +1718,7 @@ const ProductForm = () => {
 
     const handleVariantChange = (index, field, value) => {
         const updated = [...variants];
-        if (field === 'price' || field === 'stock' || field === 'cost_price' || field === 'weight') {
+        if (field === 'price' || field === 'stock' || field === 'expected_cost' || field === 'weight') {
             value = value.toString().replace(/[^0-9]/g, '');
         }
         updated[index][field] = value;
@@ -2079,7 +2085,7 @@ const ProductForm = () => {
                     submitData.append(`variants[${idx}][sku]`, v.sku);
                     submitData.append(`variants[${idx}][name]`, v.label); // Send label as name
                     submitData.append(`variants[${idx}][price]`, v.price);
-                    submitData.append(`variants[${idx}][cost_price]`, v.cost_price || '');
+                    submitData.append(`variants[${idx}][expected_cost]`, v.expected_cost || '');
                     submitData.append(`variants[${idx}][weight]`, v.weight || '');
                     submitData.append(`variants[${idx}][stock_quantity]`, v.stock);
 
@@ -2468,7 +2474,7 @@ const ProductForm = () => {
                         <div className="bg-white border border-gold/10 p-5 shadow-premium-sm rounded-sm">
                             <SectionTitle icon="payments" title="Giá và thông số" />
                             <div className="grid grid-cols-1 gap-y-8">
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4">
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-x-4 gap-y-4">
                                     <Field label="Giá bán lẻ (VNĐ)" className={`border-brick/30 bg-brick/[0.02] ${formData.price_type === 'sum' ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
                                         <div className="flex items-center w-full">
                                             <input
@@ -2497,14 +2503,26 @@ const ProductForm = () => {
                                             </select>
                                         </Field>
                                     )}
-                                    <Field label="Giá nhập (Đối nội)" className="border-primary/20 bg-stone/5">
+                                    <Field label="Giá dự kiến" className="border-primary/20 bg-stone/5">
+                                        <div className="flex items-center w-full">
+                                            <input
+                                                type="text"
+                                                name="expected_cost"
+                                                value={formatNumberOutput(formData.expected_cost)}
+                                                onChange={(e) => handlePriceInputChange(e, 'expected_cost')}
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]"
+                                            />
+                                            <span className="font-bold text-primary opacity-30 ml-2">₫</span>
+                                        </div>
+                                    </Field>
+                                    <Field label="Giá vốn hiện tại" className="border-primary/20 bg-stone/10">
                                         <div className="flex items-center w-full">
                                             <input
                                                 type="text"
                                                 name="cost_price"
                                                 value={formatNumberOutput(formData.cost_price)}
-                                                onChange={(e) => handlePriceInputChange(e, 'cost_price')}
-                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]"
+                                                readOnly
+                                                className="w-full cursor-not-allowed bg-transparent border-none focus:outline-none focus:ring-0 text-primary/70 font-bold text-[15px]"
                                             />
                                             <span className="font-bold text-primary opacity-30 ml-2">₫</span>
                                         </div>
@@ -2891,9 +2909,13 @@ const ProductForm = () => {
                                                         Giá bán (VNĐ)
                                                         <div onMouseDown={(e) => handleVariantColumnResize('price', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
                                                     </th>
-                                                    <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.cost_price }}>
-                                                        Giá nhập
-                                                        <div onMouseDown={(e) => handleVariantColumnResize('cost_price', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
+                                                    <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.expected_cost }}>
+                                                        Giá dự kiến
+                                                        <div onMouseDown={(e) => handleVariantColumnResize('expected_cost', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
+                                                    </th>
+                                                    <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.current_cost }}>
+                                                        Giá vốn hiện tại
+                                                        <div onMouseDown={(e) => handleVariantColumnResize('current_cost', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
                                                     </th>
                                                     <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.weight }}>
                                                         Khối lượng
@@ -3011,8 +3033,18 @@ const ProductForm = () => {
                                                                 <div className="relative flex items-center justify-center">
                                                                     <input
                                                                         className="w-full bg-stone/5 border border-transparent focus:border-primary/50 focus:bg-white pl-2 pr-5 py-2 rounded text-[13px] font-bold text-primary text-center transition-all"
-                                                                        value={formatNumberOutput(v.cost_price)}
-                                                                        onChange={(e) => handleVariantChange(index, 'cost_price', e.target.value)}
+                                                                        value={formatNumberOutput(v.expected_cost)}
+                                                                        onChange={(e) => handleVariantChange(index, 'expected_cost', e.target.value)}
+                                                                    />
+                                                                    <span className="absolute right-2 text-[10px] text-primary/30 font-bold">₫</span>
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-4 py-3 border-r border-stone/20">
+                                                                <div className="relative flex items-center justify-center">
+                                                                    <input
+                                                                        className="w-full cursor-not-allowed bg-stone/10 border border-transparent pl-2 pr-5 py-2 rounded text-[13px] font-bold text-primary/60 text-center transition-all"
+                                                                        value={formatNumberOutput(v.current_cost)}
+                                                                        readOnly
                                                                     />
                                                                     <span className="absolute right-2 text-[10px] text-primary/30 font-bold">₫</span>
                                                                 </div>

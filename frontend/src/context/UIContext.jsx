@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, useCallback, useMemo, useEffect } from 'react';
-import Modal from '../components/Modal';
+import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
+import Modal from '../components/Modal';
 
 const UIContext = createContext();
 
@@ -9,11 +9,10 @@ export const UIProvider = ({ children }) => {
         show: false,
         title: '',
         content: '',
-        type: 'info', // success, error, warning, info
+        type: 'info',
         onAction: null,
-        actionText: 'Đồng ý'
+        actionText: 'Đồng ý',
     });
-
     const [toasts, setToasts] = useState([]);
 
     const showModal = useCallback(({ title, content, type = 'info', onAction = null, actionText = 'Đồng ý' }) => {
@@ -23,17 +22,19 @@ export const UIProvider = ({ children }) => {
             content,
             type,
             onAction,
-            actionText
+            actionText,
         });
     }, []);
 
     const hideModal = useCallback(() => {
-        setModal(prev => ({ ...prev, show: false }));
+        setModal((prev) => ({ ...prev, show: false }));
     }, []);
 
     const showToast = useCallback((args, secondArg) => {
-        let message, type = 'info', duration = 2000;
-        
+        let message;
+        let type = 'info';
+        let duration = 2000;
+
         if (typeof args === 'object' && args !== null && !React.isValidElement(args)) {
             message = args.message;
             type = args.type || 'info';
@@ -44,11 +45,10 @@ export const UIProvider = ({ children }) => {
         }
 
         const id = Date.now();
-        // Clear previous toasts to avoid overlapping/stacking
         setToasts([{ id, message, type }]);
-        
+
         setTimeout(() => {
-            setToasts(prev => prev.filter(t => t.id !== id));
+            setToasts((prev) => prev.filter((toast) => toast.id !== id));
         }, duration);
     }, []);
 
@@ -56,7 +56,7 @@ export const UIProvider = ({ children }) => {
         showModal,
         hideModal,
         showToast,
-        showNotification: showToast
+        showNotification: showToast,
     }), [showModal, hideModal, showToast]);
 
     return (
@@ -70,40 +70,54 @@ export const UIProvider = ({ children }) => {
                 actionText={modal.actionText}
                 onAction={modal.onAction}
             >
-                <div
-                    className="whitespace-pre-line"
-                    dangerouslySetInnerHTML={{ __html: modal.content }}
-                />
+                <div className="whitespace-pre-line" dangerouslySetInnerHTML={{ __html: modal.content }} />
             </Modal>
 
-            {/* Toast Container */}
-            <div className="fixed top-5 right-5 z-[9999] flex flex-col gap-3 pointer-events-none">
+            <div className="pointer-events-none fixed right-5 top-5 z-[9999] flex flex-col gap-3">
                 <AnimatePresence>
-                    {toasts.map(toast => (
+                    {toasts.map((toast) => (
                         <motion.div
                             key={toast.id}
                             initial={{ opacity: 0, x: 50, scale: 0.9 }}
                             animate={{ opacity: 1, x: 0, scale: 1 }}
                             exit={{ opacity: 0, x: 20, scale: 0.95 }}
-                            className={`pointer-events-auto min-w-[300px] p-4 rounded-sm shadow-premium-lg border-l-4 flex items-start gap-4 ${
-                                toast.type === 'success' ? 'bg-white border-green-500' : 
-                                toast.type === 'error' ? 'bg-white border-brick' :
-                                toast.type === 'warning' ? 'bg-white border-gold' : 'bg-white border-primary'
+                            className={`pointer-events-auto flex min-w-[300px] items-start gap-4 rounded-sm border-l-4 bg-white p-4 shadow-premium-lg ${
+                                toast.type === 'success'
+                                    ? 'border-green-500'
+                                    : toast.type === 'error'
+                                        ? 'border-brick'
+                                        : toast.type === 'warning'
+                                            ? 'border-gold'
+                                            : 'border-primary'
                             }`}
                         >
-                            <span className={`material-symbols-outlined ${
-                                toast.type === 'success' ? 'text-green-500' : 
-                                toast.type === 'error' ? 'text-brick' :
-                                toast.type === 'warning' ? 'text-gold' : 'text-primary'
-                            }`}>
-                                {toast.type === 'success' ? 'check_circle' : 
-                                 toast.type === 'error' ? 'error' :
-                                 toast.type === 'warning' ? 'warning' : 'info'}
+                            <span
+                                className={`material-symbols-outlined ${
+                                    toast.type === 'success'
+                                        ? 'text-green-500'
+                                        : toast.type === 'error'
+                                            ? 'text-brick'
+                                            : toast.type === 'warning'
+                                                ? 'text-gold'
+                                                : 'text-primary'
+                                }`}
+                            >
+                                {toast.type === 'success'
+                                    ? 'check_circle'
+                                    : toast.type === 'error'
+                                        ? 'error'
+                                        : toast.type === 'warning'
+                                            ? 'warning'
+                                            : 'info'}
                             </span>
                             <div className="flex-1">
-                                <div className="text-[13px] font-bold text-primary leading-tight">{toast.message}</div>
+                                <div className="text-[13px] font-bold leading-tight text-primary">{toast.message}</div>
                             </div>
-                            <button onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))} className="text-stone/30 hover:text-primary transition-colors">
+                            <button
+                                type="button"
+                                onClick={() => setToasts((prev) => prev.filter((item) => item.id !== toast.id))}
+                                className="text-stone/30 transition-colors hover:text-primary"
+                            >
                                 <span className="material-symbols-outlined text-[18px]">close</span>
                             </button>
                         </motion.div>

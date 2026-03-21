@@ -22,7 +22,7 @@ class ProductController extends Controller
         // Start with optimized column selection for products list to reduce memory & payload
         $query = Product::query()
             ->select([
-            'id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity',
+            'id', 'sku', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
             'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title'
         ])
             ->with([
@@ -32,9 +32,9 @@ class ProductController extends Controller
             'images:id,product_id,image_url,is_primary',
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
-            'variations:id,sku,name,price,cost_price,stock_quantity,type',
+            'variations:id,sku,name,price,expected_cost,cost_price,stock_quantity,type',
             'variations.images:id,product_id,image_url,is_primary',
-            'groupedItems:id,sku,name,price,cost_price,stock_quantity,type',
+            'groupedItems:id,sku,name,price,expected_cost,cost_price,stock_quantity,type',
             'groupedItems.images:id,product_id,image_url,is_primary'
         ]);
 
@@ -284,7 +284,7 @@ class ProductController extends Controller
             $query->inRandomOrder();
         } else {
             $sortMapping = ['stock' => 'stock_quantity', 'category' => 'category_id'];
-            $validSortFields = ['id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'created_at', 'type', 'category_id'];
+            $validSortFields = ['id', 'sku', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity', 'created_at', 'type', 'category_id'];
 
             $field = $sortMapping[$sortBy] ?? $sortBy;
             if (!in_array($field, $validSortFields))
@@ -324,7 +324,7 @@ class ProductController extends Controller
             'category_ids.*' => 'exists:categories,id',
             'price' => 'required|numeric|min:0',
             'price_type' => 'nullable|string|in:fixed,sum',
-            'cost_price' => 'nullable|numeric|min:0',
+            'expected_cost' => 'nullable|numeric|min:0',
             'special_price' => 'nullable|numeric|min:0',
             'special_price_from' => 'nullable|date',
             'special_price_to' => 'nullable|date',
@@ -514,7 +514,7 @@ class ProductController extends Controller
                     'name' => $vData['name'] ?? ($product->name . ' - ' . ($vData['sku'] ?? 'Variant')),
                     'sku' => $vData['sku'],
                     'price' => $vData['price'],
-                    'cost_price' => $vData['cost_price'] ?? null,
+                    'expected_cost' => $vData['expected_cost'] ?? null,
                     'weight' => $vData['weight'] ?? null,
                     'stock_quantity' => $vData['stock_quantity'] ?? 0,
                     'category_id' => $product->category_id,
@@ -571,16 +571,16 @@ class ProductController extends Controller
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:id,name,code,frontend_type',
             'linkedProducts' => function ($q) {
-            $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
+            $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
                 ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
                 ->with([
                     'images:id,product_id,image_url,is_primary',
                     'attributeValues:id,product_id,attribute_id,value',
                     'attributeValues.attribute:id,name,code'
                 ]);
-        },
+            },
             'groupedItems' => function ($q) {
-                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
+                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'price', 'cost_price'])
                     ->with([
                         'images:id,product_id,image_url,is_primary',
@@ -588,7 +588,7 @@ class ProductController extends Controller
                     ]);
             },
             'bundleItems' => function ($q) {
-                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
+                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'images:id,product_id,image_url,is_primary',
@@ -653,7 +653,7 @@ class ProductController extends Controller
             'category_ids.*' => 'exists:categories,id',
             'price' => 'sometimes|required|numeric|min:0',
             'price_type' => 'nullable|string|in:fixed,sum',
-            'cost_price' => 'nullable|numeric|min:0',
+            'expected_cost' => 'nullable|numeric|min:0',
             'special_price' => 'nullable|numeric|min:0',
             'special_price_from' => 'nullable|date',
             'special_price_to' => 'nullable|date',
@@ -847,7 +847,7 @@ class ProductController extends Controller
                         'name' => $vData['name'] ?? $variant->name,
                         'sku' => $vData['sku'],
                         'price' => $vData['price'],
-                        'cost_price' => $vData['cost_price'] ?? null,
+                        'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                     ]);
@@ -898,7 +898,7 @@ class ProductController extends Controller
                         'name' => $vData['name'] ?? ($product->name . ' - ' . ($vData['sku'] ?? 'Variant')),
                         'sku' => $vData['sku'],
                         'price' => $vData['price'],
-                        'cost_price' => $vData['cost_price'] ?? null,
+                        'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                         'category_id' => $product->category_id,
@@ -1145,7 +1145,7 @@ class ProductController extends Controller
             ];
 
             // Store original basic fields that ARE being updated
-            foreach (['category_id', 'price', 'cost_price', 'stock_quantity', 'is_featured', 'is_new', 'status', 'type'] as $field) {
+            foreach (['category_id', 'price', 'expected_cost', 'stock_quantity', 'is_featured', 'is_new', 'status', 'type'] as $field) {
                 if (isset($basicInfo[$field]) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
                     $pData['basic'][$field] = $product->{ $field};
                 }
@@ -1177,7 +1177,7 @@ class ProductController extends Controller
             // 1. Update basic info (direct columns)
             if (!empty($basicInfo)) {
                 $toUpdate = [];
-                foreach (['category_id', 'price', 'cost_price', 'stock_quantity', 'is_featured', 'is_new', 'status', 'type'] as $field) {
+                foreach (['category_id', 'price', 'expected_cost', 'stock_quantity', 'is_featured', 'is_new', 'status', 'type'] as $field) {
                     if (isset($basicInfo[$field]) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
                         $toUpdate[$field] = $basicInfo[$field];
                     }

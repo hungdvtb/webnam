@@ -1,9 +1,5 @@
 import React, { useState } from 'react';
 
-/**
- * Shared UI panel for configuring table columns.
- * Mirrors the stylish design used in Product and Order lists.
- */
 const TableColumnSettingsPanel = ({
     availableColumns,
     visibleColumns,
@@ -12,95 +8,92 @@ const TableColumnSettingsPanel = ({
     resetDefault,
     saveAsDefault,
     onClose,
-    storageKey
+    storageKey,
 }) => {
     const [draggedItemIndex, setDraggedItemIndex] = useState(null);
 
-    const handleDragStart = (e, index) => {
+    const handleDragStart = (event, index) => {
         setDraggedItemIndex(index);
-        e.dataTransfer.effectAllowed = 'move';
-        // Visual feedback
-        e.currentTarget.style.opacity = '0.5';
+        event.dataTransfer.effectAllowed = 'move';
+        event.currentTarget.style.opacity = '0.5';
     };
 
-    const handleDragOver = (e, index) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-    };
-
-    const handleDrop = (e, index) => {
-        e.preventDefault();
+    const handleDrop = (event, index) => {
+        event.preventDefault();
         if (draggedItemIndex === null || draggedItemIndex === index) return;
 
-        const newAvailable = [...availableColumns];
-        const draggedItem = newAvailable[draggedItemIndex];
-        
-        // Remove old and insert new
-        newAvailable.splice(draggedItemIndex, 1);
-        newAvailable.splice(index, 0, draggedItem);
+        const nextColumns = [...availableColumns];
+        const draggedColumn = nextColumns[draggedItemIndex];
+        nextColumns.splice(draggedItemIndex, 1);
+        nextColumns.splice(index, 0, draggedColumn);
 
-        setAvailableColumns(newAvailable);
-        localStorage.setItem(`${storageKey}_column_order`, JSON.stringify(newAvailable.map(c => c.id)));
-        setDraggedItemIndex(null);
-    };
-
-    const handleDragEnd = (e) => {
-        e.currentTarget.style.opacity = '1';
+        setAvailableColumns(nextColumns);
+        localStorage.setItem(`${storageKey}_column_order`, JSON.stringify(nextColumns.map((column) => column.id)));
         setDraggedItemIndex(null);
     };
 
     return (
-        <div className="bg-white border-b border-primary/10 p-4 shadow-lg animate-in slide-in-from-top-2 duration-200 rounded-b-md">
-            <div className="flex justify-between items-center mb-3">
-                <h3 className="font-display font-bold text-primary uppercase text-[16px] tracking-wider">Cấu hình hiển thị cột</h3>
-                <div className="flex items-center gap-2">
-                    <p className="text-[11px] text-primary uppercase tracking-widest font-bold opacity-40 mr-2 italic">Kéo thả để đổi thứ tự</p>
+        <div className="rounded-b-sm border-t border-primary/10 bg-white px-3 py-3">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <h3 className="text-[14px] font-black text-primary">Cài đặt cột</h3>
+                    <p className="text-[11px] text-primary/50">Kéo thả để đổi thứ tự, chọn để ẩn hoặc hiện cột.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
                     <button
+                        type="button"
                         onClick={resetDefault}
-                        className="bg-primary/5 text-primary text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-sm hover:bg-primary/10 transition-all flex items-center gap-1 border border-primary/20"
+                        className="inline-flex h-8 items-center gap-1 rounded-sm border border-primary/15 bg-white px-3 text-[11px] font-bold text-primary transition hover:border-primary hover:bg-primary/5"
                     >
                         <span className="material-symbols-outlined text-[16px]">restart_alt</span>
-                        MẶC ĐỊNH
+                        Mặc định
                     </button>
                     <button
+                        type="button"
                         onClick={saveAsDefault}
-                        className="bg-white text-primary text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-sm hover:bg-primary/5 transition-all flex items-center gap-1 border border-primary/30"
+                        className="inline-flex h-8 items-center gap-1 rounded-sm border border-primary/15 bg-white px-3 text-[11px] font-bold text-primary transition hover:border-primary hover:bg-primary/5"
                     >
                         <span className="material-symbols-outlined text-[16px]">save</span>
-                        LƯU LÀM MẶC ĐỊNH
+                        Lưu mặc định
                     </button>
                     <button
+                        type="button"
                         onClick={onClose}
-                        className="bg-primary text-white text-[10px] font-bold uppercase tracking-wider px-4 py-1.5 rounded-sm hover:bg-primary/90 transition-all flex items-center gap-1 shadow-md shadow-primary/20"
+                        className="inline-flex h-8 items-center gap-1 rounded-sm bg-primary px-3 text-[11px] font-bold text-white transition hover:bg-primary/90"
                     >
                         <span className="material-symbols-outlined text-[16px]">check_circle</span>
-                        XÁC NHẬN
+                        Xong
                     </button>
                 </div>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-2">
-                {availableColumns.map((col, idx) => (
-                    <div
-                        key={col.id}
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-4">
+                {availableColumns.map((column, index) => (
+                    <label
+                        key={column.id}
                         draggable
-                        onDragStart={(e) => handleDragStart(e, idx)}
-                        onDragOver={(e) => handleDragOver(e, idx)}
-                        onDrop={(e) => handleDrop(e, idx)}
-                        onDragEnd={handleDragEnd}
-                        className={`flex items-center gap-2 p-1.5 border transition-all rounded-sm cursor-move ${visibleColumns.includes(col.id) ? 'bg-primary/5 border-primary/20 shadow-sm' : 'bg-primary/5 border-primary/10 opacity-60 hover:opacity-100 hover:border-primary/30'}`}
+                        onDragStart={(event) => handleDragStart(event, index)}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => handleDrop(event, index)}
+                        onDragEnd={(event) => {
+                            event.currentTarget.style.opacity = '1';
+                            setDraggedItemIndex(null);
+                        }}
+                        className={`flex cursor-move items-center gap-2 rounded-sm border px-2 py-2 text-[12px] transition ${
+                            visibleColumns.includes(column.id)
+                                ? 'border-primary/15 bg-primary/[0.04] text-primary'
+                                : 'border-primary/10 bg-stone-50 text-primary/55'
+                        }`}
                     >
                         <input
                             type="checkbox"
-                            id={`check-${storageKey}-${col.id}`}
-                            checked={visibleColumns.includes(col.id)}
-                            onChange={() => toggleColumn(col.id)}
-                            className="size-3 text-primary border-primary/30 rounded cursor-pointer mt-0.5"
+                            id={`check-${storageKey}-${column.id}`}
+                            checked={visibleColumns.includes(column.id)}
+                            onChange={() => toggleColumn(column.id)}
+                            className="size-3.5 cursor-pointer accent-primary"
                         />
-                        <label htmlFor={`check-${storageKey}-${col.id}`} className="text-sm text-primary truncate cursor-pointer select-none font-bold">
-                            {col.label}
-                        </label>
-                    </div>
+                        <span className="truncate font-semibold">{column.label}</span>
+                    </label>
                 ))}
             </div>
         </div>

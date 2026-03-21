@@ -50,10 +50,9 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
 
           {/* Hero text */}
           <div className="ty-hero-text">
-            <h2 className="ty-heading">Cảm ơn Quý khách đã trân trọng di sản!</h2>
+            <h2 className="ty-heading">Cảm ơn anh chị đã tin tưởng đặt hàng em !</h2>
             <p className="ty-subtitle">
-              Đơn hàng của Quý khách đã được tiếp nhận và đang được các nghệ nhân chuẩn bị kỹ lưỡng tại làng nghề.
-              Một thư xác nhận chi tiết đã được gửi đến địa chỉ email của Quý khách.
+              Đơn hàng của anh chị đã được tiếp nhận. Bên em sẽ sớm gọi lại xác nhận đơn hàng và đóng gói gửi đến mình sớm nhất ạ.
             </p>
           </div>
 

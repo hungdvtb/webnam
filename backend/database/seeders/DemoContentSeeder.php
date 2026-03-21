@@ -29,6 +29,7 @@ class DemoContentSeeder extends Seeder
             ]);
         }
         $accountId = $account->id;
+        app(\App\Services\BlogSystemPostService::class)->ensureForAccount((int) $accountId);
 
         // 2. Run basic seeders
         $this->call([

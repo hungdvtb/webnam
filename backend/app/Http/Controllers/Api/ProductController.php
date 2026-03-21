@@ -7,6 +7,7 @@ use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\BulkUpdateLog;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -22,6 +23,176 @@ class ProductController extends Controller
         });
     }
 
+    protected function productResourceRelations(): array
+    {
+        return [
+            'category:id,name',
+            'categories:id,name',
+            'supplier:id,name,code',
+            'suppliers:id,name,code',
+            'siteDomain:id,domain,is_active,is_default',
+            'images:id,product_id,image_url,is_primary,file_name,file_size',
+            'superAttributes:id,name,code,frontend_type',
+            'superAttributes.options:id,attribute_id,value,swatch_value,order',
+            'attributeValues:id,product_id,attribute_id,value',
+            'attributeValues.attribute:id,name,code,frontend_type',
+            'linkedProducts' => function ($q) {
+                $q->select(['products.id', 'products.sku', 'products.supplier_product_code', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
+                    ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
+                    ->with([
+                        'images:id,product_id,image_url,is_primary',
+                        'attributeValues:id,product_id,attribute_id,value',
+                        'attributeValues.attribute:id,name,code',
+                    ]);
+            },
+            'groupedItems' => function ($q) {
+                $q->select(['products.id', 'products.sku', 'products.supplier_product_code', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
+                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'price', 'cost_price'])
+                    ->with([
+                        'images:id,product_id,image_url,is_primary',
+                        'attributeValues:id,product_id,attribute_id,value',
+                    ]);
+            },
+            'bundleItems' => function ($q) {
+                $q->select(['products.id', 'products.sku', 'products.supplier_product_code', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
+                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'is_default', 'variant_id', 'price', 'cost_price'])
+                    ->with([
+                        'images:id,product_id,image_url,is_primary',
+                        'attributeValues:id,product_id,attribute_id,value',
+                    ]);
+            },
+            'approvedReviews.user:id,name',
+        ];
+    }
+
+    protected function appendSupplierMeta(Product $product): Product
+    {
+        if (!$product->relationLoaded('suppliers')) {
+            $product->loadMissing('suppliers:id,name,code');
+        }
+
+        $supplierIds = $product->suppliers
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+
+        $product->setAttribute('supplier_ids', $supplierIds);
+        $product->setAttribute('supplier_count', count($supplierIds));
+        $product->setAttribute('has_multiple_suppliers', count($supplierIds) > 1);
+
+        return $product;
+    }
+
+    protected function loadProductResource(Product $product): Product
+    {
+        return $this->appendSupplierMeta($product->load($this->productResourceRelations()));
+    }
+
+    protected function normalizeSupplierIds(Request $request, array $validated = []): array
+    {
+        $rawSupplierIds = $validated['supplier_ids'] ?? $request->input('supplier_ids', []);
+        $legacySupplierId = $validated['supplier_id'] ?? $request->input('supplier_id');
+
+        if (!is_array($rawSupplierIds)) {
+            $rawSupplierIds = is_string($rawSupplierIds) ? explode(',', $rawSupplierIds) : [$rawSupplierIds];
+        }
+
+        if ($legacySupplierId !== null && $legacySupplierId !== '' && !in_array($legacySupplierId, $rawSupplierIds, true)) {
+            $rawSupplierIds[] = $legacySupplierId;
+        }
+
+        return collect($rawSupplierIds)
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    protected function syncProductSuppliers(Product $product, array $supplierIds): array
+    {
+        $supplierIds = collect($supplierIds)
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $syncData = [];
+        foreach ($supplierIds as $supplierId) {
+            $syncData[$supplierId] = ['account_id' => $product->account_id];
+        }
+
+        $product->suppliers()->sync($syncData);
+        $product->forceFill([
+            'supplier_id' => $supplierIds[0] ?? null,
+        ])->save();
+
+        return $supplierIds;
+    }
+
+    protected function syncSuppliersToVariants(Product $product, array $supplierIds): void
+    {
+        $variantIds = $product->linkedProducts()
+            ->wherePivot('link_type', 'super_link')
+            ->pluck('products.id');
+
+        if ($variantIds->isEmpty()) {
+            return;
+        }
+
+        Product::query()
+            ->whereIn('id', $variantIds)
+            ->get()
+            ->each(function (Product $variant) use ($supplierIds) {
+                $this->syncProductSuppliers($variant, $supplierIds);
+            });
+    }
+
+    protected function applySupplierFilter(Builder $query, array $supplierIds, bool $includeUnassigned = false): void
+    {
+        $supplierIds = collect($supplierIds)
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($supplierIds) && !$includeUnassigned) {
+            return;
+        }
+
+        $query->where(function (Builder $builder) use ($supplierIds, $includeUnassigned) {
+            if (!empty($supplierIds)) {
+                $builder
+                    ->whereHas('suppliers', function (Builder $supplierQuery) use ($supplierIds) {
+                        $supplierQuery->whereIn('suppliers.id', $supplierIds);
+                    })
+                    ->orWhereIn('supplier_id', $supplierIds)
+                    ->orWhereHas('supplierPrices', function (Builder $priceQuery) use ($supplierIds) {
+                        $priceQuery->whereIn('supplier_id', $supplierIds);
+                    });
+            }
+
+            if ($includeUnassigned) {
+                if (!empty($supplierIds)) {
+                    $builder->orWhere(function (Builder $unassignedQuery) {
+                        $unassignedQuery
+                            ->doesntHave('suppliers')
+                            ->whereNull('supplier_id')
+                            ->whereDoesntHave('supplierPrices');
+                    });
+                } else {
+                    $builder
+                        ->doesntHave('suppliers')
+                        ->whereNull('supplier_id')
+                        ->whereDoesntHave('supplierPrices');
+                }
+            }
+        });
+    }
+
     /**
      * Display a listing of the resource.
      */
@@ -31,18 +202,20 @@ class ProductController extends Controller
         $query = Product::query()
             ->select([
             'id', 'sku', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
-            'supplier_id',
+            'supplier_id', 'supplier_product_code',
             'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title'
         ])
+            ->withCount('suppliers')
             ->with([
             'categories:id,name',
             'category:id,name',
             'supplier:id,name,code',
+            'suppliers:id,name,code',
             'siteDomain:id,domain',
             'images:id,product_id,image_url,is_primary',
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
-            'variations:id,sku,name,price,expected_cost,cost_price,stock_quantity,type',
+            'variations:id,sku,supplier_product_code,name,price,expected_cost,cost_price,stock_quantity,type',
             'variations.images:id,product_id,image_url,is_primary',
             'groupedItems:id,sku,name,price,expected_cost,cost_price,stock_quantity,type',
             'groupedItems.images:id,product_id,image_url,is_primary'
@@ -80,12 +253,42 @@ class ProductController extends Controller
             });
         }
 
-        if ($request->filled('supplier_id')) {
-            if ($request->input('supplier_id') === 'unassigned') {
-                $query->whereNull('supplier_id');
-            } else {
-                $query->where('supplier_id', (int) $request->input('supplier_id'));
-            }
+        $rawSupplierIds = $request->input('supplier_ids', $request->input('supplier_id'));
+        $includeUnassignedSuppliers = false;
+        $supplierIds = [];
+        if ($rawSupplierIds !== null && $rawSupplierIds !== '') {
+            $normalizedSupplierFilter = is_array($rawSupplierIds) ? $rawSupplierIds : explode(',', (string) $rawSupplierIds);
+            $includeUnassignedSuppliers = in_array('unassigned', $normalizedSupplierFilter, true);
+            $supplierIds = collect($normalizedSupplierFilter)
+                ->reject(fn ($value) => $value === 'unassigned')
+                ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+            $this->applySupplierFilter($query, $supplierIds, $includeUnassignedSuppliers);
+        }
+
+        if ($request->boolean('missing_purchase_price')) {
+            $query->whereDoesntHave('supplierPrices', function (Builder $priceQuery) {
+                $priceQuery
+                    ->whereNotNull('unit_cost')
+                    ->where('unit_cost', '>', 0);
+            });
+        }
+
+        if ($request->boolean('multiple_suppliers')) {
+            $query->where(function (Builder $builder) {
+                $builder
+                    ->has('suppliers', '>', 1)
+                    ->orWhereIn('id', function ($subQuery) {
+                        $subQuery
+                            ->from('supplier_product_prices')
+                            ->select('product_id')
+                            ->groupBy('product_id')
+                            ->havingRaw('COUNT(DISTINCT supplier_id) > 1');
+                    });
+            });
         }
 
         $searchRankingSql = null;
@@ -146,7 +349,9 @@ class ProductController extends Controller
                 $escapeLike = static fn ($value) => str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
                 $nameExpr = "immutable_unaccent(COALESCE(products.name, ''))";
                 $skuExpr = "immutable_unaccent(COALESCE(products.sku, ''))";
+                $supplierCodeExpr = "immutable_unaccent(COALESCE(products.supplier_product_code, ''))";
                 $compactSkuExpr = "immutable_unaccent(REGEXP_REPLACE(COALESCE(products.sku, ''), '[^a-zA-Z0-9]', '', 'g'))";
+                $compactSupplierCodeExpr = "immutable_unaccent(REGEXP_REPLACE(COALESCE(products.supplier_product_code, ''), '[^a-zA-Z0-9]', '', 'g'))";
                 $phraseLike = '%' . $escapeLike($rawSearch) . '%';
                 $prefixLike = $escapeLike($rawSearch) . '%';
                 $compactSearch = preg_replace('/[^a-z0-9]+/', '', $normalizedSearch);
@@ -159,8 +364,8 @@ class ProductController extends Controller
                     $tokenLike = '%' . $escapeLike($token) . '%';
                     $compactToken = preg_replace('/[^a-z0-9]+/', '', $token);
                     $compactTokenLike = '%' . $escapeLike($compactToken) . '%';
-                    $strictTokenMatchParts[] = "CASE WHEN ({$nameExpr} ILIKE immutable_unaccent(?) OR {$skuExpr} ILIKE immutable_unaccent(?) OR {$compactSkuExpr} ILIKE immutable_unaccent(?)) THEN 1 ELSE 0 END";
-                    array_push($strictTokenMatchBindings, $tokenLike, $tokenLike, $compactTokenLike);
+                    $strictTokenMatchParts[] = "CASE WHEN ({$nameExpr} ILIKE immutable_unaccent(?) OR {$skuExpr} ILIKE immutable_unaccent(?) OR {$supplierCodeExpr} ILIKE immutable_unaccent(?) OR {$compactSkuExpr} ILIKE immutable_unaccent(?) OR {$compactSupplierCodeExpr} ILIKE immutable_unaccent(?)) THEN 1 ELSE 0 END";
+                    array_push($strictTokenMatchBindings, $tokenLike, $tokenLike, $tokenLike, $compactTokenLike, $compactTokenLike);
                 }
 
                 $strictTokenMatchSql = !empty($strictTokenMatchParts) ? '(' . implode(' + ', $strictTokenMatchParts) . ')' : '0';
@@ -169,16 +374,22 @@ class ProductController extends Controller
                 $searchRankingParts = [
                     "CASE WHEN {$skuExpr} = immutable_unaccent(?) THEN 1500 ELSE 0 END",
                     "CASE WHEN {$nameExpr} = immutable_unaccent(?) THEN 1400 ELSE 0 END",
+                    "CASE WHEN {$supplierCodeExpr} = immutable_unaccent(?) THEN 1320 ELSE 0 END",
                     "CASE WHEN {$skuExpr} ILIKE immutable_unaccent(?) THEN 950 ELSE 0 END",
                     "CASE WHEN {$nameExpr} ILIKE immutable_unaccent(?) THEN 900 ELSE 0 END",
+                    "CASE WHEN {$supplierCodeExpr} ILIKE immutable_unaccent(?) THEN 860 ELSE 0 END",
                     "CASE WHEN {$skuExpr} ILIKE immutable_unaccent(?) THEN 820 ELSE 0 END",
                     "CASE WHEN {$nameExpr} ILIKE immutable_unaccent(?) THEN 780 ELSE 0 END",
+                    "CASE WHEN {$supplierCodeExpr} ILIKE immutable_unaccent(?) THEN 760 ELSE 0 END",
                 ];
                 $searchRankingBindings = [
                     $rawSearch,
                     $rawSearch,
+                    $rawSearch,
                     $prefixLike,
                     $prefixLike,
+                    $prefixLike,
+                    $phraseLike,
                     $phraseLike,
                     $phraseLike,
                 ];
@@ -186,10 +397,14 @@ class ProductController extends Controller
                 if ($compactPhraseLike !== null) {
                     $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} ILIKE immutable_unaccent(?) THEN 900 ELSE 0 END";
                     $searchRankingBindings[] = $compactPhraseLike;
+                    $searchRankingParts[] = "CASE WHEN {$compactSupplierCodeExpr} ILIKE immutable_unaccent(?) THEN 860 ELSE 0 END";
+                    $searchRankingBindings[] = $compactPhraseLike;
                 }
 
                 if ($compactPrefixLike !== null) {
                     $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} ILIKE immutable_unaccent(?) THEN 880 ELSE 0 END";
+                    $searchRankingBindings[] = $compactPrefixLike;
+                    $searchRankingParts[] = "CASE WHEN {$compactSupplierCodeExpr} ILIKE immutable_unaccent(?) THEN 840 ELSE 0 END";
                     $searchRankingBindings[] = $compactPrefixLike;
                 }
 
@@ -203,7 +418,9 @@ class ProductController extends Controller
                 $query->where(function (Builder $strictSearchQuery) use (
                     $nameExpr,
                     $skuExpr,
+                    $supplierCodeExpr,
                     $compactSkuExpr,
+                    $compactSupplierCodeExpr,
                     $phraseLike,
                     $compactPhraseLike,
                     $strictTokenMatchSql,
@@ -212,15 +429,37 @@ class ProductController extends Controller
                 ) {
                     $strictSearchQuery
                         ->whereRaw("{$nameExpr} ILIKE immutable_unaccent(?)", [$phraseLike])
-                        ->orWhereRaw("{$skuExpr} ILIKE immutable_unaccent(?)", [$phraseLike]);
+                        ->orWhereRaw("{$skuExpr} ILIKE immutable_unaccent(?)", [$phraseLike])
+                        ->orWhereRaw("{$supplierCodeExpr} ILIKE immutable_unaccent(?)", [$phraseLike]);
 
                     if ($compactPhraseLike !== null) {
-                        $strictSearchQuery->orWhereRaw("{$compactSkuExpr} ILIKE immutable_unaccent(?)", [$compactPhraseLike]);
+                        $strictSearchQuery
+                            ->orWhereRaw("{$compactSkuExpr} ILIKE immutable_unaccent(?)", [$compactPhraseLike])
+                            ->orWhereRaw("{$compactSupplierCodeExpr} ILIKE immutable_unaccent(?)", [$compactPhraseLike]);
                     }
 
                     if ($strictTokenMatchSql !== '0') {
                         $strictSearchQuery->orWhereRaw("{$strictTokenMatchSql} >= ?", array_merge($strictTokenMatchBindings, [$minimumRelevantMatches]));
                     }
+
+                    $strictSearchQuery->orWhereHas('variations', function (Builder $variationQuery) use ($phraseLike, $compactPhraseLike) {
+                        $variationNameExpr = "immutable_unaccent(COALESCE(products.name, ''))";
+                        $variationSkuExpr = "immutable_unaccent(COALESCE(products.sku, ''))";
+                        $variationSupplierCodeExpr = "immutable_unaccent(COALESCE(products.supplier_product_code, ''))";
+                        $variationCompactSkuExpr = "immutable_unaccent(REGEXP_REPLACE(COALESCE(products.sku, ''), '[^a-zA-Z0-9]', '', 'g'))";
+                        $variationCompactSupplierCodeExpr = "immutable_unaccent(REGEXP_REPLACE(COALESCE(products.supplier_product_code, ''), '[^a-zA-Z0-9]', '', 'g'))";
+
+                        $variationQuery
+                            ->whereRaw("{$variationNameExpr} ILIKE immutable_unaccent(?)", [$phraseLike])
+                            ->orWhereRaw("{$variationSkuExpr} ILIKE immutable_unaccent(?)", [$phraseLike])
+                            ->orWhereRaw("{$variationSupplierCodeExpr} ILIKE immutable_unaccent(?)", [$phraseLike]);
+
+                        if ($compactPhraseLike !== null) {
+                            $variationQuery
+                                ->orWhereRaw("{$variationCompactSkuExpr} ILIKE immutable_unaccent(?)", [$compactPhraseLike])
+                                ->orWhereRaw("{$variationCompactSupplierCodeExpr} ILIKE immutable_unaccent(?)", [$compactPhraseLike]);
+                        }
+                    });
                 });
             }
         }
@@ -302,7 +541,7 @@ class ProductController extends Controller
             $query->inRandomOrder();
         } else {
             $sortMapping = ['stock' => 'stock_quantity', 'category' => 'category_id'];
-            $validSortFields = ['id', 'sku', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity', 'created_at', 'type', 'category_id'];
+            $validSortFields = ['id', 'sku', 'supplier_product_code', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity', 'created_at', 'type', 'category_id'];
 
             $field = $sortMapping[$sortBy] ?? $sortBy;
             if (!in_array($field, $validSortFields))
@@ -325,7 +564,14 @@ class ProductController extends Controller
         // Ensure perPage is reasonable
         $perPage = min(max($perPage, 1), 100);
 
-        return response()->json($query->paginate($perPage));
+        $paginated = $query->paginate($perPage);
+        $paginated->setCollection(
+            $paginated->getCollection()->map(function (Product $product) {
+                return $this->appendSupplierMeta($product);
+            })
+        );
+
+        return response()->json($paginated);
     }
 
 
@@ -352,6 +598,7 @@ class ProductController extends Controller
             'stock_quantity' => 'integer|min:0',
             'weight' => 'nullable|string',
             'sku' => 'nullable|string|unique:products,sku',
+            'supplier_product_code' => 'nullable|string|max:255',
             'meta_title' => 'nullable|string',
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
@@ -362,6 +609,8 @@ class ProductController extends Controller
             'bundle_title' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
             'supplier_id' => ['nullable', $this->supplierExistsRule($request)],
+            'supplier_ids' => 'nullable|array',
+            'supplier_ids.*' => ['nullable', $this->supplierExistsRule($request)],
             // linkages
             'linked_product_ids' => 'nullable|array',
             'link_type' => 'nullable|string',
@@ -403,7 +652,12 @@ class ProductController extends Controller
             $validated['slug'] = Str::slug($validated['slug']);
         }
 
+        $supplierIds = $this->normalizeSupplierIds($request, $validated);
+        $validated['supplier_id'] = $supplierIds[0] ?? null;
+        unset($validated['supplier_ids']);
+
         $product = Product::create(array_merge($validated, ['account_id' => $request->header('X-Account-Id')]));
+        $this->syncProductSuppliers($product, $supplierIds);
 
         if ($request->has('category_ids')) {
             $product->categories()->sync($request->category_ids);
@@ -532,14 +786,16 @@ class ProductController extends Controller
                     'type' => 'simple',
                     'name' => $vData['name'] ?? ($product->name . ' - ' . ($vData['sku'] ?? 'Variant')),
                     'sku' => $vData['sku'],
+                    'supplier_product_code' => $vData['supplier_product_code'] ?? null,
                     'price' => $vData['price'],
                     'expected_cost' => $vData['expected_cost'] ?? null,
                     'weight' => $vData['weight'] ?? null,
-                    'supplier_id' => $product->supplier_id,
+                    'supplier_id' => $supplierIds[0] ?? $product->supplier_id,
                     'stock_quantity' => $vData['stock_quantity'] ?? 0,
                     'category_id' => $product->category_id,
                     'status' => $product->status ?? true,
                 ]);
+                $this->syncProductSuppliers($vProduct, $supplierIds);
 
                 // Handle variant image
                 if ($request->hasFile("variants.{$idx}.image")) {
@@ -573,7 +829,9 @@ class ProductController extends Controller
             }
         }
 
-        return response()->json($product->load(['category', 'categories', 'supplier', 'images', 'linkedProducts.images', 'linkedProducts.attributeValues', 'superAttributes', 'attributeValues.attribute']), 201);
+        $this->syncSuppliersToVariants($product, $supplierIds);
+
+        return response()->json($this->loadProductResource($product), 201);
     }
 
     /**
@@ -581,43 +839,7 @@ class ProductController extends Controller
      */
     public function show($id)
     {
-        $product = Product::with([
-            'category:id,name',
-            'categories:id,name',
-            'supplier:id,name,code',
-            'siteDomain:id,domain,is_active,is_default',
-            'images:id,product_id,image_url,is_primary,file_name,file_size',
-            'superAttributes:id,name,code,frontend_type',
-            'superAttributes.options:id,attribute_id,value,swatch_value,order',
-            'attributeValues:id,product_id,attribute_id,value',
-            'attributeValues.attribute:id,name,code,frontend_type',
-            'linkedProducts' => function ($q) {
-            $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
-                ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
-                ->with([
-                    'images:id,product_id,image_url,is_primary',
-                    'attributeValues:id,product_id,attribute_id,value',
-                    'attributeValues.attribute:id,name,code'
-                ]);
-            },
-            'groupedItems' => function ($q) {
-                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
-                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'price', 'cost_price'])
-                    ->with([
-                        'images:id,product_id,image_url,is_primary',
-                        'attributeValues:id,product_id,attribute_id,value'
-                    ]);
-            },
-            'bundleItems' => function ($q) {
-                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight'])
-                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'is_default', 'variant_id', 'price', 'cost_price'])
-                    ->with([
-                        'images:id,product_id,image_url,is_primary',
-                        'attributeValues:id,product_id,attribute_id,value'
-                    ]);
-            },
-            'approvedReviews.user:id,name'
-        ])->findOrFail($id);
+        $product = Product::with($this->productResourceRelations())->findOrFail($id);
 
         if ($product->type === 'configurable') {
             // Get variations manually to find all used attribute values from IN-STOCK variations
@@ -656,7 +878,7 @@ class ProductController extends Controller
             $product->setRelation('variations', $variations);
         }
 
-        return response()->json($product);
+        return response()->json($this->appendSupplierMeta($product));
     }
 
     /**
@@ -684,6 +906,7 @@ class ProductController extends Controller
             'stock_quantity' => 'nullable|integer|min:0',
             'weight' => 'nullable|string',
             'sku' => 'nullable|string|unique:products,sku,' . $id,
+            'supplier_product_code' => 'nullable|string|max:255',
             'status' => 'nullable|boolean',
             'meta_title' => 'nullable|string',
             'meta_description' => 'nullable|string',
@@ -694,6 +917,9 @@ class ProductController extends Controller
             'bundle_title' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
             'supplier_id' => ['nullable', $this->supplierExistsRule($request)],
+            'supplier_ids' => 'nullable|array',
+            'supplier_ids.*' => ['nullable', $this->supplierExistsRule($request)],
+            'clear_supplier_ids' => 'nullable|boolean',
             'linked_product_ids' => 'nullable|array',
             'link_type' => 'nullable|string',
             'grouped_items' => 'nullable|array',
@@ -717,19 +943,33 @@ class ProductController extends Controller
             'slug.regex' => 'Đường dẫn chỉ được chứa chữ cái thường, số và dấu gạch ngang (VD: san-pham-1).',
         ]);
 
-        // Capture which fields changed before saving
-        $nameChanged = $product->isDirty('name');
-        $skuChanged = $product->isDirty('sku');
+        $incomingSupplierIds = $request->has('supplier_ids') || $request->has('supplier_id') || $request->boolean('clear_supplier_ids');
+        $supplierIds = $incomingSupplierIds
+            ? ($request->boolean('clear_supplier_ids') ? [] : $this->normalizeSupplierIds($request, $validated))
+            : $product->suppliers()->pluck('suppliers.id')->map(fn ($value) => (int) $value)->values()->all();
+
+        if ($incomingSupplierIds) {
+            $validated['supplier_id'] = $supplierIds[0] ?? null;
+        }
+
+        unset($validated['supplier_ids'], $validated['clear_supplier_ids']);
 
         if (isset($validated['slug'])) {
             if (empty($validated['slug'])) {
-                $validated['slug'] = Str::slug($product->name);
+                $validated['slug'] = Str::slug($validated['name'] ?? $product->name);
             } else {
                 $validated['slug'] = Str::slug($validated['slug']);
             }
         }
 
-        $product->update($validated);
+        $product->fill($validated);
+        $nameChanged = $product->isDirty('name');
+        $skuChanged = $product->isDirty('sku');
+        $product->save();
+
+        if ($incomingSupplierIds) {
+            $this->syncProductSuppliers($product, $supplierIds);
+        }
 
         // ─── Sync snapshots on all linked order_items (batch UPDATE) ────────────
         // Runs one SQL query regardless of how many orders reference this product.
@@ -868,12 +1108,17 @@ class ProductController extends Controller
                     $variant->update([
                         'name' => $vData['name'] ?? $variant->name,
                         'sku' => $vData['sku'],
+                        'supplier_product_code' => $vData['supplier_product_code'] ?? null,
                         'price' => $vData['price'],
                         'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
-                        'supplier_id' => $validated['supplier_id'] ?? $product->supplier_id,
+                        'supplier_id' => $supplierIds[0] ?? $product->supplier_id,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                     ]);
+
+                    if ($incomingSupplierIds) {
+                        $this->syncProductSuppliers($variant, $supplierIds);
+                    }
 
                     // Handle variant image update/removal
                     if ($request->hasFile("variants.{$idx}.image")) {
@@ -920,14 +1165,17 @@ class ProductController extends Controller
                         'type' => 'simple',
                         'name' => $vData['name'] ?? ($product->name . ' - ' . ($vData['sku'] ?? 'Variant')),
                         'sku' => $vData['sku'],
+                        'supplier_product_code' => $vData['supplier_product_code'] ?? null,
                         'price' => $vData['price'],
                         'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
-                        'supplier_id' => $product->supplier_id,
+                        'supplier_id' => $supplierIds[0] ?? $product->supplier_id,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                         'category_id' => $product->category_id,
                         'status' => $product->status ?? true,
                     ]);
+
+                    $this->syncProductSuppliers($variant, $supplierIds);
 
                     if ($request->hasFile("variants.{$idx}.image")) {
                         $disk = 's3';
@@ -964,7 +1212,11 @@ class ProductController extends Controller
             }
         }
 
-        return response()->json($product->load(['category', 'categories', 'supplier', 'images', 'linkedProducts.images', 'linkedProducts.attributeValues', 'superAttributes', 'attributeValues.attribute']));
+        if ($incomingSupplierIds) {
+            $this->syncSuppliersToVariants($product, $supplierIds);
+        }
+
+        return response()->json($this->loadProductResource($product));
     }
 
     /**
@@ -972,7 +1224,8 @@ class ProductController extends Controller
      */
     public function duplicate($id)
     {
-        $original = Product::with(['attributeValues', 'images', 'superAttributes', 'linkedProducts.images', 'linkedProducts.attributeValues'])->where('id', $id)->firstOrFail();
+        $original = Product::with(['attributeValues', 'images', 'superAttributes', 'suppliers:id,name,code', 'linkedProducts.images', 'linkedProducts.attributeValues', 'linkedProducts.suppliers:id,name,code'])->where('id', $id)->firstOrFail();
+        $originalSupplierIds = $original->suppliers->pluck('id')->map(fn ($value) => (int) $value)->values()->all();
 
         // Clone attributes
         $clone = $original->replicate();
@@ -982,6 +1235,7 @@ class ProductController extends Controller
         $clone->status = false; // Set to inactive by default for clone
         $clone->is_new = true;
         $clone->save();
+        $this->syncProductSuppliers($clone, $originalSupplierIds);
 
         // Copy images
         foreach ($original->images as $img) {
@@ -1027,6 +1281,8 @@ class ProductController extends Controller
                     $newVariant->name = $lp->name; // Keep name or update? Keep is usually better for variants
                     $newVariant->slug = \Illuminate\Support\Str::slug($newVariant->name) . '-' . strtolower(\Illuminate\Support\Str::random(6));
                     $newVariant->save();
+                    $variantSupplierIds = $lp->suppliers->pluck('id')->map(fn ($value) => (int) $value)->values()->all();
+                    $this->syncProductSuppliers($newVariant, !empty($variantSupplierIds) ? $variantSupplierIds : $originalSupplierIds);
 
                     // Copy variant images
                     foreach ($lp->images as $img) {
@@ -1069,7 +1325,7 @@ class ProductController extends Controller
 
         return response()->json([
             'message' => 'Sản phẩm đã được nhân bản thành công',
-            'data' => $clone->load(['category', 'categories', 'supplier', 'images', 'attributeValues.attribute', 'linkedProducts.images', 'linkedProducts.attributeValues', 'superAttributes'])
+            'data' => $this->loadProductResource($clone)
         ]);
     }
 
@@ -1147,6 +1403,8 @@ class ProductController extends Controller
             'basic_info' => 'nullable|array',
             'basic_info.cost_price' => 'nullable|numeric|min:0',
             'basic_info.supplier_id' => ['nullable', $this->supplierExistsRule($request)],
+            'basic_info.supplier_ids' => 'nullable|array',
+            'basic_info.supplier_ids.*' => ['nullable', $this->supplierExistsRule($request)],
             'attributes' => 'nullable|array',
         ]);
 
@@ -1160,7 +1418,7 @@ class ProductController extends Controller
 
         // --- Logging original data for BACKUP/UNDO ---
         $originalDataLog = [];
-        $products = Product::with(['attributeValues', 'categories'])->whereIn('id', $ids)->get();
+        $products = Product::with(['attributeValues', 'categories', 'suppliers:id,name,code'])->whereIn('id', $ids)->get();
 
         foreach ($products as $product) {
             $pData = [
@@ -1168,6 +1426,7 @@ class ProductController extends Controller
                 'basic' => [],
                 'attributes' => [],
                 'category_ids' => $product->categories->pluck('id')->toArray(),
+                'supplier_ids' => $product->suppliers->pluck('id')->map(fn ($value) => (int) $value)->values()->all(),
             ];
 
             // Store original basic fields that ARE being updated
@@ -1175,6 +1434,10 @@ class ProductController extends Controller
                 if (isset($basicInfo[$field]) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
                     $pData['basic'][$field] = $product->{ $field};
                 }
+            }
+
+            if (array_key_exists('supplier_ids', $basicInfo) && is_array($basicInfo['supplier_ids'])) {
+                $pData['basic']['supplier_id'] = $product->supplier_id;
             }
 
             // Store original EAV attributes that ARE being updated
@@ -1213,6 +1476,11 @@ class ProductController extends Controller
                 }
                 if (isset($basicInfo['category_ids']) && is_array($basicInfo['category_ids']) && !empty($basicInfo['category_ids'])) {
                     $product->categories()->sync($basicInfo['category_ids']);
+                }
+
+                if (array_key_exists('supplier_ids', $basicInfo) && is_array($basicInfo['supplier_ids'])) {
+                    $this->syncProductSuppliers($product, $basicInfo['supplier_ids']);
+                    $this->syncSuppliersToVariants($product, $basicInfo['supplier_ids']);
                 }
             }
 
@@ -1254,6 +1522,11 @@ class ProductController extends Controller
             // Restore basic info
             if (!empty($pData['basic'])) {
                 $product->update($pData['basic']);
+            }
+
+            if (array_key_exists('supplier_ids', $pData)) {
+                $this->syncProductSuppliers($product, $pData['supplier_ids'] ?? []);
+                $this->syncSuppliersToVariants($product, $pData['supplier_ids'] ?? []);
             }
 
             // Restore category sync

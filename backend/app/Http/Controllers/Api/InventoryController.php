@@ -101,6 +101,12 @@ class InventoryController extends Controller
         $query->with([
             'category:id,name',
             'parentConfigurable:id,name,sku',
+            'suppliers:id,name,code',
+            'supplierPrices' => function ($builder) {
+                $builder
+                    ->select(['id', 'supplier_id', 'product_id', 'unit_cost', 'updated_at'])
+                    ->with(['supplier:id,name,code']);
+            },
         ]);
 
         if ($withVariants) {
@@ -122,7 +128,16 @@ class InventoryController extends Controller
                             'products.created_at',
                             'products.deleted_at',
                         ])
-                        ->with(['category:id,name', 'parentConfigurable:id,name,sku'])
+                        ->with([
+                            'category:id,name',
+                            'parentConfigurable:id,name,sku',
+                            'suppliers:id,name,code',
+                            'supplierPrices' => function ($priceBuilder) {
+                                $priceBuilder
+                                    ->select(['id', 'supplier_id', 'product_id', 'unit_cost', 'updated_at'])
+                                    ->with(['supplier:id,name,code']);
+                            },
+                        ])
                         ->orderBy('products.name');
                 },
             ]);
@@ -134,6 +149,7 @@ class InventoryController extends Controller
             'created_at',
             'deleted_at',
             'sku',
+            'supplier_product_code',
             'name',
             'stock_quantity',
             'damaged_quantity',
@@ -182,6 +198,7 @@ class InventoryController extends Controller
         $accountId = (int) $request->header('X-Account-Id');
         $validated = $request->validate([
             'sku' => 'required|string|max:120|unique:products,sku',
+            'supplier_product_code' => 'nullable|string|max:255',
             'name' => 'required|string|max:255',
             'price' => 'nullable|numeric|min:0',
             'expected_cost' => 'nullable|numeric|min:0',
@@ -199,6 +216,7 @@ class InventoryController extends Controller
             'account_id' => $accountId,
             'type' => 'simple',
             'sku' => $validated['sku'],
+            'supplier_product_code' => $validated['supplier_product_code'] ?? null,
             'name' => $validated['name'],
             'slug' => $slug,
             'price' => $validated['price'] ?? 0,
@@ -216,6 +234,7 @@ class InventoryController extends Controller
         $product = Product::withTrashed()->findOrFail($id);
         $validated = $request->validate([
             'sku' => 'sometimes|required|string|max:120|unique:products,sku,' . $product->id,
+            'supplier_product_code' => 'nullable|string|max:255',
             'name' => 'sometimes|required|string|max:255',
             'price' => 'nullable|numeric|min:0',
             'expected_cost' => 'nullable|numeric|min:0',
@@ -364,6 +383,7 @@ class InventoryController extends Controller
             ->select([
                 'products.id',
                 'products.sku',
+                'products.supplier_product_code',
                 'products.name',
                 'products.price',
                 'products.expected_cost',
@@ -382,25 +402,28 @@ class InventoryController extends Controller
                     ->where('supplier_price_rows.supplier_id', '=', $supplier->id);
             })
             ->where(function ($builder) use ($supplier) {
+                $this->applySupplierMembershipFilter($builder, $supplier->id);
                 $builder
-                    ->where('products.supplier_id', $supplier->id)
                     ->orWhereNotNull('supplier_price_rows.id')
                     ->orWhereHas('variations', function ($variationQuery) use ($supplier) {
-                        $variationQuery
-                            ->where('products.supplier_id', $supplier->id)
-                            ->orWhereHas('supplierPrices', function ($priceQuery) use ($supplier) {
-                                $priceQuery->where('supplier_id', $supplier->id);
-                            });
+                        $this->applySupplierMembershipFilter($variationQuery, $supplier->id);
                     });
             })
             ->whereDoesntHave('parentConfigurable')
             ->with([
                 'category:id,name',
+                'suppliers:id,name,code',
+                'supplierPrices' => function ($builder) {
+                    $builder
+                        ->select(['id', 'supplier_id', 'product_id', 'unit_cost', 'updated_at'])
+                        ->with(['supplier:id,name,code']);
+                },
                 'variations' => function ($builder) use ($supplier) {
                     $builder
                         ->select([
                             'products.id',
                             'products.sku',
+                            'products.supplier_product_code',
                             'products.name',
                             'products.price',
                             'products.expected_cost',
@@ -414,15 +437,17 @@ class InventoryController extends Controller
                             'products.deleted_at',
                         ])
                         ->where(function ($variationQuery) use ($supplier) {
-                            $variationQuery
-                                ->where('products.supplier_id', $supplier->id)
-                                ->orWhereHas('supplierPrices', function ($priceQuery) use ($supplier) {
-                                    $priceQuery->where('supplier_id', $supplier->id);
-                                });
+                            $this->applySupplierMembershipFilter($variationQuery, $supplier->id);
                         })
                         ->with([
                             'category:id,name',
                             'parentConfigurable:id,name,sku',
+                            'suppliers:id,name,code',
+                            'supplierPrices' => function ($priceBuilder) {
+                                $priceBuilder
+                                    ->select(['id', 'supplier_id', 'product_id', 'unit_cost', 'updated_at'])
+                                    ->with(['supplier:id,name,code']);
+                            },
                         ])
                         ->orderBy('products.name');
                 },
@@ -433,10 +458,12 @@ class InventoryController extends Controller
             $query->where(function ($productQuery) use ($search) {
                 $productQuery
                     ->where('products.sku', 'like', '%' . $search . '%')
+                    ->orWhere('products.supplier_product_code', 'like', '%' . $search . '%')
                     ->orWhere('products.name', 'like', '%' . $search . '%')
                     ->orWhereHas('variations', function ($variationQuery) use ($search) {
                         $variationQuery
                             ->where('products.sku', 'like', '%' . $search . '%')
+                            ->orWhere('products.supplier_product_code', 'like', '%' . $search . '%')
                             ->orWhere('products.name', 'like', '%' . $search . '%');
                     });
             });
@@ -447,8 +474,11 @@ class InventoryController extends Controller
             $query->where(function ($productQuery) use ($sku) {
                 $productQuery
                     ->where('products.sku', 'like', '%' . $sku . '%')
+                    ->orWhere('products.supplier_product_code', 'like', '%' . $sku . '%')
                     ->orWhereHas('variations', function ($variationQuery) use ($sku) {
-                        $variationQuery->where('products.sku', 'like', '%' . $sku . '%');
+                        $variationQuery
+                            ->where('products.sku', 'like', '%' . $sku . '%')
+                            ->orWhere('products.supplier_product_code', 'like', '%' . $sku . '%');
                     });
             });
         }
@@ -460,6 +490,49 @@ class InventoryController extends Controller
                     ->where('products.name', 'like', '%' . $name . '%')
                     ->orWhereHas('variations', function ($variationQuery) use ($name) {
                         $variationQuery->where('products.name', 'like', '%' . $name . '%');
+                    });
+            });
+        }
+
+        if ($request->boolean('missing_supplier_price')) {
+            $query->where(function ($builder) use ($supplier) {
+                $builder
+                    ->whereNull('supplier_price_rows.id')
+                    ->orWhereHas('variations', function ($variationQuery) use ($supplier) {
+                        $this->applySupplierMembershipFilter($variationQuery, $supplier->id);
+                        $variationQuery->whereDoesntHave('supplierPrices', function ($priceQuery) use ($supplier) {
+                            $priceQuery
+                                ->where('supplier_id', $supplier->id)
+                                ->whereNotNull('unit_cost')
+                                ->where('unit_cost', '>', 0);
+                        });
+                    });
+            });
+        }
+
+        if ($request->boolean('multiple_suppliers')) {
+            $query->where(function ($builder) {
+                $builder
+                    ->has('suppliers', '>', 1)
+                    ->orWhereIn('products.id', function ($subQuery) {
+                        $subQuery
+                            ->from('supplier_product_prices')
+                            ->select('product_id')
+                            ->groupBy('product_id')
+                            ->havingRaw('COUNT(DISTINCT supplier_id) > 1');
+                    })
+                    ->orWhereHas('variations', function ($variationQuery) {
+                        $variationQuery->where(function ($nested) {
+                            $nested
+                                ->has('suppliers', '>', 1)
+                                ->orWhereIn('products.id', function ($subQuery) {
+                                    $subQuery
+                                        ->from('supplier_product_prices')
+                                        ->select('product_id')
+                                        ->groupBy('product_id')
+                                        ->havingRaw('COUNT(DISTINCT supplier_id) > 1');
+                                });
+                        });
                     });
             });
         }
@@ -492,6 +565,7 @@ class InventoryController extends Controller
 
         $this->applyMappedSort($query, $request, [
             'sku' => 'products.sku',
+            'supplier_product_code' => 'products.supplier_product_code',
             'name' => 'products.name',
             'price' => 'products.price',
             'unit_cost' => ['raw' => 'COALESCE(supplier_price_rows.unit_cost, 0)'],
@@ -532,9 +606,13 @@ class InventoryController extends Controller
             'notes' => 'nullable|string|max:1000',
         ]);
 
-        Product::query()
-            ->whereKey((int) $validated['product_id'])
-            ->update(['supplier_id' => $supplier->id]);
+        $product = Product::query()->findOrFail((int) $validated['product_id']);
+        $product->suppliers()->syncWithoutDetaching([
+            $supplier->id => ['account_id' => $supplier->account_id ?? $product->account_id],
+        ]);
+        if (!$product->supplier_id) {
+            $product->update(['supplier_id' => $supplier->id]);
+        }
 
         $price = SupplierProductPrice::query()->updateOrCreate(
             [
@@ -606,7 +684,16 @@ class InventoryController extends Controller
         if (!empty($productIds)) {
             Product::query()
                 ->whereIn('id', $productIds)
-                ->update(['supplier_id' => $supplier->id]);
+                ->get()
+                ->each(function (Product $product) use ($supplier) {
+                    $product->suppliers()->syncWithoutDetaching([
+                        $supplier->id => ['account_id' => $supplier->account_id ?? $product->account_id],
+                    ]);
+
+                    if (!$product->supplier_id) {
+                        $product->update(['supplier_id' => $supplier->id]);
+                    }
+                });
         }
 
         foreach ($validated['items'] as $item) {
@@ -1066,11 +1153,110 @@ class InventoryController extends Controller
         };
     }
 
+    private function applySupplierMembershipFilter($query, int $supplierId): void
+    {
+        $query->where(function ($builder) use ($supplierId) {
+            $builder
+                ->whereHas('suppliers', function ($supplierQuery) use ($supplierId) {
+                    $supplierQuery->where('suppliers.id', $supplierId);
+                })
+                ->orWhere('products.supplier_id', $supplierId)
+                ->orWhereHas('supplierPrices', function ($priceQuery) use ($supplierId) {
+                    $priceQuery->where('supplier_id', $supplierId);
+                });
+        });
+    }
+
+    private function productSupplierIds(Product $product): array
+    {
+        $ids = collect();
+
+        if ($product->relationLoaded('suppliers')) {
+            $ids = $ids->merge($product->suppliers->pluck('id'));
+        }
+
+        if ($product->relationLoaded('supplierPrices')) {
+            $ids = $ids->merge($product->supplierPrices->pluck('supplier_id'));
+        }
+
+        if (!empty($product->supplier_id)) {
+            $ids->push($product->supplier_id);
+        }
+
+        return $ids
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function productSupplierPayload(Product $product): array
+    {
+        $byId = collect();
+
+        if ($product->relationLoaded('suppliers')) {
+            $byId = $byId->merge($product->suppliers->mapWithKeys(function ($supplier) {
+                return [(int) $supplier->id => [
+                    'id' => (int) $supplier->id,
+                    'name' => $supplier->name,
+                    'code' => $supplier->code,
+                ]];
+            }));
+        }
+
+        if ($product->relationLoaded('supplierPrices')) {
+            $product->supplierPrices
+                ->filter(fn ($price) => $price->relationLoaded('supplier') && $price->supplier)
+                ->each(function ($price) use (&$byId) {
+                    $supplier = $price->supplier;
+                    $byId->put((int) $supplier->id, [
+                        'id' => (int) $supplier->id,
+                        'name' => $supplier->name,
+                        'code' => $supplier->code,
+                    ]);
+                });
+        }
+
+        return $byId->values()->all();
+    }
+
+    private function productSupplierComparisons(Product $product): array
+    {
+        if (!$product->relationLoaded('supplierPrices')) {
+            return [];
+        }
+
+        $comparisons = $product->supplierPrices
+            ->filter(function ($price) {
+                return $price->relationLoaded('supplier')
+                    && $price->supplier
+                    && $price->unit_cost !== null
+                    && (float) $price->unit_cost > 0;
+            })
+            ->sortBy('unit_cost')
+            ->values();
+
+        $cheapestId = $comparisons->first()?->supplier_id;
+
+        return $comparisons->map(function ($price) use ($cheapestId) {
+            return [
+                'supplier_id' => (int) $price->supplier_id,
+                'supplier_name' => $price->supplier?->name,
+                'supplier_code' => $price->supplier?->code,
+                'unit_cost' => (float) $price->unit_cost,
+                'updated_at' => $price->updated_at,
+                'is_lowest' => (int) $price->supplier_id === (int) $cheapestId,
+            ];
+        })->all();
+    }
+
     private function buildInventoryProductsQuery(Request $request)
     {
         $query = Product::query()->select([
             'products.id',
             'products.sku',
+            'products.supplier_product_code',
             'products.name',
             'products.price',
             'products.expected_cost',
@@ -1146,15 +1332,18 @@ class InventoryController extends Controller
             $query->where(function ($builder) use ($search) {
                 $builder
                     ->where('products.sku', 'like', '%' . $search . '%')
+                    ->orWhere('products.supplier_product_code', 'like', '%' . $search . '%')
                     ->orWhere('products.name', 'like', '%' . $search . '%')
                     ->orWhereHas('variations', function ($variationQuery) use ($search) {
                         $variationQuery
                             ->where('products.sku', 'like', '%' . $search . '%')
+                            ->orWhere('products.supplier_product_code', 'like', '%' . $search . '%')
                             ->orWhere('products.name', 'like', '%' . $search . '%');
                     })
                     ->orWhereHas('parentConfigurable', function ($parentQuery) use ($search) {
                         $parentQuery
                             ->where('products.sku', 'like', '%' . $search . '%')
+                            ->orWhere('products.supplier_product_code', 'like', '%' . $search . '%')
                             ->orWhere('products.name', 'like', '%' . $search . '%');
                     });
             });
@@ -1165,11 +1354,16 @@ class InventoryController extends Controller
             $query->where(function ($builder) use ($sku) {
                 $builder
                     ->where('products.sku', 'like', '%' . $sku . '%')
+                    ->orWhere('products.supplier_product_code', 'like', '%' . $sku . '%')
                     ->orWhereHas('variations', function ($variationQuery) use ($sku) {
-                        $variationQuery->where('products.sku', 'like', '%' . $sku . '%');
+                        $variationQuery
+                            ->where('products.sku', 'like', '%' . $sku . '%')
+                            ->orWhere('products.supplier_product_code', 'like', '%' . $sku . '%');
                     })
                     ->orWhereHas('parentConfigurable', function ($parentQuery) use ($sku) {
-                        $parentQuery->where('products.sku', 'like', '%' . $sku . '%');
+                        $parentQuery
+                            ->where('products.sku', 'like', '%' . $sku . '%')
+                            ->orWhere('products.supplier_product_code', 'like', '%' . $sku . '%');
                     });
             });
         }
@@ -1220,10 +1414,35 @@ class InventoryController extends Controller
         if ($request->filled('supplier_id')) {
             $supplierId = $request->input('supplier_id');
             if ($supplierId === 'unassigned') {
-                $query->whereNull('products.supplier_id');
+                $query
+                    ->whereNull('products.supplier_id')
+                    ->whereDoesntHave('suppliers')
+                    ->whereDoesntHave('supplierPrices');
             } else {
-                $query->where('products.supplier_id', (int) $supplierId);
+                $this->applySupplierMembershipFilter($query, (int) $supplierId);
             }
+        }
+
+        if ($request->boolean('missing_purchase_price')) {
+            $query->whereDoesntHave('supplierPrices', function ($priceQuery) {
+                $priceQuery
+                    ->whereNotNull('unit_cost')
+                    ->where('unit_cost', '>', 0);
+            });
+        }
+
+        if ($request->boolean('multiple_suppliers')) {
+            $query->where(function ($builder) {
+                $builder
+                    ->has('suppliers', '>', 1)
+                    ->orWhereIn('products.id', function ($subQuery) {
+                        $subQuery
+                            ->from('supplier_product_prices')
+                            ->select('product_id')
+                            ->groupBy('product_id')
+                            ->havingRaw('COUNT(DISTINCT supplier_id) > 1');
+                    });
+            });
         }
 
         if ($request->filled('type')) {
@@ -1336,10 +1555,14 @@ class InventoryController extends Controller
         $costSource = $currentCost !== null ? 'current_cost' : ($expectedCost !== null ? 'expected_cost' : 'empty');
         $parentProduct = $product->relationLoaded('parentConfigurable') ? $product->parentConfigurable->first() : null;
         $variantCount = (int) ($product->variant_count ?? ($product->relationLoaded('variations') ? $product->variations->count() : 0));
+        $supplierComparisons = $this->productSupplierComparisons($product);
+        $supplierPayload = $this->productSupplierPayload($product);
+        $supplierIds = $this->productSupplierIds($product);
 
         $payload = [
             'id' => $product->id,
             'sku' => $product->sku,
+            'supplier_product_code' => $product->supplier_product_code,
             'name' => $product->name,
             'price' => (float) ($product->price ?? 0),
             'stock_quantity' => (int) ($product->stock_quantity ?? 0),
@@ -1376,6 +1599,11 @@ class InventoryController extends Controller
             'parent_id' => $parentProduct?->id ?? (!empty($product->parent_product_id) ? (int) $product->parent_product_id : null),
             'parent_name' => $parentProduct?->name,
             'parent_sku' => $parentProduct?->sku,
+            'suppliers' => $supplierPayload,
+            'supplier_ids' => $supplierIds,
+            'supplier_count' => max(count($supplierPayload), count($supplierIds), count(array_unique(array_column($supplierComparisons, 'supplier_id')))),
+            'has_multiple_suppliers' => max(count($supplierPayload), count($supplierIds), count(array_unique(array_column($supplierComparisons, 'supplier_id')))) > 1,
+            'supplier_price_comparisons' => $supplierComparisons,
             'supplier_unit_cost' => $supplierPrice ? (float) $supplierPrice->unit_cost : null,
             'supplier_price_id' => $supplierPrice?->id,
             'supplier_price_updated_at' => $supplierPrice?->updated_at,
@@ -1399,10 +1627,12 @@ class InventoryController extends Controller
         $currentCost = $product->cost_price !== null ? (float) $product->cost_price : null;
         $expectedCost = $product->expected_cost !== null ? (float) $product->expected_cost : null;
         $costSource = $currentCost !== null ? 'current_cost' : ($expectedCost !== null ? 'expected_cost' : 'empty');
+        $supplierIds = $this->productSupplierIds($product);
 
         return [
             'id' => $product->id,
             'sku' => $product->sku,
+            'supplier_product_code' => $product->supplier_product_code,
             'name' => $product->name,
             'price' => (float) ($product->price ?? 0),
             'stock_quantity' => (int) ($product->stock_quantity ?? 0),
@@ -1416,6 +1646,9 @@ class InventoryController extends Controller
                 'expected_cost' => 'Đang dùng giá dự kiến',
                 default => 'Chưa có giá',
             },
+            'supplier_ids' => $supplierIds,
+            'supplier_count' => count($supplierIds),
+            'has_multiple_suppliers' => count($supplierIds) > 1,
             'supplier_unit_cost' => $supplierPrice ? (float) $supplierPrice->unit_cost : null,
             'supplier_price_id' => $supplierPrice?->id,
             'supplier_price_updated_at' => $supplierPrice?->updated_at,

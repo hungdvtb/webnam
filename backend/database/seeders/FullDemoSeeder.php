@@ -29,6 +29,7 @@ class FullDemoSeeder extends Seeder
             $account = Account::create(['name' => 'Gốm Sứ Việt', 'domain' => 'localhost', 'subdomain' => 'admin']);
         }
         $accountId = $account->id;
+        app(\App\Services\BlogSystemPostService::class)->ensureForAccount((int) $accountId);
 
         // 1. Ensure Fundamental Categories exist
         $categoriesNames = [

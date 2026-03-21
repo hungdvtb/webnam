@@ -796,9 +796,15 @@ class InventoryService
             'product_id' => $product->id,
         ]);
 
-        $product->forceFill([
-            'supplier_id' => $supplier->id,
-        ])->save();
+        $product->suppliers()->syncWithoutDetaching([
+            $supplier->id => ['account_id' => $supplier->account_id ?? $product->account_id],
+        ]);
+
+        if (!$product->supplier_id) {
+            $product->forceFill([
+                'supplier_id' => $supplier->id,
+            ])->save();
+        }
 
         $supplierPrice->fill([
             'account_id' => $supplier->account_id ?? $product->account_id,

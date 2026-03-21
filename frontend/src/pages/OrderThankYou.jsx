@@ -52,7 +52,7 @@ const OrderThankYou = () => {
 
     const description =
         state.message ||
-        'Đơn hàng của Quý khách đã được tiếp nhận và đang được các nghệ nhân chuẩn bị kỹ lưỡng tại làng nghề. Một thư xác nhận chi tiết sẽ được gửi đến địa chỉ email của Quý khách.';
+        'Đơn hàng của anh chị đã được tiếp nhận. Bên em sẽ sớm gọi lại xác nhận đơn hàng và đóng gói gửi đến mình sớm nhất ạ.';
 
     return (
         <div className="min-h-screen bg-[#f8f5ef] px-4 py-10 text-[#223860] md:px-6 md:py-14">
@@ -78,7 +78,7 @@ const OrderThankYou = () => {
                                 className="text-3xl italic leading-tight text-[#1f3560] md:text-[44px]"
                                 style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
                             >
-                                Cảm ơn Quý khách đã trân trọng di sản!
+                                Cảm ơn anh chị đã tin tưởng đặt hàng em !
                             </h2>
                             <p
                                 className="mt-3 text-[17px] leading-8 text-[#415171] md:text-[20px]"

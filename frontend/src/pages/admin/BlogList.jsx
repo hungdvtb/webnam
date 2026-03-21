@@ -11,6 +11,7 @@ const DEFAULT_FILTERS = {
     seo_keyword: 'all',
     is_published: 'all',
     is_starred: 'all',
+    is_system: 'all',
 };
 
 const normalizeKeywords = (items = []) => {
@@ -126,6 +127,7 @@ const BlogList = () => {
         if (filters.seo_keyword !== 'all') count += 1;
         if (filters.is_published !== 'all') count += 1;
         if (filters.is_starred !== 'all') count += 1;
+        if (filters.is_system !== 'all') count += 1;
         return count;
     }, [filters]);
 
@@ -135,7 +137,8 @@ const BlogList = () => {
             || filters.uncategorized_only !== 'all'
             || filters.seo_keyword !== 'all'
             || filters.is_published !== 'all'
-            || filters.is_starred !== 'all',
+            || filters.is_starred !== 'all'
+            || filters.is_system !== 'all',
         [search, filters]
     );
 
@@ -152,6 +155,7 @@ const BlogList = () => {
             if (filters.seo_keyword !== 'all') params.seo_keyword = filters.seo_keyword;
             if (filters.is_published !== 'all') params.is_published = filters.is_published;
             if (filters.is_starred !== 'all') params.is_starred = filters.is_starred;
+            if (filters.is_system !== 'all') params.is_system = filters.is_system;
 
             const response = await blogApi.getAll(params);
             const list = Array.isArray(response.data?.data) ? response.data.data : [];
@@ -273,6 +277,9 @@ const BlogList = () => {
         if (filters.is_starred !== 'all') {
             tags.push({ key: 'is_starred', label: `Sao: ${filters.is_starred === '1' ? 'Có sao' : 'Không sao'}` });
         }
+        if (filters.is_system !== 'all') {
+            tags.push({ key: 'is_system', label: `Loại: ${filters.is_system === '1' ? 'Bài hệ thống' : 'Bài thường'}` });
+        }
         return tags;
     }, [categoryNameMap, filters]);
 
@@ -342,6 +349,15 @@ const BlogList = () => {
     };
 
     const deletePost = (post) => {
+        if (post?.is_system) {
+            showModal({
+                title: 'Không thể xóa',
+                content: 'Bài hệ thống luôn phải tồn tại trong hệ thống. Bạn chỉ có thể chỉnh sửa nội dung.',
+                type: 'warning',
+            });
+            return;
+        }
+
         showModal({
             title: 'Xác nhận xóa',
             content: `Bạn có chắc muốn xóa bài "${post.title}"?`,
@@ -839,6 +855,14 @@ const BlogList = () => {
                                                 </select>
                                             </div>
                                         </div>
+                                        <div>
+                                            <label className="block text-[10px] font-black uppercase tracking-widest text-stone/50 mb-1">Loại bài</label>
+                                            <select name="is_system" value={tempFilters.is_system} onChange={onTempFilterChange} className="h-9 w-full bg-stone/5 border border-gold/20 px-2 text-[12px] text-primary focus:outline-none focus:border-primary rounded-sm">
+                                                <option value="all">Tất cả bài viết</option>
+                                                <option value="1">Chỉ bài hệ thống</option>
+                                                <option value="0">Chỉ bài thường</option>
+                                            </select>
+                                        </div>
                                     </div>
 
                                     <div className="flex items-center justify-end gap-2 pt-1">
@@ -935,7 +959,14 @@ const BlogList = () => {
                                 </td>
                                 <td><div className="w-12 h-12 mx-auto bg-stone/10 border border-gold/20 rounded-sm overflow-hidden"><img src={post.featured_image || 'https://placehold.co/120x120?text=No+Img'} alt={post.title} className="w-full h-full object-cover" /></div></td>
                                 <td className="px-2 py-2">
-                                    <button type="button" onClick={() => navigate(`/admin/blog/edit/${post.id}`)} className="block text-left text-[14px] font-bold text-primary hover:text-brick truncate" title={post.title}>{post.title}</button>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <button type="button" onClick={() => navigate(`/admin/blog/edit/${post.id}`)} className="block max-w-full text-left text-[14px] font-bold text-primary hover:text-brick truncate" title={post.title}>{post.title}</button>
+                                        {post.is_system && (
+                                            <span className="inline-flex items-center rounded-sm border border-primary/20 bg-primary/5 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-primary">
+                                                Bài hệ thống
+                                            </span>
+                                        )}
+                                    </div>
                                     <div className="text-[10px] text-stone/45 uppercase tracking-wider truncate">slug: {post.slug || '--'}</div>
                                     <span className="inline-block mt-1 text-[10px] px-2 py-0.5 border border-gold/25 bg-gold/5 text-umber rounded-sm">{post.seo_keyword || 'Chưa gắn từ khóa'}</span>
                                 </td>
@@ -961,7 +992,11 @@ const BlogList = () => {
                                     <div className="flex items-center justify-end gap-1">
                                         <button type="button" onClick={() => openOnWeb(post)} className="h-8 px-2.5 border border-gold/20 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest">Xem ngoài web</button>
                                         <button type="button" onClick={() => navigate(`/admin/blog/edit/${post.id}`)} className="h-8 w-8 inline-flex items-center justify-center border border-gold/20 text-stone/60 hover:text-primary rounded-sm" title="Sửa"><span className="material-symbols-outlined text-[16px]">edit_square</span></button>
-                                        <button type="button" onClick={() => deletePost(post)} className="h-8 w-8 inline-flex items-center justify-center border border-gold/20 text-stone/60 hover:text-brick rounded-sm" title="Xóa"><span className="material-symbols-outlined text-[16px]">delete</span></button>
+                                        {post.is_system ? (
+                                            <button type="button" disabled className="h-8 w-8 inline-flex items-center justify-center border border-gold/20 bg-stone/5 text-stone/25 rounded-sm cursor-not-allowed" title="Bài hệ thống không thể xóa"><span className="material-symbols-outlined text-[16px]">delete</span></button>
+                                        ) : (
+                                            <button type="button" onClick={() => deletePost(post)} className="h-8 w-8 inline-flex items-center justify-center border border-gold/20 text-stone/60 hover:text-brick rounded-sm" title="Xóa"><span className="material-symbols-outlined text-[16px]">delete</span></button>
+                                        )}
                                     </div>
                                 </td>
                             </tr>
@@ -1085,4 +1120,3 @@ const BlogList = () => {
 };
 
 export default BlogList;
-

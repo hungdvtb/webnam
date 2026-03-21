@@ -48,6 +48,7 @@ class AccountController extends Controller
 
         // Attach current user as owner
         $request->user()->accounts()->attach($account->id, ['role' => 'owner']);
+        app(\App\Services\BlogSystemPostService::class)->ensureForAccount((int) $account->id);
 
         return response()->json($account->load('users'), 201);
     }
@@ -91,6 +92,7 @@ class AccountController extends Controller
             ]);
 
             $user->accounts()->attach($account->id, ['role' => 'owner']);
+            app(\App\Services\BlogSystemPostService::class)->ensureForAccount((int) $account->id);
 
             \Illuminate\Support\Facades\DB::commit();
 

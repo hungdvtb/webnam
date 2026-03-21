@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import Pagination from '../../components/Pagination';
 import SortIndicator from '../../components/SortIndicator';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
@@ -17,6 +17,7 @@ const primaryButton = 'inline-flex h-8 items-center justify-center gap-1.5 round
 const ghostButton = 'inline-flex h-8 items-center justify-center gap-1.5 rounded-sm border border-primary/15 bg-white px-3 text-[12px] font-bold text-primary transition hover:border-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-60';
 const dangerButton = 'inline-flex h-8 items-center justify-center gap-1.5 rounded-sm border border-brick/20 bg-white px-3 text-[12px] font-bold text-brick transition hover:bg-brick hover:text-white disabled:cursor-not-allowed disabled:opacity-60';
 const iconButton = (active) => `inline-flex h-8 w-8 items-center justify-center rounded-sm border transition ${active ? 'border-primary bg-primary text-white' : 'border-primary/15 bg-white text-primary hover:border-primary hover:bg-primary/5'}`;
+const compactIconButton = (active) => `inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border transition ${active ? 'border-primary/35 bg-primary/10 text-primary' : 'border-transparent bg-transparent text-primary/55 hover:border-primary/15 hover:bg-primary/[0.05] hover:text-primary'}`;
 const checkboxClass = 'size-4 rounded border-primary/20 accent-primary';
 
 const tabs = [
@@ -36,7 +37,7 @@ const tabs = [
 const documentTypeMap = { returns: 'return', damaged: 'damaged', adjustments: 'adjustment' };
 const documentTitleMap = { returns: 'Phiếu hàng hoàn', damaged: 'Phiếu hàng hỏng', adjustments: 'Phiếu điều chỉnh' };
 const pageSizeOptions = [20, 50, 100, 500];
-const inventoryTableStorageVersion = 'v3';
+const inventoryTableStorageVersion = 'v4';
 const emptySortConfig = { key: null, direction: 'none' };
 const getStoredPageSize = (key) => {
     if (typeof window === 'undefined') return 20;
@@ -76,6 +77,23 @@ const parseWholeNumberInput = (value) => {
     const cleaned = stripNumericValue(value);
     return cleaned ? Number(cleaned) : null;
 };
+const sortSupplierComparisons = (items = []) => [...items]
+    .map((item) => ({
+        ...item,
+        supplier_id: item?.supplier_id ?? null,
+        unit_cost: item?.unit_cost != null ? Number(item.unit_cost) : null,
+    }))
+    .filter((item) => item.supplier_id != null && item.unit_cost != null)
+    .sort((left, right) => {
+        if (left.unit_cost === right.unit_cost) {
+            return String(left.supplier_name || '').localeCompare(String(right.supplier_name || ''), 'vi');
+        }
+        return left.unit_cost - right.unit_cost;
+    })
+    .map((item, index) => ({
+        ...item,
+        is_lowest: index === 0,
+    }));
 const formatDateTime = (value) => {
     if (!value) return '-';
     const date = new Date(value);
@@ -127,6 +145,7 @@ const mapSupplierCatalogEntry = (item) => ({
     product_id: item.id,
     supplier_price_id: item.supplier_price_id || null,
     sku: item.sku || '-',
+    supplier_product_code: item.supplier_product_code || '',
     name: item.name || '-',
     parent_name: item.parent_name || null,
     parent_sku: item.parent_sku || null,
@@ -137,8 +156,13 @@ const mapSupplierCatalogEntry = (item) => ({
     notes: item.supplier_notes || '',
     updated_at: item.supplier_price_updated_at || null,
     updater_name: item.supplier_updater_name || null,
-    has_variants: Boolean(item.has_variants),
-    variant_count: Number(item.variant_count || 0),
+    suppliers: Array.isArray(item.suppliers) ? item.suppliers : [],
+    supplier_ids: Array.isArray(item.supplier_ids) ? item.supplier_ids : [],
+    supplier_count: Number(item.supplier_count || 0),
+    has_multiple_suppliers: Boolean(item.has_multiple_suppliers),
+    supplier_price_comparisons: sortSupplierComparisons(item.supplier_price_comparisons || []),
+    has_variants: Boolean(item.has_variants) || (Array.isArray(item.variants) && item.variants.length > 0),
+    variant_count: Number(item.variant_count || (Array.isArray(item.variants) ? item.variants.length : 0)),
     variants: Array.isArray(item.variants) ? item.variants.map(mapSupplierCatalogEntry) : [],
 });
 
@@ -282,13 +306,13 @@ const supplierManagementColumns = [
 ];
 
 const supplierPriceTableBaseColumns = [
+    { id: 'supplier_product_code', label: 'Mã NCC', minWidth: 140 },
     { id: 'sku', label: 'Mã sản phẩm', minWidth: 150 },
     { id: 'name', label: 'Tên sản phẩm', minWidth: 280 },
     { id: 'price', label: 'Giá bán', minWidth: 110, align: 'right' },
-    { id: 'unit_cost', label: 'Giá nhập', minWidth: 160, align: 'right' },
+    { id: 'unit_cost', label: 'Giá nhập dự kiến', minWidth: 160, align: 'right' },
     { id: 'current_cost', label: 'Giá vốn hiện tại', minWidth: 125, align: 'right' },
     { id: 'updated_at', label: 'Sửa gần nhất', minWidth: 150, align: 'center' },
-    { id: 'notes', label: 'Ghi chú', minWidth: 180 },
     { id: 'actions', label: 'Thao tác', minWidth: 120, align: 'center' },
 ];
 
@@ -317,12 +341,12 @@ const inventorySortColumnMaps = {
     },
     supplierPrices: {
         sku: 'sku',
+        supplier_product_code: 'supplier_product_code',
         name: 'name',
         price: 'price',
         unit_cost: 'unit_cost',
         current_cost: 'current_cost',
         updated_at: 'updated_at',
-        notes: 'notes',
     },
     imports: {
         code: 'code',
@@ -554,6 +578,7 @@ const InventoryTable = ({
     sortConfig = emptySortConfig,
     onSort,
     sortColumnMap = null,
+    onRowDoubleClick,
 }) => {
     const tableColumns = useMemo(() => {
         const baseColumns = columns.filter((column) => column.id !== 'stt');
@@ -631,7 +656,15 @@ const InventoryTable = ({
                         {!loading && rows.map((row, rowIndex) => {
                             const key = typeof rowKey === 'function' ? rowKey(row) : row[rowKey];
                             return (
-                                <tr key={key} className={rowClassName ? rowClassName(row) : 'hover:bg-primary/[0.02]'}>
+                                <tr
+                                    key={key}
+                                    onDoubleClick={(event) => {
+                                        if (!onRowDoubleClick) return;
+                                        if (event.target.closest('input, button, textarea, select, label, a')) return;
+                                        onRowDoubleClick(row);
+                                    }}
+                                    className={rowClassName ? rowClassName(row) : 'hover:bg-primary/[0.02]'}
+                                >
                                     {renderedColumns.map((column) => (
                                         <td key={`${key}_${column.id}`} className={`overflow-hidden border-b border-r border-primary/10 px-3 py-2.5 text-[13px] text-primary ${column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : 'text-left'}`}>
                                             <div className="min-w-0 overflow-hidden text-ellipsis">{column.id === 'stt' ? pageOffset + rowIndex + 1 : renderCell(row, column.id, rowIndex)}</div>
@@ -665,7 +698,10 @@ const InventoryTable = ({
 
 const InventoryMovement = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const { showToast } = useUI();
+    const restoredSupplierContextRef = useRef(false);
+    const skipSupplierSearchResetRef = useRef(false);
 
     const [activeTab, setActiveTab] = useState('products');
     const [dashboard, setDashboard] = useState(null);
@@ -717,7 +753,7 @@ const InventoryMovement = () => {
 
     const [productFilters, setProductFilters] = useState({ search: '', status: '', cost_source: '', type: '', category_id: '', variant_scope: '', date_from: '', date_to: '' });
     const [supplierFilters, setSupplierFilters] = useState({ search: '', status: '', month: '', date_from: '', date_to: '' });
-    const [supplierCatalogFilters, setSupplierCatalogFilters] = useState({ sku: '', name: '', category_id: '', type: '', variant_scope: '' });
+    const [supplierCatalogFilters, setSupplierCatalogFilters] = useState({ sku: '', name: '', category_id: '', type: '', variant_scope: '', missing_supplier_price: '', multiple_suppliers: '' });
     const [supplierQuickSearch, setSupplierQuickSearch] = useState('');
     const [simpleFilters, setSimpleFilters] = useState({
         imports: { search: '', date_from: '', date_to: '' },
@@ -730,6 +766,7 @@ const InventoryMovement = () => {
     });
 
     const [expandedGroups, setExpandedGroups] = useState({});
+    const [expandedComparisons, setExpandedComparisons] = useState({});
     const [selectedPriceIds, setSelectedPriceIds] = useState({});
     const [priceDrafts, setPriceDrafts] = useState({});
     const [savingPriceIds, setSavingPriceIds] = useState({});
@@ -774,6 +811,18 @@ const InventoryMovement = () => {
         if (!sortBy || sort?.direction === 'none') return {};
         return { sort_by: sortBy, sort_order: sort.direction };
     };
+    const buildSupplierPriceReturnContext = () => ({
+        source: 'inventorySupplierPrices',
+        target: '/admin/inventory',
+        activeTab: 'supplierPrices',
+        selectedSupplierId,
+        supplierQuickSearch,
+        supplierCatalogFilters,
+        supplierCatalogPage: supplierCatalogPagination.current_page || 1,
+        supplierCatalogPerPage: pageSizes.supplierPrices,
+        supplierSortConfig: sortConfigs.supplierPrices,
+        supplierPanels: openPanels.supplierPrices,
+    });
 
     const togglePanel = (section, panel) => {
         setOpenPanels((prev) => ({ ...prev, [section]: { ...prev[section], [panel]: !prev[section]?.[panel] } }));
@@ -945,6 +994,62 @@ const InventoryMovement = () => {
     }, []);
 
     useEffect(() => {
+        const returnContext = location.state?.returnContext;
+        if (!returnContext || restoredSupplierContextRef.current || returnContext.source !== 'inventorySupplierPrices') {
+            return;
+        }
+
+        restoredSupplierContextRef.current = true;
+        skipSupplierSearchResetRef.current = true;
+        setActiveTab(returnContext.activeTab || 'supplierPrices');
+        if (returnContext.selectedSupplierId) {
+            setSelectedSupplierId(Number(returnContext.selectedSupplierId));
+        }
+        setSupplierQuickSearch(returnContext.supplierQuickSearch || '');
+        setSupplierCatalogFilters((prev) => ({
+            ...prev,
+            ...(returnContext.supplierCatalogFilters || {}),
+        }));
+        if (returnContext.supplierPanels) {
+            setOpenPanels((prev) => ({
+                ...prev,
+                supplierPrices: {
+                    ...prev.supplierPrices,
+                    ...returnContext.supplierPanels,
+                },
+            }));
+        }
+        if (returnContext.supplierSortConfig) {
+            setSortConfigs((prev) => ({
+                ...prev,
+                supplierPrices: returnContext.supplierSortConfig,
+            }));
+        }
+        if (returnContext.supplierCatalogPerPage) {
+            const restoredPerPage = pageSizeOptions.includes(Number(returnContext.supplierCatalogPerPage))
+                ? Number(returnContext.supplierCatalogPerPage)
+                : pageSizes.supplierPrices;
+            setPageSizes((prev) => ({
+                ...prev,
+                supplierPrices: restoredPerPage,
+            }));
+            localStorage.setItem('inventory_page_size_supplierPrices', String(restoredPerPage));
+            setSupplierCatalogPagination((prev) => ({
+                ...prev,
+                current_page: Number(returnContext.supplierCatalogPage || 1),
+                per_page: restoredPerPage,
+            }));
+        } else if (returnContext.supplierCatalogPage) {
+            setSupplierCatalogPagination((prev) => ({
+                ...prev,
+                current_page: Number(returnContext.supplierCatalogPage || 1),
+            }));
+        }
+
+        navigate(location.pathname, { replace: true, state: null });
+    }, [location.pathname, location.state, navigate, pageSizes.supplierPrices]);
+
+    useEffect(() => {
         if (activeTab === 'products') fetchProducts(productPagination.current_page || 1);
         if (activeTab === 'suppliers') fetchSuppliers(supplierPagination.current_page || 1);
         if (activeTab === 'supplierPrices') ensureSuppliersLoaded();
@@ -972,6 +1077,7 @@ const InventoryMovement = () => {
         setPriceDrafts({});
         setSavingPriceIds({});
         setExpandedGroups({});
+        setExpandedComparisons({});
         setGroupPriceDrafts({});
         setBulkPrice('');
         setBulkNote('');
@@ -988,6 +1094,10 @@ const InventoryMovement = () => {
 
     useEffect(() => {
         if (activeTab !== 'supplierPrices' || !selectedSupplierId) return undefined;
+        if (skipSupplierSearchResetRef.current) {
+            skipSupplierSearchResetRef.current = false;
+            return undefined;
+        }
         const timer = setTimeout(() => {
             fetchSupplierCatalog(1);
         }, 250);
@@ -1032,8 +1142,17 @@ const InventoryMovement = () => {
         const normalizedQuickSearch = normalizeSearchText(supplierQuickSearch);
         const matchesQuickSearch = (row, extraFields = []) => {
             if (!normalizedQuickSearch) return true;
-            return [row?.sku, row?.name, row?.parent_name, row?.parent_sku, ...extraFields]
+            return [row?.sku, row?.supplier_product_code, row?.name, row?.parent_name, row?.parent_sku, ...extraFields]
                 .some((value) => normalizeSearchText(value).includes(normalizedQuickSearch));
+        };
+        const appendComparisonRow = (row) => {
+            if (!expandedComparisons[row.id]) return;
+            rows.push({
+                ...row,
+                row_kind: 'comparison',
+                row_id: `comparison_${row.id}`,
+                comparison_items: row.supplier_price_comparisons || [],
+            });
         };
 
         supplierCatalog.forEach((product) => {
@@ -1059,20 +1178,24 @@ const InventoryMovement = () => {
                     : (expandedGroups[product.id] ? variants : []);
 
                 shouldShowVariants.forEach((variant) => {
-                    rows.push({
+                    const variantRow = {
                         ...variant,
                         row_kind: 'item',
                         row_id: `variant_${variant.id}`,
                         group_name: product.name,
                         parent_group_id: product.id,
-                    });
+                    };
+                    rows.push(variantRow);
+                    appendComparisonRow(variantRow);
                 });
             } else if (matchesQuickSearch(product)) {
-                rows.push({ ...product, row_kind: 'item', row_id: `item_${product.id}` });
+                const itemRow = { ...product, row_kind: 'item', row_id: `item_${product.id}` };
+                rows.push(itemRow);
+                appendComparisonRow(itemRow);
             }
         });
         return rows;
-    }, [expandedGroups, supplierCatalog, supplierQuickSearch]);
+    }, [expandedComparisons, expandedGroups, supplierCatalog, supplierQuickSearch]);
 
     const allSupplierItemIdSet = useMemo(
         () => new Set(supplierCatalogItemRows.map((row) => row.id)),
@@ -1107,6 +1230,7 @@ const InventoryMovement = () => {
         setSelectedPriceIds((prev) => pruneStateMap(prev, validItemIds));
         setPriceDrafts((prev) => pruneStateMap(prev, validItemIds));
         setSavingPriceIds((prev) => pruneStateMap(prev, validItemIds));
+        setExpandedComparisons((prev) => pruneStateMap(prev, validItemIds));
         setGroupPriceDrafts((prev) => pruneStateMap(prev, validGroupIds));
         setExpandedGroups((prev) => pruneStateMap(prev, validGroupIds));
     }, [supplierCatalog, supplierCatalogItemRows]);
@@ -1166,6 +1290,41 @@ const InventoryMovement = () => {
             }
             return product;
         }));
+    };
+    const toggleComparisonRow = (productId) => {
+        setExpandedComparisons((prev) => ({ ...prev, [productId]: !prev[productId] }));
+    };
+    const getComparableSupplierCount = (row) => {
+        const comparisonSupplierIds = Array.from(new Set((row.supplier_price_comparisons || []).map((item) => Number(item.supplier_id)).filter(Boolean)));
+        return Math.max(Number(row.supplier_count || 0), comparisonSupplierIds.length);
+    };
+    const upsertSupplierComparison = (row, unitCost, updatedAt) => {
+        const supplier = suppliers.find((item) => item.id === selectedSupplierId);
+        const existingComparisons = row.supplier_price_comparisons || [];
+        const nextComparisons = sortSupplierComparisons([
+            ...existingComparisons.filter((item) => Number(item.supplier_id) !== Number(selectedSupplierId)),
+            supplier ? {
+                supplier_id: supplier.id,
+                supplier_name: supplier.name,
+                supplier_code: supplier.code || null,
+                unit_cost,
+                updated_at: updatedAt,
+            } : null,
+        ].filter(Boolean));
+
+        return {
+            supplier_price_comparisons: nextComparisons,
+            supplier_count: Math.max(Number(row.supplier_count || 0), nextComparisons.length, row.supplier_ids?.length || 0),
+            has_multiple_suppliers: Math.max(Number(row.supplier_count || 0), nextComparisons.length, row.supplier_ids?.length || 0) > 1,
+        };
+    };
+    const openSupplierCatalogProductEditor = (row) => {
+        if (!row || row.row_kind === 'comparison') return;
+        navigate(`/admin/products/edit/${row.product_id || row.id}`, {
+            state: {
+                returnContext: buildSupplierPriceReturnContext(),
+            },
+        });
     };
 
     const markGroupSelected = (groupId, checked = true) => {
@@ -1288,6 +1447,7 @@ const InventoryMovement = () => {
             });
 
             const updatedAt = response.data?.updated_at || new Date().toISOString();
+            const comparisonUpdates = upsertSupplierComparison(row, numericValue, updatedAt);
 
             patchSupplierCatalogRow(row.id, {
                 unit_cost: numericValue,
@@ -1295,6 +1455,7 @@ const InventoryMovement = () => {
                 notes: response.data?.notes ?? row.notes,
                 supplier_price_id: response.data?.id ?? row.supplier_price_id ?? null,
                 updater_name: response.data?.updater?.name ?? row.updater_name ?? null,
+                ...comparisonUpdates,
             });
             setPriceDrafts((prev) => ({ ...prev, [row.id]: cleaned }));
         } catch (error) {
@@ -1734,20 +1895,86 @@ const InventoryMovement = () => {
     };
 
     const supplierPriceCell = (row, columnId) => {
+        if (row.row_kind === 'comparison') {
+            if (columnId === 'sku') {
+                return <div className="text-[11px] font-black uppercase tracking-[0.12em] text-amber-700">So sánh giá nhập</div>;
+            }
+            if (columnId === 'name') {
+                return (
+                    <div className="space-y-2">
+                        <div className="text-[12px] font-bold text-primary/65">
+                            {row.name} {row.parent_name ? `| ${row.parent_name}` : ''}
+                        </div>
+                        {row.comparison_items?.length > 1 ? (
+                            <div className="grid gap-2">
+                                {row.comparison_items.map((item) => (
+                                    <div key={`${row.id}_${item.supplier_id}`} className={`flex flex-wrap items-center justify-between gap-2 rounded-sm border px-3 py-2 ${item.is_lowest ? 'border-emerald-300 bg-emerald-50' : 'border-primary/10 bg-white'}`}>
+                                        <div className="min-w-0">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <span className="truncate text-[12px] font-bold text-primary">{item.supplier_name}</span>
+                                                {item.supplier_code ? <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-black text-primary">{item.supplier_code}</span> : null}
+                                                {item.is_lowest ? <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-black text-white">Rẻ nhất</span> : null}
+                                            </div>
+                                            <div className="text-[11px] text-primary/45">{item.updated_at ? `Cập nhật ${formatDateTime(item.updated_at)}` : 'Chưa có thời gian cập nhật'}</div>
+                                        </div>
+                                        <div className={`text-[13px] font-black ${item.is_lowest ? 'text-emerald-700' : 'text-primary'}`}>
+                                            {formatCurrency(item.unit_cost)}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="text-[12px] text-primary/55">Chưa đủ dữ liệu để so sánh giữa nhiều nhà cung cấp.</div>
+                        )}
+                    </div>
+                );
+            }
+            if (columnId === 'actions') {
+                return (
+                    <button
+                        type="button"
+                        onClick={() => toggleComparisonRow(row.id)}
+                        className={iconButton(false)}
+                        title="Ẩn so sánh giá NCC"
+                    >
+                        <span className="material-symbols-outlined text-[16px]">expand_less</span>
+                    </button>
+                );
+            }
+            return '-';
+        }
+
         if (row.row_kind === 'group') {
             const groupSelection = getGroupSelectionState(row.id);
             if (columnId === 'select') {
                 return (
-                    <IndeterminateCheckbox
-                        checked={groupSelection.checked}
-                        indeterminate={groupSelection.indeterminate}
-                        onChange={(event) => markGroupSelected(row.id, event.target.checked)}
-                        title="Chọn toàn bộ biến thể của nhóm"
-                    />
+                    <div className="flex items-center justify-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setExpandedGroups((prev) => ({ ...prev, [row.id]: !prev[row.id] }))}
+                            className="inline-flex h-5 w-5 items-center justify-center rounded-sm border border-primary/15 text-primary/60 transition hover:border-primary hover:bg-primary/5 hover:text-primary"
+                            title={expandedGroups[row.id] ? 'Thu gọn biến thể' : 'Xem biến thể'}
+                        >
+                            <span className="material-symbols-outlined text-[15px]">{expandedGroups[row.id] ? 'expand_more' : 'chevron_right'}</span>
+                        </button>
+                        <IndeterminateCheckbox
+                            checked={groupSelection.checked}
+                            indeterminate={groupSelection.indeterminate}
+                            onChange={(event) => markGroupSelected(row.id, event.target.checked)}
+                            title="Chọn toàn bộ biến thể của nhóm"
+                        />
+                    </div>
                 );
             }
-            if (columnId === 'sku') return <button type="button" onClick={() => setExpandedGroups((prev) => ({ ...prev, [row.id]: !prev[row.id] }))} className="inline-flex min-w-0 items-center gap-1 font-black text-primary"><span className="material-symbols-outlined text-[18px]">{expandedGroups[row.id] ? 'expand_more' : 'chevron_right'}</span><span className="truncate">{row.sku}</span></button>;
-            if (columnId === 'name') return <CellText primary={row.name} secondary={supplierQuickSearch.trim() ? `${formatNumber(row.visible_variant_count || 0)} / ${formatNumber(row.variant_count || 0)} biến thể khớp` : `${formatNumber(row.variant_count || 0)} biến thể`} />;
+            if (columnId === 'sku') return <CellText primary={row.sku} secondary={row.category_name || null} mono />;
+            if (columnId === 'name') {
+                return (
+                    <div className="space-y-1">
+                        <CellText primary={row.name} secondary={supplierQuickSearch.trim() ? `${formatNumber(row.visible_variant_count || 0)} / ${formatNumber(row.variant_count || 0)} biến thể khớp` : `${formatNumber(row.variant_count || 0)} biến thể`} />
+                    </div>
+                );
+            }
+            if (columnId === 'supplier_product_code') return row.supplier_product_code ? <span className="block truncate font-mono text-[12px] font-bold text-primary/80" title={row.supplier_product_code}>{row.supplier_product_code}</span> : '-';
             if (columnId === 'price') return row.price != null ? formatCurrency(row.price) : '-';
             if (columnId === 'unit_cost') {
                 return (
@@ -1763,22 +1990,48 @@ const InventoryMovement = () => {
                 );
             }
             if (columnId === 'current_cost') return row.current_cost != null ? formatCurrency(row.current_cost) : '-';
-            if (columnId === 'supplier_price_updated_at') return '-';
             return '-';
         }
         if (columnId === 'select') {
             return (
-                <input
-                    type="checkbox"
-                    checked={Boolean(selectedPriceIds[row.id])}
-                    onChange={(event) => setItemSelected(row.id, event.target.checked)}
-                    className={checkboxClass}
-                    title="Chọn dòng giá dự kiến"
-                />
+                <div className="flex items-center justify-center gap-2">
+                    {row.parent_group_id ? <span className="material-symbols-outlined text-[14px] text-primary/25">subdirectory_arrow_right</span> : null}
+                    <input
+                        type="checkbox"
+                        checked={Boolean(selectedPriceIds[row.id])}
+                        onChange={(event) => setItemSelected(row.id, event.target.checked)}
+                        className={checkboxClass}
+                        title="Chọn dòng giá dự kiến"
+                    />
+                </div>
             );
         }
         if (columnId === 'sku') return <CellText primary={row.sku} secondary={row.parent_name || row.category_name || null} mono />;
-        if (columnId === 'name') return <CellText primary={row.name} secondary={row.parent_name ? `SKU gốc: ${row.parent_sku || '-'}` : (row.category_name || null)} />;
+        if (columnId === 'name') {
+            const comparableSuppliers = getComparableSupplierCount(row);
+            const canCompare = comparableSuppliers > 1;
+            const secondaryText = row.parent_name ? `SKU gốc: ${row.parent_sku || '-'}` : (row.category_name || null);
+
+            return (
+                <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                        <span className="truncate font-semibold text-primary">{row.name}</span>
+                        {canCompare ? (
+                            <button
+                                type="button"
+                                onClick={() => toggleComparisonRow(row.id)}
+                                className={compactIconButton(Boolean(expandedComparisons[row.id]))}
+                                title={expandedComparisons[row.id] ? 'Ẩn so sánh giá NCC' : 'So sánh giá NCC'}
+                            >
+                                <span className="material-symbols-outlined text-[14px] leading-none">{expandedComparisons[row.id] ? 'expand_less' : 'compare_arrows'}</span>
+                            </button>
+                        ) : null}
+                    </div>
+                    {secondaryText ? <div className="mt-0.5 truncate text-[11px] text-primary/45">{secondaryText}</div> : null}
+                </div>
+            );
+        }
+        if (columnId === 'supplier_product_code') return row.supplier_product_code ? <span className="block truncate font-mono text-[12px] font-bold text-primary/80" title={row.supplier_product_code}>{row.supplier_product_code}</span> : '-';
         if (columnId === 'price') return row.price != null ? formatCurrency(row.price) : '-';
         if (columnId === 'current_cost') return row.current_cost != null ? formatCurrency(row.current_cost) : '-';
         if (columnId === 'unit_cost') return (
@@ -1799,7 +2052,6 @@ const InventoryMovement = () => {
             </div>
         );
         if (columnId === 'updated_at') return row.updated_at ? formatDateTime(row.updated_at) : '-';
-        if (columnId === 'notes') return <CellText primary={row.notes || '-'} secondary={row.updater_name || null} />;
         if (columnId === 'actions') return <div className="flex items-center justify-center gap-2"><button type="button" onClick={() => removeSupplierPrice(row)} disabled={!row.supplier_price_id} className={dangerButton}>{row.supplier_price_id ? 'Xóa' : 'Chưa có giá'}</button></div>;
         return typeof row[columnId] === 'number' ? formatNumber(row[columnId]) : (row[columnId] || '-');
     };
@@ -1985,13 +2237,12 @@ const InventoryMovement = () => {
                             <option value="">{loading.suppliers ? 'Đang tải nhà cung cấp' : 'Chọn nhà cung cấp'}</option>
                             {suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
                         </select>
-                        <button type="button" onClick={openCreateSupplierPrice} disabled={!selectedSupplierId} className={primaryButton}><span className="material-symbols-outlined text-[18px]">add</span>Thêm sản phẩm</button>
                         <div className="relative w-[220px] min-w-[220px]">
                             <span className="material-symbols-outlined pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">search</span>
                             <input
                                 value={supplierQuickSearch}
                                 onChange={(event) => setSupplierQuickSearch(event.target.value)}
-                                placeholder="Tìm mã / tên sản phẩm"
+                                placeholder="Tìm SKU / tên / mã NCC"
                                 disabled={!selectedSupplierId}
                                 className={`w-full pl-9 ${inputClass}`}
                             />
@@ -2012,30 +2263,15 @@ const InventoryMovement = () => {
                     </>
                 }
             />
-            {supplierPriceModal.open ? (
-                <div className="border-b border-primary/10 bg-[#fbfcfe] px-3 py-3">
-                    <div className="grid gap-3 md:grid-cols-2">
-                        <div className="md:col-span-2">
-                            <ProductLookupInput supplierId={null} onSelect={(product) => setSupplierPriceModal((prev) => ({ ...prev, form: { ...prev.form, product_id: String(product.id), product_name: product.name, product_sku: product.sku, unit_cost: stripNumericValue(Math.round(Number(product.supplier_unit_cost ?? product.current_cost ?? product.expected_cost ?? 0))) } }))} buttonLabel="Chọn" />
-                        </div>
-                        <input value={supplierPriceModal.form.product_sku} readOnly placeholder="Mã sản phẩm" className={`${inputClass} bg-white`} />
-                        <input value={supplierPriceModal.form.product_name} readOnly placeholder="Tên sản phẩm" className={`${inputClass} bg-white`} />
-                        <input value={formatWholeNumberInput(supplierPriceModal.form.unit_cost)} onChange={(event) => setSupplierPriceModal((prev) => ({ ...prev, form: { ...prev.form, unit_cost: stripNumericValue(event.target.value) } }))} placeholder="Giá nhập" className={inputClass} />
-                        <input value={supplierPriceModal.form.notes} onChange={(event) => setSupplierPriceModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú" className={inputClass} />
-                    </div>
-                    <div className="mt-3 flex justify-end gap-2">
-                        <button type="button" onClick={() => setSupplierPriceModal({ open: false, form: createSupplierPriceForm() })} className={ghostButton}>Hủy</button>
-                        <button type="button" onClick={saveSupplierPriceEntry} className={primaryButton} disabled={loading.supplierPriceModal}>{loading.supplierPriceModal ? 'Đang lưu' : 'Lưu dòng giá'}</button>
-                    </div>
-                </div>
-            ) : null}
             {openPanels.supplierPrices.filters ? (
                 <FilterPanel actions={<button type="button" onClick={() => fetchSupplierCatalog(1)} className={primaryButton}>Lọc</button>}>
-                    <input value={supplierCatalogFilters.sku} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, sku: event.target.value }))} placeholder="Lọc theo mã sản phẩm" className={`w-[170px] ${inputClass}`} />
+                    <input value={supplierCatalogFilters.sku} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, sku: event.target.value }))} placeholder="Lọc theo mã SP / mã NCC" className={`w-[170px] ${inputClass}`} />
                     <input value={supplierCatalogFilters.name} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, name: event.target.value }))} placeholder="Lọc theo tên sản phẩm" className={`w-[180px] ${inputClass}`} />
                     <select value={supplierCatalogFilters.category_id} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, category_id: event.target.value }))} className={`w-[160px] ${selectClass}`}><option value="">Tất cả danh mục</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
                     <select value={supplierCatalogFilters.type} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[160px] ${selectClass}`}><option value="">Tất cả loại sản phẩm</option><option value="simple">Sản phẩm thường</option><option value="configurable">Sản phẩm có biến thể</option></select>
                     <select value={supplierCatalogFilters.variant_scope} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, variant_scope: event.target.value }))} className={`w-[170px] ${selectClass}`}><option value="">Tất cả biến thể</option><option value="no_variants">Sản phẩm thường</option><option value="only_variants">Biến thể</option><option value="has_variants">Nhóm có biến thể</option><option value="roots">Nhóm gốc</option></select>
+                    <select value={supplierCatalogFilters.missing_supplier_price} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, missing_supplier_price: event.target.value }))} className={`w-[170px] ${selectClass}`}><option value="">Tất cả trạng thái giá</option><option value="1">Chưa có giá nhập</option></select>
+                    <select value={supplierCatalogFilters.multiple_suppliers} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, multiple_suppliers: event.target.value }))} className={`w-[180px] ${selectClass}`}><option value="">Tất cả nguồn nhập</option><option value="1">Có nhiều nhà cung cấp</option></select>
                 </FilterPanel>
             ) : null}
             {openPanels.supplierPrices.stats ? <SummaryPanel items={supplierPriceSummaryCards} /> : null}
@@ -2050,7 +2286,13 @@ const InventoryMovement = () => {
                 onPageChange={fetchSupplierCatalog}
                 footer={`Hiển thị ${formatNumber(visibleSupplierItemIds.length)} / ${formatNumber(supplierCatalogPagination.total)} dòng giá`}
                 rowKey="row_id"
-                rowClassName={(row) => selectedPriceIds[row.id] ? 'bg-primary/[0.04]' : 'hover:bg-primary/[0.02]'}
+                rowClassName={(row) => {
+                    if (row.row_kind === 'comparison') return 'bg-[#fff8eb]';
+                    if (row.parent_group_id) return selectedPriceIds[row.id] ? 'bg-sky-100 hover:bg-sky-100' : 'bg-slate-100 hover:bg-slate-100';
+                    if (selectedPriceIds[row.id]) return 'bg-primary/[0.04] hover:bg-primary/[0.06]';
+                    return 'hover:bg-primary/[0.02]';
+                }}
+                onRowDoubleClick={openSupplierCatalogProductEditor}
                 settingsOpen={openPanels.supplierPrices.columns}
                 onCloseSettings={() => togglePanel('supplierPrices', 'columns')}
                 currentPerPage={pageSizes.supplierPrices}
@@ -2183,7 +2425,7 @@ const InventoryMovement = () => {
                                         <input
                                             value={supplierQuickSearch}
                                             onChange={(event) => setSupplierQuickSearch(event.target.value)}
-                                            placeholder="Tìm mã / tên sản phẩm"
+                                            placeholder="Tìm SKU / tên / mã NCC"
                                             disabled={!selectedSupplierId}
                                             className={`w-full pl-9 ${inputClass}`}
                                         />
@@ -2205,7 +2447,7 @@ const InventoryMovement = () => {
                         />
                         {openPanels.supplierPrices.filters ? (
                             <FilterPanel actions={<button type="button" onClick={() => fetchSupplierCatalog(1)} className={primaryButton}>Lọc</button>}>
-                                <input value={supplierCatalogFilters.sku} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, sku: event.target.value }))} placeholder="Lọc theo mã sản phẩm" className={`w-[170px] ${inputClass}`} />
+                                <input value={supplierCatalogFilters.sku} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, sku: event.target.value }))} placeholder="Lọc theo mã SP / mã NCC" className={`w-[170px] ${inputClass}`} />
                                 <input value={supplierCatalogFilters.name} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, name: event.target.value }))} placeholder="Lọc theo tên sản phẩm" className={`w-[180px] ${inputClass}`} />
                                 <select value={supplierCatalogFilters.category_id} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, category_id: event.target.value }))} className={`w-[160px] ${selectClass}`}><option value="">Tất cả danh mục</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
                                 <select value={supplierCatalogFilters.type} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[160px] ${selectClass}`}><option value="">Tất cả loại sản phẩm</option><option value="simple">Sản phẩm thường</option><option value="configurable">Sản phẩm có biến thể</option></select>
@@ -2214,7 +2456,12 @@ const InventoryMovement = () => {
                         ) : null}
                         {openPanels.supplierPrices.stats ? <SummaryPanel items={supplierPriceSummaryCards} /> : null}
                         {showPasteBox ? <div className="border-b border-primary/10 px-3 py-2.5"><div className="mb-2 text-[12px] text-primary/55">Dán theo mẫu: `SKU TAB Giá` hoặc `SKU,Giá`</div><div className="flex gap-3"><textarea value={pasteText} onChange={(event) => setPasteText(event.target.value)} className="min-h-[88px] flex-1 rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary" placeholder={'SKU-01\t120000\nSKU-02\t150000'} /><button type="button" onClick={applyPaste} className={primaryButton}>Nhận giá</button></div></div> : null}
-                        <InventoryTable storageKey="inventory_supplier_prices_table_v2" columns={supplierPriceColumns} rows={supplierRows} renderCell={supplierPriceCell} loading={loading.supplierCatalog} pagination={supplierCatalogPagination} onPageChange={fetchSupplierCatalog} footer={`Hiển thị ${formatNumber(visibleSupplierItemIds.length)} / ${formatNumber(supplierCatalogPagination.total)} sản phẩm`} rowKey="row_id" rowClassName={(row) => row.row_kind === 'group' ? 'bg-[#f9fafb]' : (selectedPriceIds[row.id] ? 'bg-primary/[0.04]' : 'hover:bg-primary/[0.02]')} settingsOpen={openPanels.supplierPrices.columns} onCloseSettings={() => togglePanel('supplierPrices', 'columns')} currentPerPage={pageSizes.supplierPrices} onPerPageChange={(value) => fetchSupplierCatalog(1, updatePageSize('supplierPrices', value))} />
+                        <InventoryTable storageKey="inventory_supplier_prices_table_v2" columns={supplierPriceColumns} rows={supplierRows} renderCell={supplierPriceCell} loading={loading.supplierCatalog} pagination={supplierCatalogPagination} onPageChange={fetchSupplierCatalog} footer={`Hiển thị ${formatNumber(visibleSupplierItemIds.length)} / ${formatNumber(supplierCatalogPagination.total)} sản phẩm`} rowKey="row_id" rowClassName={(row) => {
+                            if (row.row_kind === 'comparison') return 'bg-[#fff8eb]';
+                            if (row.row_kind === 'group') return 'bg-[#f9fafb]';
+                            if (row.parent_group_id) return selectedPriceIds[row.id] ? 'bg-sky-50' : 'bg-slate-50/80 hover:bg-slate-100';
+                            return selectedPriceIds[row.id] ? 'bg-primary/[0.04]' : 'hover:bg-primary/[0.02]';
+                        }} settingsOpen={openPanels.supplierPrices.columns} onCloseSettings={() => togglePanel('supplierPrices', 'columns')} currentPerPage={pageSizes.supplierPrices} onPerPageChange={(value) => fetchSupplierCatalog(1, updatePageSize('supplierPrices', value))} sortConfig={sortConfigs.supplierPrices} onSort={(columnId) => handleTableSort('supplierPrices', columnId)} sortColumnMap={inventorySortColumnMaps.supplierPrices} onRowDoubleClick={openSupplierCatalogProductEditor} />
                     </div>
                 </div>
             ) : null}

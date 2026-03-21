@@ -7,6 +7,7 @@ use App\Models\Account;
 use App\Models\BlogCategory;
 use App\Models\Post;
 use App\Models\PostSeoKeyword;
+use App\Services\BlogSystemPostService;
 use DOMDocument;
 use DOMXPath;
 use Illuminate\Database\Eloquent\Builder;
@@ -90,8 +91,19 @@ class BlogController extends Controller
             $query->where('is_starred', $this->normalizeFlag($starFilter));
         }
 
+        if ($this->hasSystemPostSupport()) {
+            $systemFilter = $request->query('is_system');
+            if ($systemFilter !== null && $systemFilter !== '' && $systemFilter !== 'all') {
+                $query->where('is_system', $this->normalizeFlag($systemFilter));
+            }
+        }
+
         $defaultPerPage = $request->user() ? 200 : 9;
         $perPage = min(max((int) $request->query('per_page', $defaultPerPage), 1), 1000);
+
+        if ($this->hasSystemPostSupport()) {
+            $query->orderByDesc('is_system');
+        }
 
         $posts = $query
             ->orderBy('sort_order')
@@ -110,7 +122,7 @@ class BlogController extends Controller
      */
     public function seoKeywords(Request $request)
     {
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -129,7 +141,7 @@ class BlogController extends Controller
             'keyword' => 'required|string|max:255',
         ]);
 
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -163,7 +175,7 @@ class BlogController extends Controller
             'keyword' => 'required|string|max:255',
         ]);
 
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -210,7 +222,7 @@ class BlogController extends Controller
      */
     public function destroySeoKeyword(Request $request, int $id)
     {
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -247,7 +259,7 @@ class BlogController extends Controller
             'seo_keyword' => 'nullable|string|max:255',
         ]);
 
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -303,7 +315,7 @@ class BlogController extends Controller
      */
     public function categories(Request $request)
     {
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -328,7 +340,7 @@ class BlogController extends Controller
             'sort_order' => 'nullable|integer|min:1',
         ]);
 
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -367,7 +379,7 @@ class BlogController extends Controller
             'sort_order' => 'nullable|integer|min:1',
         ]);
 
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -414,7 +426,7 @@ class BlogController extends Controller
      */
     public function destroyCategory(Request $request, int $id)
     {
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -440,7 +452,7 @@ class BlogController extends Controller
             'ids.*' => 'integer',
         ]);
 
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -492,7 +504,7 @@ class BlogController extends Controller
             'blog_category_id' => 'nullable|integer',
         ]);
 
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -566,7 +578,7 @@ class BlogController extends Controller
             'published_at' => 'nullable|date',
         ]);
 
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -588,6 +600,9 @@ class BlogController extends Controller
             $validated['slug'] ?? $validated['title'],
             $accountId
         );
+        if ($this->hasSystemPostSupport()) {
+            $validated['is_system'] = false;
+        }
 
         $post = Post::create($validated)->load('category');
         $this->ensureSeoKeywordExists($accountId, $validated['seo_keyword']);
@@ -625,7 +640,7 @@ class BlogController extends Controller
      */
     public function update(Request $request, $id)
     {
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -658,6 +673,10 @@ class BlogController extends Controller
             );
         }
 
+        if ($post->is_system) {
+            unset($validated['title'], $validated['slug']);
+        }
+
         if (array_key_exists('slug', $validated) && $validated['slug'] !== null && $validated['slug'] !== '') {
             $validated['slug'] = $this->buildUniqueSlug($validated['slug'], $accountId, $post->id);
         }
@@ -672,12 +691,15 @@ class BlogController extends Controller
      */
     public function destroy(Request $request, $id)
     {
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
 
         $post = Post::where('account_id', $accountId)->whereKey($id)->firstOrFail();
+        if ($post->is_system) {
+            return response()->json(['error' => 'System posts cannot be deleted.'], 422);
+        }
         $post->delete();
 
         return response()->json(['message' => 'Post deleted successfully']);
@@ -693,19 +715,33 @@ class BlogController extends Controller
             'ids.*' => 'integer',
         ]);
 
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
 
         $providedIds = array_values(array_unique(array_map('intval', $validated['ids'])));
 
-        $currentIds = Post::where('account_id', $accountId)
+        $currentPostsQuery = Post::where('account_id', $accountId);
+        if ($this->hasSystemPostSupport()) {
+            $currentPostsQuery->orderByDesc('is_system');
+        }
+
+        $currentPosts = $currentPostsQuery
             ->orderBy('sort_order')
             ->orderBy('id')
+            ->get($this->hasSystemPostSupport() ? ['id', 'is_system'] : ['id']);
+
+        $currentIds = $currentPosts
             ->pluck('id')
             ->map(fn ($id) => (int) $id)
             ->all();
+
+        $systemIdMap = $this->hasSystemPostSupport()
+            ? $currentPosts
+                ->mapWithKeys(fn ($post) => [(int) $post->id => (bool) $post->is_system])
+                ->all()
+            : [];
 
         $invalidIds = array_values(array_diff($providedIds, $currentIds));
         if (!empty($invalidIds)) {
@@ -715,8 +751,30 @@ class BlogController extends Controller
             ], 422);
         }
 
-        $remainingIds = array_values(array_diff($currentIds, $providedIds));
-        $finalOrder = array_merge($providedIds, $remainingIds);
+        $providedSystemIds = array_values(array_filter(
+            $providedIds,
+            fn (int $postId) => $systemIdMap[$postId] ?? false
+        ));
+        $providedRegularIds = array_values(array_filter(
+            $providedIds,
+            fn (int $postId) => !($systemIdMap[$postId] ?? false)
+        ));
+
+        $remainingSystemIds = array_values(array_filter(
+            $currentIds,
+            fn (int $postId) => ($systemIdMap[$postId] ?? false) && !in_array($postId, $providedSystemIds, true)
+        ));
+        $remainingRegularIds = array_values(array_filter(
+            $currentIds,
+            fn (int $postId) => !($systemIdMap[$postId] ?? false) && !in_array($postId, $providedRegularIds, true)
+        ));
+
+        $finalOrder = array_merge(
+            $providedSystemIds,
+            $remainingSystemIds,
+            $providedRegularIds,
+            $remainingRegularIds
+        );
 
         DB::transaction(function () use ($finalOrder) {
             foreach ($finalOrder as $index => $postId) {
@@ -736,7 +794,7 @@ class BlogController extends Controller
             'file' => 'required|file|mimes:docx|max:20480',
         ]);
 
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
         if (!$accountId) {
             return response()->json(['error' => 'Account ID is required'], 400);
         }
@@ -839,10 +897,21 @@ class BlogController extends Controller
 
     private function applyAccountScope(Builder $query, Request $request): ?int
     {
-        $accountId = $this->resolveAccountId($request);
+        $accountId = $this->resolveBlogAccountId($request);
 
         if ($accountId) {
             $query->where('account_id', $accountId);
+        }
+
+        return $accountId;
+    }
+
+    private function resolveBlogAccountId(Request $request): ?int
+    {
+        $accountId = $this->resolveAccountId($request);
+
+        if ($accountId && $this->hasSystemPostSupport()) {
+            $this->ensureSystemPosts($accountId);
         }
 
         return $accountId;
@@ -1110,6 +1179,22 @@ class BlogController extends Controller
         }
 
         return $cache;
+    }
+
+    private function hasSystemPostSupport(): bool
+    {
+        static $cache = null;
+
+        if ($cache === null) {
+            $cache = Schema::hasTable('posts') && Schema::hasColumn('posts', 'is_system');
+        }
+
+        return $cache;
+    }
+
+    private function ensureSystemPosts(int $accountId): void
+    {
+        app(BlogSystemPostService::class)->ensureForAccount($accountId);
     }
 
     private function buildUniqueSlug(string $source, int $accountId, ?int $exceptId = null): string

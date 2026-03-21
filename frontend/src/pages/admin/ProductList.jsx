@@ -64,6 +64,26 @@ function getSupplierFilterLabel(suppliers, supplierId) {
     return supplier.code ? `${supplier.name} - ${supplier.code}` : supplier.name;
 }
 
+function getDefaultProductFilters() {
+    return {
+        search: '',
+        category_id: [],
+        type: [],
+        supplier_ids: [],
+        missing_purchase_price: '',
+        multiple_suppliers: '',
+        is_featured: '',
+        is_new: '',
+        min_price: '',
+        max_price: '',
+        min_stock: '',
+        max_stock: '',
+        start_date: '',
+        end_date: '',
+        attributes: {},
+    };
+}
+
 const ProductList = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
@@ -178,11 +198,7 @@ const ProductList = () => {
 
     // Sanitize saved filters to ensure category_id and type are always arrays (legacy compatibility)
     const getInitialFilters = () => {
-        const baseFilters = savedState?.filters || {
-            search: '', category_id: [], type: [], supplier_id: '', is_featured: '', is_new: '',
-            min_price: '', max_price: '', min_stock: '', max_stock: '', start_date: '', end_date: '',
-            attributes: {}
-        };
+        const baseFilters = { ...getDefaultProductFilters(), ...(savedState?.filters || {}) };
         
         if (baseFilters.category_id && !Array.isArray(baseFilters.category_id)) {
             if (typeof baseFilters.category_id === 'string') {
@@ -204,9 +220,21 @@ const ProductList = () => {
             baseFilters.type = [];
         }
 
-        if (baseFilters.supplier_id == null) {
-            baseFilters.supplier_id = '';
+        if (baseFilters.supplier_ids && !Array.isArray(baseFilters.supplier_ids)) {
+            if (typeof baseFilters.supplier_ids === 'string') {
+                baseFilters.supplier_ids = baseFilters.supplier_ids.trim() === '' ? [] : baseFilters.supplier_ids.split(',').filter(Boolean);
+            } else {
+                baseFilters.supplier_ids = [baseFilters.supplier_ids].filter(Boolean);
+            }
+        } else if (!baseFilters.supplier_ids) {
+            baseFilters.supplier_ids = [];
         }
+
+        if (baseFilters.supplier_id != null && baseFilters.supplier_id !== '') {
+            baseFilters.supplier_ids = Array.from(new Set([...(baseFilters.supplier_ids || []), String(baseFilters.supplier_id)]));
+        }
+
+        delete baseFilters.supplier_id;
 
         if (!baseFilters.attributes || typeof baseFilters.attributes !== 'object') {
             baseFilters.attributes = {};
@@ -318,7 +346,11 @@ const ProductList = () => {
                 attrId: attr.id
             }));
 
-            const combinedColumns = [...DEFAULT_COLUMNS.slice(0, -1), ...attrColumns, DEFAULT_COLUMNS[DEFAULT_COLUMNS.length - 1]];
+            const supplierCodeColumn = { id: 'supplier_product_code', label: 'Mã NCC', minWidth: '130px' };
+            const baseColumns = DEFAULT_COLUMNS.some((column) => column.id === 'supplier_product_code')
+                ? DEFAULT_COLUMNS
+                : [...DEFAULT_COLUMNS.slice(0, -1), supplierCodeColumn, DEFAULT_COLUMNS[DEFAULT_COLUMNS.length - 1]];
+            const combinedColumns = [...baseColumns.slice(0, -1), ...attrColumns, baseColumns[baseColumns.length - 1]];
 
             const savedOrder = localStorage.getItem('product_list_column_order');
             let sortedColumns = [...combinedColumns];
@@ -337,7 +369,13 @@ const ProductList = () => {
 
             const savedVisible = localStorage.getItem('product_list_columns');
             if (savedVisible) {
-                setVisibleColumns(JSON.parse(savedVisible));
+                const savedIds = JSON.parse(savedVisible);
+                const mergedVisible = [
+                    ...combinedColumns.map((column) => column.id).filter((id) => savedIds.includes(id)),
+                    ...combinedColumns.map((column) => column.id).filter((id) => !savedIds.includes(id)),
+                ];
+                setVisibleColumns(mergedVisible);
+                localStorage.setItem('product_list_columns', JSON.stringify(mergedVisible));
             } else {
                 setVisibleColumns(sortedColumns.map(c => c.id));
             }
@@ -355,7 +393,6 @@ const ProductList = () => {
         setLoading(true);
         try {
             const params = {
-                ...currentFilters,
                 page,
                 per_page: limit,
                 is_trash: isTrashView ? 1 : 0,
@@ -363,22 +400,42 @@ const ProductList = () => {
                 sort_order: currentSort.direction === 'none' ? 'desc' : currentSort.direction
             };
 
-            if (params.category_id && Array.isArray(params.category_id) && params.category_id.length > 0) {
-                params.category_ids = params.category_id.join(',');
-                delete params.category_id;
+            if (currentFilters.search) {
+                params.search = currentFilters.search;
             }
 
-            if (params.type && Array.isArray(params.type) && params.type.length > 0) {
-                params.type = params.type.join(',');
+            if (Array.isArray(currentFilters.category_id) && currentFilters.category_id.length > 0) {
+                params.category_ids = currentFilters.category_id.join(',');
             }
 
-            if (params.attributes) {
-                Object.entries(params.attributes).forEach(([id, val]) => {
+            if (Array.isArray(currentFilters.type) && currentFilters.type.length > 0) {
+                params.type = currentFilters.type.join(',');
+            }
+
+            if (Array.isArray(currentFilters.supplier_ids) && currentFilters.supplier_ids.length > 0) {
+                params.supplier_ids = currentFilters.supplier_ids.join(',');
+            }
+
+            if (currentFilters.missing_purchase_price) {
+                params.missing_purchase_price = 1;
+            }
+
+            if (currentFilters.multiple_suppliers) {
+                params.multiple_suppliers = 1;
+            }
+
+            ['is_featured', 'is_new', 'min_price', 'max_price', 'min_stock', 'max_stock', 'start_date', 'end_date'].forEach((key) => {
+                if (currentFilters[key] !== '' && currentFilters[key] !== null && currentFilters[key] !== undefined) {
+                    params[key] = currentFilters[key];
+                }
+            });
+
+            if (currentFilters.attributes) {
+                Object.entries(currentFilters.attributes).forEach(([id, val]) => {
                     if (val && (Array.isArray(val) ? val.length > 0 : val !== '')) {
                         params[`attributes[${id}]`] = Array.isArray(val) ? val.join(',') : val;
                     }
                 });
-                delete params.attributes;
             }
 
             const response = await productApi.getAll(params);
@@ -434,12 +491,16 @@ const ProductList = () => {
                 newFilters.category_id = (Array.isArray(prev.category_id) ? prev.category_id : []).filter(id => id !== value);
             } else if (key === 'type') {
                 newFilters.type = (Array.isArray(prev.type) ? prev.type : []).filter(t => t !== value);
+            } else if (key === 'supplier_ids') {
+                newFilters.supplier_ids = (Array.isArray(prev.supplier_ids) ? prev.supplier_ids : []).filter(id => id !== value);
             } else if (key === 'stock') {
                 newFilters.min_stock = '';
                 newFilters.max_stock = '';
             } else if (key === 'date') {
                 newFilters.start_date = '';
                 newFilters.end_date = '';
+            } else if (key === 'missing_purchase_price' || key === 'multiple_suppliers') {
+                newFilters[key] = '';
             } else {
                 newFilters[key] = '';
             }
@@ -466,13 +527,14 @@ const ProductList = () => {
     };
 
     const handleReset = () => {
-        const resetFilters = { search: '', category_id: [], type: [], supplier_id: '', is_featured: '', is_new: '', min_price: '', max_price: '', min_stock: '', max_stock: '', start_date: '', end_date: '', attributes: {} };
+        const resetFilters = getDefaultProductFilters();
         const defaultSort = { key: 'created_at', direction: 'desc', phase: 1 };
         
         localStorage.removeItem('product_management_persistent_state');
         localStorage.removeItem('product_list_search_current_term');
         
         setFilters(resetFilters);
+        setTempFilters(resetFilters);
         setSortConfig(defaultSort);
         setPagination(prev => ({ ...prev, current_page: 1 }));
         setIsTrashView(false);
@@ -604,9 +666,23 @@ const ProductList = () => {
         } finally { setLoading(false); }
     };
 
+    const toggleBulkSupplierSelection = (supplierId) => {
+        setBulkUpdateData((prev) => {
+            const currentSupplierIds = Array.isArray(prev.supplier_ids) ? prev.supplier_ids : [];
+            const normalizedId = String(supplierId);
+
+            return {
+                ...prev,
+                supplier_ids: currentSupplierIds.includes(normalizedId)
+                    ? currentSupplierIds.filter((id) => id !== normalizedId)
+                    : [...currentSupplierIds, normalizedId]
+            };
+        });
+    };
+
     const handleBulkUpdateAttributesSubmit = async () => {
         // Separate basic info from attributes
-        const basicInfoFields = ['category_id', 'category_ids', 'price', 'cost_price', 'stock_quantity', 'supplier_id', 'is_featured', 'is_new', 'status', 'type'];
+        const basicInfoFields = ['category_id', 'category_ids', 'price', 'cost_price', 'stock_quantity', 'supplier_ids', 'is_featured', 'is_new', 'status', 'type'];
         const basic_info = {};
         const attributes = {};
         
@@ -725,7 +801,7 @@ const ProductList = () => {
     };
 
     const handleSort = (columnId) => {
-        const validSortColumns = ['id', 'sku', 'name', 'price', 'cost_price', 'stock_quantity', 'created_at', 'type'];
+        const validSortColumns = ['id', 'sku', 'supplier_product_code', 'name', 'price', 'cost_price', 'stock_quantity', 'created_at', 'type'];
         let key = columnId === 'stock' ? 'stock_quantity' : columnId;
         if (key === 'actions') return;
         if (!validSortColumns.includes(key)) return;
@@ -980,7 +1056,7 @@ const ProductList = () => {
                             type="text"
                             name="search"
                             autoComplete="off"
-                            placeholder="Tìm kiếm sản phẩm..."
+                            placeholder="Tìm SKU / tên / mã NCC..."
                             className="w-full bg-primary/5 border border-primary/10 px-8 py-1.5 rounded-sm text-[14px] focus:outline-none focus:border-primary/30 transition-all relative z-0"
                             value={filters.search}
                             onChange={handleFilterChange}
@@ -1045,7 +1121,7 @@ const ProductList = () => {
                     <div className="flex justify-between items-center mb-6 pb-3 border-b border-primary/10">
                         <h4 className="font-bold text-primary flex items-center gap-2 text-[15px]"><span className="material-symbols-outlined text-[20px]">tune</span> Cấu hình bộ lọc sản phẩm</h4>
                         <div className="flex gap-4">
-                            <button onClick={() => { const r = { ...tempFilters, category_id: [], type: [], supplier_id: '', min_stock: '', max_stock: '', start_date: '', end_date: '', attributes: {} }; setTempFilters(r); }} className="text-[13px] font-bold text-primary/40 hover:text-brick transition-colors">Thiết lập lại</button>
+                            <button onClick={() => setTempFilters((prev) => ({ ...getDefaultProductFilters(), search: prev?.search || '' }))} className="text-[13px] font-bold text-primary/40 hover:text-brick transition-colors">Thiết lập lại</button>
                             <button onClick={applyFilters} className="bg-primary text-white px-8 py-2 rounded-sm font-bold text-[13px] hover:bg-primary/90 shadow-md transform active:scale-95 transition-all">Áp dụng bộ lọc</button>
                         </div>
                     </div>
@@ -1172,19 +1248,92 @@ const ProductList = () => {
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Nhà cung cấp</label>
+                            <div className="relative" data-attr-dropdown>
+                                <button
+                                    onClick={() => setOpenAttrId(openAttrId === 'supplier' ? null : 'supplier')}
+                                    className={`w-full h-10 bg-white border rounded-sm px-3 pr-8 flex items-center transition-all ${openAttrId === 'supplier' ? 'border-primary shadow-inner ring-1 ring-primary/5' : 'border-primary/20 hover:border-primary/40 shadow-sm'}`}
+                                >
+                                    <span className="truncate text-[13px] font-bold text-primary">
+                                        {(tempFilters.supplier_ids || []).length > 0
+                                            ? `NCC: ${(tempFilters.supplier_ids || []).length}`
+                                            : 'Chọn nhà cung cấp...'}
+                                    </span>
+                                    <span className={`material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 transition-transform duration-300 ${openAttrId === 'supplier' ? 'rotate-180' : ''}`}>
+                                        expand_more
+                                    </span>
+                                </button>
+
+                                {openAttrId === 'supplier' && (
+                                    <div className="absolute top-[calc(100%+4px)] left-0 right-0 bg-white border border-primary/30 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] z-[1001] rounded-sm py-1.5 min-w-[220px] animate-in fade-in zoom-in-95 duration-200">
+                                        <div className="max-h-64 overflow-y-auto custom-scrollbar">
+                                            <div className="flex border-b border-primary/5 mb-1 px-1 gap-1">
+                                                <button
+                                                    className="flex-1 py-1.5 text-[10px] font-black text-primary hover:bg-primary/5 uppercase tracking-widest"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setTempFilters((prev) => ({
+                                                            ...prev,
+                                                            supplier_ids: suppliers.map((supplier) => String(supplier.id)),
+                                                        }));
+                                                    }}
+                                                >Chọn tất cả</button>
+                                                <button
+                                                    className="flex-1 py-1.5 text-[10px] font-black text-brick hover:bg-brick/5 uppercase tracking-widest"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setTempFilters((prev) => ({ ...prev, supplier_ids: [] }));
+                                                    }}
+                                                >Xóa hết</button>
+                                            </div>
+                                            <label className="px-3 py-2 hover:bg-primary/5 cursor-pointer flex items-center gap-3 transition-colors select-none" onClick={(e) => e.stopPropagation()}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={(tempFilters.supplier_ids || []).includes('unassigned')}
+                                                    onChange={() => handleTempMultiSelectChange('supplier_ids', 'unassigned')}
+                                                    className="w-4 h-4 accent-primary"
+                                                />
+                                                <span className={`text-[13px] ${(tempFilters.supplier_ids || []).includes('unassigned') ? 'font-bold text-primary' : 'text-stone-600'}`}>Chưa gắn nhà cung cấp</span>
+                                            </label>
+                                            {suppliers.map((supplier) => (
+                                                <label key={supplier.id} className="px-3 py-2 hover:bg-primary/5 cursor-pointer flex items-center gap-3 transition-colors select-none" onClick={(e) => e.stopPropagation()}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={(tempFilters.supplier_ids || []).includes(String(supplier.id))}
+                                                        onChange={() => handleTempMultiSelectChange('supplier_ids', String(supplier.id))}
+                                                        className="w-4 h-4 accent-primary"
+                                                    />
+                                                    <span className={`text-[13px] ${(tempFilters.supplier_ids || []).includes(String(supplier.id)) ? 'font-bold text-primary' : 'text-stone-600'}`}>
+                                                        {supplier.code ? `${supplier.name} - ${supplier.code}` : supplier.name}
+                                                    </span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Giá nhập</label>
                             <select
-                                name="supplier_id"
-                                value={tempFilters.supplier_id || ''}
+                                name="missing_purchase_price"
+                                value={tempFilters.missing_purchase_price || ''}
                                 onChange={handleTempFilterChange}
                                 className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary shadow-sm"
                             >
-                                <option value="">Chọn nhà cung cấp...</option>
-                                <option value="unassigned">Chưa gắn nhà cung cấp</option>
-                                {suppliers.map((supplier) => (
-                                    <option key={supplier.id} value={supplier.id}>
-                                        {supplier.code ? `${supplier.name} - ${supplier.code}` : supplier.name}
-                                    </option>
-                                ))}
+                                <option value="">Tất cả trạng thái giá nhập</option>
+                                <option value="1">Chưa có giá nhập</option>
+                            </select>
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Nguồn nhập</label>
+                            <select
+                                name="multiple_suppliers"
+                                value={tempFilters.multiple_suppliers || ''}
+                                onChange={handleTempFilterChange}
+                                className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary shadow-sm"
+                            >
+                                <option value="">Tất cả sản phẩm</option>
+                                <option value="1">Có nhiều nhà cung cấp</option>
                             </select>
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
@@ -1281,7 +1430,18 @@ const ProductList = () => {
             )}
 
             {/* Hiển thị các chip điều kiện đang lọc */}
-            {(filters.category_id || filters.type || filters.supplier_id || filters.min_stock || filters.max_stock || filters.start_date || filters.end_date || Object.values(filters.attributes).some(arr => arr.length > 0)) && (
+            {(
+                (filters.category_id || []).length > 0
+                || (filters.type || []).length > 0
+                || (filters.supplier_ids || []).length > 0
+                || Boolean(filters.missing_purchase_price)
+                || Boolean(filters.multiple_suppliers)
+                || Boolean(filters.min_stock)
+                || Boolean(filters.max_stock)
+                || Boolean(filters.start_date)
+                || Boolean(filters.end_date)
+                || Object.values(filters.attributes || {}).some(arr => arr.length > 0)
+            ) && (
                 <div className="flex flex-wrap items-center gap-2 mb-4 bg-primary/5 p-2 border border-primary/10 rounded-sm animate-in fade-in duration-300">
                     <span className="text-[13px] font-bold text-primary px-1 mr-1 border-r border-primary/20">Bộ lọc đang hoạt động:</span>
                     
@@ -1301,11 +1461,27 @@ const ProductList = () => {
                         </div>
                     ))}
 
-                    {filters.supplier_id && (
-                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                    {filters.supplier_ids && Array.isArray(filters.supplier_ids) && filters.supplier_ids.length > 0 && filters.supplier_ids.map((supplierId) => (
+                        <div key={supplierId} className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">NCC:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{getSupplierFilterLabel(suppliers, filters.supplier_id)}</span>
-                            <button onClick={() => removeFilter('supplier_id')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{getSupplierFilterLabel(suppliers, supplierId)}</span>
+                            <button onClick={() => removeFilter('supplier_ids', supplierId)} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                        </div>
+                    ))}
+
+                    {filters.missing_purchase_price && (
+                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                            <span className="text-[11px] text-primary/40">Giá nhập:</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">Chưa có giá nhập</span>
+                            <button onClick={() => removeFilter('missing_purchase_price')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                        </div>
+                    )}
+
+                    {filters.multiple_suppliers && (
+                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                            <span className="text-[11px] text-primary/40">Nguồn nhập:</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">Có nhiều nhà cung cấp</span>
+                            <button onClick={() => removeFilter('multiple_suppliers')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     )}
 
@@ -1484,6 +1660,14 @@ const ProductList = () => {
                                                     </td>
                                                 );
                                                 
+                                                if (col.id === 'supplier_product_code') return (
+                                                    <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[12px] font-mono font-bold text-primary/80">
+                                                        {p.supplier_product_code ? (
+                                                            <span className="block truncate" title={p.supplier_product_code}>{p.supplier_product_code}</span>
+                                                        ) : '--'}
+                                                    </td>
+                                                );
+
                                                 if (col.id === 'cost_price') {
                                                     const isEditing = editingProductId === p.id;
                                                     return (
@@ -1837,18 +2021,37 @@ const ProductList = () => {
                                     </div>
                                     <div className="space-y-1">
                                         <label className="text-[13px] font-bold text-primary/80">Nhà cung cấp</label>
-                                        <select
-                                            className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
-                                            value={bulkUpdateData.supplier_id || ''}
-                                            onChange={e => setBulkUpdateData({ ...bulkUpdateData, supplier_id: e.target.value })}
-                                        >
-                                            <option value="">-- Bỏ qua --</option>
-                                            {suppliers.map((supplier) => (
-                                                <option key={supplier.id} value={supplier.id}>
-                                                    {supplier.code ? `${supplier.name} - ${supplier.code}` : supplier.name}
-                                                </option>
-                                            ))}
-                                        </select>
+                                        <div className="rounded-sm border border-primary/20 bg-primary/5 p-2">
+                                            <div className="mb-2 flex items-center justify-between gap-2">
+                                                <span className="text-[11px] font-bold text-primary/55">
+                                                    {(bulkUpdateData.supplier_ids || []).length > 0
+                                                        ? `Đã chọn ${(bulkUpdateData.supplier_ids || []).length} nhà cung cấp`
+                                                        : '-- Bỏ qua --'}
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setBulkUpdateData({ ...bulkUpdateData, supplier_ids: [] })}
+                                                    className="text-[11px] font-bold text-brick hover:underline"
+                                                >
+                                                    Xóa chọn
+                                                </button>
+                                            </div>
+                                            <div className="max-h-32 space-y-1 overflow-y-auto rounded-sm bg-white p-2">
+                                                {suppliers.map((supplier) => (
+                                                    <label key={supplier.id} className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-[12px] text-primary hover:bg-primary/5">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={(bulkUpdateData.supplier_ids || []).includes(String(supplier.id))}
+                                                            onChange={() => toggleBulkSupplierSelection(supplier.id)}
+                                                            className="size-4 accent-primary"
+                                                        />
+                                                        <span className="truncate">
+                                                            {supplier.code ? `${supplier.name} - ${supplier.code}` : supplier.name}
+                                                        </span>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
 

@@ -15,6 +15,7 @@ class Post extends Model
         'content',
         'excerpt',
         'featured_image',
+        'is_system',
         'is_published',
         'is_starred',
         'sort_order',
@@ -23,6 +24,7 @@ class Post extends Model
 
     protected $casts = [
         'blog_category_id' => 'integer',
+        'is_system' => 'boolean',
         'is_published' => 'boolean',
         'is_starred' => 'boolean',
         'sort_order' => 'integer',
@@ -30,6 +32,7 @@ class Post extends Model
     ];
 
     protected $attributes = [
+        'is_system' => false,
         'is_published' => true,
         'is_starred' => false,
         'sort_order' => 0,

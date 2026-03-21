@@ -370,6 +370,7 @@ const ProductForm = () => {
     const location = useLocation();
     const queryParams = new URLSearchParams(location.search);
     const isDuplicate = queryParams.get('mode') === 'duplicate';
+    const returnContext = location.state?.returnContext || null;
 
     const { showModal, showToast } = useUI();
     const [isSaving, setIsSaving] = useState(false);
@@ -403,6 +404,8 @@ const ProductForm = () => {
     const [showSearchHistory, setShowSearchHistory] = useState(false);
     const searchContainerRef = useRef(null);
     const relatedSearchContainerRef = useRef(null); // For the other search bar
+    const supplierDropdownRef = useRef(null);
+    const [supplierPickerOpen, setSupplierPickerOpen] = useState(false);
 
     const [formData, setFormData] = useState({
         type: 'simple',
@@ -414,7 +417,8 @@ const ProductForm = () => {
         expected_cost: '',
         cost_price: '',
         weight: '',
-        supplier_id: '',
+        supplier_ids: [],
+        supplier_product_code: '',
         description: '',
         specifications: [], // [{label, value}]
         is_featured: false,
@@ -464,6 +468,7 @@ const ProductForm = () => {
         expected_cost: 150,
         current_cost: 150,
         weight: 100,
+        supplier_product_code: 180,
         stock: 100,
         actions: 60
     });
@@ -567,9 +572,22 @@ const ProductForm = () => {
         document.addEventListener('mouseup', onMouseUp);
     }, [variantTableWidths]);
 
-    const handleCancel = useCallback(() => {
+    const navigateBackToOrigin = useCallback(() => {
+        if (returnContext?.target) {
+            navigate(returnContext.target, {
+                state: {
+                    returnContext,
+                },
+            });
+            return;
+        }
+
         navigate('/admin/products');
-    }, [navigate]);
+    }, [navigate, returnContext]);
+
+    const handleCancel = useCallback(() => {
+        navigateBackToOrigin();
+    }, [navigateBackToOrigin]);
 
     const handleCopyContent = useCallback(() => {
         const content = formData.description;
@@ -771,6 +789,7 @@ const ProductForm = () => {
         const handleClickOutside = (event) => {
             if (searchContainerRef.current && !searchContainerRef.current.contains(event.target)) setShowSearchHistory(false);
             if (relatedSearchContainerRef.current && !relatedSearchContainerRef.current.contains(event.target)) setShowSearchHistory(false);
+            if (supplierDropdownRef.current && !supplierDropdownRef.current.contains(event.target)) setSupplierPickerOpen(false);
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -1017,6 +1036,7 @@ const ProductForm = () => {
         const newV = {
             id: `manual_${Date.now()}`,
             sku: `${formData.sku}-${variants.length + 1}`,
+            supplier_product_code: '',
             price: formData.price,
             expected_cost: formData.expected_cost,
             current_cost: '',
@@ -1042,7 +1062,12 @@ const ProductForm = () => {
                 expected_cost: data.expected_cost ? Math.floor(data.expected_cost) : '',
                 cost_price: data.cost_price ? Math.floor(data.cost_price) : '',
                 weight: data.weight || '',
-                supplier_id: data.supplier_id || data.supplier?.id || '',
+                supplier_ids: Array.isArray(data.supplier_ids)
+                    ? data.supplier_ids.map((value) => String(value))
+                    : Array.isArray(data.suppliers)
+                        ? data.suppliers.map((supplier) => String(supplier.id))
+                        : (data.supplier_id ? [String(data.supplier_id)] : []),
+                supplier_product_code: data.supplier_product_code || '',
                 description: data.description || '',
                 specifications: (() => {
                     if (!data.specifications) return [];
@@ -1190,6 +1215,7 @@ const ProductForm = () => {
                         expected_cost: Math.floor(v.expected_cost || 0),
                         current_cost: Math.floor(v.cost_price || 0),
                         weight: v.weight ?? '',
+                        supplier_product_code: v.supplier_product_code || '',
                         stock: v.stock_quantity ?? 0,
                         sku: v.sku ?? '',
                         attributes: attrs,
@@ -1219,7 +1245,7 @@ const ProductForm = () => {
             }
         } catch (error) {
             alert('Không thể tải thông tin sản phẩm.');
-            navigate('/admin/products');
+            navigateBackToOrigin();
         }
     };
 
@@ -1703,6 +1729,7 @@ const ProductForm = () => {
             return {
                 id: `new_${Date.now()}_${index}`,
                 sku: `${formData.sku}-${skuSuffix}`,
+                supplier_product_code: '',
                 price: formData.price,
                 expected_cost: formData.expected_cost,
                 current_cost: '',
@@ -1753,6 +1780,26 @@ const ProductForm = () => {
         const raw = e.target.value.replace(/[^0-9]/g, '');
         setFormData(prev => ({ ...prev, weight: raw }));
     };
+
+    const toggleSupplierSelection = (supplierId) => {
+        const normalizedId = String(supplierId);
+        setFormData((prev) => {
+            const currentValues = Array.isArray(prev.supplier_ids) ? prev.supplier_ids : [];
+            const nextValues = currentValues.includes(normalizedId)
+                ? currentValues.filter((value) => value !== normalizedId)
+                : [...currentValues, normalizedId];
+
+            return {
+                ...prev,
+                supplier_ids: nextValues,
+            };
+        });
+    };
+
+    const selectedSuppliers = useMemo(() => {
+        const activeIds = new Set((formData.supplier_ids || []).map((value) => String(value)));
+        return suppliers.filter((supplier) => activeIds.has(String(supplier.id)));
+    }, [formData.supplier_ids, suppliers]);
 
     const handleAddGroupItem = (product) => {
         if (formData.grouped_items.some(item => item.id === product.id)) {
@@ -2063,6 +2110,12 @@ const ProductForm = () => {
                 } else if (key === 'additional_info') {
                     const validInfo = val.filter(i => i.title.trim() && i.post_id);
                     submitData.append(key, JSON.stringify(validInfo));
+                } else if (key === 'supplier_ids') {
+                    if (Array.isArray(val) && val.length > 0) {
+                        val.forEach((supplierId) => submitData.append('supplier_ids[]', supplierId));
+                    } else {
+                        submitData.append('clear_supplier_ids', '1');
+                    }
                 } else if (Array.isArray(val)) {
                     val.forEach(v => submitData.append(`${key}[]`, v));
                 } else if (typeof val === 'boolean') {
@@ -2085,6 +2138,7 @@ const ProductForm = () => {
                     }
                     submitData.append(`variants[${idx}][sku]`, v.sku);
                     submitData.append(`variants[${idx}][name]`, v.label); // Send label as name
+                    submitData.append(`variants[${idx}][supplier_product_code]`, v.supplier_product_code || '');
                     submitData.append(`variants[${idx}][price]`, v.price);
                     submitData.append(`variants[${idx}][expected_cost]`, v.expected_cost || '');
                     submitData.append(`variants[${idx}][weight]`, v.weight || '');
@@ -2131,7 +2185,7 @@ const ProductForm = () => {
             }
 
             showToast({ message: 'Sản phẩm đã được lưu thành công!', type: 'success' });
-            navigate('/admin/products');
+            navigateBackToOrigin();
         } catch (error) {
             console.error("Save error:", error.response?.data);
             const data = error.response?.data;
@@ -2395,7 +2449,7 @@ const ProductForm = () => {
                             <SectionTitle icon="shopping_bag" title="Thông tin cơ bản" />
 
                             <div className="grid grid-cols-1 gap-y-8">
-                                <div className="grid grid-cols-1 lg:grid-cols-6 gap-4">
+                                <div className="grid grid-cols-1 lg:grid-cols-7 gap-4">
                                     <div className="lg:col-span-2">
                                         <Field label={<>Tên sản phẩm <span className="text-brick text-[14px] ml-1">*</span></>}>
                                             <input
@@ -2467,6 +2521,18 @@ const ProductForm = () => {
                                             </select>
                                         </Field>
                                     </div>
+
+                                    <div className="lg:col-span-1">
+                                        <Field label="Mã hàng NCC">
+                                            <input
+                                                name="supplier_product_code"
+                                                value={formData.supplier_product_code}
+                                                onChange={handleChange}
+                                                placeholder="Mã phía nhà cung cấp"
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
+                                            />
+                                        </Field>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -2530,19 +2596,76 @@ const ProductForm = () => {
                                             </div>
                                         </Field>
                                         <Field label="Nhà cung cấp" className="border-primary/20 bg-stone/5">
-                                            <select
-                                                name="supplier_id"
-                                                value={formData.supplier_id || ''}
-                                                onChange={handleChange}
-                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
-                                            >
-                                                <option value="">Chọn nhà cung cấp</option>
-                                                {suppliers.map((supplier) => (
-                                                    <option key={supplier.id} value={supplier.id}>
-                                                        {supplier.code ? `${supplier.name} - ${supplier.code}` : supplier.name}
-                                                    </option>
-                                                ))}
-                                            </select>
+                                            <div className="relative w-full" ref={supplierDropdownRef}>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setSupplierPickerOpen((prev) => !prev)}
+                                                    className="flex w-full items-center justify-between gap-2 bg-transparent text-left"
+                                                >
+                                                    <div className="min-w-0 flex-1">
+                                                        {selectedSuppliers.length > 0 ? (
+                                                            <div className="flex flex-wrap gap-1">
+                                                                {selectedSuppliers.slice(0, 2).map((supplier) => (
+                                                                    <span key={supplier.id} className="inline-flex max-w-full items-center rounded-full bg-primary/10 px-2 py-1 text-[11px] font-black text-primary">
+                                                                        <span className="truncate">{supplier.name}</span>
+                                                                    </span>
+                                                                ))}
+                                                                {selectedSuppliers.length > 2 ? (
+                                                                    <span className="inline-flex items-center rounded-full bg-gold/15 px-2 py-1 text-[11px] font-black text-gold">
+                                                                        +{selectedSuppliers.length - 2}
+                                                                    </span>
+                                                                ) : null}
+                                                            </div>
+                                                        ) : (
+                                                            <span className="text-primary/45 font-bold text-[14px]">Chọn nhiều nhà cung cấp</span>
+                                                        )}
+                                                    </div>
+                                                    <span className={`material-symbols-outlined text-[18px] text-primary/40 transition-transform ${supplierPickerOpen ? 'rotate-180' : ''}`}>expand_more</span>
+                                                </button>
+
+                                                {supplierPickerOpen ? (
+                                                    <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 overflow-hidden rounded-sm border border-primary/20 bg-white shadow-[0_18px_40px_-20px_rgba(15,23,42,0.45)]">
+                                                        <div className="flex items-center justify-between border-b border-primary/10 px-3 py-2">
+                                                            <span className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/40">Nhà cung cấp</span>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setFormData((prev) => ({ ...prev, supplier_ids: [] }))}
+                                                                className="text-[10px] font-black uppercase tracking-[0.14em] text-brick hover:underline"
+                                                            >
+                                                                Xóa hết
+                                                            </button>
+                                                        </div>
+                                                        <div className="max-h-60 overflow-y-auto py-1">
+                                                            {suppliers.length === 0 ? (
+                                                                <div className="px-3 py-4 text-[12px] text-primary/45">Chưa có nhà cung cấp trong kho.</div>
+                                                            ) : suppliers.map((supplier) => {
+                                                                const checked = (formData.supplier_ids || []).includes(String(supplier.id));
+                                                                return (
+                                                                    <label
+                                                                        key={supplier.id}
+                                                                        className={`flex cursor-pointer items-start gap-3 px-3 py-2 transition ${checked ? 'bg-primary/5' : 'hover:bg-primary/[0.03]'}`}
+                                                                    >
+                                                                        <input
+                                                                            type="checkbox"
+                                                                            checked={checked}
+                                                                            onChange={() => toggleSupplierSelection(supplier.id)}
+                                                                            className="mt-0.5 size-4 accent-primary"
+                                                                        />
+                                                                        <div className="min-w-0">
+                                                                            <div className={`truncate text-[13px] ${checked ? 'font-black text-primary' : 'font-semibold text-primary/80'}`}>
+                                                                                {supplier.name}
+                                                                            </div>
+                                                                            <div className="truncate text-[11px] text-primary/40">
+                                                                                {supplier.code || supplier.phone || 'Nhà cung cấp từ quản lý kho'}
+                                                                            </div>
+                                                                        </div>
+                                                                    </label>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                ) : null}
+                                            </div>
                                         </Field>
                                     </div>
                                     {['grouped', 'bundle'].includes(formData.type) && (
@@ -2941,6 +3064,10 @@ const ProductForm = () => {
                                                         Khối lượng
                                                         <div onMouseDown={(e) => handleVariantColumnResize('weight', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
                                                     </th>
+                                                    <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.supplier_product_code }}>
+                                                        Mã hàng NCC
+                                                        <div onMouseDown={(e) => handleVariantColumnResize('supplier_product_code', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
+                                                    </th>
                                                     <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.stock }}>
                                                         Kho hàng
                                                         <div onMouseDown={(e) => handleVariantColumnResize('stock', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
@@ -3078,6 +3205,15 @@ const ProductForm = () => {
                                                                     />
                                                                     <span className="absolute right-2 text-[9px] opacity-30 font-bold italic">gram</span>
                                                                 </div>
+                                                            </td>
+                                                            <td className="px-4 py-3 border-r border-stone/20">
+                                                                <input
+                                                                    className="w-full bg-stone/5 border border-transparent focus:border-purple-300 focus:bg-white px-2 py-2 rounded text-[12px] font-mono font-bold text-primary text-center transition-all"
+                                                                    value={v.supplier_product_code ?? ''}
+                                                                    onChange={(e) => handleVariantChange(index, 'supplier_product_code', e.target.value)}
+                                                                    placeholder="Mã NCC"
+                                                                    title={v.supplier_product_code || ''}
+                                                                />
                                                             </td>
                                                             <td className="px-4 py-3 border-r border-stone/20">
                                                                 <div className="flex items-center justify-center">

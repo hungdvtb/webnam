@@ -16,6 +16,7 @@ const BlogForm = () => {
     const [categories, setCategories] = useState([]);
     const [formData, setFormData] = useState({
         title: '',
+        slug: '',
         blog_category_id: '',
         seo_keyword: '',
         excerpt: '',
@@ -24,6 +25,7 @@ const BlogForm = () => {
         is_published: true,
         is_starred: false,
         published_at: '',
+        is_system: false,
     });
 
     useEffect(() => {
@@ -51,6 +53,7 @@ const BlogForm = () => {
 
             setFormData({
                 title: data.title || '',
+                slug: data.slug || '',
                 blog_category_id: data.blog_category_id ? String(data.blog_category_id) : '',
                 seo_keyword: data.seo_keyword || '',
                 excerpt: data.excerpt || '',
@@ -59,6 +62,7 @@ const BlogForm = () => {
                 is_published: data.is_published ?? true,
                 is_starred: data.is_starred || false,
                 published_at: data.published_at ? new Date(data.published_at).toISOString().split('T')[0] : '',
+                is_system: Boolean(data.is_system),
             });
         } catch (error) {
             console.error('Error fetching post', error);
@@ -82,8 +86,16 @@ const BlogForm = () => {
 
         try {
             const payload = {
-                ...formData,
+                title: formData.title,
+                slug: formData.slug,
                 blog_category_id: formData.blog_category_id ? Number(formData.blog_category_id) : null,
+                seo_keyword: formData.seo_keyword,
+                excerpt: formData.excerpt,
+                content: formData.content,
+                featured_image: formData.featured_image,
+                is_published: formData.is_published,
+                is_starred: formData.is_starred,
+                published_at: formData.published_at || null,
             };
 
             if (isEdit) {
@@ -167,11 +179,20 @@ const BlogForm = () => {
         <form onSubmit={handleSubmit} className="space-y-10 animate-fade-in pb-20">
             <div className="flex justify-between items-end gap-6 border-b border-gold/10 pb-8">
                 <div>
-                    <h1 className="text-2xl font-display font-bold text-primary italic uppercase tracking-wider">
-                        {isEdit ? 'Cập Nhật Bài Viết' : 'Tạo Bài Viết Mới'}
-                    </h1>
+                    <div className="flex flex-wrap items-center gap-3">
+                        <h1 className="text-2xl font-display font-bold text-primary italic uppercase tracking-wider">
+                            {isEdit ? 'Cập Nhật Bài Viết' : 'Tạo Bài Viết Mới'}
+                        </h1>
+                        {formData.is_system && (
+                            <span className="inline-flex items-center rounded-sm border border-primary/20 bg-primary/5 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-primary">
+                                Bài hệ thống
+                            </span>
+                        )}
+                    </div>
                     <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.18em] mt-2">
-                        Mặc định bài mới được hiển thị ngay trên website
+                        {formData.is_system
+                            ? 'Bài hệ thống luôn tồn tại, chỉ nên chỉnh phần nội dung hiển thị'
+                            : 'Mặc định bài mới được hiển thị ngay trên website'}
                     </p>
                 </div>
 
@@ -203,9 +224,26 @@ const BlogForm = () => {
                             value={formData.title}
                             onChange={handleChange}
                             required
-                            className="w-full bg-white border border-gold/20 p-5 focus:outline-none focus:border-primary font-display text-2xl text-primary shadow-sm"
+                            disabled={formData.is_system}
+                            className={`w-full border border-gold/20 p-5 font-display text-2xl text-primary shadow-sm ${formData.is_system ? 'bg-stone/5 cursor-not-allowed opacity-80' : 'bg-white focus:outline-none focus:border-primary'}`}
                             placeholder="VD: Bí quyết chọn gốm Bát Tràng"
                         />
+                        {formData.is_system && (
+                            <p className="text-[10px] text-stone/55 italic">Tiêu đề bài hệ thống được giữ cố định để đồng bộ trang chính sách.</p>
+                        )}
+                    </div>
+
+                    <div className="space-y-2">
+                        <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">Slug</label>
+                        <input
+                            type="text"
+                            name="slug"
+                            value={formData.slug}
+                            readOnly
+                            className="w-full bg-stone/5 border border-gold/20 p-4 font-body text-sm text-stone/70 shadow-sm focus:outline-none"
+                            placeholder="Slug sẽ được tạo tự động"
+                        />
+                        <p className="text-[10px] text-stone/55 italic">Slug được tạo tự động. Với bài hệ thống, slug được cố định để hệ thống luôn nhận diện đúng bài.</p>
                     </div>
 
                     <div className="space-y-2">

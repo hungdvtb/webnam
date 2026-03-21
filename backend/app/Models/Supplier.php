@@ -34,4 +34,9 @@ class Supplier extends Model
     {
         return $this->hasMany(InventoryImport::class);
     }
+
+    public function products()
+    {
+        return $this->hasMany(Product::class);
+    }
 }

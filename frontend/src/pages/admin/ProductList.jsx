@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import { Link, useNavigate } from 'react-router-dom';
-import { productApi, categoryApi, attributeApi } from '../../services/api';
+import { productApi, categoryApi, attributeApi, inventoryApi } from '../../services/api';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
 import Pagination from '../../components/Pagination';
@@ -47,6 +47,23 @@ function getPrimaryImage(product) {
     return url || null;
 }
 
+function getSupplierFilterLabel(suppliers, supplierId) {
+    if (!supplierId) {
+        return '';
+    }
+
+    if (supplierId === 'unassigned') {
+        return 'Chưa gắn nhà cung cấp';
+    }
+
+    const supplier = suppliers.find((item) => String(item.id) === String(supplierId));
+    if (!supplier) {
+        return String(supplierId);
+    }
+
+    return supplier.code ? `${supplier.name} - ${supplier.code}` : supplier.name;
+}
+
 const ProductList = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
@@ -54,6 +71,7 @@ const ProductList = () => {
     const columnSettingsRef = useRef(null);
     const [products, setProducts] = useState([]);
     const [categories, setCategories] = useState([]);
+    const [suppliers, setSuppliers] = useState([]);
     const [allAttributes, setAllAttributes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedIds, setSelectedIds] = useState([]);
@@ -75,6 +93,7 @@ const ProductList = () => {
 
     const [showBulkUpdateModal, setShowBulkUpdateModal] = useState(false);
     const [bulkUpdateData, setBulkUpdateData] = useState({});
+    const [lastBulkUpdateLogId, setLastBulkUpdateLogId] = useState(null);
     const [openAttrId, setOpenAttrId] = useState(null);
 
     const [editingProductId, setEditingProductId] = useState(null);
@@ -160,7 +179,7 @@ const ProductList = () => {
     // Sanitize saved filters to ensure category_id and type are always arrays (legacy compatibility)
     const getInitialFilters = () => {
         const baseFilters = savedState?.filters || {
-            search: '', category_id: [], type: [], is_featured: '', is_new: '',
+            search: '', category_id: [], type: [], supplier_id: '', is_featured: '', is_new: '',
             min_price: '', max_price: '', min_stock: '', max_stock: '', start_date: '', end_date: '',
             attributes: {}
         };
@@ -183,6 +202,10 @@ const ProductList = () => {
             }
         } else if (!baseFilters.type) {
             baseFilters.type = [];
+        }
+
+        if (baseFilters.supplier_id == null) {
+            baseFilters.supplier_id = '';
         }
 
         if (!baseFilters.attributes || typeof baseFilters.attributes !== 'object') {
@@ -278,9 +301,14 @@ const ProductList = () => {
 
     const fetchInitialData = async () => {
         try {
-            const [catRes, attrRes] = await Promise.all([categoryApi.getAll(), attributeApi.getAll({ active_only: true })]);
+            const [catRes, attrRes, supplierRes] = await Promise.all([
+                categoryApi.getAll(),
+                attributeApi.getAll({ active_only: true }),
+                inventoryApi.getSuppliers({ per_page: 500 }),
+            ]);
             setCategories(catRes.data || []);
             setAllAttributes(attrRes.data || []);
+            setSuppliers(supplierRes.data?.data || []);
 
             const attrColumns = (attrRes.data || []).map(attr => ({
                 id: `attr_${attr.id}`,
@@ -438,7 +466,7 @@ const ProductList = () => {
     };
 
     const handleReset = () => {
-        const resetFilters = { search: '', category_id: [], type: [], is_featured: '', is_new: '', min_price: '', max_price: '', min_stock: '', max_stock: '', start_date: '', end_date: '', attributes: {} };
+        const resetFilters = { search: '', category_id: [], type: [], supplier_id: '', is_featured: '', is_new: '', min_price: '', max_price: '', min_stock: '', max_stock: '', start_date: '', end_date: '', attributes: {} };
         const defaultSort = { key: 'created_at', direction: 'desc', phase: 1 };
         
         localStorage.removeItem('product_management_persistent_state');
@@ -578,7 +606,7 @@ const ProductList = () => {
 
     const handleBulkUpdateAttributesSubmit = async () => {
         // Separate basic info from attributes
-        const basicInfoFields = ['category_id', 'category_ids', 'price', 'cost_price', 'stock_quantity', 'is_featured', 'is_new', 'status', 'type'];
+        const basicInfoFields = ['category_id', 'category_ids', 'price', 'cost_price', 'stock_quantity', 'supplier_id', 'is_featured', 'is_new', 'status', 'type'];
         const basic_info = {};
         const attributes = {};
         
@@ -1017,12 +1045,12 @@ const ProductList = () => {
                     <div className="flex justify-between items-center mb-6 pb-3 border-b border-primary/10">
                         <h4 className="font-bold text-primary flex items-center gap-2 text-[15px]"><span className="material-symbols-outlined text-[20px]">tune</span> Cấu hình bộ lọc sản phẩm</h4>
                         <div className="flex gap-4">
-                            <button onClick={() => { const r = { ...tempFilters, category_id: [], type: [], min_stock: '', max_stock: '', start_date: '', end_date: '', attributes: {} }; setTempFilters(r); }} className="text-[13px] font-bold text-primary/40 hover:text-brick transition-colors">Thiết lập lại</button>
+                            <button onClick={() => { const r = { ...tempFilters, category_id: [], type: [], supplier_id: '', min_stock: '', max_stock: '', start_date: '', end_date: '', attributes: {} }; setTempFilters(r); }} className="text-[13px] font-bold text-primary/40 hover:text-brick transition-colors">Thiết lập lại</button>
                             <button onClick={applyFilters} className="bg-primary text-white px-8 py-2 rounded-sm font-bold text-[13px] hover:bg-primary/90 shadow-md transform active:scale-95 transition-all">Áp dụng bộ lọc</button>
                         </div>
                     </div>
                     
-                    <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 border-t border-l border-primary/10 rounded-sm mb-6 bg-primary/[0.02]">
+                    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 border-t border-l border-primary/10 rounded-sm mb-6 bg-primary/[0.02]">
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Danh mục</label>
                             <div className="relative" data-attr-dropdown>
@@ -1143,6 +1171,23 @@ const ProductList = () => {
                             </div>
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Nhà cung cấp</label>
+                            <select
+                                name="supplier_id"
+                                value={tempFilters.supplier_id || ''}
+                                onChange={handleTempFilterChange}
+                                className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary shadow-sm"
+                            >
+                                <option value="">Chọn nhà cung cấp...</option>
+                                <option value="unassigned">Chưa gắn nhà cung cấp</option>
+                                {suppliers.map((supplier) => (
+                                    <option key={supplier.id} value={supplier.id}>
+                                        {supplier.code ? `${supplier.name} - ${supplier.code}` : supplier.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Tồn kho</label>
                             <div className="flex items-center gap-2 h-10">
                                 <input type="number" name="min_stock" placeholder="Từ" className="w-1/2 h-full bg-white border border-primary/10 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary" value={tempFilters.min_stock} onChange={handleTempFilterChange} />
@@ -1236,7 +1281,7 @@ const ProductList = () => {
             )}
 
             {/* Hiển thị các chip điều kiện đang lọc */}
-            {(filters.category_id || filters.type || filters.min_stock || filters.max_stock || filters.start_date || filters.end_date || Object.values(filters.attributes).some(arr => arr.length > 0)) && (
+            {(filters.category_id || filters.type || filters.supplier_id || filters.min_stock || filters.max_stock || filters.start_date || filters.end_date || Object.values(filters.attributes).some(arr => arr.length > 0)) && (
                 <div className="flex flex-wrap items-center gap-2 mb-4 bg-primary/5 p-2 border border-primary/10 rounded-sm animate-in fade-in duration-300">
                     <span className="text-[13px] font-bold text-primary px-1 mr-1 border-r border-primary/20">Bộ lọc đang hoạt động:</span>
                     
@@ -1255,6 +1300,14 @@ const ProductList = () => {
                             <button onClick={() => removeFilter('type', t)} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     ))}
+
+                    {filters.supplier_id && (
+                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                            <span className="text-[11px] text-primary/40">NCC:</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{getSupplierFilterLabel(suppliers, filters.supplier_id)}</span>
+                            <button onClick={() => removeFilter('supplier_id')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                        </div>
+                    )}
 
                     {(filters.min_stock || filters.max_stock) && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
@@ -1740,7 +1793,7 @@ const ProductList = () => {
                                     </div>
                                 </div>
 
-                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                                     <div className="space-y-1">
                                         <label className="text-[13px] font-bold text-primary/80">Giá nhập</label>
                                         <input 
@@ -1780,6 +1833,21 @@ const ProductList = () => {
                                         >
                                             <option value="">-- Bỏ qua --</option>
                                             {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[13px] font-bold text-primary/80">Nhà cung cấp</label>
+                                        <select
+                                            className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
+                                            value={bulkUpdateData.supplier_id || ''}
+                                            onChange={e => setBulkUpdateData({ ...bulkUpdateData, supplier_id: e.target.value })}
+                                        >
+                                            <option value="">-- Bỏ qua --</option>
+                                            {suppliers.map((supplier) => (
+                                                <option key={supplier.id} value={supplier.id}>
+                                                    {supplier.code ? `${supplier.name} - ${supplier.code}` : supplier.name}
+                                                </option>
+                                            ))}
                                         </select>
                                     </div>
                                 </div>

@@ -1,7 +1,7 @@
 ﻿import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
-import { productApi, categoryApi, attributeApi, productImageApi, aiApi, blogApi, mediaApi, cmsApi } from '../../services/api';
+import { productApi, categoryApi, attributeApi, productImageApi, aiApi, blogApi, mediaApi, cmsApi, inventoryApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 import ReactQuill from 'react-quill-new';
 import mammoth from 'mammoth';
@@ -353,42 +353,14 @@ const SectionTitle = ({ icon, title }) => (
     </div>
 );
 
-// Register Custom Attributors for Quill 2.0+
-const Quill = ReactQuill.Quill;
-const Parchment = Quill.import('parchment');
-
-// Define Attributors
-const Scope = Parchment.Scope;
-const StyleAttributor = Parchment.Attributor ? Parchment.Attributor.Style : Parchment.StyleAttributor;
-
-if (StyleAttributor) {
-    const width = new StyleAttributor('width', 'width', {
-        scope: Scope.BLOCK | Scope.INLINE
-    });
-    const float = new StyleAttributor('float', 'float', {
-        scope: Scope.BLOCK | Scope.INLINE
-    });
-    const display = new StyleAttributor('display', 'display', {
-        scope: Scope.BLOCK | Scope.INLINE
-    });
-    const margin = new StyleAttributor('margin', 'margin', {
-        scope: Scope.BLOCK | Scope.INLINE
-    });
-    
-    Quill.register(width, true);
-    Quill.register(float, true);
-    Quill.register(display, true);
-    Quill.register(margin, true);
-}
-
-// Quill configuration - use the registered names
+// Quill 2 only accepts registered builtin formats here.
 const quillFormats = [
     'header', 'font', 'size',
     'bold', 'italic', 'underline', 'strike', 'blockquote',
     'list', 'indent',
     'link', 'image', 'video',
     'color', 'background',
-    'align', 'width', 'float', 'display', 'margin'
+    'align'
 ];
 
 const ProductForm = () => {
@@ -405,6 +377,7 @@ const ProductForm = () => {
     const [aiRewriting, setAiRewriting] = useState(false);
     const [typeConfirmed, setTypeConfirmed] = useState(true);
     const [categories, setCategories] = useState([]);
+    const [suppliers, setSuppliers] = useState([]);
     const [suggestedProducts, setSuggestedProducts] = useState([]);
     const [suggestedBundleProducts, setSuggestedBundleProducts] = useState([]);
     const [searchingRelated, setSearchingRelated] = useState(false);
@@ -441,6 +414,7 @@ const ProductForm = () => {
         expected_cost: '',
         cost_price: '',
         weight: '',
+        supplier_id: '',
         description: '',
         specifications: [], // [{label, value}]
         is_featured: false,
@@ -558,7 +532,6 @@ const ProductForm = () => {
                 [{ 'list': 'ordered' }, { 'list': 'bullet' }],
                 [{ 'align': [] }],
                 ['link', 'image', 'video'],
-                [{ 'width': ['25%', '50%', '75%', '100%', 'initial'] }],
                 ['fullscreen'],
                 ['clean']
             ],
@@ -815,6 +788,7 @@ const ProductForm = () => {
 
     useEffect(() => {
         fetchCategories();
+        fetchSuppliers();
         fetchRelatedData();
         if (isEdit) {
             fetchProduct();
@@ -867,6 +841,15 @@ const ProductForm = () => {
             setCategories(response.data);
         } catch (error) {
             console.error("Error fetching categories", error);
+        }
+    };
+
+    const fetchSuppliers = async () => {
+        try {
+            const response = await inventoryApi.getSuppliers({ per_page: 500 });
+            setSuppliers(response.data?.data || []);
+        } catch (error) {
+            console.error("Error fetching suppliers", error);
         }
     };
 
@@ -1059,12 +1042,20 @@ const ProductForm = () => {
                 expected_cost: data.expected_cost ? Math.floor(data.expected_cost) : '',
                 cost_price: data.cost_price ? Math.floor(data.cost_price) : '',
                 weight: data.weight || '',
+                supplier_id: data.supplier_id || data.supplier?.id || '',
                 description: data.description || '',
                 specifications: (() => {
                     if (!data.specifications) return [];
                     try {
                         const parsed = JSON.parse(data.specifications);
-                        return Array.isArray(parsed) ? parsed : [];
+                        if (!Array.isArray(parsed)) {
+                            return [];
+                        }
+
+                        return parsed.map((spec) => ({
+                            label: spec?.label ?? '',
+                            value: spec?.value ?? '',
+                        }));
                     } catch (e) {
                          // Fallback for legacy text data
                         return data.specifications.split('\n')
@@ -1115,7 +1106,16 @@ const ProductForm = () => {
                 additional_info: (() => {
                     if (!data.additional_info) return [];
                     try {
-                        return typeof data.additional_info === 'string' ? JSON.parse(data.additional_info) : data.additional_info;
+                        const parsed = typeof data.additional_info === 'string' ? JSON.parse(data.additional_info) : data.additional_info;
+                        if (!Array.isArray(parsed)) {
+                            return [];
+                        }
+
+                        return parsed.map((info) => ({
+                            title: info?.title ?? '',
+                            post_id: info?.post_id ?? '',
+                            post_title: info?.post_title ?? '',
+                        }));
                     } catch (e) { return []; }
                 })(),
                 bundle_title: data.bundle_title || '',
@@ -1155,7 +1155,7 @@ const ProductForm = () => {
                 });
                 setBundleOptions(Object.entries(optionsMap).map(([title, its]) => ({
                     id: Math.random().toString(36).substr(2, 9),
-                    title,
+                    title: title ?? '',
                     items: its
                 })));
             } else {
@@ -1189,11 +1189,12 @@ const ProductForm = () => {
                         price: Math.floor(v.price),
                         expected_cost: Math.floor(v.expected_cost || 0),
                         current_cost: Math.floor(v.cost_price || 0),
-                        weight: v.weight || 0,
-                        stock: v.stock_quantity,
+                        weight: v.weight ?? '',
+                        stock: v.stock_quantity ?? 0,
+                        sku: v.sku ?? '',
                         attributes: attrs,
                         image_url: primaryImage ? primaryImage.image_url : null,
-                        label: v.name || (v.attribute_values || []).map(av => av.value).join(' / ')
+                        label: v.name ?? (v.attribute_values || []).map(av => av.value).join(' / ') ?? ''
                     };
                 });
 
@@ -1577,7 +1578,7 @@ const ProductForm = () => {
     };
 
     const renderAttributeField = (attr) => {
-        const value = formData.custom_attributes[attr.id] || (attr.frontend_type === 'multiselect' ? [] : '');
+        const value = formData.custom_attributes[attr.id] ?? (attr.frontend_type === 'multiselect' ? [] : '');
         const commonClass = "w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary text-[14px] font-bold min-h-[32px]";
 
         switch (attr.frontend_type) {
@@ -2474,72 +2475,91 @@ const ProductForm = () => {
                         <div className="bg-white border border-gold/10 p-5 shadow-premium-sm rounded-sm">
                             <SectionTitle icon="payments" title="Giá và thông số" />
                             <div className="grid grid-cols-1 gap-y-8">
-                                <div className="grid grid-cols-1 md:grid-cols-4 gap-x-4 gap-y-4">
-                                    <Field label="Giá bán lẻ (VNĐ)" className={`border-brick/30 bg-brick/[0.02] ${formData.price_type === 'sum' ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
-                                        <div className="flex items-center w-full">
-                                            <input
-                                                type="text"
-                                                name="price"
-                                                value={formData.price_type === 'sum'
-                                                    ? formatNumberOutput(formData.grouped_items.reduce((acc, item) => acc + (item.price * item.quantity), 0))
-                                                    : formatNumberOutput(formData.price)}
-                                                onChange={(e) => handlePriceInputChange(e, 'price')}
-                                                required={formData.price_type !== 'sum'}
-                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-brick font-black text-[16px]"
-                                            />
-                                            <span className="font-bold text-brick opacity-40 ml-2">₫</span>
-                                        </div>
-                                    </Field>
-                                    {['grouped', 'bundle'].includes(formData.type) && (
-                                        <Field label={formData.type === 'bundle' ? "Loại giá bộ / combo" : "Loại giá nhóm"} className="border-gold/30 bg-gold/[0.02]">
+                                <div className="grid grid-cols-1 gap-4">
+                                    <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+                                        <Field label="Giá bán lẻ (VNĐ)" className={`border-brick/30 bg-brick/[0.02] ${formData.price_type === 'sum' ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
+                                            <div className="flex items-center w-full">
+                                                <input
+                                                    type="text"
+                                                    name="price"
+                                                    value={formData.price_type === 'sum'
+                                                        ? formatNumberOutput(formData.grouped_items.reduce((acc, item) => acc + (item.price * item.quantity), 0))
+                                                        : formatNumberOutput(formData.price)}
+                                                    onChange={(e) => handlePriceInputChange(e, 'price')}
+                                                    required={formData.price_type !== 'sum'}
+                                                    className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-brick font-black text-[16px]"
+                                                />
+                                                <span className="font-bold text-brick opacity-40 ml-2">₫</span>
+                                            </div>
+                                        </Field>
+                                        <Field label="Giá dự kiến" className="border-primary/20 bg-stone/5">
+                                            <div className="flex items-center w-full">
+                                                <input
+                                                    type="text"
+                                                    name="expected_cost"
+                                                    value={formatNumberOutput(formData.expected_cost)}
+                                                    onChange={(e) => handlePriceInputChange(e, 'expected_cost')}
+                                                    className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]"
+                                                />
+                                                <span className="font-bold text-primary opacity-30 ml-2">₫</span>
+                                            </div>
+                                        </Field>
+                                        <Field label="Giá vốn hiện tại" className="border-primary/20 bg-stone/10">
+                                            <div className="flex items-center w-full">
+                                                <input
+                                                    type="text"
+                                                    name="cost_price"
+                                                    value={formatNumberOutput(formData.cost_price)}
+                                                    readOnly
+                                                    className="w-full cursor-not-allowed bg-transparent border-none focus:outline-none focus:ring-0 text-primary/70 font-bold text-[15px]"
+                                                />
+                                                <span className="font-bold text-primary opacity-30 ml-2">₫</span>
+                                            </div>
+                                        </Field>
+                                        <Field label="Khối lượng sản phẩm" className="border-primary/20 bg-stone/5">
+                                            <div className="flex items-center w-full">
+                                                <input
+                                                    type="text"
+                                                    name="weight"
+                                                    value={formData.weight}
+                                                    onChange={handleWeightInputChange}
+                                                    placeholder="0"
+                                                    className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]"
+                                                />
+                                                <span className="font-bold text-primary opacity-30 ml-2 italic">gram</span>
+                                            </div>
+                                        </Field>
+                                        <Field label="Nhà cung cấp" className="border-primary/20 bg-stone/5">
                                             <select
-                                                name="price_type"
-                                                value={formData.price_type}
+                                                name="supplier_id"
+                                                value={formData.supplier_id || ''}
                                                 onChange={handleChange}
                                                 className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
                                             >
-                                                <option value="fixed">Cố định</option>
-                                                <option value="sum">Tổng giá các thành phần</option>
+                                                <option value="">Chọn nhà cung cấp</option>
+                                                {suppliers.map((supplier) => (
+                                                    <option key={supplier.id} value={supplier.id}>
+                                                        {supplier.code ? `${supplier.name} - ${supplier.code}` : supplier.name}
+                                                    </option>
+                                                ))}
                                             </select>
                                         </Field>
+                                    </div>
+                                    {['grouped', 'bundle'].includes(formData.type) && (
+                                        <div className="max-w-[280px]">
+                                            <Field label={formData.type === 'bundle' ? "Loại giá bộ / combo" : "Loại giá nhóm"} className="border-gold/30 bg-gold/[0.02]">
+                                                <select
+                                                    name="price_type"
+                                                    value={formData.price_type}
+                                                    onChange={handleChange}
+                                                    className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
+                                                >
+                                                    <option value="fixed">Cố định</option>
+                                                    <option value="sum">Tổng giá các thành phần</option>
+                                                </select>
+                                            </Field>
+                                        </div>
                                     )}
-                                    <Field label="Giá dự kiến" className="border-primary/20 bg-stone/5">
-                                        <div className="flex items-center w-full">
-                                            <input
-                                                type="text"
-                                                name="expected_cost"
-                                                value={formatNumberOutput(formData.expected_cost)}
-                                                onChange={(e) => handlePriceInputChange(e, 'expected_cost')}
-                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]"
-                                            />
-                                            <span className="font-bold text-primary opacity-30 ml-2">₫</span>
-                                        </div>
-                                    </Field>
-                                    <Field label="Giá vốn hiện tại" className="border-primary/20 bg-stone/10">
-                                        <div className="flex items-center w-full">
-                                            <input
-                                                type="text"
-                                                name="cost_price"
-                                                value={formatNumberOutput(formData.cost_price)}
-                                                readOnly
-                                                className="w-full cursor-not-allowed bg-transparent border-none focus:outline-none focus:ring-0 text-primary/70 font-bold text-[15px]"
-                                            />
-                                            <span className="font-bold text-primary opacity-30 ml-2">₫</span>
-                                        </div>
-                                    </Field>
-                                    <Field label="Khối lượng sản phẩm" className="border-primary/20 bg-stone/5">
-                                        <div className="flex items-center w-full">
-                                            <input
-                                                type="text"
-                                                name="weight"
-                                                value={formData.weight}
-                                                onChange={handleWeightInputChange}
-                                                placeholder="0"
-                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]"
-                                            />
-                                            <span className="font-bold text-primary opacity-30 ml-2 italic">gram</span>
-                                        </div>
-                                    </Field>
                                 </div>
 
                                 <div className="space-y-3">
@@ -2580,13 +2600,13 @@ const ProductForm = () => {
                                                     <input 
                                                         placeholder="Nhãn (VD: Kích thước)" 
                                                         className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-[13px] font-bold text-primary border-r border-stone/10 placeholder:font-normal placeholder:opacity-30 pr-2"
-                                                        value={spec.label}
+                                                        value={spec.label ?? ''}
                                                         onChange={(e) => updateSpecRow(idx, 'label', e.target.value)}
                                                     />
                                                     <input 
                                                         placeholder="Giá trị (VD: 20x30cm)" 
                                                         className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-[13px] text-stone placeholder:opacity-40"
-                                                        value={spec.value}
+                                                        value={spec.value ?? ''}
                                                         onChange={(e) => updateSpecRow(idx, 'value', e.target.value)}
                                                     />
                                                 </div>
@@ -2651,7 +2671,7 @@ const ProductForm = () => {
                                                     <input 
                                                         placeholder="Tiêu đề mục (VD: Hướng dẫn sử dụng)" 
                                                         className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-[13px] font-bold text-primary border-r border-stone/10 placeholder:font-normal placeholder:opacity-30 pr-2"
-                                                        value={info.title}
+                                                        value={info.title ?? ''}
                                                         onChange={(e) => updateAdditionalInfoRow(idx, 'title', e.target.value)}
                                                     />
                                                     
@@ -2967,7 +2987,7 @@ const ProductForm = () => {
                                                                     <textarea
                                                                         rows={1}
                                                                         className="w-full bg-stone/5 border border-transparent focus:border-purple-300 focus:bg-white px-2 py-1.5 rounded text-[12px] font-bold text-primary text-center transition-all resize-none overflow-hidden min-h-[32px] custom-scrollbar h-auto"
-                                                                        value={v.label}
+                                                                        value={v.label ?? ''}
                                                                         onChange={(e) => {
                                                                             handleVariantChange(index, 'label', e.target.value);
                                                                             e.target.style.height = 'auto';
@@ -2996,7 +3016,7 @@ const ProductForm = () => {
                                                                     <textarea
                                                                         rows={1}
                                                                         className="w-full bg-[#f4f6f8] border border-transparent focus:border-purple-300 focus:bg-white px-2 py-1.5 rounded text-[12px] font-mono font-bold text-stone-600 text-center transition-all resize-none shadow-inner overflow-hidden min-h-[32px] flex items-center justify-center leading-[32px]"
-                                                                        value={v.sku}
+                                                                        value={v.sku ?? ''}
                                                                         onChange={(e) => {
                                                                             handleVariantChange(index, 'sku', e.target.value);
                                                                             e.target.style.height = 'auto';
@@ -3053,7 +3073,7 @@ const ProductForm = () => {
                                                                 <div className="relative flex items-center justify-center">
                                                                     <input
                                                                         className="w-full bg-stone/5 border border-transparent focus:border-purple-300 focus:bg-white pl-2 pr-8 py-1 rounded text-[13px] font-bold text-primary text-center"
-                                                                        value={v.weight}
+                                                                        value={v.weight ?? ''}
                                                                         onChange={(e) => handleVariantChange(index, 'weight', e.target.value)}
                                                                     />
                                                                     <span className="absolute right-2 text-[9px] opacity-30 font-bold italic">gram</span>
@@ -3064,7 +3084,7 @@ const ProductForm = () => {
                                                                     <input
                                                                         type="number"
                                                                         className="w-full bg-[#e0f2fe] border border-transparent focus:border-blue-400 focus:bg-white px-2 py-2 rounded text-[13px] font-black text-blue-700 text-center transition-all"
-                                                                        value={v.stock}
+                                                                        value={v.stock ?? 0}
                                                                         onChange={(e) => handleVariantChange(index, 'stock', e.target.value)}
                                                                     />
                                                                 </div>
@@ -3409,7 +3429,7 @@ const ProductForm = () => {
                                                      <div className="flex-1">
                                                         <input
                                                             type="text"
-                                                            value={option.title}
+                                                            value={option.title ?? ''}
                                                             onChange={(e) => handleUpdateOptionTitle(option.id, e.target.value)}
                                                             className="w-full bg-transparent border-none p-0 text-[15px] font-black text-primary focus:ring-0"
                                                             placeholder="Nhập tên tùy chọn..."

@@ -132,6 +132,7 @@ class InventoryController extends Controller
         $sortOrder = strtolower((string) $request->input('sort_order', 'desc')) === 'asc' ? 'asc' : 'desc';
         $allowedSorts = [
             'created_at',
+            'deleted_at',
             'sku',
             'name',
             'stock_quantity',
@@ -286,7 +287,18 @@ class InventoryController extends Controller
             ->selectRaw('COALESCE(SUM(imported_amount_total), 0) as total_imported_amount')
             ->first();
 
-        $paginated = $query->latest('updated_at')->paginate($perPage)->toArray();
+        $this->applyMappedSort($query, $request, [
+            'name' => 'name',
+            'code' => 'code',
+            'phone' => 'phone',
+            'prices_count' => 'prices_count',
+            'import_slips_count' => 'import_slips_count',
+            'imported_quantity_total' => 'imported_quantity_total',
+            'imported_amount_total' => 'imported_amount_total',
+            'updated_at' => 'updated_at',
+        ], 'updated_at', ['id' => 'desc']);
+
+        $paginated = $query->paginate($perPage)->toArray();
         $paginated['summary'] = [
             'total_suppliers' => (int) ($summary->total_suppliers ?? 0),
             'total_import_slips' => (int) ($summary->total_import_slips ?? 0),
@@ -348,67 +360,167 @@ class InventoryController extends Controller
     public function supplierPrices(Request $request, int $id)
     {
         $supplier = Supplier::query()->findOrFail($id);
-        $query = SupplierProductPrice::query()
-            ->where('supplier_id', $supplier->id)
+        $query = Product::query()
+            ->select([
+                'products.id',
+                'products.sku',
+                'products.name',
+                'products.price',
+                'products.expected_cost',
+                'products.cost_price',
+                'products.stock_quantity',
+                'products.damaged_quantity',
+                'products.status',
+                'products.type',
+                'products.category_id',
+                'products.created_at',
+                'products.deleted_at',
+            ])
+            ->leftJoin('supplier_product_prices as supplier_price_rows', function ($join) use ($supplier) {
+                $join
+                    ->on('supplier_price_rows.product_id', '=', 'products.id')
+                    ->where('supplier_price_rows.supplier_id', '=', $supplier->id);
+            })
+            ->where(function ($builder) use ($supplier) {
+                $builder
+                    ->where('products.supplier_id', $supplier->id)
+                    ->orWhereNotNull('supplier_price_rows.id')
+                    ->orWhereHas('variations', function ($variationQuery) use ($supplier) {
+                        $variationQuery
+                            ->where('products.supplier_id', $supplier->id)
+                            ->orWhereHas('supplierPrices', function ($priceQuery) use ($supplier) {
+                                $priceQuery->where('supplier_id', $supplier->id);
+                            });
+                    });
+            })
+            ->whereDoesntHave('parentConfigurable')
             ->with([
-                'product:id,sku,name,expected_cost,cost_price,stock_quantity,damaged_quantity,type,category_id',
-                'product.category:id,name',
-                'product.parentConfigurable:id,name,sku',
-                'updater:id,name',
+                'category:id,name',
+                'variations' => function ($builder) use ($supplier) {
+                    $builder
+                        ->select([
+                            'products.id',
+                            'products.sku',
+                            'products.name',
+                            'products.price',
+                            'products.expected_cost',
+                            'products.cost_price',
+                            'products.stock_quantity',
+                            'products.damaged_quantity',
+                            'products.status',
+                            'products.type',
+                            'products.category_id',
+                            'products.created_at',
+                            'products.deleted_at',
+                        ])
+                        ->where(function ($variationQuery) use ($supplier) {
+                            $variationQuery
+                                ->where('products.supplier_id', $supplier->id)
+                                ->orWhereHas('supplierPrices', function ($priceQuery) use ($supplier) {
+                                    $priceQuery->where('supplier_id', $supplier->id);
+                                });
+                        })
+                        ->with([
+                            'category:id,name',
+                            'parentConfigurable:id,name,sku',
+                        ])
+                        ->orderBy('products.name');
+                },
             ]);
 
         if ($request->filled('search')) {
             $search = trim((string) $request->input('search'));
-            $query->whereHas('product', function ($productQuery) use ($search) {
+            $query->where(function ($productQuery) use ($search) {
                 $productQuery
-                    ->where('sku', 'like', '%' . $search . '%')
-                    ->orWhere('name', 'like', '%' . $search . '%')
-                    ->orWhereHas('parentConfigurable', function ($parentQuery) use ($search) {
-                        $parentQuery
-                            ->where('sku', 'like', '%' . $search . '%')
-                            ->orWhere('name', 'like', '%' . $search . '%');
+                    ->where('products.sku', 'like', '%' . $search . '%')
+                    ->orWhere('products.name', 'like', '%' . $search . '%')
+                    ->orWhereHas('variations', function ($variationQuery) use ($search) {
+                        $variationQuery
+                            ->where('products.sku', 'like', '%' . $search . '%')
+                            ->orWhere('products.name', 'like', '%' . $search . '%');
                     });
             });
         }
 
         if ($request->filled('sku')) {
             $sku = trim((string) $request->input('sku'));
-            $query->whereHas('product', fn ($productQuery) => $productQuery->where('sku', 'like', '%' . $sku . '%'));
+            $query->where(function ($productQuery) use ($sku) {
+                $productQuery
+                    ->where('products.sku', 'like', '%' . $sku . '%')
+                    ->orWhereHas('variations', function ($variationQuery) use ($sku) {
+                        $variationQuery->where('products.sku', 'like', '%' . $sku . '%');
+                    });
+            });
         }
 
         if ($request->filled('name')) {
             $name = trim((string) $request->input('name'));
-            $query->whereHas('product', fn ($productQuery) => $productQuery->where('name', 'like', '%' . $name . '%'));
+            $query->where(function ($productQuery) use ($name) {
+                $productQuery
+                    ->where('products.name', 'like', '%' . $name . '%')
+                    ->orWhereHas('variations', function ($variationQuery) use ($name) {
+                        $variationQuery->where('products.name', 'like', '%' . $name . '%');
+                    });
+            });
         }
 
         if ($request->filled('category_id')) {
-            $query->whereHas('product', fn ($productQuery) => $productQuery->where('category_id', (int) $request->input('category_id')));
+            $query->where('products.category_id', (int) $request->input('category_id'));
         }
 
         if ($request->filled('type')) {
-            $query->whereHas('product', fn ($productQuery) => $productQuery->where('type', (string) $request->input('type')));
+            $type = (string) $request->input('type');
+            if ($type === 'configurable') {
+                $query->where('products.type', 'configurable')->whereHas('variations');
+            } elseif ($type === 'simple') {
+                $query->where('products.type', 'simple')->whereDoesntHave('variations');
+            } else {
+                $query->where('products.type', $type);
+            }
         }
 
         if ($request->filled('variant_scope')) {
             $variantScope = (string) $request->input('variant_scope');
-            $query->whereHas('product', function ($productQuery) use ($variantScope) {
-                if ($variantScope === 'has_variants') {
-                    $productQuery->whereHas('variations');
-                } elseif ($variantScope === 'no_variants') {
-                    $productQuery->whereDoesntHave('variations');
-                } elseif ($variantScope === 'only_variants') {
-                    $productQuery->whereHas('parentConfigurable');
-                } elseif ($variantScope === 'roots') {
-                    $productQuery->whereDoesntHave('parentConfigurable');
-                }
-            });
+            if (in_array($variantScope, ['has_variants', 'only_variants'], true)) {
+                $query->whereHas('variations');
+            } elseif ($variantScope === 'no_variants') {
+                $query->whereDoesntHave('variations');
+            }
         }
 
         $perPage = min(max((int) $request->input('per_page', 20), 20), 500);
 
-        return response()->json(
-            $query->latest('updated_at')->paginate($perPage)
-        );
+        $this->applyMappedSort($query, $request, [
+            'sku' => 'products.sku',
+            'name' => 'products.name',
+            'price' => 'products.price',
+            'unit_cost' => ['raw' => 'COALESCE(supplier_price_rows.unit_cost, 0)'],
+            'current_cost' => ['raw' => 'COALESCE(products.cost_price, products.expected_cost, 0)'],
+            'updated_at' => ['raw' => 'COALESCE(supplier_price_rows.updated_at, products.updated_at)'],
+            'notes' => 'supplier_price_rows.notes',
+        ], 'updated_at', ['products.id' => 'desc']);
+
+        $paginated = $query->paginate($perPage);
+        $pageProductIds = collect($paginated->items())
+            ->flatMap(function (Product $product) {
+                $ids = [$product->id];
+                if ($product->relationLoaded('variations')) {
+                    $ids = array_merge($ids, $product->variations->pluck('id')->all());
+                }
+
+                return $ids;
+            });
+        $supplierPriceMap = $this->supplierPriceMapBySupplierId($supplier->id, $pageProductIds);
+
+        $paginated->getCollection()->transform(function (Product $product) use ($supplierPriceMap) {
+            return $this->inventoryProductPayload(
+                $product,
+                $supplierPriceMap->get($product->id),
+                $supplierPriceMap
+            );
+        });
+
+        return response()->json($paginated);
     }
 
     public function storeSupplierPrice(Request $request, int $id)
@@ -420,6 +532,10 @@ class InventoryController extends Controller
             'notes' => 'nullable|string|max:1000',
         ]);
 
+        Product::query()
+            ->whereKey((int) $validated['product_id'])
+            ->update(['supplier_id' => $supplier->id]);
+
         $price = SupplierProductPrice::query()->updateOrCreate(
             [
                 'supplier_id' => $supplier->id,
@@ -427,7 +543,7 @@ class InventoryController extends Controller
             ],
             [
                 'account_id' => $supplier->account_id,
-                'unit_cost' => round((float) $validated['unit_cost'], 2),
+                'unit_cost' => $this->normalizeSupplierUnitCost($validated['unit_cost']),
                 'notes' => $validated['notes'] ?? null,
                 'updated_by' => auth()->id(),
             ]
@@ -449,7 +565,7 @@ class InventoryController extends Controller
         ]);
 
         $price->forceFill([
-            'unit_cost' => round((float) $validated['unit_cost'], 2),
+            'unit_cost' => $this->normalizeSupplierUnitCost($validated['unit_cost']),
             'notes' => $validated['notes'] ?? null,
             'updated_by' => auth()->id(),
         ])->save();
@@ -479,6 +595,20 @@ class InventoryController extends Controller
         ]);
 
         $savedIds = [];
+        $productIds = collect($validated['items'])
+            ->pluck('product_id')
+            ->map(fn ($productId) => (int) $productId)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (!empty($productIds)) {
+            Product::query()
+                ->whereIn('id', $productIds)
+                ->update(['supplier_id' => $supplier->id]);
+        }
+
         foreach ($validated['items'] as $item) {
             $price = SupplierProductPrice::query()->updateOrCreate(
                 [
@@ -487,7 +617,7 @@ class InventoryController extends Controller
                 ],
                 [
                     'account_id' => $supplier->account_id,
-                    'unit_cost' => round((float) $item['unit_cost'], 2),
+                    'unit_cost' => $this->normalizeSupplierUnitCost($item['unit_cost']),
                     'notes' => $item['notes'] ?? null,
                     'updated_by' => auth()->id(),
                 ]
@@ -546,11 +676,18 @@ class InventoryController extends Controller
 
         $perPage = min(max((int) $request->input('per_page', 20), 20), 500);
 
+        $this->applyMappedSort($query, $request, [
+            'code' => 'import_number',
+            'supplier' => 'supplier_name',
+            'date' => 'import_date',
+            'line_count' => 'items_count',
+            'qty' => 'total_quantity',
+            'amount' => 'total_amount',
+            'note' => 'notes',
+        ], 'date', ['id' => 'desc']);
+
         return response()->json(
-            $query
-                ->latest('import_date')
-                ->latest('id')
-                ->paginate($perPage)
+            $query->paginate($perPage)
         );
     }
 
@@ -652,8 +789,18 @@ class InventoryController extends Controller
 
         $perPage = min(max((int) $request->input('per_page', 20), 20), 500);
 
+        $this->applyMappedSort($query, $request, [
+            'code' => 'document_number',
+            'supplier' => 'supplier_id',
+            'date' => 'document_date',
+            'line_count' => 'items_count',
+            'qty' => 'total_quantity',
+            'amount' => 'total_amount',
+            'note' => 'notes',
+        ], 'date', ['id' => 'desc']);
+
         return response()->json(
-            $query->latest('document_date')->latest('id')->paginate($perPage)
+            $query->paginate($perPage)
         );
     }
 
@@ -754,6 +901,8 @@ class InventoryController extends Controller
     public function batches(Request $request)
     {
         $query = InventoryBatch::query()
+            ->select('inventory_batches.*')
+            ->leftJoin('products', 'products.id', '=', 'inventory_batches.product_id')
             ->with([
                 'product:id,sku,name,price,expected_cost,cost_price,stock_quantity,damaged_quantity',
                 'import:id,import_number,supplier_name,import_date',
@@ -781,10 +930,16 @@ class InventoryController extends Controller
         }
 
         $perPage = min(max((int) $request->input('per_page', 20), 20), 500);
-        $paginated = $query
-            ->orderBy('received_at')
-            ->orderBy('id')
-            ->paginate($perPage);
+        $this->applyMappedSort($query, $request, [
+            'code' => 'inventory_batches.batch_number',
+            'product' => 'products.name',
+            'date' => 'inventory_batches.received_at',
+            'qty' => 'inventory_batches.quantity',
+            'remaining' => 'inventory_batches.remaining_quantity',
+            'amount' => 'inventory_batches.unit_cost',
+            'source' => 'inventory_batches.source_type',
+        ], 'date', ['inventory_batches.id' => 'asc']);
+        $paginated = $query->paginate($perPage);
 
         $paginated->getCollection()->transform(function (InventoryBatch $batch) {
             $meta = is_array($batch->meta) ? $batch->meta : [];
@@ -849,10 +1004,19 @@ class InventoryController extends Controller
 
         $perPage = min(max((int) $request->input('per_page', 20), 20), 500);
 
+        $this->applyMappedSort($query, $request, [
+            'code' => 'order_number',
+            'customer' => 'customer_name',
+            'date' => 'created_at',
+            'line_count' => 'items_count',
+            'revenue' => 'total_price',
+            'cost' => 'cost_total',
+            'profit' => 'profit_total',
+            'status' => 'status',
+        ], 'date', ['id' => 'desc']);
+
         return response()->json(
-            $query
-                ->latest('created_at')
-                ->paginate($perPage)
+            $query->paginate($perPage)
         );
     }
 
@@ -868,6 +1032,28 @@ class InventoryController extends Controller
             ->findOrFail($id);
 
         return response()->json($order);
+    }
+
+    private function sortDirection(Request $request): string
+    {
+        return strtolower((string) $request->input('sort_order', 'desc')) === 'asc' ? 'asc' : 'desc';
+    }
+
+    private function applyMappedSort($query, Request $request, array $sortMap, string $defaultSortKey, array $secondaryOrders = []): void
+    {
+        $sortKey = (string) $request->input('sort_by', $defaultSortKey);
+        $direction = $this->sortDirection($request);
+        $sortValue = $sortMap[$sortKey] ?? $sortMap[$defaultSortKey] ?? $defaultSortKey;
+
+        if (is_array($sortValue) && isset($sortValue['raw'])) {
+            $query->orderByRaw($sortValue['raw'] . ' ' . $direction);
+        } else {
+            $query->orderBy($sortValue, $direction);
+        }
+
+        foreach ($secondaryOrders as $column => $order) {
+            $query->orderBy($column, $order);
+        }
     }
 
     private function normalizeDocumentType(string $type): string
@@ -1031,6 +1217,15 @@ class InventoryController extends Controller
             }
         }
 
+        if ($request->filled('supplier_id')) {
+            $supplierId = $request->input('supplier_id');
+            if ($supplierId === 'unassigned') {
+                $query->whereNull('products.supplier_id');
+            } else {
+                $query->where('products.supplier_id', (int) $supplierId);
+            }
+        }
+
         if ($request->filled('type')) {
             $query->where('products.type', (string) $request->input('type'));
         }
@@ -1112,14 +1307,24 @@ class InventoryController extends Controller
             return collect();
         }
 
+        return $this->supplierPriceMapBySupplierId((int) $request->input('supplier_id'), $productIds);
+    }
+
+    private function supplierPriceMapBySupplierId(int $supplierId, $productIds)
+    {
+        if (!$supplierId) {
+            return collect();
+        }
+
         $ids = collect($productIds)->map(fn ($id) => (int) $id)->filter()->unique()->values()->all();
         if (empty($ids)) {
             return collect();
         }
 
         return SupplierProductPrice::query()
-            ->where('supplier_id', (int) $request->input('supplier_id'))
+            ->where('supplier_id', $supplierId)
             ->whereIn('product_id', $ids)
+            ->with(['updater:id,name'])
             ->get()
             ->keyBy('product_id');
     }
@@ -1174,6 +1379,8 @@ class InventoryController extends Controller
             'supplier_unit_cost' => $supplierPrice ? (float) $supplierPrice->unit_cost : null,
             'supplier_price_id' => $supplierPrice?->id,
             'supplier_price_updated_at' => $supplierPrice?->updated_at,
+            'supplier_notes' => $supplierPrice?->notes,
+            'supplier_updater_name' => $supplierPrice?->relationLoaded('updater') ? $supplierPrice->updater?->name : null,
             'deleted_at' => $product->deleted_at,
             'created_at' => $product->created_at,
         ];
@@ -1215,5 +1422,10 @@ class InventoryController extends Controller
             'deleted_at' => $product->deleted_at,
             'created_at' => $product->created_at,
         ];
+    }
+
+    private function normalizeSupplierUnitCost($value): int
+    {
+        return (int) round((float) $value);
     }
 }

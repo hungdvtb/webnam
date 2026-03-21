@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Pagination from '../../components/Pagination';
+import SortIndicator from '../../components/SortIndicator';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
 import { useUI } from '../../context/UIContext';
 import { useTableColumns } from '../../hooks/useTableColumns';
@@ -22,6 +23,7 @@ const tabs = [
     ['overview', 'Tổng quan'],
     ['products', 'Sản phẩm'],
     ['suppliers', 'Nhà cung cấp'],
+    ['supplierPrices', 'Giá nhập từng nhà'],
     ['imports', 'Phiếu nhập'],
     ['exports', 'Phiếu xuất bán'],
     ['returns', 'Phiếu hàng hoàn'],
@@ -34,14 +36,46 @@ const tabs = [
 const documentTypeMap = { returns: 'return', damaged: 'damaged', adjustments: 'adjustment' };
 const documentTitleMap = { returns: 'Phiếu hàng hoàn', damaged: 'Phiếu hàng hỏng', adjustments: 'Phiếu điều chỉnh' };
 const pageSizeOptions = [20, 50, 100, 500];
+const inventoryTableStorageVersion = 'v3';
+const emptySortConfig = { key: null, direction: 'none' };
 const getStoredPageSize = (key) => {
     if (typeof window === 'undefined') return 20;
     const raw = Number(localStorage.getItem(`inventory_page_size_${key}`) || 20);
     return pageSizeOptions.includes(raw) ? raw : 20;
 };
+const createSortState = () => ({
+    products: emptySortConfig,
+    suppliers: emptySortConfig,
+    supplierPrices: emptySortConfig,
+    imports: emptySortConfig,
+    exports: emptySortConfig,
+    returns: emptySortConfig,
+    damaged: emptySortConfig,
+    adjustments: emptySortConfig,
+    lots: emptySortConfig,
+    trash: emptySortConfig,
+});
+const nextSortConfig = (current, columnId) => {
+    if (!current?.key || current.key !== columnId || current.direction === 'none') {
+        return { key: columnId, direction: 'asc' };
+    }
+    if (current.direction === 'asc') {
+        return { key: columnId, direction: 'desc' };
+    }
+    return emptySortConfig;
+};
 
 const formatCurrency = (value) => `${new Intl.NumberFormat('vi-VN').format(Math.round(Number(value || 0)))}đ`;
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0));
+const stripNumericValue = (value) => String(value ?? '').replace(/[^0-9]/g, '');
+const formatWholeNumberInput = (value) => {
+    const cleaned = stripNumericValue(value);
+    return cleaned ? formatNumber(cleaned) : '';
+};
+const parseWholeNumberInput = (value) => {
+    const cleaned = stripNumericValue(value);
+    return cleaned ? Number(cleaned) : null;
+};
 const formatDateTime = (value) => {
     if (!value) return '-';
     const date = new Date(value);
@@ -77,6 +111,35 @@ const createSupplierForm = (supplier = null) => ({
     address: supplier?.address || '',
     notes: supplier?.notes || '',
     status: supplier?.status ?? true,
+});
+
+const createSupplierPriceForm = (price = null) => ({
+    id: price?.id || null,
+    product_id: price?.product?.id ? String(price.product.id) : (price?.product_id ? String(price.product_id) : ''),
+    product_name: price?.product?.name || '',
+    product_sku: price?.product?.sku || '',
+    unit_cost: price?.unit_cost != null ? stripNumericValue(Math.round(Number(price.unit_cost || 0))) : '',
+    notes: price?.notes || '',
+});
+
+const mapSupplierCatalogEntry = (item) => ({
+    id: item.id,
+    product_id: item.id,
+    supplier_price_id: item.supplier_price_id || null,
+    sku: item.sku || '-',
+    name: item.name || '-',
+    parent_name: item.parent_name || null,
+    parent_sku: item.parent_sku || null,
+    category_name: item.category_name || null,
+    price: item.price ?? null,
+    unit_cost: item.supplier_unit_cost ?? null,
+    current_cost: item.current_cost ?? item.expected_cost ?? null,
+    notes: item.supplier_notes || '',
+    updated_at: item.supplier_price_updated_at || null,
+    updater_name: item.supplier_updater_name || null,
+    has_variants: Boolean(item.has_variants),
+    variant_count: Number(item.variant_count || 0),
+    variants: Array.isArray(item.variants) ? item.variants.map(mapSupplierCatalogEntry) : [],
 });
 
 const createImportForm = (data = null) => ({
@@ -207,6 +270,104 @@ const trashColumns = [
     { id: 'actions', label: 'Thao tác', minWidth: 190, align: 'center' },
 ];
 
+const supplierManagementColumns = [
+    { id: 'name', label: 'Nhà cung cấp', minWidth: 220 },
+    { id: 'code', label: 'Mã', minWidth: 120 },
+    { id: 'phone', label: 'Điện thoại', minWidth: 135 },
+    { id: 'prices_count', label: 'Bảng giá', minWidth: 95, align: 'right' },
+    { id: 'import_slips_count', label: 'Số phiếu nhập', minWidth: 115, align: 'right' },
+    { id: 'imported_amount_total', label: 'Tổng tiền nhập', minWidth: 135, align: 'right' },
+    { id: 'updated_at', label: 'Cập nhật', minWidth: 150, align: 'center' },
+    { id: 'actions', label: 'Thao tác', minWidth: 190, align: 'center' },
+];
+
+const supplierPriceTableBaseColumns = [
+    { id: 'sku', label: 'Mã sản phẩm', minWidth: 150 },
+    { id: 'name', label: 'Tên sản phẩm', minWidth: 280 },
+    { id: 'price', label: 'Giá bán', minWidth: 110, align: 'right' },
+    { id: 'unit_cost', label: 'Giá nhập', minWidth: 160, align: 'right' },
+    { id: 'current_cost', label: 'Giá vốn hiện tại', minWidth: 125, align: 'right' },
+    { id: 'updated_at', label: 'Sửa gần nhất', minWidth: 150, align: 'center' },
+    { id: 'notes', label: 'Ghi chú', minWidth: 180 },
+    { id: 'actions', label: 'Thao tác', minWidth: 120, align: 'center' },
+];
+
+const inventorySortColumnMaps = {
+    products: {
+        sku: 'sku',
+        name: 'name',
+        total_imported: 'total_imported',
+        total_exported: 'total_exported',
+        total_returned: 'total_returned',
+        total_damaged: 'total_damaged',
+        stock_quantity: 'stock_quantity',
+        damaged_quantity: 'damaged_quantity',
+        expected_cost: 'expected_cost',
+        current_cost: 'display_cost',
+        inventory_value: 'inventory_value',
+    },
+    suppliers: {
+        name: 'name',
+        code: 'code',
+        phone: 'phone',
+        prices_count: 'prices_count',
+        import_slips_count: 'import_slips_count',
+        imported_amount_total: 'imported_amount_total',
+        updated_at: 'updated_at',
+    },
+    supplierPrices: {
+        sku: 'sku',
+        name: 'name',
+        price: 'price',
+        unit_cost: 'unit_cost',
+        current_cost: 'current_cost',
+        updated_at: 'updated_at',
+        notes: 'notes',
+    },
+    imports: {
+        code: 'code',
+        supplier: 'supplier',
+        date: 'date',
+        line_count: 'line_count',
+        qty: 'qty',
+        amount: 'amount',
+        note: 'note',
+    },
+    exports: {
+        code: 'code',
+        customer: 'customer',
+        date: 'date',
+        line_count: 'line_count',
+        revenue: 'revenue',
+        cost: 'cost',
+        profit: 'profit',
+        status: 'status',
+    },
+    documents: {
+        code: 'code',
+        supplier: 'supplier',
+        date: 'date',
+        line_count: 'line_count',
+        qty: 'qty',
+        amount: 'amount',
+        note: 'note',
+    },
+    lots: {
+        code: 'code',
+        product: 'product',
+        date: 'date',
+        qty: 'qty',
+        remaining: 'remaining',
+        amount: 'amount',
+        source: 'source',
+    },
+    trash: {
+        code: 'sku',
+        product: 'name',
+        date: 'deleted_at',
+    },
+};
+
 const PanelHeader = ({ title, description, toggles = [], actions = null }) => (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-primary/10 px-3 py-2.5">
         <div>
@@ -312,6 +473,7 @@ const ProductLookupInput = ({ supplierId = null, onSelect, placeholder = 'Tìm s
                 const response = await inventoryApi.getProducts({
                     search: trimmed,
                     with_variants: 1,
+                    variant_scope: 'roots',
                     per_page: 8,
                     supplier_id: supplierId || undefined,
                 });
@@ -389,7 +551,18 @@ const InventoryTable = ({
     onCloseSettings,
     currentPerPage = 20,
     onPerPageChange,
+    sortConfig = emptySortConfig,
+    onSort,
+    sortColumnMap = null,
 }) => {
+    const tableColumns = useMemo(() => {
+        const baseColumns = columns.filter((column) => column.id !== 'stt');
+        return [
+            { id: 'stt', label: 'STT', minWidth: 72, align: 'center', draggable: false, sortable: false },
+            ...baseColumns,
+        ];
+    }, [columns]);
+
     const {
         availableColumns,
         visibleColumns,
@@ -403,7 +576,15 @@ const InventoryTable = ({
         setAvailableColumns,
         resetDefault,
         saveAsDefault,
-    } = useTableColumns(storageKey, columns);
+    } = useTableColumns(storageKey, tableColumns);
+
+    const totalColumnCount = renderedColumns.length;
+    const pageOffset = Math.max((((pagination?.current_page || 1) - 1) * Number(pagination?.per_page || currentPerPage || 0)), 0);
+    const canSortColumn = (column) => {
+        if (!onSort || column.sortable === false || column.id === 'stt') return false;
+        if (sortColumnMap) return Boolean(sortColumnMap[column.id]);
+        return !['actions', 'select'].includes(column.id);
+    };
 
     return (
         <div className={panelClass}>
@@ -430,10 +611,15 @@ const InventoryTable = ({
                                     onDragStart={column.draggable === false ? undefined : (event) => handleHeaderDragStart(event, index)}
                                     onDragOver={(event) => event.preventDefault()}
                                     onDrop={column.draggable === false ? undefined : (event) => handleHeaderDrop(event, index)}
-                                    className="relative border-b border-r border-primary/10 px-3 py-3 text-center text-[12px] font-bold text-primary"
+                                    onDoubleClick={canSortColumn(column) ? () => onSort(column.id) : undefined}
+                                    title={canSortColumn(column) ? 'Double click to sort' : undefined}
+                                    className={`relative border-b border-r border-primary/10 px-3 py-3 text-center text-[12px] font-bold text-primary ${canSortColumn(column) ? 'cursor-pointer select-none' : ''}`}
                                     style={{ width: columnWidths[column.id] || column.minWidth }}
                                 >
-                                    <span className="block truncate">{column.headerRender ? column.headerRender() : column.label}</span>
+                                    <div className={`flex items-center gap-1 ${column.align === 'right' ? 'justify-end' : 'justify-center'}`}>
+                                        <span className="block min-w-0 truncate">{column.headerRender ? column.headerRender() : column.label}</span>
+                                        {canSortColumn(column) ? <SortIndicator colId={column.id} sortConfig={sortConfig} showNeutral /> : null}
+                                    </div>
                                     <div onMouseDown={(event) => handleColumnResize(column.id, event)} className="absolute right-0 top-0 h-full w-2 cursor-col-resize transition hover:bg-brick/20" title="Kéo để đổi độ rộng cột" />
                                 </th>
                             ))}
@@ -442,13 +628,13 @@ const InventoryTable = ({
                     <tbody>
                         {loading ? <tr><td colSpan={renderedColumns.length} className="px-4 py-10 text-center text-[13px] text-primary/55">Đang tải dữ liệu...</td></tr> : null}
                         {!loading && rows.length === 0 ? <tr><td colSpan={renderedColumns.length} className="px-4 py-10 text-center text-[13px] text-primary/55">Không có dữ liệu.</td></tr> : null}
-                        {!loading && rows.map((row) => {
+                        {!loading && rows.map((row, rowIndex) => {
                             const key = typeof rowKey === 'function' ? rowKey(row) : row[rowKey];
                             return (
                                 <tr key={key} className={rowClassName ? rowClassName(row) : 'hover:bg-primary/[0.02]'}>
                                     {renderedColumns.map((column) => (
                                         <td key={`${key}_${column.id}`} className={`overflow-hidden border-b border-r border-primary/10 px-3 py-2.5 text-[13px] text-primary ${column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : 'text-left'}`}>
-                                            <div className="min-w-0 overflow-hidden text-ellipsis">{renderCell(row, column.id)}</div>
+                                            <div className="min-w-0 overflow-hidden text-ellipsis">{column.id === 'stt' ? pageOffset + rowIndex + 1 : renderCell(row, column.id, rowIndex)}</div>
                                         </td>
                                     ))}
                                 </tr>
@@ -512,7 +698,7 @@ const InventoryMovement = () => {
     const [loading, setLoading] = useState({
         overview: false, products: false, suppliers: false, supplierCatalog: false, imports: false, exports: false,
         returns: false, damaged: false, adjustments: false, lots: false, trash: false, saving: false,
-        supplierModal: false, importModal: false, documentModal: false,
+        supplierModal: false, supplierPriceModal: false, importModal: false, documentModal: false,
     });
 
     const [openPanels, setOpenPanels] = useState({
@@ -531,7 +717,7 @@ const InventoryMovement = () => {
 
     const [productFilters, setProductFilters] = useState({ search: '', status: '', cost_source: '', type: '', category_id: '', variant_scope: '', date_from: '', date_to: '' });
     const [supplierFilters, setSupplierFilters] = useState({ search: '', status: '', month: '', date_from: '', date_to: '' });
-    const [supplierCatalogFilters, setSupplierCatalogFilters] = useState({ sku: '', name: '', category_id: '', type: '', variant_scope: 'roots' });
+    const [supplierCatalogFilters, setSupplierCatalogFilters] = useState({ sku: '', name: '', category_id: '', type: '', variant_scope: '' });
     const [supplierQuickSearch, setSupplierQuickSearch] = useState('');
     const [simpleFilters, setSimpleFilters] = useState({
         imports: { search: '', date_from: '', date_to: '' },
@@ -554,6 +740,7 @@ const InventoryMovement = () => {
     const [pasteText, setPasteText] = useState('');
     const [showPasteBox, setShowPasteBox] = useState(false);
     const [supplierModal, setSupplierModal] = useState({ open: false, form: createSupplierForm() });
+    const [supplierPriceModal, setSupplierPriceModal] = useState({ open: false, form: createSupplierPriceForm() });
     const [importModal, setImportModal] = useState({ open: false, form: createImportForm() });
     const [documentModal, setDocumentModal] = useState({ open: false, tabKey: 'returns', form: createDocumentForm('returns') });
     const [pageSizes, setPageSizes] = useState(() => ({
@@ -568,6 +755,7 @@ const InventoryMovement = () => {
         lots: getStoredPageSize('lots'),
         trash: getStoredPageSize('trash'),
     }));
+    const [sortConfigs, setSortConfigs] = useState(() => createSortState());
 
     const setFlag = (key, value) => setLoading((prev) => ({ ...prev, [key]: value }));
     const fail = (error, fallback) => {
@@ -580,6 +768,12 @@ const InventoryMovement = () => {
         total: response.data.total,
         per_page: Number(response.data.per_page),
     });
+    const buildSortParams = (section, sortOverride = null) => {
+        const sort = sortOverride || sortConfigs[section] || emptySortConfig;
+        const sortBy = inventorySortColumnMaps[section]?.[sort?.key];
+        if (!sortBy || sort?.direction === 'none') return {};
+        return { sort_by: sortBy, sort_order: sort.direction };
+    };
 
     const togglePanel = (section, panel) => {
         setOpenPanels((prev) => ({ ...prev, [section]: { ...prev[section], [panel]: !prev[section]?.[panel] } }));
@@ -640,10 +834,10 @@ const InventoryMovement = () => {
         }
     };
 
-    const fetchProducts = async (page = 1, perPage = pageSizes.products) => {
+    const fetchProducts = async (page = 1, perPage = pageSizes.products, sortOverride = null) => {
         setFlag('products', true);
         try {
-            const response = await inventoryApi.getProducts({ ...productFilters, page, per_page: perPage });
+            const response = await inventoryApi.getProducts({ ...productFilters, page, per_page: perPage, ...buildSortParams('products', sortOverride) });
             setProducts(response.data.data || []);
             setProductSummary(response.data.summary || null);
             pageState(setProductPagination, response);
@@ -654,10 +848,10 @@ const InventoryMovement = () => {
         }
     };
 
-    const fetchSuppliers = async (page = 1, perPage = pageSizes.suppliers) => {
+    const fetchSuppliers = async (page = 1, perPage = pageSizes.suppliers, sortOverride = null) => {
         setFlag('suppliers', true);
         try {
-            const response = await inventoryApi.getSuppliers({ ...supplierFilters, page, per_page: perPage });
+            const response = await inventoryApi.getSuppliers({ ...supplierFilters, page, per_page: perPage, ...buildSortParams('suppliers', sortOverride) });
             const rows = response.data.data || [];
             setSuppliers(rows);
             setSupplierSummary(response.data.summary || null);
@@ -670,25 +864,31 @@ const InventoryMovement = () => {
         }
     };
 
-    const fetchSupplierCatalog = async (page = 1, perPage = pageSizes.supplierPrices) => {
+    const fetchSupplierCatalog = async (page = 1, perPage = pageSizes.supplierPrices, sortOverride = null) => {
         if (!selectedSupplierId) return;
         setFlag('supplierCatalog', true);
         try {
-            const response = await inventoryApi.getProducts({
+            const response = await inventoryApi.getSupplierPrices(selectedSupplierId, {
                 ...supplierCatalogFilters,
-                supplier_id: selectedSupplierId,
-                quick_search: supplierQuickSearch.trim(),
-                with_variants: 1,
+                search: supplierQuickSearch.trim(),
                 page,
                 per_page: perPage,
+                ...buildSortParams('supplierPrices', sortOverride),
             });
-            setSupplierCatalog(response.data.data || []);
+            setSupplierCatalog((response.data.data || []).map((item) => mapSupplierCatalogEntry(item)));
             pageState(setSupplierCatalogPagination, response);
         } catch (error) {
             fail(error, 'Không thể tải bảng giá nhà cung cấp.');
         } finally {
             setFlag('supplierCatalog', false);
         }
+    };
+
+    const refreshSupplierCatalog = async () => {
+        if (!selectedSupplierId) return;
+        setPriceDrafts({});
+        setGroupPriceDrafts({});
+        await fetchSupplierCatalog(supplierCatalogPagination.current_page || 1, pageSizes.supplierPrices);
     };
 
     const fetchSimple = async (key, apiCall, setter, paginationSetter, page = 1, perPage = pageSizes[key] || 20) => {
@@ -704,15 +904,31 @@ const InventoryMovement = () => {
         }
     };
 
-    const fetchImports = (page = 1, perPage = pageSizes.imports) => fetchSimple('imports', (currentPage, currentPerPage) => inventoryApi.getImports({ ...simpleFilters.imports, page: currentPage, per_page: currentPerPage }), setImports, setImportPagination, page, perPage);
-    const fetchExports = (page = 1, perPage = pageSizes.exports) => fetchSimple('exports', (currentPage, currentPerPage) => inventoryApi.getExports({ ...simpleFilters.exports, page: currentPage, per_page: currentPerPage }), setExportsData, setExportPagination, page, perPage);
-    const fetchDocuments = (type, page = 1, perPage = pageSizes[{ return: 'returns', damaged: 'damaged', adjustment: 'adjustments' }[type]]) => {
+    const fetchImports = (page = 1, perPage = pageSizes.imports, sortOverride = null) => fetchSimple('imports', (currentPage, currentPerPage) => inventoryApi.getImports({ ...simpleFilters.imports, page: currentPage, per_page: currentPerPage, ...buildSortParams('imports', sortOverride) }), setImports, setImportPagination, page, perPage);
+    const fetchExports = (page = 1, perPage = pageSizes.exports, sortOverride = null) => fetchSimple('exports', (currentPage, currentPerPage) => inventoryApi.getExports({ ...simpleFilters.exports, page: currentPage, per_page: currentPerPage, ...buildSortParams('exports', sortOverride) }), setExportsData, setExportPagination, page, perPage);
+    const fetchDocuments = (type, page = 1, perPage = pageSizes[{ return: 'returns', damaged: 'damaged', adjustment: 'adjustments' }[type]], sortOverride = null) => {
         const map = { return: ['returns', setReturnsData, setReturnPagination], damaged: ['damaged', setDamagedData, setDamagedPagination], adjustment: ['adjustments', setAdjustments, setAdjustmentPagination] };
         const [key, setter, paginationSetter] = map[type];
-        return fetchSimple(key, (currentPage, currentPerPage) => inventoryApi.getDocuments(type, { ...simpleFilters[key], page: currentPage, per_page: currentPerPage }), setter, paginationSetter, page, perPage);
+        return fetchSimple(key, (currentPage, currentPerPage) => inventoryApi.getDocuments(type, { ...simpleFilters[key], page: currentPage, per_page: currentPerPage, ...buildSortParams(key, sortOverride) }), setter, paginationSetter, page, perPage);
     };
-    const fetchLots = (page = 1, perPage = pageSizes.lots) => fetchSimple('lots', (currentPage, currentPerPage) => inventoryApi.getBatches({ ...simpleFilters.lots, page: currentPage, per_page: currentPerPage, remaining_only: 1 }), setLots, setLotPagination, page, perPage);
-    const fetchTrash = (page = 1, perPage = pageSizes.trash) => fetchSimple('trash', (currentPage, currentPerPage) => inventoryApi.getProducts({ ...simpleFilters.trash, page: currentPage, per_page: currentPerPage, trash: 1 }), setTrashItems, setTrashPagination, page, perPage);
+    const fetchLots = (page = 1, perPage = pageSizes.lots, sortOverride = null) => fetchSimple('lots', (currentPage, currentPerPage) => inventoryApi.getBatches({ ...simpleFilters.lots, page: currentPage, per_page: currentPerPage, remaining_only: 1, ...buildSortParams('lots', sortOverride) }), setLots, setLotPagination, page, perPage);
+    const fetchTrash = (page = 1, perPage = pageSizes.trash, sortOverride = null) => fetchSimple('trash', (currentPage, currentPerPage) => inventoryApi.getProducts({ ...simpleFilters.trash, page: currentPage, per_page: currentPerPage, trash: 1, ...buildSortParams('trash', sortOverride) }), setTrashItems, setTrashPagination, page, perPage);
+    const handleTableSort = (section, columnId) => {
+        const next = nextSortConfig(sortConfigs[section], columnId);
+        setSortConfigs((prev) => ({ ...prev, [section]: next }));
+
+        if (section === 'products') return fetchProducts(1, pageSizes.products, next);
+        if (section === 'suppliers') return fetchSuppliers(1, pageSizes.suppliers, next);
+        if (section === 'supplierPrices') return fetchSupplierCatalog(1, pageSizes.supplierPrices, next);
+        if (section === 'imports') return fetchImports(1, pageSizes.imports, next);
+        if (section === 'exports') return fetchExports(1, pageSizes.exports, next);
+        if (section === 'returns') return fetchDocuments('return', 1, pageSizes.returns, next);
+        if (section === 'damaged') return fetchDocuments('damaged', 1, pageSizes.damaged, next);
+        if (section === 'adjustments') return fetchDocuments('adjustment', 1, pageSizes.adjustments, next);
+        if (section === 'lots') return fetchLots(1, pageSizes.lots, next);
+        if (section === 'trash') return fetchTrash(1, pageSizes.trash, next);
+        return undefined;
+    };
 
     useEffect(() => {
         const loadCategories = async () => {
@@ -731,6 +947,7 @@ const InventoryMovement = () => {
     useEffect(() => {
         if (activeTab === 'products') fetchProducts(productPagination.current_page || 1);
         if (activeTab === 'suppliers') fetchSuppliers(supplierPagination.current_page || 1);
+        if (activeTab === 'supplierPrices') ensureSuppliersLoaded();
         if (activeTab === 'imports') fetchImports(importPagination.current_page || 1);
         if (activeTab === 'exports') fetchExports(exportPagination.current_page || 1);
         if (activeTab === 'returns') fetchDocuments('return', returnPagination.current_page || 1);
@@ -741,7 +958,7 @@ const InventoryMovement = () => {
     }, [activeTab]);
 
     useEffect(() => {
-        if (activeTab !== 'suppliers') return;
+        if (activeTab !== 'supplierPrices') return;
         if (selectedSupplierId) {
             fetchSupplierCatalog(supplierCatalogPagination.current_page || 1);
         } else {
@@ -770,7 +987,7 @@ const InventoryMovement = () => {
     }, [activeTab, supplierFilters.search]);
 
     useEffect(() => {
-        if (activeTab !== 'suppliers' || !selectedSupplierId) return undefined;
+        if (activeTab !== 'supplierPrices' || !selectedSupplierId) return undefined;
         const timer = setTimeout(() => {
             fetchSupplierCatalog(1);
         }, 250);
@@ -778,7 +995,10 @@ const InventoryMovement = () => {
     }, [activeTab, selectedSupplierId, supplierQuickSearch, supplierCatalogFilters.sku, supplierCatalogFilters.name]);
 
     const ensureSuppliersLoaded = async () => {
-        if (suppliers.length > 0) return;
+        if (suppliers.length > 0) {
+            if (!selectedSupplierId && suppliers[0]?.id) setSelectedSupplierId(suppliers[0].id);
+            return;
+        }
         await fetchSuppliers(1);
     };
 
@@ -982,7 +1202,7 @@ const InventoryMovement = () => {
                 />
             ),
         },
-        ...supplierPriceBaseColumns,
+        ...supplierPriceTableBaseColumns,
     ], [allVisibleSelected, someVisibleSelected, visibleSupplierItemIds]);
 
     const applyPriceToIds = async (ids, cleaned) => {
@@ -991,24 +1211,17 @@ const InventoryMovement = () => {
             const numericValue = Number(cleaned);
             await inventoryApi.bulkSupplierPrices(selectedSupplierId, {
                 items: supplierCatalogItemRows.filter((row) => ids.includes(row.id)).map((row) => ({
-                    product_id: row.id,
+                    product_id: row.product_id,
                     unit_cost: numericValue,
                     notes: bulkNote || null,
                 })),
             });
-            setSupplierCatalog((prev) => prev.map((product) => ({
-                ...product,
-                supplier_unit_cost: ids.includes(product.id) ? numericValue : product.supplier_unit_cost,
-                supplier_price_updated_at: ids.includes(product.id) ? new Date().toISOString() : product.supplier_price_updated_at,
-                variants: Array.isArray(product.variants)
-                    ? product.variants.map((variant) => ids.includes(variant.id) ? { ...variant, supplier_unit_cost: numericValue, supplier_price_updated_at: new Date().toISOString() } : variant)
-                    : product.variants,
-            })));
             setPriceDrafts((prev) => {
                 const next = { ...prev };
                 ids.forEach((id) => { next[id] = cleaned; });
                 return next;
             });
+            await fetchSupplierCatalog(supplierCatalogPagination.current_page || 1, pageSizes.supplierPrices);
             return true;
         } catch (error) {
             fail(error, 'Không thể áp giá hàng loạt.');
@@ -1017,7 +1230,7 @@ const InventoryMovement = () => {
     };
 
     const applyBulkPrice = async () => {
-        const cleaned = bulkPrice.replace(/[^0-9]/g, '');
+        const cleaned = stripNumericValue(bulkPrice);
         if (!selectedSupplierId || !selectedIds.length || !cleaned) return showToast({ type: 'warning', message: 'Hãy chọn dòng và nhập giá.' });
         const success = await applyPriceToIds(selectedIds, cleaned);
         if (success) {
@@ -1026,7 +1239,7 @@ const InventoryMovement = () => {
     };
 
     const applyGroupPrice = async (groupId) => {
-        const cleaned = String(groupPriceDrafts[groupId] ?? bulkPrice).replace(/[^0-9]/g, '');
+        const cleaned = stripNumericValue(groupPriceDrafts[groupId] ?? bulkPrice);
         const ids = getVariantIdsByGroup(groupId);
         if (!ids.length || !cleaned) return showToast({ type: 'warning', message: 'Hãy nhập giá hàng loạt trước.' });
         setExpandedGroups((prev) => ({ ...prev, [groupId]: true }));
@@ -1050,7 +1263,7 @@ const InventoryMovement = () => {
             if (parts.length < 2) return;
             const matched = skuMap.get(parts[0].toUpperCase());
             if (!matched) return;
-            const cleaned = parts[1].replace(/[^0-9]/g, '');
+            const cleaned = stripNumericValue(parts[1]);
             if (!cleaned) return;
             nextDrafts[matched.id] = cleaned;
             nextSelected[matched.id] = true;
@@ -1060,27 +1273,30 @@ const InventoryMovement = () => {
     };
 
     const saveSingleSupplierPrice = async (row, explicitValue = null) => {
-        const rawValue = explicitValue ?? priceDrafts[row.id] ?? row.supplier_unit_cost ?? '';
-        const cleaned = String(rawValue).replace(/[^0-9]/g, '');
+        const rawValue = explicitValue ?? priceDrafts[row.id] ?? row.unit_cost ?? '';
+        const cleaned = stripNumericValue(rawValue);
         if (!selectedSupplierId || row.row_kind === 'group' || cleaned === '') return;
         const numericValue = Number(cleaned);
-        if (Number(row.supplier_unit_cost || 0) === numericValue && row.supplier_price_id) return;
+        if (Number(row.unit_cost || 0) === numericValue) return;
 
         setSavingPriceIds((prev) => ({ ...prev, [row.id]: true }));
         try {
-            const response = row.supplier_price_id
-                ? await inventoryApi.updateSupplierPrice(selectedSupplierId, row.supplier_price_id, { unit_cost: numericValue, notes: null })
-                : await inventoryApi.createSupplierPrice(selectedSupplierId, { product_id: row.id, unit_cost: numericValue, notes: null });
+            const response = await inventoryApi.createSupplierPrice(selectedSupplierId, {
+                product_id: row.product_id,
+                unit_cost: numericValue,
+                notes: row.notes || null,
+            });
 
             const updatedAt = response.data?.updated_at || new Date().toISOString();
-            const priceId = response.data?.id || row.supplier_price_id;
 
             patchSupplierCatalogRow(row.id, {
-                supplier_unit_cost: numericValue,
-                supplier_price_id: priceId,
-                supplier_price_updated_at: updatedAt,
+                unit_cost: numericValue,
+                updated_at: updatedAt,
+                notes: response.data?.notes ?? row.notes,
+                supplier_price_id: response.data?.id ?? row.supplier_price_id ?? null,
+                updater_name: response.data?.updater?.name ?? row.updater_name ?? null,
             });
-            setPriceDrafts((prev) => ({ ...prev, [row.id]: String(numericValue) }));
+            setPriceDrafts((prev) => ({ ...prev, [row.id]: cleaned }));
         } catch (error) {
             fail(error, 'Không thể lưu giá dự kiến.');
         } finally {
@@ -1094,14 +1310,13 @@ const InventoryMovement = () => {
         try {
             await inventoryApi.bulkSupplierPrices(selectedSupplierId, {
                 items: supplierCatalogItemRows.filter((row) => selectedIds.includes(row.id)).map((row) => ({
-                    product_id: row.id,
-                    unit_cost: Number(priceDrafts[row.id] ?? row.supplier_unit_cost ?? 0),
+                    product_id: row.product_id,
+                    unit_cost: parseWholeNumberInput(priceDrafts[row.id] ?? row.unit_cost ?? 0) ?? 0,
                     notes: bulkNote || null,
                 })),
             });
             showToast({ type: 'success', message: 'Đã cập nhật bảng giá nhà cung cấp.' });
-            fetchSupplierCatalog(supplierCatalogPagination.current_page || 1);
-            fetchSuppliers(supplierPagination.current_page || 1);
+            await fetchSupplierCatalog(supplierCatalogPagination.current_page || 1, pageSizes.supplierPrices);
         } catch (error) {
             fail(error, 'Không thể cập nhật bảng giá nhà cung cấp.');
         } finally {
@@ -1191,6 +1406,52 @@ const InventoryMovement = () => {
         } catch (error) {
             fail(error, 'Không thể xóa nhà cung cấp.');
         }
+    };
+
+    const openCreateSupplierPrice = () => {
+        if (!selectedSupplierId) return showToast({ type: 'warning', message: 'Hãy chọn nhà cung cấp trước.' });
+        setSupplierPriceModal({ open: true, form: createSupplierPriceForm() });
+    };
+
+    const saveSupplierPriceEntry = async () => {
+        if (!selectedSupplierId) return showToast({ type: 'warning', message: 'Hãy chọn nhà cung cấp trước.' });
+        const form = supplierPriceModal.form;
+        if (!form.product_id) return showToast({ type: 'warning', message: 'Vui lòng chọn sản phẩm.' });
+        if (!String(form.unit_cost || '').trim()) return showToast({ type: 'warning', message: 'Vui lòng nhập giá nhập.' });
+
+        setFlag('supplierPriceModal', true);
+        try {
+            await inventoryApi.createSupplierPrice(selectedSupplierId, {
+                product_id: Number(form.product_id),
+                unit_cost: parseWholeNumberInput(form.unit_cost) ?? 0,
+                notes: form.notes || null,
+            });
+            setSupplierPriceModal({ open: false, form: createSupplierPriceForm() });
+            showToast({ type: 'success', message: 'Đã thêm sản phẩm vào bảng giá.' });
+            await fetchSupplierCatalog(1, pageSizes.supplierPrices);
+        } catch (error) {
+            fail(error, 'Không thể lưu dòng giá nhập.');
+        } finally {
+            setFlag('supplierPriceModal', false);
+        }
+    };
+
+    const removeSupplierPrice = async (row) => {
+        if (!selectedSupplierId) return;
+        if (!row.supplier_price_id) return showToast({ type: 'warning', message: 'Dòng này chưa có giá nhập để xóa.' });
+        if (!window.confirm(`Xóa giá nhập của "${row.name}"?`)) return;
+        try {
+            await inventoryApi.deleteSupplierPrice(selectedSupplierId, row.supplier_price_id);
+            showToast({ type: 'success', message: 'Đã xóa dòng giá nhập.' });
+            await fetchSupplierCatalog(supplierCatalogPagination.current_page || 1, pageSizes.supplierPrices);
+        } catch (error) {
+            fail(error, 'Không thể xóa dòng giá nhập.');
+        }
+    };
+
+    const openSupplierPriceTab = (supplierId = selectedSupplierId) => {
+        if (supplierId) setSelectedSupplierId(supplierId);
+        setActiveTab('supplierPrices');
     };
 
     const openCreateImport = async () => {
@@ -1405,7 +1666,7 @@ const InventoryMovement = () => {
 
     const supplierPriceSummaryCards = useMemo(() => {
         const itemRows = supplierRows.filter((row) => row.row_kind === 'item');
-        const pricedRows = itemRows.filter((row) => Number(priceDrafts[row.id] ?? row.supplier_unit_cost ?? 0) > 0);
+        const pricedRows = itemRows.filter((row) => Number(priceDrafts[row.id] ?? row.unit_cost ?? 0) > 0);
         return [
             { label: 'Nhà cung cấp', value: currentSupplier?.name || 'Chưa chọn' },
             { label: 'Mã đang hiển thị', value: formatNumber(itemRows.length) },
@@ -1467,7 +1728,8 @@ const InventoryMovement = () => {
     const supplierCell = (row, columnId) => {
         if (columnId === 'name') return <button type="button" onClick={() => setSelectedSupplierId(row.id)} className={`w-full text-left ${selectedSupplierId === row.id ? 'font-black text-primary' : 'font-semibold text-primary/80'}`}><CellText primary={row.name} secondary={row.email || row.phone || 'Chưa có liên hệ'} /></button>;
         if (columnId === 'imported_amount_total') return formatCurrency(row.imported_amount_total || 0);
-        if (columnId === 'actions') return <div className="flex items-center justify-center gap-2"><button type="button" onClick={() => openEditSupplier(row)} className={ghostButton}>Sửa</button><button type="button" onClick={() => deleteSupplier(row)} className={dangerButton}>Xóa</button></div>;
+        if (columnId === 'updated_at') return row.updated_at ? formatDateTime(row.updated_at) : '-';
+        if (columnId === 'actions') return <div className="flex items-center justify-center gap-2"><button type="button" onClick={() => openSupplierPriceTab(row.id)} className={ghostButton}>Xem</button><button type="button" onClick={() => openEditSupplier(row)} className={ghostButton}>Sửa</button><button type="button" onClick={() => deleteSupplier(row)} className={dangerButton}>Xóa</button></div>;
         return typeof row[columnId] === 'number' ? formatNumber(row[columnId]) : (row[columnId] || '-');
     };
 
@@ -1487,12 +1749,12 @@ const InventoryMovement = () => {
             if (columnId === 'sku') return <button type="button" onClick={() => setExpandedGroups((prev) => ({ ...prev, [row.id]: !prev[row.id] }))} className="inline-flex min-w-0 items-center gap-1 font-black text-primary"><span className="material-symbols-outlined text-[18px]">{expandedGroups[row.id] ? 'expand_more' : 'chevron_right'}</span><span className="truncate">{row.sku}</span></button>;
             if (columnId === 'name') return <CellText primary={row.name} secondary={supplierQuickSearch.trim() ? `${formatNumber(row.visible_variant_count || 0)} / ${formatNumber(row.variant_count || 0)} biến thể khớp` : `${formatNumber(row.variant_count || 0)} biến thể`} />;
             if (columnId === 'price') return row.price != null ? formatCurrency(row.price) : '-';
-            if (columnId === 'supplier_unit_cost') {
+            if (columnId === 'unit_cost') {
                 return (
                     <div className="flex items-center gap-2">
                         <input
-                            value={groupPriceDrafts[row.id] ?? ''}
-                            onChange={(event) => setGroupPriceDrafts((prev) => ({ ...prev, [row.id]: event.target.value.replace(/[^0-9]/g, '') }))}
+                            value={formatWholeNumberInput(groupPriceDrafts[row.id] ?? '')}
+                            onChange={(event) => setGroupPriceDrafts((prev) => ({ ...prev, [row.id]: stripNumericValue(event.target.value) }))}
                             placeholder="Giá nhóm"
                             className="h-8 w-full rounded-sm border border-primary/15 px-2 text-right text-[13px] outline-none focus:border-primary"
                         />
@@ -1515,15 +1777,15 @@ const InventoryMovement = () => {
                 />
             );
         }
-        if (columnId === 'sku') return <CellText primary={row.sku} secondary={row.group_name || row.parent_name || null} mono />;
-        if (columnId === 'name') return <CellText primary={row.name} />;
+        if (columnId === 'sku') return <CellText primary={row.sku} secondary={row.parent_name || row.category_name || null} mono />;
+        if (columnId === 'name') return <CellText primary={row.name} secondary={row.parent_name ? `SKU gốc: ${row.parent_sku || '-'}` : (row.category_name || null)} />;
         if (columnId === 'price') return row.price != null ? formatCurrency(row.price) : '-';
         if (columnId === 'current_cost') return row.current_cost != null ? formatCurrency(row.current_cost) : '-';
-        if (columnId === 'supplier_unit_cost') return (
+        if (columnId === 'unit_cost') return (
             <div className="flex items-center gap-2">
                 <input
-                    value={priceDrafts[row.id] ?? (row.supplier_unit_cost ?? '')}
-                    onChange={(event) => setPriceDrafts((prev) => ({ ...prev, [row.id]: event.target.value.replace(/[^0-9]/g, '') }))}
+                    value={formatWholeNumberInput(priceDrafts[row.id] ?? (row.unit_cost ?? ''))}
+                    onChange={(event) => setPriceDrafts((prev) => ({ ...prev, [row.id]: stripNumericValue(event.target.value) }))}
                     onBlur={() => saveSingleSupplierPrice(row)}
                     onKeyDown={(event) => {
                         if (event.key === 'Enter') {
@@ -1536,7 +1798,9 @@ const InventoryMovement = () => {
                 {savingPriceIds[row.id] ? <span className="shrink-0 text-[11px] text-primary/45">Đang lưu...</span> : null}
             </div>
         );
-        if (columnId === 'supplier_price_updated_at') return row.supplier_price_updated_at ? formatDateTime(row.supplier_price_updated_at) : '-';
+        if (columnId === 'updated_at') return row.updated_at ? formatDateTime(row.updated_at) : '-';
+        if (columnId === 'notes') return <CellText primary={row.notes || '-'} secondary={row.updater_name || null} />;
+        if (columnId === 'actions') return <div className="flex items-center justify-center gap-2"><button type="button" onClick={() => removeSupplierPrice(row)} disabled={!row.supplier_price_id} className={dangerButton}>{row.supplier_price_id ? 'Xóa' : 'Chưa có giá'}</button></div>;
         return typeof row[columnId] === 'number' ? formatNumber(row[columnId]) : (row[columnId] || '-');
     };
 
@@ -1606,6 +1870,7 @@ const InventoryMovement = () => {
         const filters = simpleFilters[tabKey];
         const columns = tabKey === 'imports' ? importColumns : tabKey === 'exports' ? exportColumns : tabKey === 'lots' ? lotColumns : tabKey === 'trash' ? trashColumns : documentColumns;
         const renderCell = tabKey === 'imports' ? renderImportCell : tabKey === 'exports' ? renderExportCell : tabKey === 'lots' ? renderLotCell : tabKey === 'trash' ? renderTrashCell : (row, columnId) => renderDocumentCell(row, columnId, tabKey);
+        const sortMap = ['returns', 'damaged', 'adjustments'].includes(tabKey) ? inventorySortColumnMaps.documents : inventorySortColumnMaps[tabKey];
         const extraActions = <>{tabKey === 'imports' ? <button type="button" onClick={openCreateImport} className={primaryButton}>Tạo phiếu</button> : null}{tabKey === 'exports' ? <button type="button" onClick={() => navigate('/admin/orders/new')} className={primaryButton}>Tạo phiếu</button> : null}{['returns', 'damaged', 'adjustments'].includes(tabKey) ? <button type="button" onClick={() => openCreateDocument(tabKey)} className={primaryButton}>Tạo phiếu</button> : null}</>;
 
         return (
@@ -1622,17 +1887,180 @@ const InventoryMovement = () => {
                     />
                     {openPanels[tabKey].filters ? <FilterPanel actions={<button type="button" onClick={() => tabFetch[tabKey](1)} className={primaryButton}>Lọc</button>}><input value={filters.search} onChange={(event) => setSimpleFilters((prev) => ({ ...prev, [tabKey]: { ...prev[tabKey], search: event.target.value } }))} placeholder="Tìm nhanh" className={`w-[240px] ${inputClass}`} /><input type="date" value={filters.date_from} onChange={(event) => setSimpleFilters((prev) => ({ ...prev, [tabKey]: { ...prev[tabKey], date_from: event.target.value } }))} className={`w-[145px] ${inputClass}`} /><input type="date" value={filters.date_to} onChange={(event) => setSimpleFilters((prev) => ({ ...prev, [tabKey]: { ...prev[tabKey], date_to: event.target.value } }))} className={`w-[145px] ${inputClass}`} /></FilterPanel> : null}
                     {openPanels[tabKey].stats ? <SummaryPanel items={simpleSummaryMap[tabKey] || []} /> : null}
-                    <InventoryTable storageKey={`inventory_${tabKey}_table`} columns={columns} rows={tabRows[tabKey]} renderCell={renderCell} loading={tabLoading[tabKey]} pagination={tabPagination[tabKey]} onPageChange={tabFetch[tabKey]} footer={`Kết quả: ${formatNumber(tabPagination[tabKey].total)}`} settingsOpen={openPanels[tabKey].columns} onCloseSettings={() => togglePanel(tabKey, 'columns')} currentPerPage={pageSizes[tabKey]} onPerPageChange={(value) => {
+                    <InventoryTable storageKey={`inventory_${tabKey}_table_${inventoryTableStorageVersion}`} columns={columns} rows={tabRows[tabKey]} renderCell={renderCell} loading={tabLoading[tabKey]} pagination={tabPagination[tabKey]} onPageChange={tabFetch[tabKey]} footer={`Kết quả: ${formatNumber(tabPagination[tabKey].total)}`} settingsOpen={openPanels[tabKey].columns} onCloseSettings={() => togglePanel(tabKey, 'columns')} currentPerPage={pageSizes[tabKey]} onPerPageChange={(value) => {
                         const nextSize = updatePageSize(tabKey, value);
                         if (tabKey === 'returns') return fetchDocuments('return', 1, nextSize);
                         if (tabKey === 'damaged') return fetchDocuments('damaged', 1, nextSize);
                         if (tabKey === 'adjustments') return fetchDocuments('adjustment', 1, nextSize);
                         return tabFetch[tabKey](1, nextSize);
-                    }} />
+                    }} sortConfig={sortConfigs[tabKey]} onSort={(columnId) => handleTableSort(tabKey, columnId)} sortColumnMap={sortMap} />
                 </div>
             </div>
         );
     };
+
+    const suppliersTabContent = (
+        <div className={panelClass}>
+            <PanelHeader
+                title="Quản lý nhà cung cấp"
+                description="Chọn một nhà cung cấp rồi bấm Xem để mở tab giá nhập riêng."
+                toggles={[
+                    { id: 'suppliers_filters', icon: 'filter_alt', label: 'Bộ lọc', active: openPanels.suppliers.filters, onClick: () => togglePanel('suppliers', 'filters') },
+                    { id: 'suppliers_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.suppliers.stats, onClick: () => togglePanel('suppliers', 'stats') },
+                    { id: 'suppliers_columns', icon: 'view_column', label: 'Cài đặt cột', active: openPanels.suppliers.columns, onClick: () => togglePanel('suppliers', 'columns') },
+                ]}
+                actions={<button type="button" onClick={openCreateSupplier} className={primaryButton}><span className="material-symbols-outlined text-[18px]">add</span>Thêm nhà cung cấp</button>}
+            />
+            {openPanels.suppliers.filters ? (
+                <FilterPanel actions={<button type="button" onClick={() => fetchSuppliers(1)} className={primaryButton}>Lọc</button>}>
+                    <input value={supplierFilters.search} onChange={(event) => setSupplierFilters((prev) => ({ ...prev, search: event.target.value }))} placeholder="Tìm nhà cung cấp" className={`w-[220px] ${inputClass}`} />
+                    <select value={supplierFilters.status} onChange={(event) => setSupplierFilters((prev) => ({ ...prev, status: event.target.value }))} className={`w-[150px] ${selectClass}`}>
+                        <option value="">Tất cả trạng thái</option>
+                        <option value="1">Đang dùng</option>
+                        <option value="0">Ngừng dùng</option>
+                    </select>
+                    <input type="month" value={supplierFilters.month} onChange={(event) => setSupplierFilters((prev) => ({ ...prev, month: event.target.value }))} className={`w-[155px] ${inputClass}`} />
+                    <input type="date" value={supplierFilters.date_from} onChange={(event) => setSupplierFilters((prev) => ({ ...prev, date_from: event.target.value }))} className={`w-[145px] ${inputClass}`} />
+                    <input type="date" value={supplierFilters.date_to} onChange={(event) => setSupplierFilters((prev) => ({ ...prev, date_to: event.target.value }))} className={`w-[145px] ${inputClass}`} />
+                </FilterPanel>
+            ) : null}
+            {openPanels.suppliers.stats ? <SummaryPanel items={supplierSummaryItems} /> : null}
+            <InventoryTable
+                storageKey={`inventory_suppliers_table_${inventoryTableStorageVersion}`}
+                columns={supplierManagementColumns}
+                rows={suppliers}
+                renderCell={supplierCell}
+                loading={loading.suppliers}
+                pagination={supplierPagination}
+                onPageChange={fetchSuppliers}
+                footer={`Kết quả: ${formatNumber(supplierPagination.total)} nhà cung cấp`}
+                settingsOpen={openPanels.suppliers.columns}
+                onCloseSettings={() => togglePanel('suppliers', 'columns')}
+                currentPerPage={pageSizes.suppliers}
+                onPerPageChange={(value) => fetchSuppliers(1, updatePageSize('suppliers', value))}
+                sortConfig={sortConfigs.suppliers}
+                onSort={(columnId) => handleTableSort('suppliers', columnId)}
+                sortColumnMap={inventorySortColumnMaps.suppliers}
+            />
+            {currentSupplier ? (
+                <div className="border-t border-primary/10 bg-[#fbfcfe] px-3 py-3">
+                    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                        <div className="rounded-sm border border-primary/10 bg-white px-3 py-2">
+                            <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Nhà cung cấp</div>
+                            <div className="mt-1 text-[14px] font-black text-primary">{currentSupplier.name}</div>
+                            <div className="text-[11px] text-primary/45">{currentSupplier.code || 'Chưa có mã'}</div>
+                        </div>
+                        <div className="rounded-sm border border-primary/10 bg-white px-3 py-2">
+                            <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Liên hệ</div>
+                            <div className="mt-1 text-[13px] font-semibold text-primary">{currentSupplier.phone || 'Chưa có số điện thoại'}</div>
+                            <div className="truncate text-[11px] text-primary/45">{currentSupplier.email || 'Chưa có email'}</div>
+                        </div>
+                        <div className="rounded-sm border border-primary/10 bg-white px-3 py-2">
+                            <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Địa chỉ</div>
+                            <div className="mt-1 text-[12px] font-semibold text-primary">{currentSupplier.address || 'Chưa có địa chỉ'}</div>
+                        </div>
+                        <div className="rounded-sm border border-primary/10 bg-white px-3 py-2">
+                            <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Ghi chú</div>
+                            <div className="mt-1 text-[12px] text-primary/70">{currentSupplier.notes || 'Chưa có ghi chú'}</div>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
+        </div>
+    );
+
+    const supplierPricesTabContent = (
+        <div className={panelClass}>
+            <PanelHeader
+                title={currentSupplier ? `Giá nhập - ${currentSupplier.name}` : 'Giá nhập từng nhà'}
+                description={currentSupplier ? 'Mỗi nhà cung cấp có một bảng giá nhập riêng. Khi tạo phiếu nhập, giá sẽ tự đổ từ bảng này và vẫn có thể sửa tay.' : 'Chọn nhà cung cấp trong tab Nhà cung cấp hoặc đổi nhanh ngay tại đây để mở thư viện giá nhập.'}
+                actions={
+                    <>
+                        <select
+                            value={selectedSupplierId ? String(selectedSupplierId) : ''}
+                            onChange={(event) => setSelectedSupplierId(event.target.value ? Number(event.target.value) : null)}
+                            disabled={loading.suppliers && suppliers.length === 0}
+                            className={`w-[220px] ${selectClass}`}
+                        >
+                            <option value="">{loading.suppliers ? 'Đang tải nhà cung cấp' : 'Chọn nhà cung cấp'}</option>
+                            {suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
+                        </select>
+                        <button type="button" onClick={openCreateSupplierPrice} disabled={!selectedSupplierId} className={primaryButton}><span className="material-symbols-outlined text-[18px]">add</span>Thêm sản phẩm</button>
+                        <div className="relative w-[220px] min-w-[220px]">
+                            <span className="material-symbols-outlined pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">search</span>
+                            <input
+                                value={supplierQuickSearch}
+                                onChange={(event) => setSupplierQuickSearch(event.target.value)}
+                                placeholder="Tìm mã / tên sản phẩm"
+                                disabled={!selectedSupplierId}
+                                className={`w-full pl-9 ${inputClass}`}
+                            />
+                        </div>
+                        <input value={formatWholeNumberInput(bulkPrice)} onChange={(event) => setBulkPrice(stripNumericValue(event.target.value))} placeholder="Giá áp chọn" disabled={!selectedSupplierId} className={`w-[125px] ${inputClass}`} />
+                        <button type="button" onClick={() => setShowPasteBox((value) => !value)} disabled={!selectedSupplierId} className={ghostButton}>{showPasteBox ? 'Ẩn dán nhanh' : 'Dán nhanh'}</button>
+                        <button type="button" onClick={applyBulkPrice} disabled={!selectedSupplierId || !selectedIds.length} className={ghostButton}>Áp giá chọn</button>
+                        <button type="button" onClick={refreshSupplierCatalog} disabled={!selectedSupplierId || loading.supplierCatalog} className={ghostButton}><span className={`material-symbols-outlined text-[18px] ${loading.supplierCatalog ? 'animate-spin' : ''}`}>refresh</span>Làm mới</button>
+                        {[
+                            { id: 'supplierPrices_filters', icon: 'filter_alt', label: 'Bộ lọc', active: openPanels.supplierPrices.filters, onClick: () => togglePanel('supplierPrices', 'filters') },
+                            { id: 'supplierPrices_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.supplierPrices.stats, onClick: () => togglePanel('supplierPrices', 'stats') },
+                            { id: 'supplierPrices_columns', icon: 'view_column', label: 'Cài đặt cột', active: openPanels.supplierPrices.columns, onClick: () => togglePanel('supplierPrices', 'columns') },
+                        ].map((toggle) => (
+                            <button key={toggle.id} type="button" onClick={toggle.onClick} className={iconButton(toggle.active)} title={toggle.label}>
+                                <span className="material-symbols-outlined text-[18px]">{toggle.icon}</span>
+                            </button>
+                        ))}
+                    </>
+                }
+            />
+            {supplierPriceModal.open ? (
+                <div className="border-b border-primary/10 bg-[#fbfcfe] px-3 py-3">
+                    <div className="grid gap-3 md:grid-cols-2">
+                        <div className="md:col-span-2">
+                            <ProductLookupInput supplierId={null} onSelect={(product) => setSupplierPriceModal((prev) => ({ ...prev, form: { ...prev.form, product_id: String(product.id), product_name: product.name, product_sku: product.sku, unit_cost: stripNumericValue(Math.round(Number(product.supplier_unit_cost ?? product.current_cost ?? product.expected_cost ?? 0))) } }))} buttonLabel="Chọn" />
+                        </div>
+                        <input value={supplierPriceModal.form.product_sku} readOnly placeholder="Mã sản phẩm" className={`${inputClass} bg-white`} />
+                        <input value={supplierPriceModal.form.product_name} readOnly placeholder="Tên sản phẩm" className={`${inputClass} bg-white`} />
+                        <input value={formatWholeNumberInput(supplierPriceModal.form.unit_cost)} onChange={(event) => setSupplierPriceModal((prev) => ({ ...prev, form: { ...prev.form, unit_cost: stripNumericValue(event.target.value) } }))} placeholder="Giá nhập" className={inputClass} />
+                        <input value={supplierPriceModal.form.notes} onChange={(event) => setSupplierPriceModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú" className={inputClass} />
+                    </div>
+                    <div className="mt-3 flex justify-end gap-2">
+                        <button type="button" onClick={() => setSupplierPriceModal({ open: false, form: createSupplierPriceForm() })} className={ghostButton}>Hủy</button>
+                        <button type="button" onClick={saveSupplierPriceEntry} className={primaryButton} disabled={loading.supplierPriceModal}>{loading.supplierPriceModal ? 'Đang lưu' : 'Lưu dòng giá'}</button>
+                    </div>
+                </div>
+            ) : null}
+            {openPanels.supplierPrices.filters ? (
+                <FilterPanel actions={<button type="button" onClick={() => fetchSupplierCatalog(1)} className={primaryButton}>Lọc</button>}>
+                    <input value={supplierCatalogFilters.sku} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, sku: event.target.value }))} placeholder="Lọc theo mã sản phẩm" className={`w-[170px] ${inputClass}`} />
+                    <input value={supplierCatalogFilters.name} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, name: event.target.value }))} placeholder="Lọc theo tên sản phẩm" className={`w-[180px] ${inputClass}`} />
+                    <select value={supplierCatalogFilters.category_id} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, category_id: event.target.value }))} className={`w-[160px] ${selectClass}`}><option value="">Tất cả danh mục</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
+                    <select value={supplierCatalogFilters.type} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[160px] ${selectClass}`}><option value="">Tất cả loại sản phẩm</option><option value="simple">Sản phẩm thường</option><option value="configurable">Sản phẩm có biến thể</option></select>
+                    <select value={supplierCatalogFilters.variant_scope} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, variant_scope: event.target.value }))} className={`w-[170px] ${selectClass}`}><option value="">Tất cả biến thể</option><option value="no_variants">Sản phẩm thường</option><option value="only_variants">Biến thể</option><option value="has_variants">Nhóm có biến thể</option><option value="roots">Nhóm gốc</option></select>
+                </FilterPanel>
+            ) : null}
+            {openPanels.supplierPrices.stats ? <SummaryPanel items={supplierPriceSummaryCards} /> : null}
+            {showPasteBox ? <div className="border-b border-primary/10 px-3 py-2.5"><div className="mb-2 text-[12px] text-primary/55">Dán theo mẫu: `SKU TAB Giá` hoặc `SKU,Giá`</div><div className="flex gap-3"><textarea value={pasteText} onChange={(event) => setPasteText(event.target.value)} className="min-h-[88px] flex-1 rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary" placeholder={'SKU-01\t120000\nSKU-02\t150000'} /><button type="button" onClick={applyPaste} className={primaryButton}>Nhận giá</button></div></div> : null}
+            <InventoryTable
+                storageKey={`inventory_supplier_prices_table_${inventoryTableStorageVersion}`}
+                columns={supplierPriceColumns}
+                rows={supplierRows}
+                renderCell={supplierPriceCell}
+                loading={loading.supplierCatalog}
+                pagination={supplierCatalogPagination}
+                onPageChange={fetchSupplierCatalog}
+                footer={`Hiển thị ${formatNumber(visibleSupplierItemIds.length)} / ${formatNumber(supplierCatalogPagination.total)} dòng giá`}
+                rowKey="row_id"
+                rowClassName={(row) => selectedPriceIds[row.id] ? 'bg-primary/[0.04]' : 'hover:bg-primary/[0.02]'}
+                settingsOpen={openPanels.supplierPrices.columns}
+                onCloseSettings={() => togglePanel('supplierPrices', 'columns')}
+                currentPerPage={pageSizes.supplierPrices}
+                onPerPageChange={(value) => fetchSupplierCatalog(1, updatePageSize('supplierPrices', value))}
+                sortConfig={sortConfigs.supplierPrices}
+                onSort={(columnId) => handleTableSort('supplierPrices', columnId)}
+                sortColumnMap={inventorySortColumnMaps.supplierPrices}
+            />
+        </div>
+    );
 
     const importLineTotal = useMemo(() => importModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unit_cost || 0), 0), [importModal.form.items]);
     const documentLineTotal = useMemo(() => documentModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unit_cost || 0), 0), [documentModal.form.items]);
@@ -1649,8 +2077,10 @@ const InventoryMovement = () => {
             </div>
             <div className={`${panelClass} p-2`}><div className="flex flex-nowrap gap-2 overflow-x-auto">{tabs.map(([key, label]) => <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-10 shrink-0 rounded-sm border px-4 text-[12px] font-black transition ${activeTab === key ? 'border-primary bg-primary text-white' : 'border-primary/15 bg-white text-primary hover:border-primary/35 hover:bg-primary/[0.03]'}`}>{label}</button>)}</div></div>
             {activeTab === 'overview' ? <div className={panelClass}><PanelHeader title="Tổng quan kho" toggles={[{ id: 'overview_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.overview.stats, onClick: () => togglePanel('overview', 'stats') }]} />{openPanels.overview.stats ? <SummaryPanel items={overviewItems} /> : null}</div> : null}
-            {activeTab === 'products' ? <div className={panelClass}><PanelHeader title="Sản phẩm kho" toggles={[{ id: 'products_filters', icon: 'filter_alt', label: 'Bộ lọc', active: openPanels.products.filters, onClick: () => togglePanel('products', 'filters') }, { id: 'products_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.products.stats, onClick: () => togglePanel('products', 'stats') }, { id: 'products_columns', icon: 'view_column', label: 'Cài đặt cột', active: openPanels.products.columns, onClick: () => togglePanel('products', 'columns') }]} actions={<button type="button" onClick={() => navigate('/admin/products/new')} className={primaryButton}>Tạo sản phẩm</button>} />{openPanels.products.filters ? <FilterPanel actions={<button type="button" onClick={() => fetchProducts(1)} className={primaryButton}>Lọc</button>}><input value={productFilters.search} onChange={(event) => setProductFilters((prev) => ({ ...prev, search: event.target.value }))} placeholder="Tìm mã hoặc tên" className={`w-[220px] ${inputClass}`} /><select value={productFilters.status} onChange={(event) => setProductFilters((prev) => ({ ...prev, status: event.target.value }))} className={`w-[150px] ${selectClass}`}><option value="">Tất cả trạng thái bán</option><option value="active">Đang bán</option><option value="inactive">Ngừng bán</option></select><select value={productFilters.cost_source} onChange={(event) => setProductFilters((prev) => ({ ...prev, cost_source: event.target.value }))} className={`w-[170px] ${selectClass}`}><option value="">Tất cả trạng thái giá</option><option value="actual">Đang dùng giá vốn</option><option value="expected">Đang dùng giá dự kiến</option><option value="empty">Chưa có giá</option></select><select value={productFilters.type} onChange={(event) => setProductFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[165px] ${selectClass}`}><option value="">Tất cả loại sản phẩm</option><option value="simple">Sản phẩm thường</option><option value="configurable">Sản phẩm có biến thể</option></select><select value={productFilters.category_id} onChange={(event) => setProductFilters((prev) => ({ ...prev, category_id: event.target.value }))} className={`w-[165px] ${selectClass}`}><option value="">Tất cả danh mục</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select><select value={productFilters.variant_scope} onChange={(event) => setProductFilters((prev) => ({ ...prev, variant_scope: event.target.value }))} className={`w-[165px] ${selectClass}`}><option value="">Có biến thể / không</option><option value="has_variants">Có biến thể</option><option value="no_variants">Không có biến thể</option><option value="only_variants">Chỉ biến thể con</option><option value="roots">Chỉ sản phẩm gốc</option></select><input type="date" value={productFilters.date_from} onChange={(event) => setProductFilters((prev) => ({ ...prev, date_from: event.target.value }))} className={`w-[145px] ${inputClass}`} /><input type="date" value={productFilters.date_to} onChange={(event) => setProductFilters((prev) => ({ ...prev, date_to: event.target.value }))} className={`w-[145px] ${inputClass}`} /></FilterPanel> : null}{openPanels.products.stats ? <SummaryPanel items={productSummaryItems} /> : null}<InventoryTable storageKey="inventory_products_table" columns={productColumns} rows={products} renderCell={productCell} loading={loading.products} pagination={productPagination} onPageChange={fetchProducts} footer={`Kết quả: ${formatNumber(productPagination.total)} mã`} settingsOpen={openPanels.products.columns} onCloseSettings={() => togglePanel('products', 'columns')} currentPerPage={pageSizes.products} onPerPageChange={(value) => fetchProducts(1, updatePageSize('products', value))} /></div> : null}
-            {activeTab === 'suppliers' ? (
+            {activeTab === 'products' ? <div className={panelClass}><PanelHeader title="Sản phẩm kho" toggles={[{ id: 'products_filters', icon: 'filter_alt', label: 'Bộ lọc', active: openPanels.products.filters, onClick: () => togglePanel('products', 'filters') }, { id: 'products_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.products.stats, onClick: () => togglePanel('products', 'stats') }, { id: 'products_columns', icon: 'view_column', label: 'Cài đặt cột', active: openPanels.products.columns, onClick: () => togglePanel('products', 'columns') }]} actions={<button type="button" onClick={() => navigate('/admin/products/new')} className={primaryButton}>Tạo sản phẩm</button>} />{openPanels.products.filters ? <FilterPanel actions={<button type="button" onClick={() => fetchProducts(1)} className={primaryButton}>Lọc</button>}><input value={productFilters.search} onChange={(event) => setProductFilters((prev) => ({ ...prev, search: event.target.value }))} placeholder="Tìm mã hoặc tên" className={`w-[220px] ${inputClass}`} /><select value={productFilters.status} onChange={(event) => setProductFilters((prev) => ({ ...prev, status: event.target.value }))} className={`w-[150px] ${selectClass}`}><option value="">Tất cả trạng thái bán</option><option value="active">Đang bán</option><option value="inactive">Ngừng bán</option></select><select value={productFilters.cost_source} onChange={(event) => setProductFilters((prev) => ({ ...prev, cost_source: event.target.value }))} className={`w-[170px] ${selectClass}`}><option value="">Tất cả trạng thái giá</option><option value="actual">Đang dùng giá vốn</option><option value="expected">Đang dùng giá dự kiến</option><option value="empty">Chưa có giá</option></select><select value={productFilters.type} onChange={(event) => setProductFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[165px] ${selectClass}`}><option value="">Tất cả loại sản phẩm</option><option value="simple">Sản phẩm thường</option><option value="configurable">Sản phẩm có biến thể</option></select><select value={productFilters.category_id} onChange={(event) => setProductFilters((prev) => ({ ...prev, category_id: event.target.value }))} className={`w-[165px] ${selectClass}`}><option value="">Tất cả danh mục</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select><select value={productFilters.variant_scope} onChange={(event) => setProductFilters((prev) => ({ ...prev, variant_scope: event.target.value }))} className={`w-[165px] ${selectClass}`}><option value="">Có biến thể / không</option><option value="has_variants">Có biến thể</option><option value="no_variants">Không có biến thể</option><option value="only_variants">Chỉ biến thể con</option><option value="roots">Chỉ sản phẩm gốc</option></select><input type="date" value={productFilters.date_from} onChange={(event) => setProductFilters((prev) => ({ ...prev, date_from: event.target.value }))} className={`w-[145px] ${inputClass}`} /><input type="date" value={productFilters.date_to} onChange={(event) => setProductFilters((prev) => ({ ...prev, date_to: event.target.value }))} className={`w-[145px] ${inputClass}`} /></FilterPanel> : null}{openPanels.products.stats ? <SummaryPanel items={productSummaryItems} /> : null}<InventoryTable storageKey={`inventory_products_table_${inventoryTableStorageVersion}`} columns={productColumns} rows={products} renderCell={productCell} loading={loading.products} pagination={productPagination} onPageChange={fetchProducts} footer={`Kết quả: ${formatNumber(productPagination.total)} mã`} settingsOpen={openPanels.products.columns} onCloseSettings={() => togglePanel('products', 'columns')} currentPerPage={pageSizes.products} onPerPageChange={(value) => fetchProducts(1, updatePageSize('products', value))} sortConfig={sortConfigs.products} onSort={(columnId) => handleTableSort('products', columnId)} sortColumnMap={inventorySortColumnMaps.products} /></div> : null}
+            {activeTab === 'suppliers' ? suppliersTabContent : null}
+            {activeTab === 'supplierPrices' ? supplierPricesTabContent : null}
+            {false ? (
                 <div className="grid items-start gap-3 xl:grid-cols-[300px,minmax(0,1fr)]">
                     <div className={`${panelClass} self-start`}>
                         <div className="border-b border-primary/10 px-3 py-2.5">

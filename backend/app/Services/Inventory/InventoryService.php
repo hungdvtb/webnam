@@ -796,15 +796,24 @@ class InventoryService
             'product_id' => $product->id,
         ]);
 
+        $product->forceFill([
+            'supplier_id' => $supplier->id,
+        ])->save();
+
         $supplierPrice->fill([
             'account_id' => $supplier->account_id ?? $product->account_id,
-            'unit_cost' => round($unitCost, 2),
+            'unit_cost' => $this->normalizeSupplierUnitCost($unitCost),
             'notes' => $notes,
             'updated_by' => $userId ?? Auth::id(),
         ]);
         $supplierPrice->save();
 
         return $supplierPrice;
+    }
+
+    private function normalizeSupplierUnitCost(float $value): int
+    {
+        return (int) round($value);
     }
 
     private function allocateSellableBatches(int $accountId, Product $product, int $requestedQty): array

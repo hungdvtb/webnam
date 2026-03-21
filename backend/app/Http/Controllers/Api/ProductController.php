@@ -9,11 +9,19 @@ use App\Models\BulkUpdateLog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 use Illuminate\Database\Eloquent\Builder;
 
 class ProductController extends Controller
 {
+    protected function supplierExistsRule(Request $request)
+    {
+        return Rule::exists('suppliers', 'id')->where(function ($query) {
+            $query->whereNull('deleted_at');
+        });
+    }
+
     /**
      * Display a listing of the resource.
      */
@@ -23,11 +31,13 @@ class ProductController extends Controller
         $query = Product::query()
             ->select([
             'id', 'sku', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
+            'supplier_id',
             'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title'
         ])
             ->with([
             'categories:id,name',
             'category:id,name',
+            'supplier:id,name,code',
             'siteDomain:id,domain',
             'images:id,product_id,image_url,is_primary',
             'attributeValues:id,product_id,attribute_id,value',
@@ -68,6 +78,14 @@ class ProductController extends Controller
                 }
                 );
             });
+        }
+
+        if ($request->filled('supplier_id')) {
+            if ($request->input('supplier_id') === 'unassigned') {
+                $query->whereNull('supplier_id');
+            } else {
+                $query->where('supplier_id', (int) $request->input('supplier_id'));
+            }
         }
 
         $searchRankingSql = null;
@@ -343,6 +361,7 @@ class ProductController extends Controller
             'slug' => 'nullable|string|max:255|unique:products,slug',
             'bundle_title' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
+            'supplier_id' => ['nullable', $this->supplierExistsRule($request)],
             // linkages
             'linked_product_ids' => 'nullable|array',
             'link_type' => 'nullable|string',
@@ -516,6 +535,7 @@ class ProductController extends Controller
                     'price' => $vData['price'],
                     'expected_cost' => $vData['expected_cost'] ?? null,
                     'weight' => $vData['weight'] ?? null,
+                    'supplier_id' => $product->supplier_id,
                     'stock_quantity' => $vData['stock_quantity'] ?? 0,
                     'category_id' => $product->category_id,
                     'status' => $product->status ?? true,
@@ -553,7 +573,7 @@ class ProductController extends Controller
             }
         }
 
-        return response()->json($product->load(['category', 'categories', 'images', 'linkedProducts.images', 'linkedProducts.attributeValues', 'superAttributes', 'attributeValues.attribute']), 201);
+        return response()->json($product->load(['category', 'categories', 'supplier', 'images', 'linkedProducts.images', 'linkedProducts.attributeValues', 'superAttributes', 'attributeValues.attribute']), 201);
     }
 
     /**
@@ -564,6 +584,7 @@ class ProductController extends Controller
         $product = Product::with([
             'category:id,name',
             'categories:id,name',
+            'supplier:id,name,code',
             'siteDomain:id,domain,is_active,is_default',
             'images:id,product_id,image_url,is_primary,file_name,file_size',
             'superAttributes:id,name,code,frontend_type',
@@ -672,6 +693,7 @@ class ProductController extends Controller
             'slug' => 'nullable|string|max:255|unique:products,slug,' . $id,
             'bundle_title' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
+            'supplier_id' => ['nullable', $this->supplierExistsRule($request)],
             'linked_product_ids' => 'nullable|array',
             'link_type' => 'nullable|string',
             'grouped_items' => 'nullable|array',
@@ -849,6 +871,7 @@ class ProductController extends Controller
                         'price' => $vData['price'],
                         'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
+                        'supplier_id' => $validated['supplier_id'] ?? $product->supplier_id,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                     ]);
 
@@ -900,6 +923,7 @@ class ProductController extends Controller
                         'price' => $vData['price'],
                         'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
+                        'supplier_id' => $product->supplier_id,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                         'category_id' => $product->category_id,
                         'status' => $product->status ?? true,
@@ -940,7 +964,7 @@ class ProductController extends Controller
             }
         }
 
-        return response()->json($product->load(['category', 'categories', 'images', 'linkedProducts.images', 'linkedProducts.attributeValues', 'superAttributes', 'attributeValues.attribute']));
+        return response()->json($product->load(['category', 'categories', 'supplier', 'images', 'linkedProducts.images', 'linkedProducts.attributeValues', 'superAttributes', 'attributeValues.attribute']));
     }
 
     /**
@@ -1045,7 +1069,7 @@ class ProductController extends Controller
 
         return response()->json([
             'message' => 'Sản phẩm đã được nhân bản thành công',
-            'data' => $clone->load(['category', 'categories', 'images', 'attributeValues.attribute', 'linkedProducts.images', 'linkedProducts.attributeValues', 'superAttributes'])
+            'data' => $clone->load(['category', 'categories', 'supplier', 'images', 'attributeValues.attribute', 'linkedProducts.images', 'linkedProducts.attributeValues', 'superAttributes'])
         ]);
     }
 
@@ -1121,6 +1145,8 @@ class ProductController extends Controller
             'ids' => 'required|array',
             'ids.*' => 'exists:products,id',
             'basic_info' => 'nullable|array',
+            'basic_info.cost_price' => 'nullable|numeric|min:0',
+            'basic_info.supplier_id' => ['nullable', $this->supplierExistsRule($request)],
             'attributes' => 'nullable|array',
         ]);
 
@@ -1145,7 +1171,7 @@ class ProductController extends Controller
             ];
 
             // Store original basic fields that ARE being updated
-            foreach (['category_id', 'price', 'expected_cost', 'stock_quantity', 'is_featured', 'is_new', 'status', 'type'] as $field) {
+            foreach (['category_id', 'price', 'cost_price', 'expected_cost', 'stock_quantity', 'supplier_id', 'is_featured', 'is_new', 'status', 'type'] as $field) {
                 if (isset($basicInfo[$field]) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
                     $pData['basic'][$field] = $product->{ $field};
                 }
@@ -1177,7 +1203,7 @@ class ProductController extends Controller
             // 1. Update basic info (direct columns)
             if (!empty($basicInfo)) {
                 $toUpdate = [];
-                foreach (['category_id', 'price', 'expected_cost', 'stock_quantity', 'is_featured', 'is_new', 'status', 'type'] as $field) {
+                foreach (['category_id', 'price', 'cost_price', 'expected_cost', 'stock_quantity', 'supplier_id', 'is_featured', 'is_new', 'status', 'type'] as $field) {
                     if (isset($basicInfo[$field]) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
                         $toUpdate[$field] = $basicInfo[$field];
                     }

@@ -321,17 +321,17 @@ class FinanceController extends Controller
     public function storeFixedExpense(Request $request)
     {
         $validated = $request->validate([
+            'content' => 'nullable|required_without:name|string|max:180',
+            'monthly_amount' => 'nullable|required_without:amount|numeric|min:0',
             'category_id' => 'nullable|integer|exists:finance_catalogs,id',
             'default_wallet_id' => 'nullable|integer|exists:finance_wallets,id',
-            'name' => 'required|string|max:180',
-            'amount' => 'required|numeric|min:0.01',
-            'frequency' => ['nullable', Rule::in(['daily', 'weekly', 'monthly', 'quarterly', 'yearly'])],
-            'interval_value' => 'nullable|integer|min:1',
-            'reminder_days' => 'nullable|integer|min:0|max:365',
+            'name' => 'nullable|required_without:content|string|max:180',
+            'amount' => 'nullable|required_without:monthly_amount|numeric|min:0',
+            'effective_date' => 'nullable|date',
+            'start_date' => 'nullable|required_without:effective_date|date',
+            'sort_order' => 'nullable|integer|min:1',
             'status' => ['nullable', Rule::in(['active', 'paused', 'stopped'])],
-            'start_date' => 'required|date',
-            'next_due_date' => 'nullable|date|after_or_equal:start_date',
-            'last_paid_date' => 'nullable|date',
+            'day_calculation_mode' => ['nullable', Rule::in(['actual_month', 'fixed_30'])],
             'note' => 'nullable|string|max:5000',
         ]);
 
@@ -344,17 +344,17 @@ class FinanceController extends Controller
     {
         $expense = FinanceFixedExpense::query()->findOrFail($id);
         $validated = $request->validate([
+            'content' => 'nullable|required_without:name|string|max:180',
+            'monthly_amount' => 'nullable|required_without:amount|numeric|min:0',
             'category_id' => 'nullable|integer|exists:finance_catalogs,id',
             'default_wallet_id' => 'nullable|integer|exists:finance_wallets,id',
-            'name' => 'required|string|max:180',
-            'amount' => 'required|numeric|min:0.01',
-            'frequency' => ['nullable', Rule::in(['daily', 'weekly', 'monthly', 'quarterly', 'yearly'])],
-            'interval_value' => 'nullable|integer|min:1',
-            'reminder_days' => 'nullable|integer|min:0|max:365',
+            'name' => 'nullable|required_without:content|string|max:180',
+            'amount' => 'nullable|required_without:monthly_amount|numeric|min:0',
+            'effective_date' => 'nullable|date',
+            'start_date' => 'nullable|required_without:effective_date|date',
+            'sort_order' => 'nullable|integer|min:1',
             'status' => ['nullable', Rule::in(['active', 'paused', 'stopped'])],
-            'start_date' => 'required|date',
-            'next_due_date' => 'nullable|date|after_or_equal:start_date',
-            'last_paid_date' => 'nullable|date',
+            'day_calculation_mode' => ['nullable', Rule::in(['actual_month', 'fixed_30'])],
             'note' => 'nullable|string|max:5000',
         ]);
 
@@ -366,9 +366,45 @@ class FinanceController extends Controller
     public function destroyFixedExpense(Request $request, int $id)
     {
         $expense = FinanceFixedExpense::query()->findOrFail($id);
-        $this->financeService->deleteFixedExpense($expense, auth()->id());
+        $this->financeService->deleteFixedExpense(
+            $expense,
+            auth()->id(),
+            $request->input('effective_date'),
+            $request->input('day_calculation_mode')
+        );
 
         return response()->json(['message' => 'Đã xóa mềm chi phí cố định.']);
+    }
+
+    public function syncFixedExpenseSheet(Request $request)
+    {
+        $validated = $request->validate([
+            'effective_date' => 'required|date',
+            'day_calculation_mode' => ['nullable', Rule::in(['actual_month', 'fixed_30'])],
+            'note' => 'nullable|string|max:5000',
+            'rows' => 'nullable|array',
+            'rows.*.id' => 'nullable|integer|exists:finance_fixed_expenses,id',
+            'rows.*.content' => 'nullable|string|max:180',
+            'rows.*.monthly_amount' => 'nullable|numeric|min:0',
+        ]);
+
+        $payload = $this->financeService->syncFixedExpenseSheet(
+            $this->accountId($request),
+            [...$validated, 'user_id' => auth()->id()]
+        );
+
+        return response()->json($payload);
+    }
+
+    public function fixedExpenseByDate(Request $request)
+    {
+        $validated = $request->validate([
+            'date' => 'required|date',
+        ]);
+
+        return response()->json(
+            $this->financeService->fixedExpenseByDate($this->accountId($request), $validated['date'])
+        );
     }
 
     public function payFixedExpense(Request $request, int $id)

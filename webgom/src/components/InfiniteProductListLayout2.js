@@ -96,7 +96,7 @@ export default function InfiniteProductListLayout2({ initialData, category = '',
         {products.map((product) => (
           <div key={product.id} className={styles.productCard}>
             <div className={styles.imageArea}>
-              <Link href={`/product/${product.slug}`}>
+              <Link href={`/product/${product.slug || product.id}`}>
                 {(() => {
                   const img = product.primary_image;
                   let src = 'https://placehold.co/400';
@@ -125,7 +125,7 @@ export default function InfiniteProductListLayout2({ initialData, category = '',
             
             <div className={styles.cardBody}>
               <span className={styles.categoryTag}>{product.category?.name || 'Gốm Sứ'}</span>
-              <Link href={`/product/${product.slug}`} style={{ textDecoration: 'none' }}>
+              <Link href={`/product/${product.slug || product.id}`} style={{ textDecoration: 'none' }}>
                 <h3 className={styles.productName}>{product.name}</h3>
               </Link>
               

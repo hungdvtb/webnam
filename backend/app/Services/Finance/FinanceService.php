@@ -5,6 +5,7 @@ namespace App\Services\Finance;
 use App\Models\FinanceCatalog;
 use App\Models\FinanceChangeLog;
 use App\Models\FinanceFixedExpense;
+use App\Models\FinanceFixedExpenseVersion;
 use App\Models\FinanceLoan;
 use App\Models\FinanceLoanPayment;
 use App\Models\FinanceTransaction;
@@ -88,6 +89,24 @@ class FinanceService
         return min(max((int) ($filters['per_page'] ?? $default), 1), $max);
     }
 
+    public function resolveFixedExpenseCalculationMode(?string $value): string
+    {
+        return $value === 'fixed_30' ? 'fixed_30' : 'actual_month';
+    }
+
+    public function fixedExpenseCalculationModeLabel(string $mode): string
+    {
+        return $mode === 'fixed_30' ? 'Cố định 30 ngày' : 'Theo tháng thực tế';
+    }
+
+    public function resolveFixedExpenseDaysInMonth(Carbon|string $date, ?string $mode = null): int
+    {
+        $resolvedDate = $date instanceof Carbon ? $date->copy() : Carbon::parse($date);
+        $resolvedMode = $this->resolveFixedExpenseCalculationMode($mode);
+
+        return $resolvedMode === 'fixed_30' ? 30 : $resolvedDate->daysInMonth;
+    }
+
     public function nextDueDate(Carbon $baseDate, string $frequency, int $intervalValue, ?Carbon $currentDueDate = null): Carbon
     {
         $date = ($currentDueDate ?: $baseDate)->copy();
@@ -117,6 +136,8 @@ class FinanceService
 
     public function outstandingOrdersQuery(int $accountId): Builder
     {
+        $outstandingExpression = 'GREATEST(orders.total_price - COALESCE(order_receipts.paid_amount, 0), 0)';
+
         $paidSubquery = FinanceTransaction::query()
             ->selectRaw('reference_id, COALESCE(SUM(amount), 0) AS paid_amount')
             ->where('account_id', $accountId)
@@ -141,8 +162,8 @@ class FinanceService
             ->whereNull('orders.deleted_at')
             ->whereNotIn('orders.status', ['cancelled', 'returned'])
             ->selectRaw('COALESCE(order_receipts.paid_amount, 0) AS paid_amount')
-            ->selectRaw('GREATEST(orders.total_price - COALESCE(order_receipts.paid_amount, 0), 0) AS outstanding_amount')
-            ->havingRaw('GREATEST(orders.total_price - COALESCE(order_receipts.paid_amount, 0), 0) > 0');
+            ->selectRaw("{$outstandingExpression} AS outstanding_amount")
+            ->whereRaw("{$outstandingExpression} > 0");
     }
 
     public function recalculateWalletBalance(FinanceWallet $wallet): FinanceWallet
@@ -711,52 +732,303 @@ class FinanceService
         });
     }
 
+    public function currentFixedExpenseRows(int $accountId): Collection
+    {
+        return FinanceFixedExpense::query()
+            ->where('account_id', $accountId)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get();
+    }
+
     public function storeFixedExpense(int $accountId, array $data, ?FinanceFixedExpense $expense = null): FinanceFixedExpense
     {
         return DB::transaction(function () use ($accountId, $data, $expense) {
-            $isNew = !$expense;
-            $expense ??= new FinanceFixedExpense();
-            $before = $expense->exists ? $expense->getOriginal() : null;
+            $currentMaxSortOrder = (int) FinanceFixedExpense::query()
+                ->where('account_id', $accountId)
+                ->max('sort_order');
 
-            $startDate = Carbon::parse($data['start_date']);
-            $nextDueDate = !empty($data['next_due_date'])
-                ? Carbon::parse($data['next_due_date'])
-                : $this->nextDueDate($startDate, $data['frequency'] ?? 'monthly', (int) ($data['interval_value'] ?? 1), null);
-
-            $expense->fill([
-                'account_id' => $accountId,
+            $savedExpense = $this->persistFixedExpenseRow($accountId, [
+                'content' => $data['content'] ?? $data['name'] ?? '',
+                'monthly_amount' => $data['monthly_amount'] ?? $data['amount'] ?? 0,
                 'category_id' => $data['category_id'] ?? null,
                 'default_wallet_id' => $data['default_wallet_id'] ?? null,
-                'created_by' => $expense->created_by ?: ($data['user_id'] ?? auth()->id()),
-                'updated_by' => $data['user_id'] ?? auth()->id(),
-                'code' => $expense->code ?: $this->nextCode(FinanceFixedExpense::class, 'FX', $accountId),
-                'name' => $data['name'],
-                'amount' => round((float) $data['amount'], 2),
-                'frequency' => $data['frequency'] ?? 'monthly',
-                'interval_value' => (int) ($data['interval_value'] ?? 1),
-                'reminder_days' => (int) ($data['reminder_days'] ?? 3),
+                'effective_date' => $data['effective_date'] ?? $data['start_date'] ?? now()->toDateString(),
+                'sort_order' => $data['sort_order'] ?? ($expense?->sort_order ?: ($currentMaxSortOrder + 1)),
                 'status' => $data['status'] ?? 'active',
-                'start_date' => $startDate->toDateString(),
-                'next_due_date' => $nextDueDate->toDateString(),
-                'last_paid_date' => $data['last_paid_date'] ?? null,
                 'note' => $data['note'] ?? null,
-            ]);
-            $expense->save();
+                'user_id' => $data['user_id'] ?? auth()->id(),
+            ], $expense);
 
-            $this->logChange(
+            $this->createFixedExpenseVersionSnapshot(
                 $accountId,
-                $expense,
-                $isNew ? 'created' : 'updated',
-                $before,
-                $expense->fresh()->getAttributes(),
-                $data['user_id'] ?? auth()->id()
+                $this->currentFixedExpenseRows($accountId),
+                [
+                    'effective_date' => $data['effective_date'] ?? $data['start_date'] ?? now()->toDateString(),
+                    'day_calculation_mode' => $data['day_calculation_mode'] ?? null,
+                    'note' => $data['version_note'] ?? null,
+                    'user_id' => $data['user_id'] ?? auth()->id(),
+                ]
             );
 
-            return $expense->fresh(['category', 'wallet']);
+            return $savedExpense;
         });
     }
 
-    public function deleteFixedExpense(FinanceFixedExpense $expense, ?int $userId = null): void
+    public function syncFixedExpenseSheet(int $accountId, array $data): array
+    {
+        $rows = $this->normalizeFixedExpenseSheetRows($data['rows'] ?? []);
+        $effectiveDate = Carbon::parse($data['effective_date'] ?? now())->toDateString();
+        $dayCalculationMode = $this->resolveFixedExpenseCalculationMode($data['day_calculation_mode'] ?? null);
+        $userId = $data['user_id'] ?? auth()->id();
+
+        return DB::transaction(function () use ($accountId, $rows, $effectiveDate, $dayCalculationMode, $data, $userId) {
+            $existingRows = FinanceFixedExpense::withTrashed()
+                ->where('account_id', $accountId)
+                ->get()
+                ->keyBy('id');
+
+            $keptIds = [];
+
+            foreach ($rows as $row) {
+                $expense = null;
+
+                if (!empty($row['id'])) {
+                    $expense = $existingRows->get((int) $row['id']);
+
+                    if (!$expense) {
+                        throw new InvalidArgumentException('Không tìm thấy dòng chi phí cố định để cập nhật.');
+                    }
+                }
+
+                $savedExpense = $this->persistFixedExpenseRow($accountId, [
+                    ...$row,
+                    'effective_date' => $effectiveDate,
+                    'user_id' => $userId,
+                ], $expense);
+
+                $keptIds[] = $savedExpense->id;
+            }
+
+            $rowsToDelete = FinanceFixedExpense::query()
+                ->where('account_id', $accountId)
+                ->when($keptIds !== [], fn (Builder $query) => $query->whereNotIn('id', $keptIds))
+                ->get();
+
+            foreach ($rowsToDelete as $rowToDelete) {
+                $this->softDeleteFixedExpenseRow($rowToDelete, $userId);
+            }
+
+            $currentRows = $this->currentFixedExpenseRows($accountId);
+            $version = $this->createFixedExpenseVersionSnapshot($accountId, $currentRows, [
+                'effective_date' => $effectiveDate,
+                'day_calculation_mode' => $dayCalculationMode,
+                'note' => $data['note'] ?? null,
+                'user_id' => $userId,
+            ]);
+
+            return [
+                'rows' => $currentRows->map(fn (FinanceFixedExpense $expense) => $this->fixedExpensePayload($expense))->values(),
+                'version' => $this->fixedExpenseVersionPayload($version, Carbon::parse($effectiveDate)),
+                'history' => FinanceFixedExpenseVersion::query()
+                    ->with('creator:id,name')
+                    ->where('account_id', $accountId)
+                    ->orderByDesc('effective_date')
+                    ->orderByDesc('id')
+                    ->limit(20)
+                    ->get()
+                    ->map(fn (FinanceFixedExpenseVersion $historyVersion) => $this->fixedExpenseVersionPayload($historyVersion))
+                    ->values(),
+            ];
+        });
+    }
+
+    public function deleteFixedExpense(
+        FinanceFixedExpense $expense,
+        ?int $userId = null,
+        ?string $effectiveDate = null,
+        ?string $dayCalculationMode = null
+    ): void {
+        DB::transaction(function () use ($expense, $userId, $effectiveDate, $dayCalculationMode) {
+            $accountId = (int) $expense->account_id;
+            $this->softDeleteFixedExpenseRow($expense, $userId);
+
+            $this->createFixedExpenseVersionSnapshot($accountId, $this->currentFixedExpenseRows($accountId), [
+                'effective_date' => $effectiveDate ?? now()->toDateString(),
+                'day_calculation_mode' => $dayCalculationMode,
+                'note' => 'Deleted fixed expense row',
+                'user_id' => $userId ?? auth()->id(),
+            ]);
+        });
+    }
+
+    public function fixedExpenseByDate(int $accountId, Carbon|string $date): array
+    {
+        $resolvedDate = $date instanceof Carbon ? $date->copy() : Carbon::parse($date);
+
+        $version = FinanceFixedExpenseVersion::query()
+            ->with('creator:id,name')
+            ->where('account_id', $accountId)
+            ->whereDate('effective_date', '<=', $resolvedDate->toDateString())
+            ->orderByDesc('effective_date')
+            ->orderByDesc('id')
+            ->first();
+
+        if ($version) {
+            return $this->fixedExpenseVersionPayload($version, $resolvedDate);
+        }
+
+        $currentRows = $this->currentFixedExpenseRows($accountId);
+        $totalMonthlyAmount = round((float) $currentRows->sum('amount'), 2);
+        $mode = $this->resolveFixedExpenseCalculationMode(null);
+        $daysInMonth = $this->resolveFixedExpenseDaysInMonth($resolvedDate, $mode);
+
+        return [
+            'id' => null,
+            'effective_date' => null,
+            'day_calculation_mode' => $mode,
+            'day_calculation_label' => $this->fixedExpenseCalculationModeLabel($mode),
+            'total_monthly_amount' => $totalMonthlyAmount,
+            'days_in_month' => $daysInMonth,
+            'daily_amount' => $daysInMonth > 0 ? round($totalMonthlyAmount / $daysInMonth, 2) : 0,
+            'items' => $currentRows->map(fn (FinanceFixedExpense $expense) => [
+                'line_key' => (string) $expense->id,
+                'fixed_expense_id' => $expense->id,
+                'content' => $expense->name,
+                'monthly_amount' => round((float) $expense->amount, 2),
+                'sort_order' => (int) $expense->sort_order,
+            ])->values(),
+            'note' => null,
+            'created_at' => null,
+            'created_by' => null,
+            'created_by_name' => null,
+            'applies_to_date' => $resolvedDate->toDateString(),
+        ];
+    }
+
+    public function fixedExpenseDailySeries(int $accountId, Carbon $from, Carbon $to): Collection
+    {
+        $versions = FinanceFixedExpenseVersion::query()
+            ->where('account_id', $accountId)
+            ->whereDate('effective_date', '<=', $to->toDateString())
+            ->orderBy('effective_date')
+            ->orderBy('id')
+            ->get();
+
+        $series = collect();
+        $versionIndex = 0;
+        $activeVersion = null;
+        $cursor = $from->copy()->startOfDay();
+
+        while ($cursor <= $to) {
+            while (isset($versions[$versionIndex]) && Carbon::parse($versions[$versionIndex]->effective_date)->startOfDay()->lte($cursor)) {
+                $activeVersion = $versions[$versionIndex];
+                $versionIndex += 1;
+            }
+
+            $resolved = $activeVersion
+                ? $this->fixedExpenseVersionPayload($activeVersion, $cursor)
+                : $this->fixedExpenseByDate($accountId, $cursor);
+
+            $series->push([
+                'date' => $cursor->toDateString(),
+                'version_id' => $resolved['id'],
+                'effective_date' => $resolved['effective_date'],
+                'day_calculation_mode' => $resolved['day_calculation_mode'],
+                'days_in_month' => $resolved['days_in_month'],
+                'total_monthly_amount' => $resolved['total_monthly_amount'],
+                'daily_amount' => $resolved['daily_amount'],
+            ]);
+
+            $cursor->addDay();
+        }
+
+        return $series;
+    }
+
+    private function normalizeFixedExpenseSheetRows(array $rows): array
+    {
+        $normalizedRows = [];
+
+        foreach ($rows as $index => $row) {
+            $content = trim((string) ($row['content'] ?? $row['name'] ?? ''));
+            $amountValue = $row['monthly_amount'] ?? $row['amount'] ?? '';
+            $hasAmount = $amountValue !== null && $amountValue !== '';
+
+            if ($content === '' && !$hasAmount) {
+                continue;
+            }
+
+            if ($content === '') {
+                throw new InvalidArgumentException('Dòng chi phí #' . ($index + 1) . ' chưa có nội dung.');
+            }
+
+            if ($amountValue !== '' && !is_numeric($amountValue)) {
+                throw new InvalidArgumentException('Dòng chi phí "' . $content . '" có số tiền không hợp lệ.');
+            }
+
+            $monthlyAmount = round((float) ($amountValue === '' ? 0 : $amountValue), 2);
+
+            if ($monthlyAmount < 0) {
+                throw new InvalidArgumentException('Dòng chi phí "' . $content . '" không được nhỏ hơn 0.');
+            }
+
+            $normalizedRows[] = [
+                'id' => !empty($row['id']) ? (int) $row['id'] : null,
+                'content' => $content,
+                'monthly_amount' => $monthlyAmount,
+                'sort_order' => count($normalizedRows) + 1,
+            ];
+        }
+
+        return $normalizedRows;
+    }
+
+    private function persistFixedExpenseRow(int $accountId, array $data, ?FinanceFixedExpense $expense = null): FinanceFixedExpense
+    {
+        $isNew = !$expense;
+        $expense ??= new FinanceFixedExpense();
+        $before = $expense->exists ? $expense->getOriginal() : null;
+        $effectiveDate = Carbon::parse($data['effective_date'] ?? $data['start_date'] ?? now());
+
+        if (method_exists($expense, 'trashed') && $expense->exists && $expense->trashed()) {
+            $expense->restore();
+        }
+
+        $expense->fill([
+            'account_id' => $accountId,
+            'category_id' => $data['category_id'] ?? null,
+            'default_wallet_id' => $data['default_wallet_id'] ?? null,
+            'created_by' => $expense->created_by ?: ($data['user_id'] ?? auth()->id()),
+            'updated_by' => $data['user_id'] ?? auth()->id(),
+            'code' => $expense->code ?: $this->nextCode(FinanceFixedExpense::class, 'FX', $accountId),
+            'name' => trim((string) ($data['content'] ?? $data['name'] ?? '')),
+            'amount' => round((float) ($data['monthly_amount'] ?? $data['amount'] ?? 0), 2),
+            'sort_order' => (int) ($data['sort_order'] ?? ($expense->sort_order ?: 0)),
+            'frequency' => 'monthly',
+            'interval_value' => 1,
+            'reminder_days' => 0,
+            'status' => $data['status'] ?? 'active',
+            'start_date' => $effectiveDate->toDateString(),
+            'next_due_date' => $effectiveDate->toDateString(),
+            'last_paid_date' => $data['last_paid_date'] ?? $expense->last_paid_date,
+            'note' => $data['note'] ?? null,
+        ]);
+        $expense->save();
+
+        $this->logChange(
+            $accountId,
+            $expense,
+            $isNew ? 'created' : 'updated',
+            $before,
+            $expense->fresh()->getAttributes(),
+            $data['user_id'] ?? auth()->id()
+        );
+
+        return $expense->fresh(['category', 'wallet']);
+    }
+
+    private function softDeleteFixedExpenseRow(FinanceFixedExpense $expense, ?int $userId = null): void
     {
         $before = $expense->getAttributes();
         $expense->delete();
@@ -769,6 +1041,45 @@ class FinanceService
             null,
             $userId ?? auth()->id()
         );
+    }
+
+    private function createFixedExpenseVersionSnapshot(int $accountId, Collection $rows, array $data): FinanceFixedExpenseVersion
+    {
+        $itemsSnapshot = $rows
+            ->sortBy('sort_order')
+            ->values()
+            ->map(function (FinanceFixedExpense $expense) {
+                return [
+                    'line_key' => (string) $expense->id,
+                    'fixed_expense_id' => $expense->id,
+                    'content' => $expense->name,
+                    'monthly_amount' => round((float) $expense->amount, 2),
+                    'sort_order' => (int) $expense->sort_order,
+                ];
+            })
+            ->values()
+            ->all();
+
+        $version = FinanceFixedExpenseVersion::query()->create([
+            'account_id' => $accountId,
+            'created_by' => $data['user_id'] ?? auth()->id(),
+            'effective_date' => Carbon::parse($data['effective_date'] ?? now())->toDateString(),
+            'day_calculation_mode' => $this->resolveFixedExpenseCalculationMode($data['day_calculation_mode'] ?? null),
+            'total_monthly_amount' => round((float) $rows->sum('amount'), 2),
+            'items_snapshot' => $itemsSnapshot,
+            'note' => $data['note'] ?? null,
+        ]);
+
+        $this->logChange(
+            $accountId,
+            $version,
+            'created',
+            null,
+            $version->fresh()->getAttributes(),
+            $data['user_id'] ?? auth()->id()
+        );
+
+        return $version->fresh('creator');
     }
 
     public function markFixedExpensePaid(FinanceFixedExpense $expense, array $data): FinanceTransaction
@@ -1036,12 +1347,16 @@ class FinanceService
             'id' => $expense->id,
             'code' => $expense->code,
             'name' => $expense->name,
+            'content' => $expense->name,
             'amount' => round((float) $expense->amount, 2),
+            'monthly_amount' => round((float) $expense->amount, 2),
+            'sort_order' => (int) $expense->sort_order,
             'frequency' => $expense->frequency,
             'interval_value' => (int) $expense->interval_value,
             'reminder_days' => (int) $expense->reminder_days,
             'status' => $expense->status,
             'start_date' => optional($expense->start_date)->toDateString(),
+            'effective_date' => optional($expense->start_date)->toDateString(),
             'next_due_date' => optional($expense->next_due_date)->toDateString(),
             'last_paid_date' => optional($expense->last_paid_date)->toDateString(),
             'days_until_due' => $daysUntilDue,
@@ -1051,6 +1366,43 @@ class FinanceService
             'default_wallet_id' => $expense->default_wallet_id,
             'default_wallet_name' => $expense->wallet?->name,
             'note' => $expense->note,
+        ];
+    }
+
+    public function fixedExpenseVersionPayload(FinanceFixedExpenseVersion $version, ?Carbon $forDate = null): array
+    {
+        $appliesToDate = ($forDate ?: ($version->effective_date instanceof Carbon ? $version->effective_date->copy() : Carbon::parse($version->effective_date)))->copy();
+        $mode = $this->resolveFixedExpenseCalculationMode($version->day_calculation_mode);
+        $daysInMonth = $this->resolveFixedExpenseDaysInMonth($appliesToDate, $mode);
+        $items = collect($version->items_snapshot ?? [])
+            ->map(function (array $item) {
+                return [
+                    'line_key' => (string) ($item['line_key'] ?? $item['fixed_expense_id'] ?? Str::uuid()),
+                    'fixed_expense_id' => !empty($item['fixed_expense_id']) ? (int) $item['fixed_expense_id'] : null,
+                    'content' => $item['content'] ?? '',
+                    'monthly_amount' => round((float) ($item['monthly_amount'] ?? 0), 2),
+                    'sort_order' => (int) ($item['sort_order'] ?? 0),
+                ];
+            })
+            ->sortBy('sort_order')
+            ->values();
+
+        $totalMonthlyAmount = round((float) ($version->total_monthly_amount ?: $items->sum('monthly_amount')), 2);
+
+        return [
+            'id' => $version->id,
+            'effective_date' => optional($version->effective_date)->toDateString(),
+            'day_calculation_mode' => $mode,
+            'day_calculation_label' => $this->fixedExpenseCalculationModeLabel($mode),
+            'total_monthly_amount' => $totalMonthlyAmount,
+            'days_in_month' => $daysInMonth,
+            'daily_amount' => $daysInMonth > 0 ? round($totalMonthlyAmount / $daysInMonth, 2) : 0,
+            'items' => $items,
+            'note' => $version->note,
+            'created_at' => optional($version->created_at)->toIso8601String(),
+            'created_by' => $version->created_by,
+            'created_by_name' => $version->creator?->name,
+            'applies_to_date' => $appliesToDate->toDateString(),
         ];
     }
 

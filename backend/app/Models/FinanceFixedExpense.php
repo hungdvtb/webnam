@@ -20,6 +20,7 @@ class FinanceFixedExpense extends Model
         'code',
         'name',
         'amount',
+        'sort_order',
         'frequency',
         'interval_value',
         'reminder_days',
@@ -32,6 +33,7 @@ class FinanceFixedExpense extends Model
 
     protected $casts = [
         'amount' => 'decimal:2',
+        'sort_order' => 'integer',
         'start_date' => 'date',
         'next_due_date' => 'date',
         'last_paid_date' => 'date',

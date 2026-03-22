@@ -13,10 +13,7 @@ export default async function ProductDetailPage({ params }) {
   let relatedProducts = [];
 
   try {
-    [product, relatedProducts] = await Promise.all([
-      getWebProductDetail(slug),
-      getWebRelatedProducts(slug)
-    ]);
+    product = await getWebProductDetail(slug);
   } catch (error) {
     console.error("Failed to fetch product detail:", error);
     return (
@@ -29,6 +26,14 @@ export default async function ProductDetailPage({ params }) {
       </div>
     );
   }
+
+  try {
+    relatedProducts = await getWebRelatedProducts(slug);
+  } catch (error) {
+    console.error("Failed to fetch related products:", error);
+    relatedProducts = [];
+  }
+
   const formatPrice = (price) => {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
   };
@@ -109,7 +114,7 @@ export default async function ProductDetailPage({ params }) {
               {relatedProducts.map((rel) => {
                 const displayImage = rel.primary_image;
                 return (
-                  <Link key={rel.id} href={`/product/${rel.slug}`} className={styles.relatedCard}>
+                  <Link key={rel.id} href={`/product/${rel.slug || rel.id}`} className={styles.relatedCard}>
                     <div className={styles.relImage}>
                     {displayImage && (displayImage.url || displayImage.path) ? (
                         <Image 

@@ -12,16 +12,19 @@ import BundleProductView from './product/BundleProductView';
 
 export default function ProductDetailContent({ product }) {
   const [selectedOptions, setSelectedOptions] = useState({});
+  const [selectedVariantId, setSelectedVariantId] = useState(null);
   const [selectedGroupItems, setSelectedGroupItems] = useState([]);
   const [bundleItems, setBundleItems] = useState([]);
   const [quantity, setQuantity] = useState(1);
   const [activeIndex, setActiveIndex] = useState(0);
   const { addToCart } = useCart();
   const router = useRouter();
+  const hasStructuredVariantAttributes = product?.super_attributes?.length > 0;
+  const hasVariants = product?.type === 'configurable' && product?.variations?.length > 0;
 
   // Initialize selected options
   useEffect(() => {
-    if (product?.super_attributes?.length > 0) {
+    if (hasStructuredVariantAttributes) {
       const initialOptions = {};
       // Preferred: pick values from the first available variation to ensure a valid combo
       const firstVariant = product.variations?.[0];
@@ -47,6 +50,20 @@ export default function ProductDetailContent({ product }) {
         }
       });
       setSelectedOptions(initialOptions);
+    } else {
+      setSelectedOptions({});
+    }
+
+    if (hasVariants) {
+      setSelectedVariantId((prev) => {
+        if (prev && product.variations?.some((variant) => variant.id === prev)) {
+          return prev;
+        }
+
+        return product.variations?.[0]?.id ?? null;
+      });
+    } else {
+      setSelectedVariantId(null);
     }
 
     if (product?.type === 'grouped' && product.grouped_items?.length > 0) {
@@ -74,11 +91,15 @@ export default function ProductDetailContent({ product }) {
         })));
       }
     }
-  }, [product]);
+  }, [hasStructuredVariantAttributes, hasVariants, product]);
 
   // Find the matching variant
   const matchingVariant = useMemo(() => {
-    if (!product?.variations || product.variations.length === 0) return null;
+    if (!hasVariants) return null;
+
+    if (!hasStructuredVariantAttributes) {
+      return product.variations.find((variant) => variant.id === selectedVariantId) || product.variations[0] || null;
+    }
 
     return product.variations.find(variant => {
       return Object.entries(selectedOptions).every(([attrCode, selectedValue]) => {
@@ -87,7 +108,7 @@ export default function ProductDetailContent({ product }) {
         );
       });
     });
-  }, [product, selectedOptions]);
+  }, [hasStructuredVariantAttributes, hasVariants, product, selectedOptions, selectedVariantId]);
 
   const currentProduct = matchingVariant || product;
 
@@ -204,7 +225,7 @@ export default function ProductDetailContent({ product }) {
         .reduce((acc, item) => acc + (parseFloat(item.price) * item.qty), 0);
       return sum;
     }
-    return currentProduct.price;
+    return currentProduct.current_price ?? currentProduct.price;
   }, [product, currentProduct, selectedGroupItems, bundleItems]);
 
   const images = useMemo(() => {
@@ -260,6 +281,24 @@ export default function ProductDetailContent({ product }) {
     return { itemsToCart, finalPrice };
   };
 
+  const getSelectedOptionsPayload = () => {
+    if (product?.type !== 'configurable') {
+      return selectedOptions;
+    }
+
+    const optionPayload = { ...selectedOptions };
+
+    if (currentProduct?.id && currentProduct.id !== product.id) {
+      optionPayload.variant_id = currentProduct.id;
+      optionPayload.variant_name = currentProduct.name;
+      optionPayload.variant_sku = currentProduct.sku;
+      optionPayload.parent_product_id = product.id;
+      optionPayload.parent_product_name = product.name;
+    }
+
+    return optionPayload;
+  };
+
   const handleOptionSelect = (attrCode, value) => {
     setSelectedOptions(prev => {
       const next = { ...prev, [attrCode]: value };
@@ -309,6 +348,11 @@ export default function ProductDetailContent({ product }) {
     setActiveIndex(0);
   };
 
+  const handleVariantSelect = (variantId) => {
+    setSelectedVariantId(variantId);
+    setActiveIndex(0);
+  };
+
   const handleAddToCart = (e) => {
     if (e) e.preventDefault();
     const items = (product.bundle_items?.length ? product.bundle_items : null)
@@ -333,8 +377,9 @@ export default function ProductDetailContent({ product }) {
             price: item?.price
           };
       });
-    
-    addToCart(product, quantity, selectedOptions, itemsToCart, displayPrice);
+
+    const cartProduct = product.type === 'configurable' ? currentProduct : product;
+    addToCart(cartProduct, quantity, getSelectedOptionsPayload(), itemsToCart, displayPrice);
     flyToCart(e, images?.[0] ? getImageUrl(images[0]) : '/logo-dai-thanh.png');
   };
 
@@ -374,7 +419,9 @@ export default function ProductDetailContent({ product }) {
             price: item?.price
           };
       });
-    addToCart(product, quantity, selectedOptions, itemsToCart);
+
+    const cartProduct = product.type === 'configurable' ? currentProduct : product;
+    addToCart(cartProduct, quantity, getSelectedOptionsPayload(), itemsToCart, displayPrice);
     router.push('/cart');
   };
 
@@ -452,13 +499,15 @@ export default function ProductDetailContent({ product }) {
     );
   }
 
-  if (product?.super_attributes?.length > 0) {
+  if (hasVariants) {
     return (
       <ConfigurableProductView 
         {...commonProps}
         currentProduct={currentProduct}
+        hasStructuredVariantAttributes={hasStructuredVariantAttributes}
         selectedOptions={selectedOptions}
         handleOptionSelect={handleOptionSelect}
+        handleVariantSelect={handleVariantSelect}
       />
     );
   }

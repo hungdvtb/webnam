@@ -118,7 +118,7 @@ export default async function Home() {
           
           <div className={styles.productsGrid}>
             {featuredProducts.map((product) => (
-              <Link href={`/product/${product.slug}`} key={product.id} className={styles.productCard}>
+              <Link href={`/product/${product.slug || product.id}`} key={product.id} className={styles.productCard}>
                 <div className={styles.productImage}>
                   {(() => {
                     const img = product.primary_image;

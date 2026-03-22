@@ -32,6 +32,11 @@ const ORDER_TABLE_COLUMNS = [
     DEFAULT_COLUMNS.find((column) => column.id === 'actions'),
 ];
 
+const EXPORT_SLIP_FILTER_OPTIONS = [
+    { value: 'created', label: 'Đã tạo phiếu xuất' },
+    { value: 'missing', label: 'Chưa tạo phiếu xuất' },
+];
+
 /**
  * Hover card that shows full product list for an order.
  * Stays open while mouse moves between trigger and card.
@@ -539,6 +544,7 @@ const OrderList = () => {
         customer_phone: '',
         shipping_address: '',
         shipping_carrier_code: '',
+        export_slip_state: '',
         shipping_dispatched_from: '',
         shipping_dispatched_to: '',
         attributes: {}
@@ -637,6 +643,7 @@ const OrderList = () => {
             if (currentFilters.created_at_from) params.created_at_from = currentFilters.created_at_from;
             if (currentFilters.created_at_to) params.created_at_to = currentFilters.created_at_to;
             if (currentFilters.shipping_carrier_code) params.shipping_carrier_code = currentFilters.shipping_carrier_code;
+            if (currentFilters.export_slip_state) params.export_slip_state = currentFilters.export_slip_state;
             if (currentFilters.shipping_dispatched_from) params.shipping_dispatched_from = currentFilters.shipping_dispatched_from;
             if (currentFilters.shipping_dispatched_to) params.shipping_dispatched_to = currentFilters.shipping_dispatched_to;
 
@@ -821,6 +828,7 @@ const OrderList = () => {
             customer_phone: '',
             shipping_address: '',
             shipping_carrier_code: '',
+            export_slip_state: '',
             shipping_dispatched_from: '',
             shipping_dispatched_to: '',
             attributes: {},
@@ -1008,6 +1016,7 @@ const OrderList = () => {
         if (filters.order_number) c++;
         if (filters.customer_phone) c++;
         if (filters.shipping_carrier_code) c++;
+        if (filters.export_slip_state) c++;
         if (filters.created_at_from || filters.created_at_to) c++;
         if (filters.shipping_dispatched_from || filters.shipping_dispatched_to) c++;
         if (filters.attributes) c += Object.keys(filters.attributes).length;
@@ -1200,6 +1209,27 @@ const OrderList = () => {
                             </div>
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Phiếu xuất</label>
+                            <div className="relative">
+                                <select
+                                    name="export_slip_state"
+                                    className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer appearance-none"
+                                    value={tempFilters.export_slip_state}
+                                    onChange={handleTempFilterChange}
+                                >
+                                    <option value="">Tất cả</option>
+                                    {EXPORT_SLIP_FILTER_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>
+                                            {option.label}
+                                        </option>
+                                    ))}
+                                </select>
+                                <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 pointer-events-none text-[18px]">
+                                    expand_more
+                                </span>
+                            </div>
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Ngày gửi vận chuyển</label>
                             <div className="flex gap-2 items-center h-10">
                                 <input name="shipping_dispatched_from" type="date" className="flex-1 h-full bg-white border border-primary/10 rounded-sm px-2 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer" value={tempFilters.shipping_dispatched_from} onChange={handleTempFilterChange} />
@@ -1312,6 +1342,13 @@ const OrderList = () => {
                             <span className="text-[11px] text-primary/40">Vận chuyển:</span>
                             <span className="text-[13px] font-bold text-[#0F172A]">{connectedCarriers.find((carrier) => carrier.carrier_code === filters.shipping_carrier_code)?.carrier_name || filters.shipping_carrier_code}</span>
                             <button onClick={() => removeFilter('shipping_carrier_code')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                        </div>
+                    )}
+                    {filters.export_slip_state && (
+                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                            <span className="text-[11px] text-primary/40">Phiếu xuất:</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{EXPORT_SLIP_FILTER_OPTIONS.find((option) => option.value === filters.export_slip_state)?.label || filters.export_slip_state}</span>
+                            <button onClick={() => removeFilter('export_slip_state')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     )}
                     {(filters.shipping_dispatched_from || filters.shipping_dispatched_to) && (

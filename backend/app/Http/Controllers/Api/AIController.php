@@ -127,6 +127,7 @@ class AIController extends Controller
             'name' => 'required|string',
             'category' => 'nullable|string',
             'attributes' => 'nullable|array',
+            'custom_instruction' => 'nullable|string|max:2000',
         ]);
 
         $attrString = '';
@@ -139,16 +140,23 @@ class AIController extends Controller
             }
         }
 
+        $customInstruction = trim((string) $request->input('custom_instruction', ''));
+        $customInstructionBlock = $customInstruction !== ''
+            ? "Yeu cau bo sung tu nguoi dung (uu tien lam theo neu khong mau thuan):\n{$customInstruction}\n"
+            : '';
+
         $prompt = "Ban la mot chuyen gia ve nghe thuat gom su Bat Trang va marketing cao cap.\n"
             . "Hay viet mot doan mo ta san pham quyen ru, dam chat nghe thuat va tam linh cho san pham sau:\n"
             . "Ten: {$request->input('name')}\n"
             . "Danh muc: {$request->input('category')}\n"
             . "Thong so:\n{$attrString}\n"
-            . "Yeu cau:\n"
+            . $customInstructionBlock
+            . "Yeu cau mac dinh:\n"
             . "1. Ngon ngu: Tieng Viet, my mieu va tinh te.\n"
             . "2. Cau truc: dep tong the, ky thuat che tac-chat lieu, y nghia phong thuy-va goi y bai tri.\n"
             . "3. Khong dung cac cum khoa trang.\n"
-            . "4. Tra loi truc tiep noi dung mo ta, khong gioi thieu la AI.";
+            . "4. Tra loi truc tiep noi dung mo ta, khong gioi thieu la AI.\n"
+            . "5. Neu nguoi dung muon them anh minh hoa, khong tu tao URL anh; hay chen dong goi y ro rang theo dang [Goi y anh minh hoa: ...] tai vi tri phu hop.";
 
         try {
             $result = $this->geminiService->generateText($prompt, $this->resolveAccountId($request));
@@ -168,18 +176,26 @@ class AIController extends Controller
     {
         $request->validate([
             'content' => 'required|string',
+            'custom_instruction' => 'nullable|string|max:2000',
         ]);
+
+        $customInstruction = trim((string) $request->input('custom_instruction', ''));
+        $customInstructionBlock = $customInstruction !== ''
+            ? "Yeu cau bo sung tu nguoi dung (uu tien lam theo neu khong mau thuan):\n{$customInstruction}\n\n"
+            : '';
 
         $prompt = "Ban la mot bien tap vien chuyen nghiep ve nghe thuat gom su Bat Trang va marketing cao cap.\n"
             . "Toi co mot doan mo ta noi dung san pham dang HTML. Hay viet lai phan van ban hien thi sao cho muot ma, cam xuc va hap dan hon.\n\n"
-            . "YEU CAU QUAN TRONG NHAT: GIU NGUYEN HOAN TOAN cau truc HTML, cac the <img>, cac duong link <a href> va cac placeholder he thong.\n"
-            . "Chi thay doi phan van ban hien thi.\n\n"
+            . "YEU CAU QUAN TRONG NHAT: GIU NGUYEN HOAN TOAN cac the <img>, cac duong link <a href>, cac placeholder he thong va khong doi thuoc tinh HTML hien co.\n"
+            . "Ban chi duoc sap xep lai cac the van ban nhu <p>, <h2>, <h3>, <ul>, <li> neu nguoi dung co yeu cau ro ve bo cuc/trinh bay.\n\n"
+            . $customInstructionBlock
             . "Noi dung HTML dau vao:\n"
             . $request->input('content')
             . "\n\nLuu y:\n"
             . "1. Ngon ngu: Tieng Viet, tinh te, sac sao.\n"
             . "2. Khong thay doi thuoc tinh cua the HTML (src, class, style...).\n"
-            . "3. Tra ve dung HTML ket qua, khong can markdown html.";
+            . "3. Neu nguoi dung muon them anh minh hoa, khong tu tao URL anh; hay chen dong goi y ro rang theo dang [Goi y anh minh hoa: ...] tai vi tri phu hop.\n"
+            . "4. Tra ve dung HTML ket qua, khong can markdown html.";
 
         try {
             $result = $this->geminiService->generateText($prompt, $this->resolveAccountId($request));

@@ -5,6 +5,7 @@ namespace App\Services\Finance;
 use App\Models\FinanceCatalog;
 use App\Models\FinanceChangeLog;
 use App\Models\FinanceFixedExpense;
+use App\Models\FinanceFixedExpenseVersion;
 use App\Models\FinanceLoan;
 use App\Models\FinanceLoanPayment;
 use App\Models\FinanceTransaction;
@@ -45,6 +46,11 @@ class FinanceReadService
 
         $profitLossBase = (float) (clone $confirmedTransactions)
             ->where('affects_profit_loss', true)
+            ->where(function (Builder $builder) {
+                $builder
+                    ->whereNull('transaction_type')
+                    ->orWhere('transaction_type', '!=', 'fixed_expense');
+            })
             ->selectRaw("COALESCE(SUM(CASE WHEN direction = 'in' THEN amount ELSE amount * -1 END), 0) AS total")
             ->value('total');
 
@@ -111,6 +117,10 @@ class FinanceReadService
             ->get()
             ->sum(fn (FinanceLoan $loan) => $loan->outstanding_principal);
 
+        $fixedExpenseSeries = $this->financeService->fixedExpenseDailySeries($accountId, $from, $to);
+        $allocatedFixedExpense = (float) $fixedExpenseSeries->sum('daily_amount');
+        $currentFixedExpense = $this->financeService->fixedExpenseByDate($accountId, $to);
+
         return [
             'filters' => [
                 'date_from' => $from->toDateString(),
@@ -129,7 +139,9 @@ class FinanceReadService
                 'net_debt' => round($outstandingOrders + $pendingIncome - $pendingExpense, 2),
                 'loan_liability' => round($loanLiability, 2),
                 'loan_receivable' => round($loanReceivable, 2),
-                'profit_loss' => round($profitLossBase + $loanInterestIncome - $loanInterestExpense, 2),
+                'fixed_expense_allocated' => round($allocatedFixedExpense, 2),
+                'fixed_expense_daily' => round((float) ($currentFixedExpense['daily_amount'] ?? 0), 2),
+                'profit_loss' => round($profitLossBase + $loanInterestIncome - $loanInterestExpense - $allocatedFixedExpense, 2),
             ],
             'wallets' => FinanceWallet::query()
                 ->where('account_id', $accountId)
@@ -140,16 +152,11 @@ class FinanceReadService
                 ->get()
                 ->map(fn (FinanceWallet $wallet) => $this->financeService->walletPayload($wallet, $from, $to))
                 ->values(),
-            'due_fixed_expenses' => FinanceFixedExpense::query()
-                ->with(['category', 'wallet'])
-                ->where('account_id', $accountId)
-                ->where('status', 'active')
-                ->whereDate('next_due_date', '<=', Carbon::now()->addDays(14)->toDateString())
-                ->orderBy('next_due_date')
-                ->limit(8)
-                ->get()
+            'due_fixed_expenses' => $this->financeService->currentFixedExpenseRows($accountId)
+                ->take(8)
                 ->map(fn (FinanceFixedExpense $expense) => $this->financeService->fixedExpensePayload($expense))
                 ->values(),
+            'fixed_expense_version' => $currentFixedExpense,
             'recent_transactions' => FinanceTransaction::query()
                 ->with(['wallet', 'category', 'creator'])
                 ->where('account_id', $accountId)
@@ -418,9 +425,6 @@ class FinanceReadService
             ->with(['category:id,name,color,group_key', 'wallet:id,name,type,bank_name'])
             ->where('account_id', $accountId);
 
-        if (!empty($filters['status'])) {
-            $query->where('status', $filters['status']);
-        }
         if (!empty($filters['search'])) {
             $search = trim((string) $filters['search']);
             $query->where(function (Builder $builder) use ($search) {
@@ -431,26 +435,38 @@ class FinanceReadService
             });
         }
 
-        $page = $query->orderBy('next_due_date')->orderBy('name')->paginate($this->financeService->resolvePerPage($filters, 20, 100));
-        $currentMonthStart = Carbon::now()->startOfMonth();
-        $currentMonthEnd = Carbon::now()->endOfMonth();
+        $rows = $query
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get();
+
+        $requestedDate = !empty($filters['date'])
+            ? Carbon::parse($filters['date'])
+            : now();
+
+        $currentVersion = $this->financeService->fixedExpenseByDate($accountId, $requestedDate);
+        $history = FinanceFixedExpenseVersion::query()
+            ->with('creator:id,name')
+            ->where('account_id', $accountId)
+            ->orderByDesc('effective_date')
+            ->orderByDesc('id')
+            ->limit(20)
+            ->get();
 
         return [
-            ...$page->toArray(),
-            'data' => collect($page->items())->map(fn (FinanceFixedExpense $expense) => $this->financeService->fixedExpensePayload($expense))->values(),
+            'date' => $requestedDate->toDateString(),
+            'rows' => $rows->map(fn (FinanceFixedExpense $expense) => $this->financeService->fixedExpensePayload($expense))->values(),
+            'current_version' => $currentVersion,
+            'history' => $history->map(fn (FinanceFixedExpenseVersion $version) => $this->financeService->fixedExpenseVersionPayload($version))->values(),
             'summary' => [
-                'active_count' => (int) FinanceFixedExpense::query()->where('account_id', $accountId)->where('status', 'active')->count(),
-                'due_soon_count' => (int) FinanceFixedExpense::query()
-                    ->where('account_id', $accountId)
-                    ->where('status', 'active')
-                    ->whereDate('next_due_date', '<=', Carbon::now()->addDays(14)->toDateString())
-                    ->count(),
-                'current_month_total' => round((float) FinanceTransaction::query()
-                    ->where('account_id', $accountId)
-                    ->where('transaction_type', 'fixed_expense')
-                    ->where('status', 'confirmed')
-                    ->whereBetween('transaction_date', [$currentMonthStart, $currentMonthEnd])
-                    ->sum('amount'), 2),
+                'row_count' => $rows->count(),
+                'total_monthly_amount' => round((float) $rows->sum('amount'), 2),
+                'daily_amount' => round((float) ($currentVersion['daily_amount'] ?? 0), 2),
+                'days_in_month' => (int) ($currentVersion['days_in_month'] ?? $requestedDate->daysInMonth),
+                'day_calculation_mode' => $currentVersion['day_calculation_mode'] ?? $this->financeService->resolveFixedExpenseCalculationMode(null),
+                'day_calculation_label' => $currentVersion['day_calculation_label'] ?? $this->financeService->fixedExpenseCalculationModeLabel(
+                    $this->financeService->resolveFixedExpenseCalculationMode(null)
+                ),
             ],
         ];
     }
@@ -493,6 +509,17 @@ class FinanceReadService
             ->orderBy('transaction_date')
             ->get();
 
+        $loanPayments = FinanceLoanPayment::query()
+            ->with('loan:id,type')
+            ->where('account_id', $accountId)
+            ->where('status', 'confirmed')
+            ->whereBetween('payment_date', [$from, $to])
+            ->get();
+
+        $fixedExpenseSeries = $this->financeService->fixedExpenseDailySeries($accountId, $from, $to);
+        $fixedExpenseByDate = $fixedExpenseSeries->keyBy('date');
+        $loanPaymentsByDate = $loanPayments->groupBy(fn (FinanceLoanPayment $payment) => optional($payment->payment_date)->toDateString());
+
         $monthlyCashFlow = collect();
         $monthCursor = $from->copy()->startOfMonth();
         $monthEnd = $to->copy()->startOfMonth();
@@ -500,8 +527,22 @@ class FinanceReadService
         while ($monthCursor <= $monthEnd) {
             $monthKey = $monthCursor->format('Y-m');
             $monthRows = $transactions->filter(fn (FinanceTransaction $transaction) => $transaction->transaction_date?->format('Y-m') === $monthKey);
+            $monthLoanPayments = $loanPayments->filter(fn (FinanceLoanPayment $payment) => $payment->payment_date?->format('Y-m') === $monthKey);
+            $monthFixedExpense = (float) $fixedExpenseSeries
+                ->filter(fn (array $row) => str_starts_with($row['date'], $monthKey))
+                ->sum('daily_amount');
             $income = (float) $monthRows->where('direction', 'in')->whereNotIn('transaction_type', ['transfer_in'])->sum('amount');
             $expense = (float) $monthRows->where('direction', 'out')->whereNotIn('transaction_type', ['transfer_out'])->sum('amount');
+            $profitBase = (float) $monthRows
+                ->where('affects_profit_loss', true)
+                ->filter(fn (FinanceTransaction $transaction) => $transaction->transaction_type !== 'fixed_expense')
+                ->sum('signed_amount');
+            $loanInterestIncome = (float) $monthLoanPayments
+                ->filter(fn (FinanceLoanPayment $payment) => $payment->loan?->type === 'lent')
+                ->sum('interest_amount');
+            $loanInterestExpense = (float) $monthLoanPayments
+                ->filter(fn (FinanceLoanPayment $payment) => $payment->loan?->type === 'borrowed')
+                ->sum('interest_amount');
 
             $monthlyCashFlow->push([
                 'month' => $monthKey,
@@ -509,9 +550,54 @@ class FinanceReadService
                 'income' => round($income, 2),
                 'expense' => round($expense, 2),
                 'net' => round($income - $expense, 2),
+                'fixed_expense_allocated' => round($monthFixedExpense, 2),
+                'profit_after_fixed' => round($profitBase + $loanInterestIncome - $loanInterestExpense - $monthFixedExpense, 2),
             ]);
 
             $monthCursor->addMonth();
+        }
+
+        $dailyProfitLoss = collect();
+        $dayCursor = $from->copy()->startOfDay();
+
+        while ($dayCursor <= $to) {
+            $dateKey = $dayCursor->toDateString();
+            $dayRows = $transactions->filter(fn (FinanceTransaction $transaction) => $transaction->transaction_date?->toDateString() === $dateKey);
+            $dayLoanPayments = $loanPaymentsByDate->get($dateKey, collect());
+            $fixedExpenseRow = $fixedExpenseByDate->get($dateKey, [
+                'daily_amount' => 0,
+                'total_monthly_amount' => 0,
+                'effective_date' => null,
+                'version_id' => null,
+            ]);
+
+            $income = (float) $dayRows->where('direction', 'in')->whereNotIn('transaction_type', ['transfer_in'])->sum('amount');
+            $expense = (float) $dayRows->where('direction', 'out')->whereNotIn('transaction_type', ['transfer_out'])->sum('amount');
+            $profitBase = (float) $dayRows
+                ->where('affects_profit_loss', true)
+                ->filter(fn (FinanceTransaction $transaction) => $transaction->transaction_type !== 'fixed_expense')
+                ->sum('signed_amount');
+            $loanInterestIncome = (float) $dayLoanPayments
+                ->filter(fn (FinanceLoanPayment $payment) => $payment->loan?->type === 'lent')
+                ->sum('interest_amount');
+            $loanInterestExpense = (float) $dayLoanPayments
+                ->filter(fn (FinanceLoanPayment $payment) => $payment->loan?->type === 'borrowed')
+                ->sum('interest_amount');
+            $profitBeforeFixed = $profitBase + $loanInterestIncome - $loanInterestExpense;
+
+            $dailyProfitLoss->push([
+                'date' => $dateKey,
+                'label' => $dayCursor->locale('vi')->translatedFormat('d/m'),
+                'income' => round($income, 2),
+                'expense' => round($expense, 2),
+                'fixed_expense_daily' => round((float) $fixedExpenseRow['daily_amount'], 2),
+                'fixed_expense_monthly' => round((float) $fixedExpenseRow['total_monthly_amount'], 2),
+                'fixed_expense_effective_date' => $fixedExpenseRow['effective_date'],
+                'profit_before_fixed' => round($profitBeforeFixed, 2),
+                'profit_after_fixed' => round($profitBeforeFixed - (float) $fixedExpenseRow['daily_amount'], 2),
+            ]);
+
+            $dayCursor->addDay();
         }
 
         return [
@@ -521,6 +607,12 @@ class FinanceReadService
             ],
             'summary' => $dashboard['summary'],
             'monthly_cash_flow' => $monthlyCashFlow,
+            'daily_profit_loss' => $dailyProfitLoss,
+            'fixed_expense_report' => [
+                'current' => $this->financeService->fixedExpenseByDate($accountId, $to),
+                'allocated_total' => round((float) $fixedExpenseSeries->sum('daily_amount'), 2),
+                'daily_series' => $fixedExpenseSeries->values(),
+            ],
             'income_by_category' => $this->groupTransactionsByCategory($transactions->where('direction', 'in')->whereNotIn('transaction_type', ['transfer_in'])),
             'expense_by_category' => $this->groupTransactionsByCategory($transactions->where('direction', 'out')->whereNotIn('transaction_type', ['transfer_out'])),
             'wallet_report' => FinanceWallet::query()

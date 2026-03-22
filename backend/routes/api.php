@@ -257,7 +257,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/finance/loans/{id}/payments', [FinanceController::class, 'storeLoanPayment'])->whereNumber('id');
     Route::delete('/finance/loan-payments/{id}', [FinanceController::class, 'destroyLoanPayment'])->whereNumber('id');
     Route::get('/finance/fixed-expenses', [FinanceController::class, 'fixedExpenses']);
+    Route::get('/finance/fixed-expenses/by-date', [FinanceController::class, 'fixedExpenseByDate']);
     Route::post('/finance/fixed-expenses', [FinanceController::class, 'storeFixedExpense']);
+    Route::put('/finance/fixed-expenses/sheet', [FinanceController::class, 'syncFixedExpenseSheet']);
     Route::put('/finance/fixed-expenses/{id}', [FinanceController::class, 'updateFixedExpense'])->whereNumber('id');
     Route::delete('/finance/fixed-expenses/{id}', [FinanceController::class, 'destroyFixedExpense'])->whereNumber('id');
     Route::post('/finance/fixed-expenses/{id}/pay', [FinanceController::class, 'payFixedExpense'])->whereNumber('id');

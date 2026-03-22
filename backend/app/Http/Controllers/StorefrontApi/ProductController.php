@@ -366,8 +366,14 @@ class ProductController extends Controller
     public function related(Request $request, $slug)
     {
         $accountId = $this->getAccountId($request);
-        $product = Product::where('slug', $slug)
+        $product = Product::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+            ->where(function ($q) use ($slug) {
+                $q->where('slug', $slug);
+                if (is_numeric($slug)) {
+                    $q->orWhere('id', (int) $slug);
+                }
+            })
             ->firstOrFail();
 
         $limit = 8;

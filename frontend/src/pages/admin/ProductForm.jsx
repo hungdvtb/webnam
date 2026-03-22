@@ -20,6 +20,13 @@ const ItemType = {
     BUNDLE_ITEM: 'bundle_item',
 };
 
+const AI_INSTRUCTION_SUGGESTIONS = [
+    'Viết ngắn gọn hơn, súc tích hơn.',
+    'Trình bày theo bố cục chuẩn: mở bài, chất liệu, ý nghĩa, bài trí.',
+    'Thêm gợi ý vị trí ảnh minh họa phù hợp trong bài.',
+    'Giọng văn sang trọng, dễ hiểu, phù hợp khách mua quà và trưng bày.',
+];
+
 const DraggableImage = ({ img, index, moveImage, handleSetPrimary, handleDeleteImage, isSelected, toggleSelectImage, isDragSelecting }) => {
     const ref = useRef(null);
     const [, drop] = useDrop({
@@ -477,7 +484,17 @@ const ProductForm = () => {
     });
 
     const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
+    const [aiInstruction, setAiInstruction] = useState('');
     const quillRef = useRef(null);
+
+    const appendAiInstruction = useCallback((suggestion) => {
+        setAiInstruction((prev) => {
+            const normalizedPrev = prev.trim();
+            if (!normalizedPrev) return suggestion;
+            if (normalizedPrev.includes(suggestion)) return prev;
+            return `${normalizedPrev}\n- ${suggestion}`;
+        });
+    }, []);
 
     const imageHandler = useCallback(() => {
         const input = document.createElement('input');
@@ -1603,7 +1620,8 @@ const ProductForm = () => {
             const response = await aiApi.generateProductDescription({
                 name: formData.name,
                 category: categoryName,
-                attributes: attrData
+                attributes: attrData,
+                custom_instruction: aiInstruction.trim() || undefined,
             });
 
             setFormData(prev => ({ ...prev, description: response.data.description }));
@@ -1635,7 +1653,8 @@ const ProductForm = () => {
         setAiRewriting(true);
         try {
             const response = await aiApi.rewriteProductDescription({
-                content: modifiedHtml
+                content: modifiedHtml,
+                custom_instruction: aiInstruction.trim() || undefined,
             });
 
             let finalHtml = response.data.description;
@@ -3866,12 +3885,12 @@ const ProductForm = () => {
 
                         {/* Description */}
                         <div className="bg-white border border-gold/10 shadow-premium-sm rounded-sm overflow-hidden">
-                            <div className="flex justify-between items-center p-4 border-b border-gold/10">
+                            <div className="flex flex-col gap-3 xl:flex-row xl:justify-between xl:items-center p-4 border-b border-gold/10">
                                 <div className="flex items-center gap-3">
                                     <span className="material-symbols-outlined text-primary/40 p-2 bg-stone/5 rounded-full text-lg">description</span>
                                     <h3 className="font-sans text-[16px] font-bold text-primary italic uppercase tracking-tight">Mô tả sản phẩm</h3>
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
                                     <button
                                         type="button"
                                         onClick={handleAIRewrite}
@@ -3920,6 +3939,49 @@ const ProductForm = () => {
                                         <span className="material-symbols-outlined text-[18px]">{isEditorFullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
                                         {isEditorFullscreen ? 'ĐÓNG PHÓNG TO' : 'PHÓNG TO EDITOR'}
                                     </button>
+                                </div>
+                            </div>
+                            <div className="px-4 py-3 border-b border-gold/10 bg-stone/[0.02]">
+                                <div className="flex flex-col gap-3">
+                                    <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                                        <div>
+                                            <p className="text-[12px] font-black uppercase tracking-[0.18em] text-primary">Yêu cầu thêm cho AI</p>
+                                            <p className="text-[12px] text-stone/70 mt-1">
+                                                Áp dụng cho cả <span className="font-bold text-primary">AI Viết lại</span> và <span className="font-bold text-primary">AI Viết mới</span>. Bạn có thể yêu cầu kiểu như viết ngắn hơn, theo format chuẩn, hoặc thêm gợi ý ảnh minh họa.
+                                            </p>
+                                        </div>
+                                        {aiInstruction.trim() && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setAiInstruction('')}
+                                                className="inline-flex items-center gap-1 self-start px-3 py-1.5 rounded-sm border border-stone/15 text-stone/70 font-bold text-[11px] uppercase tracking-widest transition-all hover:border-red-300 hover:text-red-500 hover:bg-red-50 active:scale-95"
+                                            >
+                                                <span className="material-symbols-outlined text-[15px]">mop</span>
+                                                Xóa yêu cầu
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    <textarea
+                                        value={aiInstruction}
+                                        onChange={(e) => setAiInstruction(e.target.value)}
+                                        rows={3}
+                                        placeholder={'Ví dụ: Viết lại ngắn hơn khoảng 3 đoạn, giữ giọng sang trọng; thêm gợi ý vị trí ảnh minh họa cho từng phần; trình bày theo format chuẩn gồm mở bài, chất liệu, ý nghĩa và bài trí.'}
+                                        className="w-full rounded-sm border border-gold/20 bg-white px-4 py-3 text-[13px] text-primary placeholder:text-stone/35 focus:outline-none focus:ring-2 focus:ring-gold/30 focus:border-gold/40 resize-y min-h-[92px]"
+                                    />
+
+                                    <div className="flex flex-wrap gap-2">
+                                        {AI_INSTRUCTION_SUGGESTIONS.map((suggestion) => (
+                                            <button
+                                                key={suggestion}
+                                                type="button"
+                                                onClick={() => appendAiInstruction(suggestion)}
+                                                className="px-3 py-1.5 rounded-full border border-gold/20 bg-white text-[11px] font-bold text-gold transition-all hover:bg-gold/5 hover:border-gold/40 active:scale-95"
+                                            >
+                                                {suggestion}
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
                             <div className={`p-1 ${isEditorFullscreen ? 'editor-fullscreen-container' : 'min-h-[400px]'}`}>

@@ -606,6 +606,86 @@
   gap: 0.5rem;
 }
 
+.variantList {
+  display: grid;
+  gap: 0.625rem;
+}
+
+.variantCardWrap {
+  position: relative;
+}
+
+.variantCard {
+  width: 100%;
+  border: 1px solid rgba(27, 54, 93, 0.12);
+  border-radius: 0.75rem;
+  background: #ffffff;
+  color: #1B365D;
+  padding: 0.875rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.variantCard:hover {
+  border-color: rgba(197, 160, 101, 0.55);
+  box-shadow: 0 10px 18px rgba(27, 54, 93, 0.08);
+  transform: translateY(-1px);
+}
+
+.variantCardActive {
+  border-color: var(--accent);
+  background: rgba(197, 160, 101, 0.08);
+  box-shadow: 0 12px 22px rgba(197, 160, 101, 0.15);
+}
+
+.variantCardName {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #1B365D;
+}
+
+.variantCardMeta {
+  margin-top: 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: rgba(27, 54, 93, 0.58);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.variantCardPrice {
+  flex-shrink: 0;
+  font-size: 1rem;
+  font-weight: 800;
+  color: #8e5229;
+}
+
+.variantActionRow {
+  position: relative;
+  margin-top: 0.125rem;
+}
+
+.variantActionRow .configOptionBtn {
+  width: 100%;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  font-size: 0.85rem;
+}
+
+.variantActionMeta {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.82;
+}
+
 .optionBtn {
   padding: 0.4rem 0.75rem;
   border-radius: 0.4rem;

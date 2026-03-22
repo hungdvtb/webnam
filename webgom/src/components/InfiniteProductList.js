@@ -99,7 +99,7 @@ export default function InfiniteProductList({ initialData, category = '', sort =
             key={product.id} 
             className={styles.productCard}
           >
-            <Link href={`/product/${product.slug}`} className={styles.imageWrapper}>
+            <Link href={`/product/${product.slug || product.id}`} className={styles.imageWrapper}>
               {(() => {
                 const img = product.primary_image;
                 let src = 'https://placehold.co/400';
@@ -126,7 +126,7 @@ export default function InfiniteProductList({ initialData, category = '', sort =
             </Link>
             <div className={styles.productInfo}>
               <p className={styles.productCategory}>{product.category?.name || 'Bát Tràng Premium'}</p>
-              <Link href={`/product/${product.slug}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+              <Link href={`/product/${product.slug || product.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
                 <h3 className={styles.productName}>{product.name}</h3>
               </Link>
               <div className={styles.rating}>

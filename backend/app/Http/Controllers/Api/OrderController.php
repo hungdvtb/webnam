@@ -48,6 +48,7 @@ class OrderController extends Controller
             ->select([
                 'id', 'order_number', 'total_price', 'status', 'customer_name', 
                 'customer_phone', 'shipping_address', 'province', 'district', 'ward', 'created_at', 'notes',
+                'type',
                 'shipping_status', 'shipping_carrier_code', 'shipping_carrier_name',
                 'shipping_tracking_code', 'shipping_dispatched_at',
                 'shipping_issue_code', 'shipping_issue_message', 'shipping_issue_detected_at',
@@ -119,6 +120,35 @@ class OrderController extends Controller
         })
         ->when($request->filled('shipping_dispatched_to'), function($q) use ($request) {
             $q->whereDate('shipping_dispatched_at', '<=', $request->shipping_dispatched_to);
+        })
+        ->when($request->filled('export_slip_state'), function ($q) use ($request) {
+            $state = trim((string) $request->input('export_slip_state'));
+
+            if ($state === 'created') {
+                $q->where(function ($builder) {
+                    $builder
+                        ->where('type', 'inventory_export')
+                        ->orWhere(function ($exportQuery) {
+                            $exportQuery
+                                ->whereNotNull('shipping_tracking_code')
+                                ->where('shipping_tracking_code', '!=', '');
+                        });
+                });
+            }
+
+            if ($state === 'missing') {
+                $q
+                    ->where(function ($builder) {
+                        $builder
+                            ->whereNull('type')
+                            ->orWhere('type', '!=', 'inventory_export');
+                    })
+                    ->where(function ($builder) {
+                        $builder
+                            ->whereNull('shipping_tracking_code')
+                            ->orWhere('shipping_tracking_code', '');
+                    });
+            }
         });
 
         // Optimize Dynamic Attribute Filters (EAV) using JOIN for large data

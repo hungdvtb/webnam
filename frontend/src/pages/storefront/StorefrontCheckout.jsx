@@ -8,6 +8,7 @@ const StorefrontCheckout = () => {
     const [searchParams] = useSearchParams();
     const productId = searchParams.get('product');
     const qty = parseInt(searchParams.get('qty') || '1');
+    const bundleOption = searchParams.get('bundle_option') || '';
 
     const [product, setProduct] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -55,7 +56,11 @@ const StorefrontCheckout = () => {
                 ward: form.ward,
                 notes: form.notes,
                 source: 'website',
-                items: product ? [{ product_id: product.id, quantity: form.quantity }] : [],
+                items: product ? [{
+                    product_id: product.id,
+                    quantity: form.quantity,
+                    options: bundleOption ? { bundle_option_title: bundleOption } : undefined,
+                }] : [],
             };
             const res = await api.post('/storefront/order', payload);
             trackPurchase(res.data.order_number, product ? product.current_price * form.quantity : 0, payload.items);
@@ -72,6 +77,7 @@ const StorefrontCheckout = () => {
                     paymentMethod: 'cod',
                     totalAmount: product ? product.current_price * form.quantity : 0,
                     totalItems: form.quantity,
+                    bundleOption,
                     continuePath: '/san-pham',
                     continueLabel: 'Tiếp tục mua sắm',
                     secondaryPath: '/old/dashboard',
@@ -83,7 +89,7 @@ const StorefrontCheckout = () => {
                         quantity: form.quantity,
                         price: product.current_price,
                         image: product.images?.[0]?.url || product.main_image || '',
-                        meta: product.category?.name || '',
+                        meta: bundleOption || product.category?.name || '',
                     }] : [],
                 },
             });
@@ -200,6 +206,7 @@ const StorefrontCheckout = () => {
                                         <div className="flex-1 min-w-0">
                                             <h4 className="text-sm font-bold text-stone-800 line-clamp-2">{product.name}</h4>
                                             <p className="text-xs text-stone-500 mt-1">{product.sku}</p>
+                                            {bundleOption ? <p className="mt-1 text-xs font-bold text-primary">Tùy chọn bộ: {bundleOption}</p> : null}
                                         </div>
                                     </div>
 

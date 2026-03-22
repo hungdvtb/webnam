@@ -235,6 +235,31 @@ export default function ProductDetailContent({ product }) {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
   };
 
+  const getBundleSelectionByConfig = (configName) => {
+    const normalizedConfig = configName || '';
+    const selectedItems = bundleItems.filter(item => {
+      if (item.removed) return false;
+      const itemConfig = item.option_title || item.pivot?.option_title || '';
+      return !itemConfig || itemConfig === normalizedConfig;
+    });
+
+    const itemsToCart = selectedItems.map((it, idx) => ({
+      uid: `${it.id}_${it.pivot?.variant_id || idx}`,
+      id: it.id,
+      name: it.name,
+      qty: it.qty || 1,
+      price: it.price,
+      image: it.images?.[0]?.image_url || it.primary_image?.url
+    }));
+
+    const finalPrice = selectedItems.reduce(
+      (acc, item) => acc + (parseFloat(item.price || 0) * (item.qty || 1)),
+      0
+    );
+
+    return { itemsToCart, finalPrice };
+  };
+
   const handleOptionSelect = (attrCode, value) => {
     setSelectedOptions(prev => {
       const next = { ...prev, [attrCode]: value };
@@ -290,7 +315,7 @@ export default function ProductDetailContent({ product }) {
       || (product.grouped_items?.length ? product.grouped_items : []);
 
     const itemsToCart = product.type === 'bundle'
-      ? bundleItems.filter(it => it.selected).map((it, idx) => ({
+      ? bundleItems.filter(it => it.selected && !it.removed).map((it, idx) => ({
           uid: `${it.id}_${it.pivot?.variant_id || idx}`,  // unique per slot
           id: it.id,
           name: it.name,
@@ -313,13 +338,25 @@ export default function ProductDetailContent({ product }) {
     flyToCart(e, images?.[0] ? getImageUrl(images[0]) : '/logo-dai-thanh.png');
   };
 
+  const handleAddBundleConfig = (configName, e) => {
+    if (e) e.preventDefault();
+    const { itemsToCart, finalPrice } = getBundleSelectionByConfig(configName);
+    if (itemsToCart.length === 0) return;
+
+    addToCart(product, quantity, { bundle_config: configName }, itemsToCart, finalPrice);
+    flyToCart(
+      e,
+      images?.[0] ? getImageUrl(images[0]) : '/logo-dai-thanh.png'
+    );
+  };
+
   const handleBuyNow = (e) => {
     if (e) e.preventDefault();
     const items = (product.bundle_items?.length ? product.bundle_items : null)
       || (product.grouped_items?.length ? product.grouped_items : []);
 
     const itemsToCart = product.type === 'bundle'
-      ? bundleItems.filter(it => it.selected).map((it, idx) => ({
+      ? bundleItems.filter(it => it.selected && !it.removed).map((it, idx) => ({
           uid: `${it.id}_${it.pivot?.variant_id || idx}`,
           id: it.id,
           name: it.name,
@@ -338,6 +375,14 @@ export default function ProductDetailContent({ product }) {
           };
       });
     addToCart(product, quantity, selectedOptions, itemsToCart);
+    router.push('/cart');
+  };
+
+  const handleBuyBundleConfig = (configName) => {
+    const { itemsToCart, finalPrice } = getBundleSelectionByConfig(configName);
+    if (itemsToCart.length === 0) return;
+
+    addToCart(product, quantity, { bundle_config: configName }, itemsToCart, finalPrice);
     router.push('/cart');
   };
 
@@ -390,7 +435,9 @@ export default function ProductDetailContent({ product }) {
         switchBundleConfiguration={switchBundleConfiguration}
         resetBundleItems={resetBundleItems}
         handleAddToCart={handleAddToCart}
+        handleAddBundleConfig={handleAddBundleConfig}
         handleBuyTabConfig={handleBuyTabConfig}
+        handleBuyBundleConfig={handleBuyBundleConfig}
       />
     );
   }

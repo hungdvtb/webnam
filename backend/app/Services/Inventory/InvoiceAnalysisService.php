@@ -253,6 +253,7 @@ PROMPT;
                 'sku' => $product?->sku,
                 'supplier_product_code' => $supplierCode ?: null,
                 'quantity' => $quantity,
+                'received_quantity' => 0,
                 'unit_name' => $product?->unit?->name ?? ($item['unit_name'] ?? null),
                 'unit_cost' => $unitCost,
                 'line_total' => $lineTotal,
@@ -297,36 +298,27 @@ PROMPT;
         }
 
         $compactCode = preg_replace('/[^A-Z0-9]+/', '', strtoupper($supplierCode)) ?: '';
-        $baseQuery = Product::query()->with(['unit:id,name']);
-
-        if ($supplierId) {
-            $baseQuery->where(function ($builder) use ($supplierId) {
-                $builder
-                    ->where('supplier_id', $supplierId)
-                    ->orWhereHas('suppliers', function ($supplierQuery) use ($supplierId) {
-                        $supplierQuery->where('suppliers.id', $supplierId);
-                    })
-                    ->orWhereHas('supplierPrices', function ($priceQuery) use ($supplierId) {
-                        $priceQuery->where('supplier_id', $supplierId);
-                    });
+        $supplierPriceQuery = SupplierProductPrice::query()
+            ->with(['product.unit:id,name'])
+            ->when($supplierId, function ($builder) use ($supplierId) {
+                $builder->where('supplier_id', $supplierId);
             });
-        }
 
-        $exactSupplierCode = (clone $baseQuery)
+        $exactSupplierCode = (clone $supplierPriceQuery)
             ->where('supplier_product_code', $supplierCode)
             ->first();
 
-        if ($exactSupplierCode) {
-            return $exactSupplierCode;
+        if ($exactSupplierCode?->product) {
+            return $exactSupplierCode->product;
         }
 
         if ($compactCode !== '') {
-            $compactSupplierCode = (clone $baseQuery)
+            $compactSupplierCode = (clone $supplierPriceQuery)
                 ->whereRaw("REGEXP_REPLACE(COALESCE(supplier_product_code, ''), '[^a-zA-Z0-9]', '', 'g') = ?", [$compactCode])
                 ->first();
 
-            if ($compactSupplierCode) {
-                return $compactSupplierCode;
+            if ($compactSupplierCode?->product) {
+                return $compactSupplierCode->product;
             }
         }
 

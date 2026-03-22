@@ -39,7 +39,7 @@ class ProductController extends Controller
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:id,name,code,frontend_type',
             'linkedProducts' => function ($q) {
-                $q->select(['products.id', 'products.sku', 'products.supplier_product_code', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
+                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
                     ->with([
                         'unit:id,name',
@@ -49,7 +49,7 @@ class ProductController extends Controller
                     ]);
             },
             'groupedItems' => function ($q) {
-                $q->select(['products.id', 'products.sku', 'products.supplier_product_code', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
+                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
@@ -58,7 +58,7 @@ class ProductController extends Controller
                     ]);
             },
             'bundleItems' => function ($q) {
-                $q->select(['products.id', 'products.sku', 'products.supplier_product_code', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
+                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
@@ -207,7 +207,7 @@ class ProductController extends Controller
         $query = Product::query()
             ->select([
             'id', 'sku', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
-            'supplier_id', 'supplier_product_code', 'inventory_unit_id',
+            'supplier_id', 'inventory_unit_id',
             'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title'
         ])
             ->withCount('suppliers')
@@ -221,7 +221,7 @@ class ProductController extends Controller
             'images:id,product_id,image_url,is_primary',
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
-            'variations:id,sku,supplier_product_code,name,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id',
+            'variations:id,sku,name,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id',
             'variations.unit:id,name',
             'variations.images:id,product_id,image_url,is_primary',
             'groupedItems:id,sku,name,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id',
@@ -357,9 +357,7 @@ class ProductController extends Controller
                 $escapeLike = static fn ($value) => str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
                 $nameExpr = "immutable_unaccent(COALESCE(products.name, ''))";
                 $skuExpr = "immutable_unaccent(COALESCE(products.sku, ''))";
-                $supplierCodeExpr = "immutable_unaccent(COALESCE(products.supplier_product_code, ''))";
                 $compactSkuExpr = "immutable_unaccent(REGEXP_REPLACE(COALESCE(products.sku, ''), '[^a-zA-Z0-9]', '', 'g'))";
-                $compactSupplierCodeExpr = "immutable_unaccent(REGEXP_REPLACE(COALESCE(products.supplier_product_code, ''), '[^a-zA-Z0-9]', '', 'g'))";
                 $phraseLike = '%' . $escapeLike($rawSearch) . '%';
                 $prefixLike = $escapeLike($rawSearch) . '%';
                 $compactSearch = preg_replace('/[^a-z0-9]+/', '', $normalizedSearch);
@@ -372,8 +370,8 @@ class ProductController extends Controller
                     $tokenLike = '%' . $escapeLike($token) . '%';
                     $compactToken = preg_replace('/[^a-z0-9]+/', '', $token);
                     $compactTokenLike = '%' . $escapeLike($compactToken) . '%';
-                    $strictTokenMatchParts[] = "CASE WHEN ({$nameExpr} ILIKE immutable_unaccent(?) OR {$skuExpr} ILIKE immutable_unaccent(?) OR {$supplierCodeExpr} ILIKE immutable_unaccent(?) OR {$compactSkuExpr} ILIKE immutable_unaccent(?) OR {$compactSupplierCodeExpr} ILIKE immutable_unaccent(?)) THEN 1 ELSE 0 END";
-                    array_push($strictTokenMatchBindings, $tokenLike, $tokenLike, $tokenLike, $compactTokenLike, $compactTokenLike);
+                    $strictTokenMatchParts[] = "CASE WHEN ({$nameExpr} ILIKE immutable_unaccent(?) OR {$skuExpr} ILIKE immutable_unaccent(?) OR {$compactSkuExpr} ILIKE immutable_unaccent(?)) THEN 1 ELSE 0 END";
+                    array_push($strictTokenMatchBindings, $tokenLike, $tokenLike, $compactTokenLike);
                 }
 
                 $strictTokenMatchSql = !empty($strictTokenMatchParts) ? '(' . implode(' + ', $strictTokenMatchParts) . ')' : '0';
@@ -382,22 +380,16 @@ class ProductController extends Controller
                 $searchRankingParts = [
                     "CASE WHEN {$skuExpr} = immutable_unaccent(?) THEN 1500 ELSE 0 END",
                     "CASE WHEN {$nameExpr} = immutable_unaccent(?) THEN 1400 ELSE 0 END",
-                    "CASE WHEN {$supplierCodeExpr} = immutable_unaccent(?) THEN 1320 ELSE 0 END",
                     "CASE WHEN {$skuExpr} ILIKE immutable_unaccent(?) THEN 950 ELSE 0 END",
                     "CASE WHEN {$nameExpr} ILIKE immutable_unaccent(?) THEN 900 ELSE 0 END",
-                    "CASE WHEN {$supplierCodeExpr} ILIKE immutable_unaccent(?) THEN 860 ELSE 0 END",
                     "CASE WHEN {$skuExpr} ILIKE immutable_unaccent(?) THEN 820 ELSE 0 END",
                     "CASE WHEN {$nameExpr} ILIKE immutable_unaccent(?) THEN 780 ELSE 0 END",
-                    "CASE WHEN {$supplierCodeExpr} ILIKE immutable_unaccent(?) THEN 760 ELSE 0 END",
                 ];
                 $searchRankingBindings = [
                     $rawSearch,
                     $rawSearch,
-                    $rawSearch,
                     $prefixLike,
                     $prefixLike,
-                    $prefixLike,
-                    $phraseLike,
                     $phraseLike,
                     $phraseLike,
                 ];
@@ -405,14 +397,10 @@ class ProductController extends Controller
                 if ($compactPhraseLike !== null) {
                     $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} ILIKE immutable_unaccent(?) THEN 900 ELSE 0 END";
                     $searchRankingBindings[] = $compactPhraseLike;
-                    $searchRankingParts[] = "CASE WHEN {$compactSupplierCodeExpr} ILIKE immutable_unaccent(?) THEN 860 ELSE 0 END";
-                    $searchRankingBindings[] = $compactPhraseLike;
                 }
 
                 if ($compactPrefixLike !== null) {
                     $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} ILIKE immutable_unaccent(?) THEN 880 ELSE 0 END";
-                    $searchRankingBindings[] = $compactPrefixLike;
-                    $searchRankingParts[] = "CASE WHEN {$compactSupplierCodeExpr} ILIKE immutable_unaccent(?) THEN 840 ELSE 0 END";
                     $searchRankingBindings[] = $compactPrefixLike;
                 }
 
@@ -426,9 +414,7 @@ class ProductController extends Controller
                 $query->where(function (Builder $strictSearchQuery) use (
                     $nameExpr,
                     $skuExpr,
-                    $supplierCodeExpr,
                     $compactSkuExpr,
-                    $compactSupplierCodeExpr,
                     $phraseLike,
                     $compactPhraseLike,
                     $strictTokenMatchSql,
@@ -437,13 +423,11 @@ class ProductController extends Controller
                 ) {
                     $strictSearchQuery
                         ->whereRaw("{$nameExpr} ILIKE immutable_unaccent(?)", [$phraseLike])
-                        ->orWhereRaw("{$skuExpr} ILIKE immutable_unaccent(?)", [$phraseLike])
-                        ->orWhereRaw("{$supplierCodeExpr} ILIKE immutable_unaccent(?)", [$phraseLike]);
+                        ->orWhereRaw("{$skuExpr} ILIKE immutable_unaccent(?)", [$phraseLike]);
 
                     if ($compactPhraseLike !== null) {
                         $strictSearchQuery
-                            ->orWhereRaw("{$compactSkuExpr} ILIKE immutable_unaccent(?)", [$compactPhraseLike])
-                            ->orWhereRaw("{$compactSupplierCodeExpr} ILIKE immutable_unaccent(?)", [$compactPhraseLike]);
+                            ->orWhereRaw("{$compactSkuExpr} ILIKE immutable_unaccent(?)", [$compactPhraseLike]);
                     }
 
                     if ($strictTokenMatchSql !== '0') {
@@ -453,19 +437,15 @@ class ProductController extends Controller
                     $strictSearchQuery->orWhereHas('variations', function (Builder $variationQuery) use ($phraseLike, $compactPhraseLike) {
                         $variationNameExpr = "immutable_unaccent(COALESCE(products.name, ''))";
                         $variationSkuExpr = "immutable_unaccent(COALESCE(products.sku, ''))";
-                        $variationSupplierCodeExpr = "immutable_unaccent(COALESCE(products.supplier_product_code, ''))";
                         $variationCompactSkuExpr = "immutable_unaccent(REGEXP_REPLACE(COALESCE(products.sku, ''), '[^a-zA-Z0-9]', '', 'g'))";
-                        $variationCompactSupplierCodeExpr = "immutable_unaccent(REGEXP_REPLACE(COALESCE(products.supplier_product_code, ''), '[^a-zA-Z0-9]', '', 'g'))";
 
                         $variationQuery
                             ->whereRaw("{$variationNameExpr} ILIKE immutable_unaccent(?)", [$phraseLike])
-                            ->orWhereRaw("{$variationSkuExpr} ILIKE immutable_unaccent(?)", [$phraseLike])
-                            ->orWhereRaw("{$variationSupplierCodeExpr} ILIKE immutable_unaccent(?)", [$phraseLike]);
+                            ->orWhereRaw("{$variationSkuExpr} ILIKE immutable_unaccent(?)", [$phraseLike]);
 
                         if ($compactPhraseLike !== null) {
                             $variationQuery
-                                ->orWhereRaw("{$variationCompactSkuExpr} ILIKE immutable_unaccent(?)", [$compactPhraseLike])
-                                ->orWhereRaw("{$variationCompactSupplierCodeExpr} ILIKE immutable_unaccent(?)", [$compactPhraseLike]);
+                                ->orWhereRaw("{$variationCompactSkuExpr} ILIKE immutable_unaccent(?)", [$compactPhraseLike]);
                         }
                     });
                 });
@@ -549,7 +529,7 @@ class ProductController extends Controller
             $query->inRandomOrder();
         } else {
             $sortMapping = ['stock' => 'stock_quantity', 'category' => 'category_id'];
-            $validSortFields = ['id', 'sku', 'supplier_product_code', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity', 'created_at', 'type', 'category_id'];
+            $validSortFields = ['id', 'sku', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity', 'created_at', 'type', 'category_id'];
 
             $field = $sortMapping[$sortBy] ?? $sortBy;
             if (!in_array($field, $validSortFields))
@@ -607,7 +587,6 @@ class ProductController extends Controller
             'weight' => 'nullable|string',
             'inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'sku' => 'nullable|string|unique:products,sku',
-            'supplier_product_code' => 'nullable|string|max:255',
             'meta_title' => 'nullable|string',
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
@@ -797,7 +776,6 @@ class ProductController extends Controller
                     'type' => 'simple',
                     'name' => $vData['name'] ?? ($product->name . ' - ' . ($vData['sku'] ?? 'Variant')),
                     'sku' => $vData['sku'],
-                    'supplier_product_code' => $vData['supplier_product_code'] ?? null,
                     'price' => $vData['price'],
                     'expected_cost' => $vData['expected_cost'] ?? null,
                     'weight' => $vData['weight'] ?? null,
@@ -919,7 +897,6 @@ class ProductController extends Controller
             'weight' => 'nullable|string',
             'inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'sku' => 'nullable|string|unique:products,sku,' . $id,
-            'supplier_product_code' => 'nullable|string|max:255',
             'status' => 'nullable|boolean',
             'meta_title' => 'nullable|string',
             'meta_description' => 'nullable|string',
@@ -1123,7 +1100,6 @@ class ProductController extends Controller
                     $variant->update([
                         'name' => $vData['name'] ?? $variant->name,
                         'sku' => $vData['sku'],
-                        'supplier_product_code' => $vData['supplier_product_code'] ?? null,
                         'price' => $vData['price'],
                         'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
@@ -1181,7 +1157,6 @@ class ProductController extends Controller
                         'type' => 'simple',
                         'name' => $vData['name'] ?? ($product->name . ' - ' . ($vData['sku'] ?? 'Variant')),
                         'sku' => $vData['sku'],
-                        'supplier_product_code' => $vData['supplier_product_code'] ?? null,
                         'price' => $vData['price'],
                         'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,

@@ -42,7 +42,7 @@ const AdminLayout = () => {
         if (!user) return false;
         if (user.is_admin) return true;
         let perms = [];
-        try { perms = typeof user.permissions === 'string' ? JSON.parse(user.permissions) : (user.permissions || []); } catch(e){}
+        try { perms = typeof user.permissions === 'string' ? JSON.parse(user.permissions) : (user.permissions || []); } catch { perms = []; }
         return perms.includes(permId);
     };
 
@@ -55,6 +55,7 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/orders')) return 'orders';
         if (path.startsWith('/admin/customers')) return 'customers';
         if (path.startsWith('/admin/inventory')) return 'inventory';
+        if (path.startsWith('/admin/finance')) return 'reports';
         if (path.startsWith('/admin/warehouses')) return 'warehouses';
         if (path.startsWith('/admin/attributes')) return 'attributes';
         if (path.startsWith('/admin/carrier-mappings')) return 'settings';
@@ -118,15 +119,6 @@ const AdminLayout = () => {
                                         >
                                             <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/settings' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>web</span>
                                             <span className="font-sans text-xs font-medium tracking-wide">Cài đặt web</span>
-                                        </Link>
-                                    )}
-                                    {false && (
-                                        <Link 
-                                            to="/admin/shipping-settings" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/shipping-settings' || location.pathname === '/admin/carrier-mappings' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
-                                        >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/shipping-settings' || location.pathname === '/admin/carrier-mappings' ? 'text-gold' : 'group-hover:text-gold'}`}>local_shipping</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Cài đặt vận chuyển</span>
                                         </Link>
                                     )}
                                     {canAccess('attributes') && (
@@ -300,6 +292,10 @@ const AdminLayout = () => {
 
 
                     <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-stone uppercase tracking-[0.2em] opacity-50">Báo cáo & Phân tích</div>
+                    <Link to="/admin/finance" className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/finance' ? 'bg-gold/10 text-gold' : 'hover:bg-white/10 text-white'}`}>
+                        <span className={`material-symbols-outlined w-6 text-center ${location.pathname === '/admin/finance' ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>account_balance_wallet</span>
+                        <span className="font-sans text-sm font-medium tracking-wider">Theo dõi tài chính</span>
+                    </Link>
                     <Link to="/admin/reports" className="flex items-center gap-4 p-3 hover:bg-white/10 rounded-sm transition-colors group">
                         <span className="material-symbols-outlined w-6 text-center text-stone group-hover:text-gold transition-colors">analytics</span>
                         <span className="font-sans text-sm font-medium tracking-wider">Báo cáo tổng hợp</span>

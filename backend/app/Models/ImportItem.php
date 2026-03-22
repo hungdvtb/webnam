@@ -18,6 +18,7 @@ class ImportItem extends Model
         'supplier_product_code_snapshot',
         'unit_name_snapshot',
         'quantity',
+        'received_quantity',
         'unit_cost',
         'supplier_price_snapshot',
         'price_was_updated',
@@ -27,6 +28,8 @@ class ImportItem extends Model
     ];
 
     protected $casts = [
+        'quantity' => 'integer',
+        'received_quantity' => 'integer',
         'unit_cost' => 'decimal:2',
         'supplier_price_snapshot' => 'decimal:2',
         'line_total' => 'decimal:2',

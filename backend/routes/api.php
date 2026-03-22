@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CategoryController;
+use App\Http\Controllers\Api\FinanceController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ProductController;
@@ -225,6 +226,39 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/inventory/batches', [InventoryController::class, 'batches']);
     Route::get('/inventory/exports', [InventoryController::class, 'exports']);
     Route::get('/inventory/exports/{id}', [InventoryController::class, 'showExport'])->whereNumber('id');
+
+    // Finance
+    Route::get('/finance/dashboard', [FinanceController::class, 'dashboard']);
+    Route::get('/finance/options', [FinanceController::class, 'options']);
+    Route::get('/finance/transactions', [FinanceController::class, 'transactions']);
+    Route::post('/finance/transactions', [FinanceController::class, 'storeTransaction']);
+    Route::post('/finance/transactions/{id}/restore', [FinanceController::class, 'restoreTransaction'])->whereNumber('id');
+    Route::post('/finance/transactions/{id}', [FinanceController::class, 'updateTransaction'])->whereNumber('id');
+    Route::delete('/finance/transactions/{id}', [FinanceController::class, 'destroyTransaction'])->whereNumber('id');
+    Route::get('/finance/wallets', [FinanceController::class, 'wallets']);
+    Route::post('/finance/wallets', [FinanceController::class, 'storeWallet']);
+    Route::put('/finance/wallets/{id}', [FinanceController::class, 'updateWallet'])->whereNumber('id');
+    Route::post('/finance/wallets/{id}/adjust', [FinanceController::class, 'adjustWallet'])->whereNumber('id');
+    Route::get('/finance/wallets/{id}/ledger', [FinanceController::class, 'walletLedger'])->whereNumber('id');
+    Route::get('/finance/transfers', [FinanceController::class, 'transfers']);
+    Route::post('/finance/transfers', [FinanceController::class, 'storeTransfer']);
+    Route::delete('/finance/transfers/{id}', [FinanceController::class, 'destroyTransfer'])->whereNumber('id');
+    Route::get('/finance/loans', [FinanceController::class, 'loans']);
+    Route::post('/finance/loans', [FinanceController::class, 'storeLoan']);
+    Route::put('/finance/loans/{id}', [FinanceController::class, 'updateLoan'])->whereNumber('id');
+    Route::delete('/finance/loans/{id}', [FinanceController::class, 'destroyLoan'])->whereNumber('id');
+    Route::post('/finance/loans/{id}/payments', [FinanceController::class, 'storeLoanPayment'])->whereNumber('id');
+    Route::delete('/finance/loan-payments/{id}', [FinanceController::class, 'destroyLoanPayment'])->whereNumber('id');
+    Route::get('/finance/fixed-expenses', [FinanceController::class, 'fixedExpenses']);
+    Route::post('/finance/fixed-expenses', [FinanceController::class, 'storeFixedExpense']);
+    Route::put('/finance/fixed-expenses/{id}', [FinanceController::class, 'updateFixedExpense'])->whereNumber('id');
+    Route::delete('/finance/fixed-expenses/{id}', [FinanceController::class, 'destroyFixedExpense'])->whereNumber('id');
+    Route::post('/finance/fixed-expenses/{id}/pay', [FinanceController::class, 'payFixedExpense'])->whereNumber('id');
+    Route::get('/finance/catalogs', [FinanceController::class, 'catalogs']);
+    Route::post('/finance/catalogs', [FinanceController::class, 'storeCatalog']);
+    Route::put('/finance/catalogs/{id}', [FinanceController::class, 'updateCatalog'])->whereNumber('id');
+    Route::delete('/finance/catalogs/{id}', [FinanceController::class, 'destroyCatalog'])->whereNumber('id');
+    Route::get('/finance/reports', [FinanceController::class, 'reports']);
 
     // Shipment management
     Route::get('/shipments', [\App\Http\Controllers\Api\ShipmentController::class , 'index']);

@@ -14,6 +14,99 @@ import ComponentSelectionModal from './common/ComponentSelectionModal';
 import { useState, useMemo, useEffect } from 'react';
 import Breadcrumb from './common/Breadcrumb';
 
+function BundleActionPopup({
+  configName,
+  onClose,
+  onViewDetails,
+  onAddToCart,
+  onBuyNow
+}) {
+  useEffect(() => {
+    if (!configName || typeof document === 'undefined') return undefined;
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [configName, onClose]);
+
+  if (!configName || typeof document === 'undefined') {
+    return null;
+  }
+
+  return createPortal(
+    <div className={styles.bundleActionOverlay} onClick={onClose}>
+      <div className={styles.bundleActionModal} onClick={(event) => event.stopPropagation()}>
+        <div className={styles.bundleActionHeader}>
+          <div>
+            <p className={styles.bundleActionEyebrow}>Chọn cấu hình bộ</p>
+            <h3 className={styles.bundleActionTitle}>{configName}</h3>
+          </div>
+          <button type="button" onClick={onClose} className={styles.bundleActionClose} aria-label="Đóng popup cấu hình bộ">
+            <span className="material-symbols-outlined">close</span>
+          </button>
+        </div>
+
+        <div className={styles.bundleActionBody}>
+          <button type="button" onClick={onViewDetails} className={styles.bundleActionTop}>
+            <span className="material-symbols-outlined">tune</span>
+            Xem chi tiết và tùy chỉnh thành phần bộ
+          </button>
+
+          <div className={styles.bundleActionGrid}>
+            <button type="button" onClick={onAddToCart} className={styles.bundleActionPrimary}>
+              <span className="material-symbols-outlined">add_shopping_cart</span>
+              Thêm vào giỏ
+            </button>
+            <button type="button" onClick={onBuyNow} className={styles.bundleActionSecondary}>
+              <span className="material-symbols-outlined">shopping_bag</span>
+              Mua ngay
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function InlineBundleActionPopover({ configName, onViewDetails, onAddToCart, onBuyNow }) {
+  if (!configName) {
+    return null;
+  }
+
+  return (
+    <div className={styles.bundleActionPopover}>
+      <div className={styles.bundleActionContent}>
+        <p className={styles.bundleActionEyebrow}>Chọn cấu hình bộ</p>
+        <h3 className={styles.bundleActionTitle}>{configName}</h3>
+        <button type="button" onClick={onViewDetails} className={styles.bundleActionTop}>
+          <span className="material-symbols-outlined">tune</span>
+          Xem chi tiết và tùy chỉnh thành phần bộ
+        </button>
+        <div className={styles.bundleActionGrid}>
+          <button type="button" onClick={onAddToCart} className={styles.bundleActionPrimary}>
+            <span className="material-symbols-outlined">add_shopping_cart</span>
+            Thêm vào giỏ
+          </button>
+          <button type="button" onClick={onBuyNow} className={styles.bundleActionSecondary}>
+            <span className="material-symbols-outlined">shopping_bag</span>
+            Mua ngay
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function BundleProductView({
   product,
   displayPrice,
@@ -31,14 +124,18 @@ export default function BundleProductView({
   switchBundleConfiguration,
   resetBundleItems,
   handleAddToCart,
+  handleAddBundleConfig,
   handleBuyNow,
   handleBuyTabConfig,
+  handleBuyBundleConfig,
   quantity,
   setQuantity,
   additionalInfo
 }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeSlot, setActiveSlot] = useState(null);
+  const [bundleActionConfig, setBundleActionConfig] = useState('');
+  const [hoveredBundleConfig, setHoveredBundleConfig] = useState('');
   // Active tab in the detail section (separate from upper config selector)
   const [activeTab, setActiveTab] = useState(null);
 
@@ -137,6 +234,80 @@ export default function BundleProductView({
     if (switchBundleConfiguration) switchBundleConfiguration(tabName);
   };
 
+  const activeBundlePopover = bundleActionConfig || hoveredBundleConfig;
+
+  useEffect(() => {
+    if (!bundleActionConfig) return undefined;
+
+    const handlePointerDown = (event) => {
+      const wrapper = event.target.closest('[data-bundle-config-wrapper="true"]');
+      if (!wrapper || wrapper.dataset.configName !== bundleActionConfig) {
+        setBundleActionConfig('');
+        setHoveredBundleConfig('');
+      }
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setBundleActionConfig('');
+        setHoveredBundleConfig('');
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [bundleActionConfig]);
+
+  const handleBundleMouseEnter = (configName) => {
+    if (!bundleActionConfig) {
+      setHoveredBundleConfig(configName);
+    }
+  };
+
+  const handleBundleMouseLeave = (configName) => {
+    if (!bundleActionConfig && hoveredBundleConfig === configName) {
+      setHoveredBundleConfig('');
+    }
+  };
+
+  const handleOpenBundleActions = (configName) => {
+    handleTabChange(configName);
+    setHoveredBundleConfig(configName);
+    setBundleActionConfig((currentConfig) => currentConfig === configName ? '' : configName);
+  };
+
+  const closeBundleActions = () => {
+    setBundleActionConfig('');
+    setHoveredBundleConfig('');
+  };
+
+  const handleViewBundleDetails = () => {
+    if (activeBundlePopover) {
+      handleTabChange(activeBundlePopover);
+    }
+    closeBundleActions();
+    document.getElementById('bundle-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const handlePopupAddToCart = (event) => {
+    if (!activeBundlePopover || !handleAddBundleConfig) return;
+    handleAddBundleConfig(activeBundlePopover, event);
+    closeBundleActions();
+  };
+
+  const handlePopupBuyNow = () => {
+    if (!activeBundlePopover || !handleBuyBundleConfig) return;
+    handleBuyBundleConfig(activeBundlePopover);
+    closeBundleActions();
+  };
+
   return (
     <>
       <Breadcrumb product={product} />
@@ -213,14 +384,37 @@ export default function BundleProductView({
                     </h4>
                   )}
                   <div className={styles.configOptionsGrid}>
-                    {configurations.map(config => (
-                      <button key={config}
-                        onClick={() => handleTabChange(config)}
-                        className={`${styles.configOptionBtn} ${activeConfig === config ? styles.configOptionBtnActive : ''}`}
-                      >
-                        {config}
-                      </button>
-                    ))}
+                    {configurations.map(config => {
+                      const isActive = activeConfig === config || activeBundlePopover === config;
+
+                      return (
+                        <div
+                          key={config}
+                          className={styles.configOptionWrap}
+                          data-bundle-config-wrapper="true"
+                          data-config-name={config}
+                          onMouseEnter={() => handleBundleMouseEnter(config)}
+                          onMouseLeave={() => handleBundleMouseLeave(config)}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleOpenBundleActions(config)}
+                            className={`${styles.configOptionBtn} ${isActive ? styles.configOptionBtnActive : ''}`}
+                            aria-expanded={activeBundlePopover === config}
+                          >
+                            {config}
+                          </button>
+                          {activeBundlePopover === config ? (
+                            <InlineBundleActionPopover
+                              configName={config}
+                              onViewDetails={handleViewBundleDetails}
+                              onAddToCart={handlePopupAddToCart}
+                              onBuyNow={handlePopupBuyNow}
+                            />
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}

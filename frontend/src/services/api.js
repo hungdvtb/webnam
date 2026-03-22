@@ -36,7 +36,7 @@ const multipartConfig = (data) => (
 );
 
 export const productApi = {
-    getAll: (params) => api.get('/products', { params }),
+    getAll: (params, signal) => api.get('/products', { params, signal }),
     getOne: (id) => api.get(`/products/${id}`),
     store: (data) => api.post('/products', data),
     update: (id, data) => api.post(`/products/${id}`, data), // POST for multipart support
@@ -169,7 +169,7 @@ export const stockApi = {
 
 export const inventoryApi = {
     getDashboard: (params) => api.get('/inventory/dashboard', { params }),
-    getProducts: (params) => api.get('/inventory/products', { params }),
+    getProducts: (params, signal) => api.get('/inventory/products', { params, signal }),
     createProduct: (data) => api.post('/inventory/products', data),
     updateProduct: (id, data) => api.put(`/inventory/products/${id}`, data),
     getSuppliers: (params) => api.get('/inventory/suppliers', { params }),
@@ -201,6 +201,40 @@ export const inventoryApi = {
     getBatches: (params) => api.get('/inventory/batches', { params }),
     getExports: (params) => api.get('/inventory/exports', { params }),
     getExport: (id) => api.get(`/inventory/exports/${id}`),
+};
+
+export const financeApi = {
+    getDashboard: (params) => api.get('/finance/dashboard', { params }),
+    getOptions: () => api.get('/finance/options'),
+    getTransactions: (params) => api.get('/finance/transactions', { params }),
+    createTransaction: (data) => api.post('/finance/transactions', data, multipartConfig(data)),
+    updateTransaction: (id, data) => api.post(`/finance/transactions/${id}`, data, multipartConfig(data)),
+    deleteTransaction: (id) => api.delete(`/finance/transactions/${id}`),
+    restoreTransaction: (id) => api.post(`/finance/transactions/${id}/restore`),
+    getWallets: (params) => api.get('/finance/wallets', { params }),
+    createWallet: (data) => api.post('/finance/wallets', data),
+    updateWallet: (id, data) => api.put(`/finance/wallets/${id}`, data),
+    adjustWallet: (id, data) => api.post(`/finance/wallets/${id}/adjust`, data),
+    getWalletLedger: (id, params) => api.get(`/finance/wallets/${id}/ledger`, { params }),
+    getTransfers: (params) => api.get('/finance/transfers', { params }),
+    createTransfer: (data) => api.post('/finance/transfers', data),
+    deleteTransfer: (id) => api.delete(`/finance/transfers/${id}`),
+    getLoans: (params) => api.get('/finance/loans', { params }),
+    createLoan: (data) => api.post('/finance/loans', data),
+    updateLoan: (id, data) => api.put(`/finance/loans/${id}`, data),
+    deleteLoan: (id) => api.delete(`/finance/loans/${id}`),
+    createLoanPayment: (id, data) => api.post(`/finance/loans/${id}/payments`, data),
+    deleteLoanPayment: (id) => api.delete(`/finance/loan-payments/${id}`),
+    getFixedExpenses: (params) => api.get('/finance/fixed-expenses', { params }),
+    createFixedExpense: (data) => api.post('/finance/fixed-expenses', data),
+    updateFixedExpense: (id, data) => api.put(`/finance/fixed-expenses/${id}`, data),
+    deleteFixedExpense: (id) => api.delete(`/finance/fixed-expenses/${id}`),
+    payFixedExpense: (id, data) => api.post(`/finance/fixed-expenses/${id}/pay`, data, multipartConfig(data)),
+    getCatalogs: (params) => api.get('/finance/catalogs', { params }),
+    createCatalog: (data) => api.post('/finance/catalogs', data),
+    updateCatalog: (id, data) => api.put(`/finance/catalogs/${id}`, data),
+    deleteCatalog: (id) => api.delete(`/finance/catalogs/${id}`),
+    getReports: (params) => api.get('/finance/reports', { params }),
 };
 
 export const couponApi = {

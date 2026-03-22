@@ -22,6 +22,9 @@ class InventoryImport extends Model
         'total_quantity',
         'subtotal_amount',
         'extra_charge_percent',
+        'extra_charge_mode',
+        'extra_charge_value',
+        'extra_charge_amount',
         'total_amount',
         'notes',
         'created_by',
@@ -32,6 +35,8 @@ class InventoryImport extends Model
         'import_date' => 'date',
         'subtotal_amount' => 'decimal:2',
         'extra_charge_percent' => 'decimal:2',
+        'extra_charge_value' => 'decimal:2',
+        'extra_charge_amount' => 'decimal:2',
         'total_amount' => 'decimal:2',
         'inventory_applied_at' => 'datetime',
     ];

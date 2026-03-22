@@ -1,11 +1,33 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useCart } from "@/context/CartContext";
 
+const DEFAULT_BRAND_TITLE = "G\u1ed1m \u0110\u1ea1i Th\u00e0nh";
+const DEFAULT_SEARCH_PLACEHOLDER = "B\u1ea1n c\u1ea7n t\u00ecm ki\u1ebfm s\u1ea3n ph\u1ea9m g\u00ec?";
+
 const isExternalUrl = (value = "") => /^https?:\/\//i.test(String(value).trim());
+
+const toComparableText = (value = "") =>
+  String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\u0111/g, "d")
+    .replace(/\u0110/g, "D")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+const normalizeBrandTitle = (value = "") => {
+  const trimmed = String(value || "").trim();
+
+  if (!trimmed) return DEFAULT_BRAND_TITLE;
+
+  return toComparableText(trimmed) === "gom dai thanh" ? DEFAULT_BRAND_TITLE : trimmed;
+};
 
 const renderNavLink = (item) => {
   const href = String(item?.url || item?.link || "#").trim() || "#";
@@ -30,35 +52,21 @@ const renderNavLink = (item) => {
 
 export default function Header({
   menuItems = [],
-  brandText = "GỐM ĐẠI THÀNH",
+  brandText = DEFAULT_BRAND_TITLE,
   logoUrl = "",
-  searchPlaceholder = "Bạn cần tìm kiếm sản phẩm gì?",
+  searchPlaceholder = DEFAULT_SEARCH_PLACEHOLDER,
 }) {
   const [searchQuery, setSearchQuery] = useState("");
   const { cartCount } = useCart();
-  const [isBouncing, setIsBouncing] = useState(false);
-  const [mounted, setMounted] = useState(false);
   const router = useRouter();
 
-  const resolvedBrandText = String(brandText || "").trim() || "GỐM ĐẠI THÀNH";
+  const resolvedBrandTitle = normalizeBrandTitle(brandText);
   const resolvedLogoUrl = String(logoUrl || "").trim() || "/logo-dai-thanh.png";
   const resolvedSearchPlaceholder =
-    String(searchPlaceholder || "").trim() || "Bạn cần tìm kiếm sản phẩm gì?";
+    String(searchPlaceholder || "").trim() || DEFAULT_SEARCH_PLACEHOLDER;
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    if (cartCount > 0) {
-      setIsBouncing(true);
-      const timer = setTimeout(() => setIsBouncing(false), 300);
-      return () => clearTimeout(timer);
-    }
-  }, [cartCount]);
-
-  const handleSearch = (e) => {
-    if ((e.type === "keydown" && e.key === "Enter") || e.type === "click") {
+  const handleSearch = (event) => {
+    if ((event.type === "keydown" && event.key === "Enter") || event.type === "click") {
       if (searchQuery.trim()) {
         router.push(`/products?search=${encodeURIComponent(searchQuery.trim())}`);
       }
@@ -68,14 +76,22 @@ export default function Header({
   return (
     <header className="site-header">
       <div className="container header-content">
-        <Link href="/" className="logo-section">
-          <div className="logo-img-box">
-            <img src={resolvedLogoUrl} alt={resolvedBrandText} className="logo-img" />
-          </div>
-          <div className="logo-text">
-            <h1 className="logo-title">{resolvedBrandText}</h1>
-            <span className="logo-subtitle">TINH HOA ĐẤT VIỆT</span>
-          </div>
+        <Link
+          href="/"
+          className="logo-section"
+          aria-label={resolvedBrandTitle}
+        >
+          <span className="logo-img-box">
+            <Image
+              src={resolvedLogoUrl}
+              alt={resolvedBrandTitle}
+              className="logo-img"
+              width={56}
+              height={56}
+              sizes="56px"
+              unoptimized
+            />
+          </span>
         </Link>
 
         <nav className="main-nav">
@@ -89,13 +105,19 @@ export default function Header({
             ) : (
               <>
                 <li className="nav-item">
-                  <Link href="/products" className="nav-link">SẢN PHẨM</Link>
+                  <Link href="/products" className="nav-link">
+                    {"S\u1ea3n ph\u1ea9m"}
+                  </Link>
                 </li>
                 <li className="nav-item">
-                  <Link href="/blog" className="nav-link">TIN TỨC</Link>
+                  <Link href="/blog" className="nav-link">
+                    {"Tin t\u1ee9c"}
+                  </Link>
                 </li>
                 <li className="nav-item">
-                  <Link href="/stores" className="nav-link">CỬA HÀNG</Link>
+                  <Link href="/stores" className="nav-link">
+                    {"C\u1eeda h\u00e0ng"}
+                  </Link>
                 </li>
               </>
             )}
@@ -104,23 +126,38 @@ export default function Header({
 
         <div className="actions-section">
           <div className="search-bar">
-            <span className="material-symbols-outlined search-icon" onClick={handleSearch}>search</span>
+            <span className="material-symbols-outlined search-icon" onClick={handleSearch}>
+              search
+            </span>
             <input
               type="text"
               placeholder={resolvedSearchPlaceholder}
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(event) => setSearchQuery(event.target.value)}
               onKeyDown={handleSearch}
               className="search-input"
             />
           </div>
 
-          <Link href="/cart" className={`cart-action ${isBouncing ? "bounce-cart" : ""}`}>
-            <span className="material-symbols-outlined cart-icon">shopping_cart</span>
+          <Link href="/cart" className="cart-action">
+            <span
+              key={`cart-icon-${cartCount}`}
+              className={`material-symbols-outlined cart-icon ${cartCount > 0 ? "cart-icon-bounce" : ""}`}
+            >
+              shopping_cart
+            </span>
             <div className="cart-text">
-              <span className="cart-title">Giỏ hàng</span>
+              <span className="cart-title">{"Gi\u1ecf h\u00e0ng"}</span>
               <span className="cart-subtitle">
-                Có <strong className={isBouncing ? "bounce-text" : ""}>{mounted ? cartCount : 0}</strong> sản phẩm
+                {"C\u00f3"}{" "}
+                <strong
+                  key={`cart-count-${cartCount}`}
+                  className={cartCount > 0 ? "bounce-text" : undefined}
+                  suppressHydrationWarning
+                >
+                  {cartCount}
+                </strong>{" "}
+                {"s\u1ea3n ph\u1ea9m"}
               </span>
             </div>
           </Link>
@@ -129,14 +166,14 @@ export default function Header({
 
       <style jsx>{`
         .site-header {
-          background: rgba(255, 255, 255, 0.85);
-          backdrop-filter: blur(12px);
-          border-bottom: 1px solid var(--border);
-          height: 64px;
-          padding: 0 24px;
+          background: rgba(255, 255, 255, 0.92);
+          backdrop-filter: blur(16px);
+          border-bottom: 1px solid rgba(197, 160, 89, 0.16);
+          min-height: 78px;
+          padding: 0 clamp(16px, 2.2vw, 24px);
           display: flex;
           align-items: center;
-          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
+          box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
           position: sticky;
           top: 0;
           z-index: 1000;
@@ -147,30 +184,32 @@ export default function Header({
           align-items: center;
           justify-content: space-between;
           width: 100%;
-          height: 100%;
-          gap: 1.5rem;
+          min-height: 78px;
+          gap: clamp(0.75rem, 1.8vw, 1.5rem);
         }
 
         .logo-section {
+          --brand-logo-size: 56px;
           display: flex;
           align-items: center;
-          gap: 12px;
           text-decoration: none;
           color: inherit;
           flex-shrink: 0;
         }
 
         .logo-img-box {
-          width: 40px;
-          height: 40px;
+          width: var(--brand-logo-size);
+          height: var(--brand-logo-size);
           display: flex;
           align-items: center;
           justify-content: center;
           overflow: hidden;
-          transition: transform 0.3s ease;
           flex-shrink: 0;
-          background: #fff;
-          border-radius: 8px;
+          background: linear-gradient(180deg, #ffffff 0%, #f9f3ea 100%);
+          border: 1px solid rgba(197, 160, 89, 0.18);
+          border-radius: 12px;
+          box-shadow: 0 8px 18px rgba(27, 44, 78, 0.08);
+          transition: transform 0.25s ease, box-shadow 0.25s ease;
         }
 
         .logo-img {
@@ -180,61 +219,34 @@ export default function Header({
         }
 
         .logo-section:hover .logo-img-box {
-          transform: translateY(-2px);
-        }
-
-        .logo-text {
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          border-left: 2px solid rgba(197, 160, 89, 0.4);
-          padding-left: 12px;
-          flex-shrink: 0;
-        }
-
-        .logo-title {
-          font-family: var(--font-display);
-          font-size: 18px;
-          font-weight: 600;
-          color: var(--primary);
-          margin: 0;
-          white-space: nowrap;
-          text-transform: uppercase;
-          line-height: 1.1;
-          letter-spacing: 0.02em;
-        }
-
-        .logo-subtitle {
-          font-family: var(--font-body);
-          font-size: 10px;
-          text-transform: uppercase;
-          letter-spacing: 0.3em;
-          color: var(--accent);
-          font-weight: 600;
-          margin-top: 2px;
-          line-height: 1;
-          white-space: nowrap;
+          transform: translateY(-1px);
+          box-shadow: 0 10px 22px rgba(27, 44, 78, 0.12);
         }
 
         .main-nav {
           flex: 1;
+          min-width: 0;
         }
 
         .nav-list {
           display: flex;
+          align-items: center;
+          flex-wrap: wrap;
           list-style: none;
-          gap: 1.5rem;
+          gap: clamp(1rem, 1.3vw, 1.5rem);
           margin: 0;
           padding: 0;
         }
 
         .nav-link {
-          font-size: 14px;
-          font-weight: 700;
+          font-size: 16px;
+          font-weight: 800;
           color: #1a2c4e;
           text-decoration: none;
-          letter-spacing: 0.05em;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
           transition: color 0.2s;
+          white-space: nowrap;
         }
 
         .nav-link:hover {
@@ -244,13 +256,16 @@ export default function Header({
         .actions-section {
           display: flex;
           align-items: center;
-          gap: 1.5rem;
+          gap: clamp(0.85rem, 1.4vw, 1.5rem);
+          flex-shrink: 0;
+          min-width: 0;
         }
 
         .search-bar {
           position: relative;
           display: flex;
           align-items: center;
+          min-width: 0;
         }
 
         .search-icon {
@@ -266,29 +281,39 @@ export default function Header({
           border: none;
           border-radius: 20px;
           padding: 6px 16px 6px 36px;
-          width: 240px;
+          width: clamp(190px, 18vw, 250px);
           font-size: 13px;
           outline: none;
-          transition: width 0.3s;
+          transition: width 0.3s ease, background-color 0.3s ease;
+          min-width: 0;
         }
 
         .search-input:focus {
-          width: 280px;
+          width: clamp(220px, 21vw, 290px);
           background-color: #e2e8f0;
         }
 
         .cart-action {
           position: relative;
-          text-decoration: none;
           display: flex;
           align-items: center;
+          gap: 0.5rem;
+          text-decoration: none;
           color: inherit;
+          flex-shrink: 0;
         }
 
         .cart-icon {
           font-size: 32px;
           color: #1a2c4e;
-          margin-right: 8px;
+          margin-right: 0;
+        }
+
+        .cart-text {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+          line-height: 1.1;
         }
 
         .cart-title {
@@ -297,6 +322,7 @@ export default function Header({
           font-weight: 700;
           font-size: 15px;
           line-height: 1.2;
+          white-space: nowrap;
         }
 
         .cart-subtitle {
@@ -312,22 +338,44 @@ export default function Header({
           animation: badgeBounce 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
         }
 
-        :global(.cart-action.bounce-cart span.cart-icon) {
+        .cart-icon-bounce {
           animation: cartShake 0.4s ease-in-out;
         }
 
         @keyframes badgeBounce {
-          0% { transform: scale(1); }
-          50% { transform: scale(1.4); }
-          100% { transform: scale(1); }
+          0% {
+            transform: scale(1);
+          }
+
+          50% {
+            transform: scale(1.4);
+          }
+
+          100% {
+            transform: scale(1);
+          }
         }
 
         @keyframes cartShake {
-          0% { transform: rotate(0deg) scale(1); }
-          25% { transform: rotate(-15deg) scale(1.2); }
-          50% { transform: rotate(15deg) scale(1.2); }
-          75% { transform: rotate(-5deg) scale(1.1); }
-          100% { transform: rotate(0deg) scale(1); }
+          0% {
+            transform: rotate(0deg) scale(1);
+          }
+
+          25% {
+            transform: rotate(-15deg) scale(1.2);
+          }
+
+          50% {
+            transform: rotate(15deg) scale(1.2);
+          }
+
+          75% {
+            transform: rotate(-5deg) scale(1.1);
+          }
+
+          100% {
+            transform: rotate(0deg) scale(1);
+          }
         }
 
         @media (max-width: 1024px) {
@@ -335,12 +383,82 @@ export default function Header({
             display: none;
           }
 
+          .header-content {
+            gap: 1rem;
+          }
+
           .search-input {
-            width: 180px;
+            width: clamp(160px, 32vw, 220px);
           }
 
           .search-input:focus {
-            width: 220px;
+            width: clamp(180px, 36vw, 240px);
+          }
+        }
+
+        @media (max-width: 768px) {
+          .site-header {
+            min-height: 72px;
+          }
+
+          .header-content {
+            min-height: 72px;
+          }
+
+          .logo-section {
+            --brand-logo-size: 50px;
+          }
+
+          .actions-section {
+            gap: 0.75rem;
+          }
+
+          .search-input {
+            width: 160px;
+          }
+
+          .search-input:focus {
+            width: 180px;
+          }
+
+          .cart-subtitle {
+            display: none;
+          }
+        }
+
+        @media (max-width: 640px) {
+          .site-header {
+            padding: 12px 16px;
+          }
+
+          .header-content {
+            min-height: auto;
+            flex-wrap: wrap;
+            row-gap: 0.75rem;
+          }
+
+          .logo-section {
+            --brand-logo-size: 46px;
+            flex: 1 1 100%;
+          }
+
+          .actions-section {
+            width: 100%;
+            flex: 1 1 100%;
+            justify-content: space-between;
+          }
+
+          .search-bar {
+            flex: 1 1 auto;
+          }
+
+          .search-input,
+          .search-input:focus {
+            width: 100%;
+          }
+
+          .cart-text {
+            display: none;
           }
         }
       `}</style>

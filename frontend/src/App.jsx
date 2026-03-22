@@ -37,6 +37,7 @@ import OrderForm from './pages/admin/OrderForm';
 import InventoryMovement from './pages/admin/InventoryMovement';
 import CustomerManagement from './pages/admin/CustomerManagement';
 import ReportDashboard from './pages/admin/ReportDashboard';
+import FinanceTracking from './pages/admin/FinanceTracking';
 import BlogList from './pages/admin/BlogList';
 import BlogForm from './pages/admin/BlogForm';
 import BlogImport from './pages/admin/BlogImport';
@@ -155,6 +156,7 @@ function App() {
                 <Route path="shipping-settings" element={<ShippingSettingsPage />} />
                 <Route path="users" element={<UserList />} />
                 <Route path="reports" element={<ReportDashboard />} />
+                <Route path="finance" element={<FinanceTracking />} />
                 <Route path="order-status-settings" element={<OrderStatusSettings />} />
                 <Route path="carrier-mappings" element={<Navigate to="/admin/shipping-settings?tab=mapping" replace />} />
                 <Route path="orders/:id" element={<OrderDetail />} />

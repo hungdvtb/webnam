@@ -12,6 +12,7 @@ class SupplierProductPrice extends Model
         'account_id',
         'supplier_id',
         'product_id',
+        'supplier_product_code',
         'unit_cost',
         'notes',
         'updated_by',

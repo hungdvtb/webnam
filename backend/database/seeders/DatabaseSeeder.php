@@ -26,6 +26,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             DemoContentSeeder::class,
             SystemPostSeeder::class,
+            FinanceDefaultSeeder::class,
         ]);
     }
 }

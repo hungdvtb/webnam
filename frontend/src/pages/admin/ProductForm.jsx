@@ -420,7 +420,6 @@ const ProductForm = () => {
         weight: '',
         inventory_unit_id: '',
         supplier_ids: [],
-        supplier_product_code: '',
         description: '',
         specifications: [], // [{label, value}]
         is_featured: false,
@@ -471,7 +470,6 @@ const ProductForm = () => {
         current_cost: 150,
         weight: 100,
         unit: 96,
-        supplier_product_code: 180,
         stock: 100,
         actions: 60
     });
@@ -1083,7 +1081,6 @@ const ProductForm = () => {
         const newV = {
             id: `manual_${Date.now()}`,
             sku: `${formData.sku}-${variants.length + 1}`,
-            supplier_product_code: '',
             price: formData.price,
             expected_cost: formData.expected_cost,
             current_cost: '',
@@ -1116,7 +1113,6 @@ const ProductForm = () => {
                     : Array.isArray(data.suppliers)
                         ? data.suppliers.map((supplier) => String(supplier.id))
                         : (data.supplier_id ? [String(data.supplier_id)] : []),
-                supplier_product_code: data.supplier_product_code || '',
                 description: data.description || '',
                 specifications: (() => {
                     if (!data.specifications) return [];
@@ -1265,7 +1261,6 @@ const ProductForm = () => {
                         current_cost: Math.floor(v.cost_price || 0),
                         weight: v.weight ?? '',
                         inventory_unit_id: v.inventory_unit_id ? String(v.inventory_unit_id) : (data.inventory_unit_id ? String(data.inventory_unit_id) : ''),
-                        supplier_product_code: v.supplier_product_code || '',
                         stock: v.stock_quantity ?? 0,
                         sku: v.sku ?? '',
                         attributes: attrs,
@@ -1779,7 +1774,6 @@ const ProductForm = () => {
             return {
                 id: `new_${Date.now()}_${index}`,
                 sku: `${formData.sku}-${skuSuffix}`,
-                supplier_product_code: '',
                 price: formData.price,
                 expected_cost: formData.expected_cost,
                 current_cost: '',
@@ -2189,7 +2183,6 @@ const ProductForm = () => {
                     }
                     submitData.append(`variants[${idx}][sku]`, v.sku);
                     submitData.append(`variants[${idx}][name]`, v.label); // Send label as name
-                    submitData.append(`variants[${idx}][supplier_product_code]`, v.supplier_product_code || '');
                     submitData.append(`variants[${idx}][price]`, v.price);
                     submitData.append(`variants[${idx}][expected_cost]`, v.expected_cost || '');
                     submitData.append(`variants[${idx}][weight]`, v.weight || '');
@@ -2501,8 +2494,8 @@ const ProductForm = () => {
                             <SectionTitle icon="shopping_bag" title="Thông tin cơ bản" />
 
                             <div className="grid grid-cols-1 gap-y-8">
-                                <div className="grid grid-cols-1 lg:grid-cols-7 gap-4">
-                                    <div className="lg:col-span-2">
+                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                                    <div>
                                         <Field label={<>Tên sản phẩm <span className="text-brick text-[14px] ml-1">*</span></>}>
                                             <input
                                                 name="name"
@@ -2515,7 +2508,7 @@ const ProductForm = () => {
                                         </Field>
                                     </div>
 
-                                    <div className="lg:col-span-2">
+                                    <div>
                                         <Field label={<>Mã sản phẩm (SKU) <span className="text-brick text-[14px] ml-1">*</span></>} className="group/sku border-gold/20">
                                             <input
                                                 name="sku"
@@ -2536,7 +2529,7 @@ const ProductForm = () => {
                                         </Field>
                                     </div>
 
-                                    <div className="lg:col-span-1">
+                                    <div>
                                         <Field label={<>Loại sản phẩm <span className="text-brick text-[14px] ml-1">*</span></>}>
                                             <select
                                                 name="type"
@@ -2551,7 +2544,7 @@ const ProductForm = () => {
                                         </Field>
                                     </div>
 
-                                    <div className="lg:col-span-1">
+                                    <div>
                                         <Field label="Danh mục">
                                             <select
                                                 name="category_id"
@@ -2574,17 +2567,32 @@ const ProductForm = () => {
                                         </Field>
                                     </div>
 
-                                    <div className="lg:col-span-1">
-                                        <Field label="Mã hàng NCC">
-                                            <input
-                                                name="supplier_product_code"
-                                                value={formData.supplier_product_code}
-                                                onChange={handleChange}
-                                                placeholder="Mã phía nhà cung cấp"
-                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
-                                            />
+                                    <div>
+                                        <Field label="ĐVT" className="border-primary/20 bg-stone/5">
+                                            <div className="flex items-center gap-2 w-full">
+                                                <select
+                                                    name="inventory_unit_id"
+                                                    value={formData.inventory_unit_id || ''}
+                                                    onChange={(e) => setFormData((prev) => ({ ...prev, inventory_unit_id: e.target.value }))}
+                                                    className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
+                                                >
+                                                    <option value="">Chọn ĐVT</option>
+                                                    {inventoryUnits.map((unit) => (
+                                                        <option key={unit.id} value={unit.id}>{unit.name}</option>
+                                                    ))}
+                                                </select>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleCreateInventoryUnit()}
+                                                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-primary/15 bg-white text-primary/70 transition hover:border-primary/35 hover:text-primary"
+                                                    title="Thêm đơn vị tính"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">add</span>
+                                                </button>
+                                            </div>
                                         </Field>
                                     </div>
+
                                 </div>
                             </div>
                         </div>
@@ -2594,7 +2602,7 @@ const ProductForm = () => {
                             <SectionTitle icon="payments" title="Giá và thông số" />
                             <div className="grid grid-cols-1 gap-y-8">
                                 <div className="grid grid-cols-1 gap-4">
-                                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_auto_auto_minmax(0,1.8fr)]">
+                                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
                                         <Field label="Giá bán lẻ (VNĐ)" className={`border-brick/30 bg-brick/[0.02] ${formData.price_type === 'sum' ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
                                             <div className="flex items-center w-full">
                                                 <input
@@ -2634,7 +2642,7 @@ const ProductForm = () => {
                                                 <span className="font-bold text-primary opacity-30 ml-2">₫</span>
                                             </div>
                                         </Field>
-                                        <Field label="Khối lượng SP" className="border-primary/20 bg-stone/5 lg:min-w-[128px]">
+                                        <Field label="Khối lượng SP" className="border-primary/20 bg-stone/5">
                                             <div className="flex items-center w-full">
                                                 <input
                                                     type="text"
@@ -2645,29 +2653,6 @@ const ProductForm = () => {
                                                     className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]"
                                                 />
                                                 <span className="font-bold text-primary opacity-30 ml-2 italic">gram</span>
-                                            </div>
-                                        </Field>
-                                        <Field label="ĐVT" className="border-primary/20 bg-stone/5 lg:min-w-[140px]">
-                                            <div className="flex items-center gap-2 w-full">
-                                                <select
-                                                    name="inventory_unit_id"
-                                                    value={formData.inventory_unit_id || ''}
-                                                    onChange={(e) => setFormData((prev) => ({ ...prev, inventory_unit_id: e.target.value }))}
-                                                    className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
-                                                >
-                                                    <option value="">Chọn ĐVT</option>
-                                                    {inventoryUnits.map((unit) => (
-                                                        <option key={unit.id} value={unit.id}>{unit.name}</option>
-                                                    ))}
-                                                </select>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleCreateInventoryUnit()}
-                                                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-primary/15 bg-white text-primary/70 transition hover:border-primary/35 hover:text-primary"
-                                                    title="Thêm đơn vị tính"
-                                                >
-                                                    <span className="material-symbols-outlined text-[16px]">add</span>
-                                                </button>
                                             </div>
                                         </Field>
                                         <Field label="Nhà cung cấp" className="border-primary/20 bg-stone/5">
@@ -3143,10 +3128,6 @@ const ProductForm = () => {
                                                         ĐVT
                                                         <div onMouseDown={(e) => handleVariantColumnResize('unit', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
                                                     </th>
-                                                    <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.supplier_product_code }}>
-                                                        Mã hàng NCC
-                                                        <div onMouseDown={(e) => handleVariantColumnResize('supplier_product_code', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
-                                                    </th>
                                                     <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.stock }}>
                                                         Kho hàng
                                                         <div onMouseDown={(e) => handleVariantColumnResize('stock', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
@@ -3306,15 +3287,6 @@ const ProductForm = () => {
                                                                     ))}
                                                                     <option value="__create__">+ Thêm mới</option>
                                                                 </select>
-                                                            </td>
-                                                            <td className="px-4 py-3 border-r border-stone/20">
-                                                                <input
-                                                                    className="w-full bg-stone/5 border border-transparent focus:border-purple-300 focus:bg-white px-2 py-2 rounded text-[12px] font-mono font-bold text-primary text-center transition-all"
-                                                                    value={v.supplier_product_code ?? ''}
-                                                                    onChange={(e) => handleVariantChange(index, 'supplier_product_code', e.target.value)}
-                                                                    placeholder="Mã NCC"
-                                                                    title={v.supplier_product_code || ''}
-                                                                />
                                                             </td>
                                                             <td className="px-4 py-3 border-r border-stone/20">
                                                                 <div className="flex items-center justify-center">

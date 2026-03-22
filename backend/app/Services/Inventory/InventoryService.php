@@ -17,6 +17,7 @@ use App\Models\Product;
 use App\Models\Supplier;
 use App\Models\SupplierProductPrice;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -37,6 +38,7 @@ class InventoryService
             }
 
             $supplier = $context['supplier'];
+            $supplierName = $context['supplier_name'];
             $productIds = $context['product_ids'];
             $products = $context['products'];
 
@@ -54,16 +56,19 @@ class InventoryService
 
             $import = InventoryImport::create([
                 'account_id' => $accountId,
-                'supplier_id' => $supplier->id,
+                'supplier_id' => $supplier?->id,
                 'inventory_import_status_id' => $status->id,
                 'import_number' => $this->generateImportNumber($accountId),
-                'supplier_name' => trim((string) $supplier->name),
+                'supplier_name' => $supplierName,
                 'import_date' => $importDate->toDateString(),
                 'status' => $status->code,
                 'entry_mode' => $context['entry_mode'],
                 'total_quantity' => $totalQuantity,
                 'subtotal_amount' => $context['subtotal_amount'],
                 'extra_charge_percent' => $context['extra_charge_percent'],
+                'extra_charge_mode' => $context['extra_charge_mode'],
+                'extra_charge_value' => $context['extra_charge_value'],
+                'extra_charge_amount' => $context['extra_charge_amount'],
                 'total_amount' => $totalAmount,
                 'notes' => $payload['notes'] ?? null,
                 'created_by' => $userId ?? Auth::id(),
@@ -77,6 +82,7 @@ class InventoryService
             foreach ($items as $index => $item) {
                 $product = $products->get((int) $item['product_id']);
                 $quantity = (int) $item['quantity'];
+                $receivedQuantity = max(0, min($quantity, (int) ($item['received_quantity'] ?? $quantity)));
                 $unitCost = round((float) $item['unit_cost'], 2);
                 $lineTotal = round($quantity * $unitCost, 2);
                 $supplierPrice = $supplierPrices->get($product->id);
@@ -91,9 +97,10 @@ class InventoryService
                     'supplier_product_price_id' => $supplierPrice?->id,
                     'product_name_snapshot' => $product->name,
                     'product_sku_snapshot' => $product->sku,
-                    'supplier_product_code_snapshot' => $item['supplier_product_code'] ?? $product->supplier_product_code,
+                    'supplier_product_code_snapshot' => $item['supplier_product_code'] ?? $supplierPrice?->supplier_product_code,
                     'unit_name_snapshot' => $item['unit_name'] ?? $product->unit?->name,
                     'quantity' => $quantity,
+                    'received_quantity' => $receivedQuantity,
                     'unit_cost' => $unitCost,
                     'supplier_price_snapshot' => $snapshotSupplierCost,
                     'price_was_updated' => $priceChanged && $shouldUpdateSupplierPrice,
@@ -102,7 +109,7 @@ class InventoryService
                     'sort_order' => $index + 1,
                 ]);
 
-                if ($this->importAffectsInventory($status)) {
+                if ($this->importAffectsInventory($status) && $receivedQuantity > 0) {
                     InventoryBatch::create([
                     'account_id' => $accountId,
                     'product_id' => $product->id,
@@ -112,13 +119,13 @@ class InventoryService
                     'source_id' => $import->id,
                     'batch_number' => $this->generateLotNumber($import->import_number, $index + 1),
                     'received_at' => $importDate->copy()->setTimeFrom(now()),
-                    'quantity' => $quantity,
-                    'remaining_quantity' => $quantity,
+                    'quantity' => $receivedQuantity,
+                    'remaining_quantity' => $receivedQuantity,
                     'unit_cost' => $unitCost,
                     'status' => 'open',
                     'meta' => [
-                        'supplier_id' => $supplier->id,
-                        'supplier_name' => $supplier->name,
+                        'supplier_id' => $supplier?->id,
+                        'supplier_name' => $supplierName,
                         'source_label' => $import->import_number,
                         'source_name' => 'Phiếu nhập',
                     ],
@@ -126,11 +133,19 @@ class InventoryService
 
                 }
 
-                if ($shouldUpdateSupplierPrice || $supplierPrice === null || $priceChanged) {
-                    $supplierPrice = $this->upsertSupplierPrice($supplier, $product, $unitCost, $userId, $item['price_notes'] ?? null);
+                if ($supplier && ($shouldUpdateSupplierPrice || $supplierPrice === null || $priceChanged || array_key_exists('supplier_product_code', $item))) {
+                    $supplierPrice = $this->upsertSupplierPrice(
+                        $supplier,
+                        $product,
+                        $unitCost,
+                        $userId,
+                        $item['price_notes'] ?? null,
+                        $item['supplier_product_code'] ?? null
+                    );
                     $supplierPrices->put($product->id, $supplierPrice);
                     $importItem->forceFill([
                         'supplier_product_price_id' => $supplierPrice->id,
+                        'supplier_product_code_snapshot' => $item['supplier_product_code'] ?? $supplierPrice->supplier_product_code,
                     ])->save();
                 }
 
@@ -168,15 +183,18 @@ class InventoryService
             ImportItem::query()->where('import_id', $import->id)->delete();
 
             $import->forceFill([
-                'supplier_id' => $context['supplier']->id,
+                'supplier_id' => $context['supplier']?->id,
                 'inventory_import_status_id' => $status->id,
-                'supplier_name' => trim((string) $context['supplier']->name),
+                'supplier_name' => $context['supplier_name'],
                 'import_date' => $context['import_date']->toDateString(),
                 'status' => $status->code,
                 'entry_mode' => $context['entry_mode'],
                 'total_quantity' => $context['total_quantity'],
                 'subtotal_amount' => $context['subtotal_amount'],
                 'extra_charge_percent' => $context['extra_charge_percent'],
+                'extra_charge_mode' => $context['extra_charge_mode'],
+                'extra_charge_value' => $context['extra_charge_value'],
+                'extra_charge_amount' => $context['extra_charge_amount'],
                 'total_amount' => $context['total_amount'],
                 'notes' => $payload['notes'] ?? null,
                 'inventory_applied_at' => $this->importAffectsInventory($status)
@@ -392,11 +410,27 @@ class InventoryService
 
     private function prepareImportContext(array $payload, int $accountId): array
     {
+        $status = $this->resolveImportStatus($payload, $accountId);
+        $statusWasManuallySelected = filter_var($payload['status_is_manual'] ?? false, FILTER_VALIDATE_BOOL);
+
         $items = collect($payload['items'] ?? [])
             ->map(function ($item) {
+                $quantity = (int) ($item['quantity'] ?? 0);
+                $receivedQuantity = isset($item['received_quantity'])
+                    ? (int) $item['received_quantity']
+                    : 0;
+
+                if ($receivedQuantity < 0) {
+                    $receivedQuantity = 0;
+                }
+                if ($receivedQuantity > $quantity) {
+                    $receivedQuantity = $quantity;
+                }
+
                 return [
                     'product_id' => (int) ($item['product_id'] ?? 0),
-                    'quantity' => (int) ($item['quantity'] ?? 0),
+                    'quantity' => $quantity,
+                    'received_quantity' => $receivedQuantity,
                     'unit_cost' => round((float) ($item['unit_cost'] ?? 0), 2),
                     'notes' => $item['notes'] ?? null,
                     'price_notes' => $item['price_notes'] ?? null,
@@ -414,7 +448,24 @@ class InventoryService
             ]);
         }
 
-        $supplier = Supplier::query()->findOrFail((int) ($payload['supplier_id'] ?? 0));
+        $allItemsCompleted = $items->every(fn ($item) => (int) $item['received_quantity'] >= (int) $item['quantity']);
+        if (!$statusWasManuallySelected && $allItemsCompleted) {
+            $completedStatus = $this->resolveCompletedImportStatus($accountId);
+            if ($completedStatus) {
+                $status = $completedStatus;
+            }
+        } elseif (!$statusWasManuallySelected && !$allItemsCompleted && $this->isCompletedImportStatus($status)) {
+            $incompleteStatus = $this->resolveIncompleteImportStatus($accountId);
+            if ($incompleteStatus) {
+                $status = $incompleteStatus;
+            }
+        }
+
+        $supplierId = (int) ($payload['supplier_id'] ?? 0);
+        $supplier = $supplierId > 0
+            ? Supplier::query()->findOrFail($supplierId)
+            : null;
+        $supplierName = $this->resolvedImportSupplierName($supplier);
         $productIds = $items->pluck('product_id')->unique()->values()->all();
         $products = Product::query()
             ->with(['unit:id,name'])
@@ -429,30 +480,80 @@ class InventoryService
             ]);
         }
 
-        $supplierPrices = SupplierProductPrice::query()
-            ->where('supplier_id', $supplier->id)
-            ->whereIn('product_id', $productIds)
-            ->get()
-            ->keyBy('product_id');
+        $supplierPrices = $supplier
+            ? SupplierProductPrice::query()
+                ->where('supplier_id', $supplier->id)
+                ->whereIn('product_id', $productIds)
+                ->get()
+                ->keyBy('product_id')
+            : collect();
 
         $importDate = Carbon::parse($payload['import_date'] ?? now());
         $subtotalAmount = round((float) $items->sum(fn ($item) => $item['quantity'] * $item['unit_cost']), 2);
-        $extraChargePercent = round((float) ($payload['extra_charge_percent'] ?? 0), 2);
-        $totalAmount = round($subtotalAmount + ($subtotalAmount * $extraChargePercent / 100), 2);
+        $extraCharge = $this->resolveImportExtraCharge($payload, $subtotalAmount);
+        $totalAmount = round($subtotalAmount + $extraCharge['amount'], 2);
 
         return [
             'items' => $items,
             'supplier' => $supplier,
+            'supplier_name' => $supplierName,
             'product_ids' => $productIds,
             'products' => $products,
             'supplier_prices' => $supplierPrices,
             'import_date' => $importDate,
-            'status' => $this->resolveImportStatus($payload, $accountId),
+            'status' => $status,
             'entry_mode' => $this->resolveImportEntryMode($payload),
             'total_quantity' => (int) $items->sum('quantity'),
+            'total_received_quantity' => (int) $items->sum('received_quantity'),
             'subtotal_amount' => $subtotalAmount,
-            'extra_charge_percent' => $extraChargePercent,
+            'extra_charge_percent' => $extraCharge['percent'],
+            'extra_charge_mode' => $extraCharge['mode'],
+            'extra_charge_value' => $extraCharge['value'],
+            'extra_charge_amount' => $extraCharge['amount'],
             'total_amount' => $totalAmount,
+        ];
+    }
+
+    private function resolvedImportSupplierName(?Supplier $supplier): string
+    {
+        $name = trim((string) ($supplier?->name ?? ''));
+        return $name !== '' ? $name : 'Tất cả sản phẩm';
+    }
+
+    private function resolveImportExtraCharge(array $payload, float $subtotalAmount): array
+    {
+        $mode = in_array(($payload['extra_charge_mode'] ?? null), ['percent', 'amount', 'mixed'], true)
+            ? (string) $payload['extra_charge_mode']
+            : 'percent';
+
+        $rawValue = array_key_exists('extra_charge_value', $payload) && $payload['extra_charge_value'] !== null && $payload['extra_charge_value'] !== ''
+            ? round((float) $payload['extra_charge_value'], 2)
+            : null;
+
+        if ($mode === 'amount') {
+            $value = $rawValue ?? round((float) ($payload['extra_charge_amount'] ?? 0), 2);
+            $fixedAmount = round($value, 2);
+            $percent = $subtotalAmount > 0
+                ? round(($fixedAmount / $subtotalAmount) * 100, 2)
+                : 0;
+        } elseif ($mode === 'mixed') {
+            $value = $rawValue ?? 0;
+            $fixedAmount = round($value, 2);
+            $percent = round((float) ($payload['extra_charge_percent'] ?? 0), 2);
+        } else {
+            $value = $rawValue ?? round((float) ($payload['extra_charge_percent'] ?? 0), 2);
+            $percent = round($value, 2);
+            $fixedAmount = 0;
+            $mode = 'percent';
+        }
+
+        $amount = round($fixedAmount + (($subtotalAmount * $percent) / 100), 2);
+
+        return [
+            'mode' => $mode,
+            'value' => round($value, 2),
+            'amount' => round($amount, 2),
+            'percent' => round($percent, 2),
         ];
     }
 
@@ -501,6 +602,69 @@ class InventoryService
         return $status;
     }
 
+    private function resolveCompletedImportStatus(int $accountId): ?InventoryImportStatus
+    {
+        return InventoryImportStatus::query()
+            ->where(function ($builder) use ($accountId) {
+                $builder
+                    ->whereNull('account_id')
+                    ->orWhere('account_id', $accountId);
+            })
+            ->where('is_active', true)
+            ->orderByRaw('CASE WHEN account_id = ? THEN 0 ELSE 1 END', [$accountId])
+            ->orderByDesc('is_default')
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get()
+            ->first(fn (InventoryImportStatus $status) => $this->isCompletedImportStatus($status));
+    }
+
+    private function resolveIncompleteImportStatus(int $accountId): ?InventoryImportStatus
+    {
+        return InventoryImportStatus::query()
+            ->where(function ($builder) use ($accountId) {
+                $builder
+                    ->whereNull('account_id')
+                    ->orWhere('account_id', $accountId);
+            })
+            ->where('is_active', true)
+            ->orderByRaw('CASE WHEN account_id = ? THEN 0 ELSE 1 END', [$accountId])
+            ->orderByDesc('is_default')
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get()
+            ->first(function (InventoryImportStatus $status) {
+                $normalizedCode = $this->normalizeStatusText($status->code);
+                $normalizedName = $this->normalizeStatusText($status->name);
+
+                return in_array($normalizedCode, ['hoan_thanh_1_phan', 'partial', 'partially_completed'], true)
+                    || str_contains($normalizedName, '1 phan')
+                    || str_contains($normalizedName, 'mot phan')
+                    || str_contains($normalizedName, 'chua du')
+                    || !$this->isCompletedImportStatus($status);
+            });
+    }
+
+    private function isCompletedImportStatus(?InventoryImportStatus $status): bool
+    {
+        if (!$status) {
+            return false;
+        }
+
+        $normalizedCode = $this->normalizeStatusText($status->code);
+        $normalizedName = $this->normalizeStatusText($status->name);
+
+        return in_array($normalizedCode, ['hoan_thanh', 'completed', 'complete', 'done'], true)
+            || str_contains($normalizedName, 'hoan thanh')
+            || str_contains($normalizedName, 'completed')
+            || str_contains($normalizedName, 'complete');
+    }
+
+    private function normalizeStatusText(?string $value): string
+    {
+        return Str::lower(trim((string) Str::of((string) $value)->ascii()));
+    }
+
     private function resolveImportEntryMode(array $payload): string
     {
         $entryMode = trim((string) ($payload['entry_mode'] ?? ''));
@@ -519,6 +683,7 @@ class InventoryService
         $products = $context['products'];
         $supplierPrices = $context['supplier_prices'];
         $supplier = $context['supplier'];
+        $supplierName = $context['supplier_name'];
         $importDate = $context['import_date'];
 
         foreach ($items as $index => $item) {
@@ -528,6 +693,7 @@ class InventoryService
             }
 
             $quantity = (int) $item['quantity'];
+            $receivedQuantity = max(0, min($quantity, (int) ($item['received_quantity'] ?? $quantity)));
             $unitCost = round((float) $item['unit_cost'], 2);
             $lineTotal = round($quantity * $unitCost, 2);
             $supplierPrice = $supplierPrices->get($product->id);
@@ -542,9 +708,10 @@ class InventoryService
                 'supplier_product_price_id' => $supplierPrice?->id,
                 'product_name_snapshot' => $product->name,
                 'product_sku_snapshot' => $product->sku,
-                'supplier_product_code_snapshot' => $item['supplier_product_code'] ?? $product->supplier_product_code,
+                'supplier_product_code_snapshot' => $item['supplier_product_code'] ?? $supplierPrice?->supplier_product_code,
                 'unit_name_snapshot' => $item['unit_name'] ?? $product->unit?->name,
                 'quantity' => $quantity,
+                'received_quantity' => $receivedQuantity,
                 'unit_cost' => $unitCost,
                 'supplier_price_snapshot' => $snapshotSupplierCost,
                 'price_was_updated' => $priceChanged && $shouldUpdateSupplierPrice,
@@ -553,15 +720,23 @@ class InventoryService
                 'sort_order' => $index + 1,
             ]);
 
-            if ($shouldUpdateSupplierPrice || $supplierPrice === null || $priceChanged) {
-                $supplierPrice = $this->upsertSupplierPrice($supplier, $product, $unitCost, $userId, $item['price_notes'] ?? null);
+            if ($supplier && ($shouldUpdateSupplierPrice || $supplierPrice === null || $priceChanged || array_key_exists('supplier_product_code', $item))) {
+                $supplierPrice = $this->upsertSupplierPrice(
+                    $supplier,
+                    $product,
+                    $unitCost,
+                    $userId,
+                    $item['price_notes'] ?? null,
+                    $item['supplier_product_code'] ?? null
+                );
                 $supplierPrices->put($product->id, $supplierPrice);
                 $importItem->forceFill([
                     'supplier_product_price_id' => $supplierPrice->id,
+                    'supplier_product_code_snapshot' => $item['supplier_product_code'] ?? $supplierPrice->supplier_product_code,
                 ])->save();
             }
 
-            if ($this->importAffectsInventory($status)) {
+            if ($this->importAffectsInventory($status) && $receivedQuantity > 0) {
                 InventoryBatch::create([
                     'account_id' => $import->account_id,
                     'product_id' => $product->id,
@@ -571,13 +746,13 @@ class InventoryService
                     'source_id' => $import->id,
                     'batch_number' => $this->generateLotNumber($import->import_number, $index + 1),
                     'received_at' => $importDate->copy()->setTimeFrom(now()),
-                    'quantity' => $quantity,
-                    'remaining_quantity' => $quantity,
+                    'quantity' => $receivedQuantity,
+                    'remaining_quantity' => $receivedQuantity,
                     'unit_cost' => $unitCost,
                     'status' => 'open',
                     'meta' => [
-                        'supplier_id' => $supplier->id,
-                        'supplier_name' => $supplier->name,
+                        'supplier_id' => $supplier?->id,
+                        'supplier_name' => $supplierName,
                         'source_label' => $import->import_number,
                         'source_name' => 'Phieu nhap',
                     ],
@@ -678,10 +853,10 @@ class InventoryService
             'items' => function ($builder) {
                 $builder->orderBy('sort_order')->orderBy('id');
             },
-            'items.product:id,sku,name,price,stock_quantity,inventory_unit_id,supplier_product_code',
+            'items.product:id,sku,name,price,stock_quantity,inventory_unit_id',
             'items.product.unit:id,name',
             'items.batch',
-            'items.supplierPrice:id,supplier_id,product_id,unit_cost,notes,updated_at',
+            'items.supplierPrice:id,supplier_id,product_id,supplier_product_code,unit_cost,notes,updated_at',
             'attachments:id,import_id,invoice_analysis_log_id,source_type,disk,file_path,original_name,mime_type,file_size,uploaded_by,created_at',
             'attachments.invoiceAnalysisLog:id,status,provider',
             'invoiceAnalysisLogs:id,import_id,supplier_id,source_name,status,provider,analysis_result,error_message,created_at',
@@ -1115,7 +1290,14 @@ class InventoryService
         ]);
     }
 
-    private function upsertSupplierPrice(Supplier $supplier, Product $product, float $unitCost, ?int $userId = null, ?string $notes = null): SupplierProductPrice
+    private function upsertSupplierPrice(
+        Supplier $supplier,
+        Product $product,
+        float $unitCost,
+        ?int $userId = null,
+        ?string $notes = null,
+        ?string $supplierProductCode = null
+    ): SupplierProductPrice
     {
         $supplierPrice = SupplierProductPrice::query()->firstOrNew([
             'supplier_id' => $supplier->id,
@@ -1132,12 +1314,19 @@ class InventoryService
             ])->save();
         }
 
-        $supplierPrice->fill([
+        $supplierPriceData = [
             'account_id' => $supplier->account_id ?? $product->account_id,
             'unit_cost' => $this->normalizeSupplierUnitCost($unitCost),
             'notes' => $notes,
             'updated_by' => $userId ?? Auth::id(),
-        ]);
+        ];
+
+        if ($supplierProductCode !== null) {
+            $normalizedSupplierCode = trim((string) $supplierProductCode);
+            $supplierPriceData['supplier_product_code'] = $normalizedSupplierCode !== '' ? $normalizedSupplierCode : null;
+        }
+
+        $supplierPrice->fill($supplierPriceData);
         $supplierPrice->save();
 
         return $supplierPrice;

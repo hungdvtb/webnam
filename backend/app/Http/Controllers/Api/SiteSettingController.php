@@ -12,6 +12,7 @@ class SiteSettingController extends Controller
     private const JSON_SETTING_KEYS = [
         'header_menu_items',
         'footer_menu_groups',
+        'inventory_import_print_templates',
     ];
 
     public function index(Request $request)

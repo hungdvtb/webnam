@@ -2,12 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { cmsApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
+import useAiAvailability from '../../hooks/useAiAvailability';
 
 const BannerForm = () => {
     const { id } = useParams();
     const isEdit = !!id;
     const navigate = useNavigate();
     const { showModal } = useUI();
+    const { available: aiAvailable, disabledReason } = useAiAvailability();
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
@@ -23,6 +25,10 @@ const BannerForm = () => {
     });
 
     const handleAIGenerate = async () => {
+        if (!aiAvailable) {
+            showModal({ title: 'AI chưa sẵn sàng', content: disabledReason, type: 'warning' });
+            return;
+        }
         setAiGenerating(true);
         try {
             const prompt = `Hãy viết một tiêu đề (Title) và phụ đề (Subtitle) cực kỳ sang trọng, cuốn hút và mang đậm chất nghệ thuật gốm sứ Bát Tràng cho một Banner quảng cáo trên trang chủ. 
@@ -175,8 +181,9 @@ const BannerForm = () => {
                                     <button
                                         type="button"
                                         onClick={handleAIGenerate}
-                                        disabled={aiGenerating}
+                                        disabled={aiGenerating || !aiAvailable}
                                         className={`text-[9px] font-black uppercase tracking-[0.1em] flex items-center gap-1.5 transition-all ${aiGenerating ? 'text-gold opacity-50' : 'text-gold hover:text-primary active:scale-95'}`}
+                                        title={!aiAvailable ? disabledReason : 'Tạo nội dung banner bằng AI'}
                                     >
                                         <span className={`material-symbols-outlined text-[14px] ${aiGenerating ? 'animate-spin' : ''}`}>auto_awesome</span>
                                         {aiGenerating ? 'Đang soạn...' : 'AI Sáng Tạo Content'}

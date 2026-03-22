@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { productApi, categoryApi, attributeApi, productImageApi, aiApi, blogApi, mediaApi, cmsApi, inventoryApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
+import useAiAvailability from '../../hooks/useAiAvailability';
 import ReactQuill from 'react-quill-new';
 import mammoth from 'mammoth';
 import 'react-quill-new/dist/quill.snow.css';
@@ -373,6 +374,7 @@ const ProductForm = () => {
     const returnContext = location.state?.returnContext || null;
 
     const { showModal, showToast } = useUI();
+    const { available: aiAvailable, disabledReason } = useAiAvailability();
     const [isSaving, setIsSaving] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
     const [aiRewriting, setAiRewriting] = useState(false);
@@ -1580,6 +1582,10 @@ const ProductForm = () => {
     };
 
     const handleAIGenerate = async () => {
+        if (!aiAvailable) {
+            showModal({ title: 'AI chưa sẵn sàng', content: disabledReason, type: 'warning' });
+            return;
+        }
         if (!formData.name) {
             showModal({ title: 'Lưu ý', content: 'Vui lòng nhập Tên Sản Phẩm để AI có cơ sở viết mô tả.', type: 'warning' });
             return;
@@ -1609,6 +1615,10 @@ const ProductForm = () => {
     };
 
     const handleAIRewrite = async () => {
+        if (!aiAvailable) {
+            showModal({ title: 'AI chưa sẵn sàng', content: disabledReason, type: 'warning' });
+            return;
+        }
         if (!formData.description || formData.description.trim() === '' || formData.description === '<p><br></p>') {
             showModal({ title: 'Lưu ý', content: 'Vui lòng nhập định dạng thô hoặc copy nội dung vào khung mô tả trước khi yêu cầu AI viết lại.', type: 'warning' });
             return;
@@ -3865,8 +3875,9 @@ const ProductForm = () => {
                                     <button
                                         type="button"
                                         onClick={handleAIRewrite}
-                                        disabled={aiRewriting}
+                                        disabled={aiRewriting || !aiAvailable}
                                         className={`flex items-center gap-2 px-4 py-1.5 rounded-sm border border-gold/30 text-gold font-bold text-[11px] uppercase tracking-widest transition-all shadow-sm ${aiRewriting ? 'opacity-50 cursor-wait' : 'hover:bg-primary hover:text-white hover:border-primary active:scale-95'}`}
+                                        title={!aiAvailable ? disabledReason : 'Viết lại mô tả bằng AI'}
                                     >
                                         <span className={`material-symbols-outlined text-[16px] ${aiRewriting ? 'animate-pulse' : ''}`}>edit_document</span>
                                         {aiRewriting ? 'AI đang viết lại...' : 'AI Viết lại'}
@@ -3874,8 +3885,9 @@ const ProductForm = () => {
                                     <button
                                         type="button"
                                         onClick={handleAIGenerate}
-                                        disabled={aiGenerating}
+                                        disabled={aiGenerating || !aiAvailable}
                                         className={`flex items-center gap-2 px-4 py-1.5 rounded-sm border border-gold/30 text-gold font-bold text-[11px] uppercase tracking-widest transition-all shadow-sm ${aiGenerating ? 'opacity-50 cursor-wait' : 'hover:bg-primary hover:text-white hover:border-primary active:scale-95'}`}
+                                        title={!aiAvailable ? disabledReason : 'Tạo mô tả mới bằng AI'}
                                     >
                                         <span className={`material-symbols-outlined text-[16px] ${aiGenerating ? 'animate-spin' : ''}`}>auto_awesome</span>
                                         {aiGenerating ? 'AI đang tạo...' : 'AI Viết mới'}

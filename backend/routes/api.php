@@ -357,6 +357,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/admin/reviews/{id}/approve', [\App\Http\Controllers\Api\ReviewController::class , 'approve']);
 
         // Admin AI Tools
+        Route::post('/ai/generate-content', [AIController::class , 'generateContent']);
+        Route::post('/ai/read-invoice', [AIController::class , 'readInvoice']);
         Route::post('/ai/generate-product-description', [AIController::class , 'generateProductDescription']);
         Route::post('/ai/rewrite-product-description', [AIController::class , 'rewriteProductDescription']);
         
@@ -368,6 +370,7 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::get('/products/{productId}/reviews', [\App\Http\Controllers\Api\ReviewController::class , 'index']);
 
 // Public AI Chat Routes
+Route::get('/ai/status', [AIController::class , 'status']);
 Route::post('/ai/chat', [AIController::class , 'chat']);
 Route::get('/ai/history/{chat_id}', [AIController::class , 'getHistory']);
 

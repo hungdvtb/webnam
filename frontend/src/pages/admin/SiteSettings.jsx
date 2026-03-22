@@ -20,6 +20,12 @@ const defaultSettings = {
     ga_active: false,
     tt_pixel_id: '',
     tt_pixel_active: false,
+    ai_gemini_api_key: '',
+    ai_gemini_model: 'gemini-2.5-flash',
+    ai_gemini_enabled: true,
+    ai_gemini_has_api_key: false,
+    ai_gemini_available: false,
+    ai_gemini_key_source: null,
     bank_name: '',
     bank_account_number: '',
     bank_account_name: '',
@@ -463,6 +469,12 @@ const SiteSettings = () => {
             setSettings((prev) => ({
                 ...prev,
                 ...incomingSettings,
+                ai_gemini_api_key: '',
+                ai_gemini_model: incomingSettings.ai_gemini_model || prev.ai_gemini_model,
+                ai_gemini_enabled: incomingSettings.ai_gemini_enabled ?? prev.ai_gemini_enabled,
+                ai_gemini_has_api_key: Boolean(incomingSettings.ai_gemini_has_api_key),
+                ai_gemini_available: Boolean(incomingSettings.ai_gemini_available),
+                ai_gemini_key_source: incomingSettings.ai_gemini_key_source || null,
                 header_brand_text: incomingSettings.header_brand_text || incomingSettings.site_name || prev.header_brand_text,
                 header_notice_text: incomingSettings.header_notice_text || prev.header_notice_text,
                 header_search_placeholder: incomingSettings.header_search_placeholder || prev.header_search_placeholder,
@@ -494,8 +506,8 @@ const SiteSettings = () => {
     }, [activeTab, searchParams, setSearchParams]);
 
     const handleChange = (e) => {
-        const { name, value } = e.target;
-        setSettings((prev) => ({ ...prev, [name]: value }));
+        const { name, value, type, checked } = e.target;
+        setSettings((prev) => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
     };
 
     const withHeaderMenuOrder = (menus) => menus
@@ -772,15 +784,25 @@ const SiteSettings = () => {
                 store_locations: normalizedStoreLocations,
             };
 
-            await cmsApi.settings.update({
+            const response = await cmsApi.settings.update({
                 account_id: activeAccountId,
                 settings: payloadSettings,
             });
+            const aiStatus = response.data?.ai || {};
+            const nextHasApiKey = Boolean(
+                aiStatus.configured ?? settings.ai_gemini_has_api_key ?? settings.ai_gemini_api_key
+            );
             setHeaderMenus(normalizedHeaderMenus);
             setFooterMenuGroups(normalizedFooterMenuGroups);
             setStoreLocations(normalizedStoreLocations);
             setSettings((prev) => ({
                 ...prev,
+                ai_gemini_api_key: '',
+                ai_gemini_has_api_key: nextHasApiKey,
+                ai_gemini_available: Boolean(aiStatus.available ?? (nextHasApiKey && prev.ai_gemini_enabled)),
+                ai_gemini_enabled: aiStatus.enabled ?? prev.ai_gemini_enabled,
+                ai_gemini_model: aiStatus.model || prev.ai_gemini_model,
+                ai_gemini_key_source: aiStatus.key_source || prev.ai_gemini_key_source || null,
                 header_menu_items: normalizedHeaderMenus,
                 footer_menu_groups: normalizedFooterMenuGroups,
                 store_locations: normalizedStoreLocations,
@@ -920,6 +942,7 @@ const SiteSettings = () => {
         { id: 'footer', title: 'Cài đặt Footer', icon: 'bottom_panel_open' },
         { id: 'stores', title: 'Hệ thống cửa hàng', icon: 'storefront' },
         { id: 'pixel', title: 'Pixel & Tracking', icon: 'analytics' },
+        { id: 'ai', title: 'Cài đặt AI (Gemini)', icon: 'smart_toy' },
         { id: 'domains', title: 'Quản lý tên miền', icon: 'language' },
         { id: 'bank', title: 'Cài đặt STK', icon: 'account_balance' },
         { id: 'quote', title: 'Báo giá', icon: 'image' },
@@ -932,6 +955,7 @@ const SiteSettings = () => {
         { id: 'footer', title: 'Cài đặt Footer', icon: 'bottom_panel_open' },
         { id: 'stores', title: 'Hệ thống cửa hàng', icon: 'storefront' },
         { id: 'pixel', title: 'Pixel & Tracking', icon: 'analytics' },
+        { id: 'ai', title: 'Cài đặt AI (Gemini)', icon: 'smart_toy' },
         { id: 'domains', title: 'Quản lý tên miền', icon: 'language' },
         { id: 'bank', title: 'Cài đặt STK', icon: 'account_balance' },
         { id: 'quote', title: 'Báo giá', icon: 'image' },
@@ -976,7 +1000,7 @@ const SiteSettings = () => {
                         key={tab.id}
                         type="button"
                         onClick={() => setActiveTab(tab.id)}
-                        className={`pb-3 text-[13px] font-black uppercase tracking-widest transition-all relative flex items-center gap-2 ${activeTab === tab.id ? 'text-primary' : 'text-primary/40 hover:text-primary/70'}`}
+                        className={`pb-3 text-[13px] font-black tracking-[0.04em] leading-tight transition-all relative flex items-center gap-2 ${activeTab === tab.id ? 'text-primary' : 'text-primary/40 hover:text-primary/70'}`}
                     >
                         <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
                         {tab.title}
@@ -1515,6 +1539,110 @@ const SiteSettings = () => {
                                     <input type="text" name={item.idName} value={settings[item.idName]} onChange={handleChange} className={inputClasses} placeholder={item.placeholder} />
                                 </SectionCard>
                             ))}
+                        </div>
+                    )}
+
+                    {activeTab === 'ai' && (
+                        <div className="space-y-6">
+                            <SectionCard
+                                icon="smart_toy"
+                                title="Cấu hình Gemini cho toàn bộ hệ thống"
+                                rightSlot={(
+                                    <span className={`inline-flex items-center rounded-sm px-3 py-1 text-[10px] font-black uppercase tracking-wider ${settings.ai_gemini_available ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                                        {settings.ai_gemini_available ? 'Sẵn sàng hoạt động' : 'Đang khóa AI'}
+                                    </span>
+                                )}
+                            >
+                                <div className="space-y-6">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        <div>
+                                            <label className={labelClasses}>API Key Gemini</label>
+                                            <input
+                                                type="password"
+                                                name="ai_gemini_api_key"
+                                                value={settings.ai_gemini_api_key}
+                                                onChange={handleChange}
+                                                className={inputClasses}
+                                                placeholder={settings.ai_gemini_has_api_key ? 'Đã có API key. Dán key mới nếu muốn thay thế.' : 'Dán API key Gemini vào đây'}
+                                            />
+                                            <p className="mt-2 text-[11px] text-primary/45 leading-5">
+                                                {settings.ai_gemini_has_api_key
+                                                    ? 'API key đang được lưu an toàn ở backend. Frontend không thể đọc lại giá trị thật.'
+                                                    : 'Chưa có API key. Khi chưa nhập khóa, toàn bộ tính năng AI sẽ tự động bị vô hiệu hóa.'}
+                                            </p>
+                                        </div>
+
+                                        <div>
+                                            <label className={labelClasses}>Model</label>
+                                            <input
+                                                type="text"
+                                                name="ai_gemini_model"
+                                                value={settings.ai_gemini_model}
+                                                onChange={handleChange}
+                                                className={inputClasses}
+                                                placeholder="gemini-2.5-flash"
+                                            />
+                                            <p className="mt-2 text-[11px] text-primary/45 leading-5">
+                                                Khuyến nghị dùng `gemini-2.5-flash`. Hệ thống sẽ tự đổi các model Gemini 1.5 cũ sang model mới để tránh lỗi không còn hỗ trợ.
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="rounded-sm border border-primary/10 bg-primary/[0.02] p-4">
+                                        <div className="flex flex-wrap items-center justify-between gap-4">
+                                            <div>
+                                                <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary">Bật / tắt AI</div>
+                                                <p className="mt-1 text-[12px] text-primary/55">
+                                                    Công tắc này áp dụng cho bài viết, đọc hóa đơn, chat và các nút AI khác trong hệ thống.
+                                                </p>
+                                            </div>
+
+                                            <label className="flex items-center gap-3 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    name="ai_gemini_enabled"
+                                                    checked={!!settings.ai_gemini_enabled}
+                                                    onChange={handleChange}
+                                                    className="sr-only peer"
+                                                />
+                                                <span className={`text-[10px] font-black uppercase ${settings.ai_gemini_enabled ? 'text-green-600' : 'text-primary/35'}`}>
+                                                    {settings.ai_gemini_enabled ? 'Đang bật' : 'Đang tắt'}
+                                                </span>
+                                                <span className={`relative inline-flex h-6 w-11 rounded-full transition-colors ${settings.ai_gemini_enabled ? 'bg-green-500' : 'bg-stone-300'}`}>
+                                                    <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200 mt-0.5 ${settings.ai_gemini_enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                                                </span>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div className="rounded-sm border border-primary/10 bg-white p-4">
+                                            <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/35">Trạng thái khóa</div>
+                                            <div className="mt-2 text-[14px] font-black text-primary">
+                                                {settings.ai_gemini_has_api_key ? 'Đã cấu hình' : 'Chưa cấu hình'}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-sm border border-primary/10 bg-white p-4">
+                                            <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/35">Khả dụng thực tế</div>
+                                            <div className="mt-2 text-[14px] font-black text-primary">
+                                                {settings.ai_gemini_available ? 'Sẵn sàng' : 'Đang vô hiệu hóa'}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-sm border border-primary/10 bg-white p-4">
+                                            <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/35">Nguồn API key</div>
+                                            <div className="mt-2 text-[14px] font-black text-primary">
+                                                {settings.ai_gemini_key_source === 'site_setting'
+                                                    ? 'Cài đặt web'
+                                                    : settings.ai_gemini_key_source === 'account'
+                                                        ? 'Tài khoản cũ'
+                                                        : settings.ai_gemini_key_source === 'env'
+                                                            ? 'Biến môi trường'
+                                                            : 'Chưa có'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </SectionCard>
                         </div>
                     )}
 

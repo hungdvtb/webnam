@@ -35,4 +35,13 @@ return [
         ],
     ],
 
+    'gemini' => [
+        'base_url' => env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta/'),
+        'default_model' => env('GEMINI_MODEL', 'gemini-2.5-flash'),
+        'ca_bundle_path' => env('GEMINI_CA_BUNDLE_PATH'),
+        'verify_ssl' => env('GEMINI_VERIFY_SSL', true),
+        'timeout' => env('GEMINI_TIMEOUT', 60),
+        'connect_timeout' => env('GEMINI_CONNECT_TIMEOUT', 15),
+    ],
+
 ];

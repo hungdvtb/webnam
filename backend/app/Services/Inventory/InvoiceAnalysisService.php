@@ -2,23 +2,24 @@
 
 namespace App\Services\Inventory;
 
-use App\Models\Account;
 use App\Models\InventoryInvoiceAnalysisLog;
 use App\Models\Product;
 use App\Models\Supplier;
 use App\Models\SupplierProductPrice;
-use Gemini;
-use Gemini\Data\Blob;
-use Gemini\Enums\MimeType;
+use App\Services\AI\GeminiService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class InvoiceAnalysisService
 {
+    public function __construct(
+        private readonly GeminiService $geminiService,
+    ) {
+    }
+
     public function analyzeUploadedInvoice(UploadedFile $file, int $accountId, ?int $supplierId = null, ?int $userId = null): array
     {
         $disk = 'public';
@@ -44,6 +45,7 @@ class InvoiceAnalysisService
 
             $log->forceFill([
                 'status' => !empty($draft['unmatched_lines']) ? 'partial' : 'success',
+                'provider' => $analysis['provider'] ?? 'gemini',
                 'analysis_result' => [
                     'raw_invoice' => $analysis['invoice'],
                     'mapped_items' => $draft['items'],
@@ -88,7 +90,6 @@ class InvoiceAnalysisService
 
     private function extractInvoiceData(InventoryInvoiceAnalysisLog $log, int $accountId, ?Supplier $supplier = null): array
     {
-        $mimeType = $this->resolveMimeType($log->mime_type);
         $absolutePath = Storage::disk($log->disk)->path($log->file_path);
         $rawBytes = file_get_contents($absolutePath);
 
@@ -96,50 +97,22 @@ class InvoiceAnalysisService
             throw new \RuntimeException('Khong doc duoc tep hoa don.');
         }
 
-        $account = Account::query()->find($accountId);
-        $apiKey = $account?->ai_api_key ?? env('GEMINI_API_KEY');
-
-        if (!$apiKey) {
-            return $this->fallbackInvoiceExtraction($log, $rawBytes);
-        }
-
         $prompt = $this->buildInvoicePrompt($supplier);
-        $blob = new Blob($mimeType, base64_encode($rawBytes));
-        $client = Gemini::factory()
-            ->withApiKey($apiKey)
-            ->withBaseUrl('https://generativelanguage.googleapis.com/v1beta/')
-            ->make();
+        $result = $this->geminiService->readImage(
+            base64_encode($rawBytes),
+            (string) $log->mime_type,
+            $prompt,
+            $accountId,
+            env('GEMINI_INVOICE_MODEL')
+        );
+        $text = trim((string) ($result['text'] ?? ''));
+        $decoded = $this->decodeInvoiceJson($text);
 
-        $models = [
-            env('GEMINI_INVOICE_MODEL', 'gemini-2.0-flash'),
-            'gemini-1.5-flash',
-            'gemini-pro-vision',
-            'gemini-pro-latest',
+        return [
+            'invoice' => $decoded,
+            'raw_text' => $text,
+            'provider' => $result['model'] ?? 'gemini',
         ];
-
-        $lastError = null;
-
-        foreach (array_unique(array_filter($models)) as $model) {
-            try {
-                $response = $client->generativeModel($model)->generateContent($prompt, $blob);
-                $text = trim((string) $response->text());
-                $decoded = $this->decodeInvoiceJson($text);
-
-                return [
-                    'invoice' => $decoded,
-                    'raw_text' => $text,
-                    'provider' => $model,
-                ];
-            } catch (\Throwable $exception) {
-                $lastError = $exception;
-            }
-        }
-
-        if ($lastError) {
-            throw $lastError;
-        }
-
-        throw new \RuntimeException('Khong co model AI phu hop de doc hoa don.');
     }
 
     private function buildInvoicePrompt(?Supplier $supplier = null): string
@@ -203,36 +176,6 @@ PROMPT;
         }
 
         throw new \RuntimeException('AI tra ve JSON khong hop le.');
-    }
-
-    private function fallbackInvoiceExtraction(InventoryInvoiceAnalysisLog $log, string $rawBytes): array
-    {
-        $rawText = null;
-        $mimeType = strtolower((string) $log->mime_type);
-
-        if (str_contains($mimeType, 'text') || str_contains($mimeType, 'json') || str_contains($mimeType, 'csv')) {
-            $rawText = trim($rawBytes);
-        }
-
-        if (!$rawText) {
-            throw new \RuntimeException('Chua cau hinh AI key va khong co bo OCR noi bo.');
-        }
-
-        return [
-            'invoice' => [
-                'invoice_number' => null,
-                'invoice_date' => null,
-                'supplier_name' => null,
-                'currency' => 'VND',
-                'subtotal_amount' => 0,
-                'tax_amount' => 0,
-                'total_amount' => 0,
-                'notes' => null,
-                'items' => [],
-            ],
-            'raw_text' => $rawText,
-            'provider' => 'fallback',
-        ];
     }
 
     private function buildDraftImport(array $analysis, ?Supplier $supplier = null): array
@@ -368,23 +311,5 @@ PROMPT;
     private function normalizeSupplierCode(?string $value): string
     {
         return trim(preg_replace('/\s+/', '', (string) $value) ?? '');
-    }
-
-    private function resolveMimeType(?string $value): MimeType
-    {
-        $mime = strtolower((string) $value);
-
-        return match ($mime) {
-            'image/png' => MimeType::IMAGE_PNG,
-            'image/jpeg', 'image/jpg' => MimeType::IMAGE_JPEG,
-            'image/webp' => MimeType::IMAGE_WEBP,
-            'image/heic' => MimeType::IMAGE_HEIC,
-            'image/heif' => MimeType::IMAGE_HEIF,
-            'text/plain' => MimeType::TEXT_PLAIN,
-            'text/csv' => MimeType::TEXT_CSV,
-            'application/json' => MimeType::APPLICATION_JSON,
-            'application/pdf' => MimeType::APPLICATION_PDF,
-            default => throw new \RuntimeException('Dinh dang tep hoa don chua duoc ho tro: ' . $mime),
-        };
     }
 }

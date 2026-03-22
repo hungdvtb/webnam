@@ -497,7 +497,7 @@ class InventoryController extends Controller
 
         if ($request->filled('search')) {
             $search = trim((string) $request->input('search'));
-            $query->where(function ($productQuery) use ($search) {
+            $query->where(function ($productQuery) use ($search, $supplier) {
                 $productQuery
                     ->where('products.sku', 'like', '%' . $search . '%')
                     ->orWhere('products.name', 'like', '%' . $search . '%')
@@ -517,7 +517,7 @@ class InventoryController extends Controller
 
         if ($request->filled('sku')) {
             $sku = trim((string) $request->input('sku'));
-            $query->where(function ($productQuery) use ($sku) {
+            $query->where(function ($productQuery) use ($sku, $supplier) {
                 $productQuery
                     ->where('products.sku', 'like', '%' . $sku . '%')
                     ->orWhere('supplier_price_rows.supplier_product_code', 'like', '%' . $sku . '%')

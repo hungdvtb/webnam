@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { attributeApi, aiApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
+import useAiAvailability from '../../hooks/useAiAvailability';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
 
 const AttributeList = () => {
@@ -10,6 +11,7 @@ const AttributeList = () => {
     const [isFormOpen, setIsFormOpen] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
     const { showModal } = useUI();
+    const { available: aiAvailable, disabledReason } = useAiAvailability();
     const [formData, setFormData] = useState({
         id: null,
         name: '',
@@ -155,6 +157,10 @@ const AttributeList = () => {
     };
 
     const handleAIGenerate = async () => {
+        if (!aiAvailable) {
+            showModal({ title: 'AI chưa sẵn sàng', content: disabledReason, type: 'warning' });
+            return;
+        }
         if (!formData.name) return alert('Vui lòng nhập tên thuộc tính trước.');
         setAiGenerating(true);
         try {
@@ -413,8 +419,9 @@ const AttributeList = () => {
                                             <button 
                                                 type="button" 
                                                 onClick={handleAIGenerate} 
-                                                disabled={aiGenerating} 
+                                                disabled={aiGenerating || !aiAvailable} 
                                                 className="flex items-center gap-1.5 text-gold hover:text-primary transition-colors text-[9px] font-black uppercase"
+                                                title={!aiAvailable ? disabledReason : 'Gợi ý giá trị bằng AI'}
                                             >
                                                 <span className={`material-symbols-outlined text-[16px] ${aiGenerating ? 'animate-spin' : ''}`}>auto_awesome</span>
                                                 Gợi ý AI

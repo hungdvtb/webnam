@@ -8,6 +8,18 @@ const Login = () => {
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
 
+    const resolveLoginError = (err) => {
+        if (!err?.response) {
+            return 'Không kết nối được API backend. Hãy bật backend ở cổng 8003 rồi thử lại.';
+        }
+
+        if (err.response?.status === 401) {
+            return 'Email hoặc mật khẩu không đúng.';
+        }
+
+        return err.response?.data?.message || 'Đăng nhập thất bại. Vui lòng thử lại.';
+    };
+
     const handleChange = (e) => {
         setCredentials({ ...credentials, [e.target.name]: e.target.value });
     };
@@ -27,7 +39,7 @@ const Login = () => {
                 navigate('/dashboard');
             }
         } catch (err) {
-            setError(err.response?.data?.message || 'Đăng nhập thất bại. Vui lòng thử lại.');
+            setError(resolveLoginError(err));
         } finally {
             setLoading(false);
         }

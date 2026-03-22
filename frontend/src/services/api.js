@@ -338,7 +338,10 @@ export const cartApi = {
 };
 
 export const aiApi = {
+    getStatus: () => api.get('/ai/status'),
     chat: (data) => api.post('/ai/chat', data),
+    generateContent: (data) => api.post('/ai/generate-content', data),
+    readInvoice: (data) => api.post('/ai/read-invoice', data, multipartConfig(data)),
     generateProductDescription: (data) => api.post('/ai/generate-product-description', data),
     rewriteProductDescription: (data) => api.post('/ai/rewrite-product-description', data),
     getHistory: (chatId) => api.get(`/ai/history/${chatId}`),

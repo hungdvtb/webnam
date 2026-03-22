@@ -3,9 +3,11 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\SiteSetting;
 use App\Models\Account;
+use App\Models\SiteSetting;
+use App\Services\AI\GeminiService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Validator;
 
 class SiteSettingController extends Controller
@@ -17,29 +19,50 @@ class SiteSettingController extends Controller
         'inventory_import_print_templates',
     ];
 
+    private const BOOLEAN_SETTING_KEYS = [
+        'fb_pixel_active',
+        'ga_active',
+        'tt_pixel_active',
+        'ai_gemini_enabled',
+    ];
+
+    private const SECRET_SETTING_KEYS = [
+        GeminiService::SETTING_API_KEY,
+    ];
+
+    public function __construct(
+        private readonly GeminiService $geminiService,
+    ) {
+    }
+
     public function index(Request $request)
     {
-        $accountId = null;
-        if ($request->has('site_code')) {
-            $account = Account::where('site_code', $request->site_code)->first();
-            if ($account) {
-                $accountId = $account->id;
-            }
-        } elseif ($request->header('X-Account-Id') && $request->header('X-Account-Id') !== 'all') {
-            $accountId = $request->header('X-Account-Id');
-        }
+        $accountId = $this->resolveAccountId($request);
 
         if (!$accountId) {
             return response()->json([]);
         }
 
-        $settings = SiteSetting::where('account_id', $accountId)
+        $settings = [];
+
+        SiteSetting::query()
+            ->where('account_id', $accountId)
             ->get(['key', 'value'])
-            ->mapWithKeys(function ($setting) {
-                return [
-                    $setting->key => $this->decodeSettingValue($setting->key, $setting->value),
-                ];
+            ->each(function (SiteSetting $setting) use (&$settings) {
+                if (in_array($setting->key, self::SECRET_SETTING_KEYS, true)) {
+                    return;
+                }
+
+                $settings[$setting->key] = $this->decodeSettingValue($setting->key, $setting->value);
             });
+
+        $aiStatus = $this->geminiService->status($accountId);
+
+        $settings[GeminiService::SETTING_MODEL] = trim((string) ($aiStatus['model'] ?? $settings[GeminiService::SETTING_MODEL] ?? GeminiService::DEFAULT_MODEL));
+        $settings[GeminiService::SETTING_ENABLED] = (bool) ($settings[GeminiService::SETTING_ENABLED] ?? $aiStatus['enabled']);
+        $settings['ai_gemini_has_api_key'] = (bool) $aiStatus['configured'];
+        $settings['ai_gemini_available'] = (bool) $aiStatus['available'];
+        $settings['ai_gemini_key_source'] = $aiStatus['key_source'];
 
         return response()->json($settings);
     }
@@ -77,17 +100,51 @@ class SiteSettingController extends Controller
         }
 
         foreach ($validated['settings'] as $key => $value) {
+            if ($key === GeminiService::SETTING_MODEL) {
+                $value = $this->geminiService->normalizeModelName(is_scalar($value) ? (string) $value : null);
+            }
+
+            if ($this->shouldSkipEmptySecretSetting($key, $value)) {
+                continue;
+            }
+
             SiteSetting::setValue(
                 $key,
                 $this->encodeSettingValue($key, $value),
-                $validated['account_id']
+                (int) $validated['account_id']
             );
         }
 
-        return response()->json(['message' => 'Settings updated successfully']);
+        return response()->json([
+            'message' => 'Settings updated successfully',
+            'ai' => $this->geminiService->status((int) $validated['account_id']),
+        ]);
     }
 
-    private function decodeSettingValue(string $key, $value)
+    private function resolveAccountId(Request $request): ?int
+    {
+        if ($request->has('site_code')) {
+            $account = Account::query()->where('site_code', $request->site_code)->first();
+
+            return $account?->id;
+        }
+
+        $headerAccountId = $request->header('X-Account-Id');
+        if ($headerAccountId && $headerAccountId !== 'all') {
+            return (int) $headerAccountId;
+        }
+
+        $siteCode = $request->header('X-Site-Code');
+        if ($siteCode) {
+            $account = Account::query()->where('site_code', $siteCode)->first();
+
+            return $account?->id;
+        }
+
+        return null;
+    }
+
+    private function decodeSettingValue(string $key, mixed $value): mixed
     {
         if (in_array($key, self::JSON_SETTING_KEYS, true)) {
             if (!is_string($value) || trim($value) === '') {
@@ -95,20 +152,30 @@ class SiteSettingController extends Controller
             }
 
             $decoded = json_decode($value, true);
+
             return json_last_error() === JSON_ERROR_NONE && is_array($decoded) ? $decoded : [];
+        }
+
+        if (in_array($key, self::BOOLEAN_SETTING_KEYS, true)) {
+            return $this->toBoolean($value);
         }
 
         return $value;
     }
 
-    private function encodeSettingValue(string $key, $value)
+    private function encodeSettingValue(string $key, mixed $value): mixed
     {
+        if (in_array($key, self::SECRET_SETTING_KEYS, true)) {
+            return Crypt::encryptString(trim((string) $value));
+        }
+
         if (in_array($key, self::JSON_SETTING_KEYS, true)) {
             if (is_string($value)) {
                 $decoded = json_decode($value, true);
                 if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
                     return json_encode(array_values($decoded), JSON_UNESCAPED_UNICODE);
                 }
+
                 return json_encode([], JSON_UNESCAPED_UNICODE);
             }
 
@@ -117,6 +184,10 @@ class SiteSettingController extends Controller
             }
 
             return json_encode([], JSON_UNESCAPED_UNICODE);
+        }
+
+        if (in_array($key, self::BOOLEAN_SETTING_KEYS, true)) {
+            return $this->toBoolean($value) ? '1' : '0';
         }
 
         if (is_bool($value)) {
@@ -128,5 +199,26 @@ class SiteSettingController extends Controller
         }
 
         return json_encode($value, JSON_UNESCAPED_UNICODE);
+    }
+
+    private function shouldSkipEmptySecretSetting(string $key, mixed $value): bool
+    {
+        if (!in_array($key, self::SECRET_SETTING_KEYS, true)) {
+            return false;
+        }
+
+        return trim((string) $value) === '';
+    }
+
+    private function toBoolean(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        return match (strtolower(trim((string) $value))) {
+            '1', 'true', 'yes', 'on' => true,
+            default => false,
+        };
     }
 }

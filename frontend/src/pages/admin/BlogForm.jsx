@@ -2,6 +2,7 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { blogApi, aiApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
+import useAiAvailability from '../../hooks/useAiAvailability';
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 
@@ -10,6 +11,7 @@ const BlogForm = () => {
     const isEdit = !!id;
     const navigate = useNavigate();
     const { showModal } = useUI();
+    const { available: aiAvailable, disabledReason } = useAiAvailability();
 
     const [loading, setLoading] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
@@ -116,28 +118,45 @@ const BlogForm = () => {
     };
 
     const handleAIGenerate = async () => {
-        if (!formData.title) {
-            showModal({ title: 'Lưu ý', content: 'Vui lòng nhập tiêu đề để AI tạo nội dung.', type: 'warning' });
+        if (!aiAvailable) {
+            showModal({ title: 'AI chưa sẵn sàng', content: disabledReason, type: 'warning' });
             return;
         }
 
         setAiGenerating(true);
 
         try {
-            const prompt = `Viết bài blog chuẩn SEO bằng tiếng Việt với tiêu đề: "${formData.title}".\n`
-                + `Yêu cầu: có H2/H3, văn phong trang trọng, khoảng 600-900 từ, trả về JSON {"excerpt":"...","content":"..."}.`
-                + `content phải là HTML hợp lệ với thẻ p, h2, h3, ul, li, strong.`;
+            const selectedCategory = categories.find((category) => String(category.id) === String(formData.blog_category_id));
+            const prompt = [
+                'Bạn là biên tập viên SEO tiếng Việt cho website bán hàng.',
+                'Hãy tạo một bài viết blog mới và trả về DUY NHẤT JSON hợp lệ theo cấu trúc:',
+                '{"title":"...","seo_keyword":"...","excerpt":"...","content":"..."}',
+                'Yêu cầu bắt buộc:',
+                '- title hấp dẫn, đúng chính tả, có giá trị SEO.',
+                '- seo_keyword ngắn gọn, sát chủ đề bài.',
+                '- excerpt dài 140-180 ký tự.',
+                '- content là HTML hợp lệ với các thẻ p, h2, h3, ul, li, strong.',
+                '- Nội dung khoảng 700-1000 từ, văn phong tự nhiên, bán hàng vừa phải, có giá trị thực tế.',
+                '- Có mở bài, phần thân theo cụm ý rõ ràng, kết bài và lời kêu gọi hành động nhẹ.',
+                '- Không nhắc rằng bạn là AI.',
+                `Tiêu đề gợi ý hiện tại: ${formData.title || 'Chưa có, hãy tự đề xuất tiêu đề phù hợp.'}`,
+                `Từ khóa SEO gợi ý: ${formData.seo_keyword || 'Chưa có, hãy tự đề xuất.'}`,
+                `Tóm tắt hiện tại: ${formData.excerpt || 'Chưa có.'}`,
+                `Danh mục bài viết: ${selectedCategory?.name || 'Chưa chọn danh mục'}`,
+            ].join('\n');
 
-            const response = await aiApi.chat({ message: prompt });
+            const response = await aiApi.generateContent({ prompt });
 
             let aiData;
             try {
-                const raw = response.data?.response || '{}';
+                const raw = response.data?.text || response.data?.response || '{}';
                 const jsonMatch = raw.match(/\{[\s\S]*\}/);
                 aiData = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
             } catch {
-                const fallback = response.data?.response || '';
+                const fallback = response.data?.text || response.data?.response || '';
                 aiData = {
+                    title: formData.title || 'Bài viết mới',
+                    seo_keyword: formData.seo_keyword || '',
                     excerpt: fallback.slice(0, 180),
                     content: `<p>${fallback}</p>`,
                 };
@@ -145,6 +164,8 @@ const BlogForm = () => {
 
             setFormData((prev) => ({
                 ...prev,
+                title: aiData.title || prev.title,
+                seo_keyword: aiData.seo_keyword || prev.seo_keyword,
                 excerpt: aiData.excerpt || prev.excerpt,
                 content: aiData.content || prev.content,
                 is_published: true,
@@ -295,18 +316,24 @@ const BlogForm = () => {
                             <button
                                 type="button"
                                 onClick={handleAIGenerate}
-                                disabled={aiGenerating}
+                                disabled={aiGenerating || !aiAvailable}
                                 className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[9px] font-bold uppercase tracking-widest transition-all shadow-sm ${aiGenerating
                                     ? 'bg-gold/10 text-gold animate-pulse cursor-wait'
-                                    : 'bg-gradient-to-r from-primary to-umber text-white hover:scale-105 active:scale-95'
+                                    : !aiAvailable
+                                        ? 'bg-stone-300 text-stone-100 cursor-not-allowed'
+                                        : 'bg-gradient-to-r from-primary to-umber text-white hover:scale-105 active:scale-95'
                                     }`}
+                                title={!aiAvailable ? disabledReason : 'Tạo tiêu đề và nội dung bằng AI'}
                             >
                                 <span className={`material-symbols-outlined text-xs ${aiGenerating ? 'animate-spin' : ''}`}>
                                     {aiGenerating ? 'progress_activity' : 'auto_awesome'}
                                 </span>
-                                {aiGenerating ? 'Đang tạo nội dung...' : 'AI tạo content'}
+                                {aiGenerating ? 'Đang viết bài...' : 'Viết bằng AI'}
                             </button>
                         </div>
+                        {!aiAvailable ? (
+                            <p className="text-[11px] text-amber-700 italic">{disabledReason}</p>
+                        ) : null}
 
                         <div className="bg-white border border-gold/20 shadow-sm quill-premium-wrapper">
                             <ReactQuill

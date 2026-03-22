@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class InventoryController extends Controller
 {
@@ -195,8 +196,9 @@ class InventoryController extends Controller
             'total_damaged',
         ];
         if ($searchTerm !== '') {
+            // Keep alias sorting raw so PostgreSQL does not wrap it into an expression and lose alias resolution.
             $query
-                ->orderByDesc('search_score')
+                ->orderByRaw('search_score DESC')
                 ->orderBy('products.name', 'asc')
                 ->orderBy('products.created_at', 'desc');
         } else {
@@ -658,28 +660,40 @@ class InventoryController extends Controller
         ]);
 
         $product = Product::query()->findOrFail((int) $validated['product_id']);
-        $product->suppliers()->syncWithoutDetaching([
-            $supplier->id => ['account_id' => $supplier->account_id ?? $product->account_id],
-        ]);
+        $this->attachSupplierToProduct($product, $supplier);
         if (!$product->supplier_id) {
             $product->update(['supplier_id' => $supplier->id]);
         }
 
-        $price = SupplierProductPrice::query()->updateOrCreate(
-            [
+        $normalizedProductId = (int) $validated['product_id'];
+        $normalizedSupplierCode = $this->normalizeSupplierProductCode($validated['supplier_product_code'] ?? null);
+        $this->ensureUniqueSupplierProductCodes($supplier->id, [[
+            'product_id' => $normalizedProductId,
+            'supplier_product_code' => $normalizedSupplierCode,
+        ]]);
+        $normalizedUnitCost = $this->normalizeSupplierUnitCost($validated['unit_cost']);
+        $now = now();
+
+        DB::table('supplier_product_prices')->upsert(
+            [[
                 'supplier_id' => $supplier->id,
-                'product_id' => (int) $validated['product_id'],
-            ],
-            [
-                'account_id' => $supplier->account_id,
-                'supplier_product_code' => isset($validated['supplier_product_code']) && trim((string) $validated['supplier_product_code']) !== ''
-                    ? trim((string) $validated['supplier_product_code'])
-                    : null,
-                'unit_cost' => $this->normalizeSupplierUnitCost($validated['unit_cost']),
+                'product_id' => $normalizedProductId,
+                'account_id' => $supplier->account_id ?? $product->account_id,
+                'supplier_product_code' => $normalizedSupplierCode,
+                'unit_cost' => $normalizedUnitCost,
                 'notes' => $validated['notes'] ?? null,
                 'updated_by' => auth()->id(),
-            ]
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]],
+            ['supplier_id', 'product_id'],
+            ['account_id', 'supplier_product_code', 'unit_cost', 'notes', 'updated_by', 'updated_at']
         );
+
+        $price = SupplierProductPrice::withoutGlobalScopes()
+            ->where('supplier_id', $supplier->id)
+            ->where('product_id', $normalizedProductId)
+            ->firstOrFail();
 
         return response()->json($price->load(['product:id,sku,name,expected_cost,cost_price,stock_quantity,type,category_id', 'product.category:id,name', 'updater:id,name']), 201);
     }
@@ -687,7 +701,7 @@ class InventoryController extends Controller
     public function updateSupplierPrice(Request $request, int $id, int $priceId)
     {
         $supplier = Supplier::query()->findOrFail($id);
-        $price = SupplierProductPrice::query()
+        $price = SupplierProductPrice::withoutGlobalScopes()
             ->where('supplier_id', $supplier->id)
             ->findOrFail($priceId);
 
@@ -697,10 +711,15 @@ class InventoryController extends Controller
             'notes' => 'nullable|string|max:1000',
         ]);
 
+        $normalizedSupplierCode = $this->normalizeSupplierProductCode($validated['supplier_product_code'] ?? null);
+        $this->ensureUniqueSupplierProductCodes($supplier->id, [[
+            'product_id' => (int) $price->product_id,
+            'supplier_product_code' => $normalizedSupplierCode,
+        ]]);
+
         $price->forceFill([
-            'supplier_product_code' => isset($validated['supplier_product_code']) && trim((string) $validated['supplier_product_code']) !== ''
-                ? trim((string) $validated['supplier_product_code'])
-                : null,
+            'account_id' => $supplier->account_id ?? $price->account_id,
+            'supplier_product_code' => $normalizedSupplierCode,
             'unit_cost' => $this->normalizeSupplierUnitCost($validated['unit_cost']),
             'notes' => $validated['notes'] ?? null,
             'updated_by' => auth()->id(),
@@ -712,7 +731,7 @@ class InventoryController extends Controller
     public function destroySupplierPrice(int $id, int $priceId)
     {
         Supplier::query()->findOrFail($id);
-        $price = SupplierProductPrice::query()
+        $price = SupplierProductPrice::withoutGlobalScopes()
             ->where('supplier_id', $id)
             ->findOrFail($priceId);
         $price->delete();
@@ -725,14 +744,27 @@ class InventoryController extends Controller
         $supplier = Supplier::query()->findOrFail($id);
         $validated = $request->validate([
             'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
+            'items.*.product_id' => 'required|integer|distinct|exists:products,id',
             'items.*.supplier_product_code' => 'nullable|string|max:255',
             'items.*.unit_cost' => 'required|numeric|min:0',
             'items.*.notes' => 'nullable|string|max:1000',
         ]);
 
-        $savedIds = [];
-        $productIds = collect($validated['items'])
+        $normalizedItems = collect($validated['items'])
+            ->map(function (array $item) {
+                return [
+                    'product_id' => (int) $item['product_id'],
+                    'supplier_product_code' => $this->normalizeSupplierProductCode($item['supplier_product_code'] ?? null),
+                    'unit_cost' => $item['unit_cost'],
+                    'notes' => $item['notes'] ?? null,
+                ];
+            })
+            ->values()
+            ->all();
+
+        $this->ensureUniqueSupplierProductCodes($supplier->id, $normalizedItems);
+
+        $productIds = collect($normalizedItems)
             ->pluck('product_id')
             ->map(fn ($productId) => (int) $productId)
             ->filter()
@@ -740,14 +772,14 @@ class InventoryController extends Controller
             ->values()
             ->all();
 
+        $productAccountIds = [];
         if (!empty($productIds)) {
             Product::query()
                 ->whereIn('id', $productIds)
                 ->get()
-                ->each(function (Product $product) use ($supplier) {
-                    $product->suppliers()->syncWithoutDetaching([
-                        $supplier->id => ['account_id' => $supplier->account_id ?? $product->account_id],
-                    ]);
+                ->each(function (Product $product) use ($supplier, &$productAccountIds) {
+                    $productAccountIds[$product->id] = $product->account_id;
+                    $this->attachSupplierToProduct($product, $supplier);
 
                     if (!$product->supplier_id) {
                         $product->update(['supplier_id' => $supplier->id]);
@@ -755,29 +787,40 @@ class InventoryController extends Controller
                 });
         }
 
-        foreach ($validated['items'] as $item) {
-            $price = SupplierProductPrice::query()->updateOrCreate(
-                [
-                    'supplier_id' => $supplier->id,
-                    'product_id' => (int) $item['product_id'],
-                ],
-                [
-                    'account_id' => $supplier->account_id,
-                    'supplier_product_code' => isset($item['supplier_product_code']) && trim((string) $item['supplier_product_code']) !== ''
-                        ? trim((string) $item['supplier_product_code'])
-                        : null,
-                    'unit_cost' => $this->normalizeSupplierUnitCost($item['unit_cost']),
-                    'notes' => $item['notes'] ?? null,
-                    'updated_by' => auth()->id(),
-                ]
-            );
-
-            $savedIds[] = $price->id;
+        $upsertRows = [];
+        foreach ($normalizedItems as $item) {
+            $productId = (int) $item['product_id'];
+            $resolvedAccountId = $supplier->account_id ?? ($productAccountIds[$productId] ?? null);
+            $upsertRows[] = [
+                'supplier_id' => $supplier->id,
+                'product_id' => $productId,
+                'account_id' => $resolvedAccountId,
+                'supplier_product_code' => $item['supplier_product_code'],
+                'unit_cost' => $this->normalizeSupplierUnitCost($item['unit_cost']),
+                'notes' => $item['notes'] ?? null,
+                'updated_by' => auth()->id(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ];
         }
 
-        $prices = SupplierProductPrice::query()
+        DB::table('supplier_product_prices')->upsert(
+            $upsertRows,
+            ['supplier_id', 'product_id'],
+            ['account_id', 'supplier_product_code', 'unit_cost', 'notes', 'updated_by', 'updated_at']
+        );
+
+        $savedProductIds = collect($validated['items'])
+            ->pluck('product_id')
+            ->map(fn ($value) => (int) $value)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $prices = SupplierProductPrice::withoutGlobalScopes()
             ->where('supplier_id', $supplier->id)
-            ->whereIn('id', $savedIds)
+            ->whereIn('product_id', $savedProductIds)
             ->with([
                 'product:id,sku,name,expected_cost,cost_price,stock_quantity,type,category_id',
                 'product.category:id,name',
@@ -994,7 +1037,7 @@ class InventoryController extends Controller
     public function imports(Request $request)
     {
         $query = InventoryImport::query()
-            ->withCount('items')
+            ->withCount(['items', 'attachments'])
             ->with(['supplier:id,name', 'creator:id,name', 'statusConfig:id,code,name,color,affects_inventory'])
             ->withSum('items as lines_total_amount', 'line_total')
             ->withSum('items as total_received_quantity', 'received_quantity');
@@ -1002,12 +1045,27 @@ class InventoryController extends Controller
         if ($request->filled('search')) {
             $search = trim((string) $request->input('search'));
             $query->where(function ($builder) use ($search) {
-                $builder
-                    ->where('import_number', 'like', '%' . $search . '%')
-                    ->orWhere('supplier_name', 'like', '%' . $search . '%')
-                    ->orWhereHas('supplier', function ($supplierQuery) use ($search) {
-                        $supplierQuery->where('name', 'like', '%' . $search . '%');
+                $this->applyCaseInsensitiveSearch($builder, [
+                    'import_number',
+                    'supplier_name',
+                    'notes',
+                ], $search);
+
+                $builder->orWhereHas('supplier', function ($supplierQuery) use ($search) {
+                    $this->applyCaseInsensitiveSearch($supplierQuery, ['name'], $search);
+                });
+
+                $builder->orWhereHas('items', function ($itemQuery) use ($search) {
+                    $this->applyCaseInsensitiveSearch($itemQuery, [
+                        'product_name_snapshot',
+                        'product_sku_snapshot',
+                        'supplier_product_code_snapshot',
+                    ], $search);
+
+                    $itemQuery->orWhereHas('product', function ($productQuery) use ($search) {
+                        $this->applyCaseInsensitiveSearch($productQuery, ['name', 'sku'], $search);
                     });
+                });
             });
         }
 
@@ -1021,6 +1079,15 @@ class InventoryController extends Controller
 
         if ($request->filled('entry_mode')) {
             $query->where('entry_mode', (string) $request->input('entry_mode'));
+        }
+
+        if ($request->filled('has_invoice')) {
+            $hasInvoice = (string) $request->input('has_invoice');
+            if ($hasInvoice === 'with_invoice') {
+                $query->has('attachments');
+            } elseif ($hasInvoice === 'without_invoice') {
+                $query->doesntHave('attachments');
+            }
         }
 
         if ($request->filled('date_from')) {
@@ -1097,6 +1164,30 @@ class InventoryController extends Controller
         return response()->json(['message' => 'Đã xóa phiếu nhập.']);
     }
 
+    public function bulkDestroyImports(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer|distinct',
+        ]);
+
+        $ids = collect($validated['ids'])->map(fn ($id) => (int) $id)->unique()->values();
+        $imports = InventoryImport::query()->whereIn('id', $ids)->get();
+
+        if ($imports->count() !== $ids->count()) {
+            return response()->json(['message' => 'Có phiếu nhập không tồn tại hoặc không còn khả dụng.'], 422);
+        }
+
+        foreach ($imports as $import) {
+            $this->inventoryService->deleteImport($import);
+        }
+
+        return response()->json([
+            'message' => 'Đã xóa các phiếu nhập đã chọn.',
+            'deleted_count' => $imports->count(),
+        ]);
+    }
+
     public function documents(Request $request, string $type)
     {
         $type = $this->normalizeDocumentType($type);
@@ -1108,12 +1199,26 @@ class InventoryController extends Controller
         if ($request->filled('search')) {
             $search = trim((string) $request->input('search'));
             $query->where(function ($builder) use ($search) {
-                $builder
-                    ->where('document_number', 'like', '%' . $search . '%')
-                    ->orWhere('notes', 'like', '%' . $search . '%')
-                    ->orWhereHas('supplier', function ($supplierQuery) use ($search) {
-                        $supplierQuery->where('name', 'like', '%' . $search . '%');
+                $this->applyCaseInsensitiveSearch($builder, [
+                    'document_number',
+                    'notes',
+                ], $search);
+
+                $builder->orWhereHas('supplier', function ($supplierQuery) use ($search) {
+                    $this->applyCaseInsensitiveSearch($supplierQuery, ['name'], $search);
+                });
+
+                $builder->orWhereHas('items', function ($itemQuery) use ($search) {
+                    $this->applyCaseInsensitiveSearch($itemQuery, [
+                        'product_name_snapshot',
+                        'product_sku_snapshot',
+                        'notes',
+                    ], $search);
+
+                    $itemQuery->orWhereHas('product', function ($productQuery) use ($search) {
+                        $this->applyCaseInsensitiveSearch($productQuery, ['name', 'sku'], $search);
                     });
+                });
             });
         }
 
@@ -1236,6 +1341,34 @@ class InventoryController extends Controller
         return response()->json(['message' => 'Đã xóa phiếu kho.']);
     }
 
+    public function bulkDestroyDocuments(Request $request, string $type)
+    {
+        $type = $this->normalizeDocumentType($type);
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer|distinct',
+        ]);
+
+        $ids = collect($validated['ids'])->map(fn ($id) => (int) $id)->unique()->values();
+        $documents = InventoryDocument::query()
+            ->where('type', $type)
+            ->whereIn('id', $ids)
+            ->get();
+
+        if ($documents->count() !== $ids->count()) {
+            return response()->json(['message' => 'Có phiếu kho không tồn tại hoặc không đúng loại.'], 422);
+        }
+
+        foreach ($documents as $document) {
+            $this->inventoryService->deleteDocument($document);
+        }
+
+        return response()->json([
+            'message' => 'Đã xóa các phiếu kho đã chọn.',
+            'deleted_count' => $documents->count(),
+        ]);
+    }
+
     public function batches(Request $request)
     {
         $query = InventoryBatch::query()
@@ -1321,10 +1454,22 @@ class InventoryController extends Controller
         if ($request->filled('search')) {
             $search = trim((string) $request->input('search'));
             $query->where(function ($builder) use ($search) {
-                $builder
-                    ->where('order_number', 'like', $search . '%')
-                    ->orWhere('customer_name', 'like', '%' . $search . '%')
-                    ->orWhere('customer_phone', 'like', '%' . $search . '%');
+                $this->applyCaseInsensitiveSearch($builder, [
+                    'order_number',
+                    'customer_name',
+                    'customer_phone',
+                ], $search);
+
+                $builder->orWhereHas('items', function ($itemQuery) use ($search) {
+                    $this->applyCaseInsensitiveSearch($itemQuery, [
+                        'product_name_snapshot',
+                        'product_sku_snapshot',
+                    ], $search);
+
+                    $itemQuery->orWhereHas('product', function ($productQuery) use ($search) {
+                        $this->applyCaseInsensitiveSearch($productQuery, ['name', 'sku'], $search);
+                    });
+                });
             });
         }
 
@@ -1391,6 +1536,25 @@ class InventoryController extends Controller
 
         foreach ($secondaryOrders as $column => $order) {
             $query->orderBy($column, $order);
+        }
+    }
+
+    private function applyCaseInsensitiveSearch(Builder $query, array $columns, string $search): void
+    {
+        $search = trim($search);
+        if ($search === '' || empty($columns)) {
+            return;
+        }
+
+        $escapedSearch = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $search);
+        $like = '%' . $escapedSearch . '%';
+
+        foreach (array_values($columns) as $index => $column) {
+            $method = $index === 0 ? 'whereRaw' : 'orWhereRaw';
+            $query->{$method}(
+                "LOWER(COALESCE({$column}, '')) LIKE LOWER(?) ESCAPE '\\\\'",
+                [$like]
+            );
         }
     }
 
@@ -1998,7 +2162,7 @@ class InventoryController extends Controller
             return collect();
         }
 
-        return SupplierProductPrice::query()
+        return SupplierProductPrice::withoutGlobalScopes()
             ->where('supplier_id', $supplierId)
             ->whereIn('product_id', $ids)
             ->with(['updater:id,name'])
@@ -2242,6 +2406,127 @@ class InventoryController extends Controller
             'deleted_at' => $product->deleted_at,
             'created_at' => $product->created_at,
         ];
+    }
+
+    private function attachSupplierToProduct(Product $product, Supplier $supplier): void
+    {
+        DB::table('product_suppliers')->upsert(
+            [[
+                'product_id' => (int) $product->id,
+                'supplier_id' => (int) $supplier->id,
+                'account_id' => $supplier->account_id ?? $product->account_id,
+                'updated_at' => now(),
+                'created_at' => now(),
+            ]],
+            ['product_id', 'supplier_id'],
+            ['account_id', 'updated_at']
+        );
+    }
+
+    private function normalizeSupplierProductCode($value): ?string
+    {
+        $normalized = trim((string) $value);
+
+        return $normalized !== '' ? $normalized : null;
+    }
+
+    private function supplierProductCodeLookupKey(?string $value): ?string
+    {
+        $normalized = $this->normalizeSupplierProductCode($value);
+
+        return $normalized !== null ? mb_strtolower($normalized) : null;
+    }
+
+    private function ensureUniqueSupplierProductCodes(int $supplierId, array $items): void
+    {
+        $normalizedItems = collect($items)
+            ->map(function ($item) {
+                return [
+                    'product_id' => (int) ($item['product_id'] ?? 0),
+                    'supplier_product_code' => $this->normalizeSupplierProductCode($item['supplier_product_code'] ?? null),
+                ];
+            })
+            ->filter(fn ($item) => $item['product_id'] > 0 && $item['supplier_product_code'] !== null)
+            ->values();
+
+        if ($normalizedItems->isEmpty()) {
+            return;
+        }
+
+        $codesByLookupKey = [];
+        foreach ($normalizedItems as $item) {
+            $lookupKey = $this->supplierProductCodeLookupKey($item['supplier_product_code']);
+            if ($lookupKey === null) {
+                continue;
+            }
+
+            if (isset($codesByLookupKey[$lookupKey]) && $codesByLookupKey[$lookupKey]['product_id'] !== $item['product_id']) {
+                throw ValidationException::withMessages([
+                    'supplier_product_code' => [sprintf('Mã NCC "%s" đang bị trùng trong bảng giá của nhà cung cấp này.', $item['supplier_product_code'])],
+                ]);
+            }
+
+            $codesByLookupKey[$lookupKey] = [
+                'product_id' => $item['product_id'],
+                'supplier_product_code' => $item['supplier_product_code'],
+            ];
+        }
+
+        if (empty($codesByLookupKey)) {
+            return;
+        }
+
+        $lookupKeys = array_keys($codesByLookupKey);
+        $ignoredProductIds = $normalizedItems
+            ->pluck('product_id')
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+        $placeholders = implode(', ', array_fill(0, count($lookupKeys), '?'));
+
+        $conflictQuery = SupplierProductPrice::withoutGlobalScopes()
+            ->with(['product:id,sku,name'])
+            ->where('supplier_id', $supplierId)
+            ->whereNotNull('supplier_product_code')
+            ->where('supplier_product_code', '<>', '')
+            ->whereRaw("LOWER(BTRIM(COALESCE(supplier_product_code, ''))) IN ({$placeholders})", $lookupKeys);
+
+        if (!empty($ignoredProductIds)) {
+            $conflictQuery->whereNotIn('product_id', $ignoredProductIds);
+        }
+
+        $conflict = $conflictQuery
+            ->orderBy('id')
+            ->first();
+
+        if (!$conflict) {
+            return;
+        }
+
+        $conflictCode = $this->normalizeSupplierProductCode($conflict->supplier_product_code) ?? ($codesByLookupKey[$this->supplierProductCodeLookupKey($conflict->supplier_product_code) ?? '']['supplier_product_code'] ?? null);
+        $productLabel = $this->supplierProductConflictLabel($conflict);
+
+        throw ValidationException::withMessages([
+            'supplier_product_code' => [sprintf(
+                'Mã NCC "%s" đã tồn tại ở %s.',
+                $conflictCode ?? 'đã nhập',
+                $productLabel
+            )],
+        ]);
+    }
+
+    private function supplierProductConflictLabel(SupplierProductPrice $price): string
+    {
+        $sku = trim((string) ($price->product?->sku ?? ''));
+        $name = trim((string) ($price->product?->name ?? ''));
+        $parts = array_values(array_filter([$sku, $name]));
+
+        if (!empty($parts)) {
+            return 'sản phẩm ' . implode(' - ', $parts);
+        }
+
+        return 'một sản phẩm khác';
     }
 
     private function normalizeSupplierUnitCost($value): int

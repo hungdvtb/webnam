@@ -190,13 +190,21 @@ export const inventoryApi = {
     getImportInvoiceAnalysis: (id) => api.get(`/inventory/import-invoices/${id}`),
     getImports: (params) => api.get('/inventory/imports', { params }),
     createImport: (data) => api.post('/inventory/imports', data, multipartConfig(data)),
-    updateImport: (id, data) => api.put(`/inventory/imports/${id}`, data, multipartConfig(data)),
+    updateImport: (id, data) => {
+        if (data instanceof FormData) {
+            data.append('_method', 'PUT');
+            return api.post(`/inventory/imports/${id}`, data, multipartConfig(data));
+        }
+        return api.put(`/inventory/imports/${id}`, data);
+    },
     deleteImport: (id) => api.delete(`/inventory/imports/${id}`),
+    bulkDeleteImports: (ids) => api.post('/inventory/imports/bulk-delete', { ids }),
     getImport: (id) => api.get(`/inventory/imports/${id}`),
     getDocuments: (type, params) => api.get(`/inventory/documents/${type}`, { params }),
     createDocument: (type, data) => api.post(`/inventory/documents/${type}`, data),
     updateDocument: (type, id, data) => api.put(`/inventory/documents/${type}/${id}`, data),
     deleteDocument: (type, id) => api.delete(`/inventory/documents/${type}/${id}`),
+    bulkDeleteDocuments: (type, ids) => api.post(`/inventory/documents/${type}/bulk-delete`, { ids }),
     getDocument: (type, id) => api.get(`/inventory/documents/${type}/${id}`),
     getBatches: (params) => api.get('/inventory/batches', { params }),
     getExports: (params) => api.get('/inventory/exports', { params }),

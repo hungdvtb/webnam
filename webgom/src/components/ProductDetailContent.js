@@ -280,7 +280,7 @@ export default function ProductDetailContent({ product }) {
           const thisMatches = variant.attribute_values?.some(av => 
             (av.attribute?.code === attr.code || av.attribute_id === attr.id) && av.value === currentVal
           );
-          return othersMatch && thisMatches && variant.stock_quantity > 0;
+          return othersMatch && thisMatches;
         });
 
         if (!isPossible) {
@@ -297,7 +297,7 @@ export default function ProductDetailContent({ product }) {
               const thisMatches = variant.attribute_values?.some(av => 
                 (av.attribute?.code === attr.code || av.attribute_id === attr.id) && av.value === opt.value
               );
-              return othersMatch && thisMatches && variant.stock_quantity > 0;
+              return othersMatch && thisMatches;
             });
           });
           if (firstValid) next[attr.code] = firstValid.value;

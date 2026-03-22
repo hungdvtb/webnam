@@ -2,7 +2,7 @@ export const DEFAULT_HEADER_MENU_ITEMS = [
     { id: 'header-menu-products', label: 'Sản phẩm', link: '/san-pham', enabled: true, order: 1 },
     { id: 'header-menu-about', label: 'Về chúng tôi', link: '/about', enabled: true, order: 2 },
     { id: 'header-menu-knowledge', label: 'Kiến thức gốm', link: '/blog', enabled: true, order: 3 },
-    { id: 'header-menu-store', label: 'Hệ thống cửa hàng', link: '/he-thong-cua-hang', enabled: true, order: 4 },
+    { id: 'header-menu-store', label: 'Hệ thống cửa hàng', link: '/stores', enabled: true, order: 4 },
 ];
 
 const parseMaybeJson = (value) => {
@@ -19,11 +19,12 @@ const parseMaybeJson = (value) => {
 
 export const normalizeHeaderMenus = (value) => {
     const parsed = parseMaybeJson(value) || DEFAULT_HEADER_MENU_ITEMS;
+    const normalizeStoreRoute = (link = '/') => (link === '/he-thong-cua-hang' ? '/stores' : link);
 
     const normalized = parsed.map((item, index) => {
         const fallback = DEFAULT_HEADER_MENU_ITEMS[index] || DEFAULT_HEADER_MENU_ITEMS[0];
         const label = String(item?.label || item?.title || fallback.label || '').trim();
-        const link = String(item?.link || item?.url || fallback.link || '/').trim() || '/';
+        const link = normalizeStoreRoute(String(item?.link || item?.url || fallback.link || '/').trim() || '/');
         const enabled = item?.enabled === undefined ? true : Boolean(item.enabled);
         const rawOrder = Number(item?.order ?? item?.sort_order ?? (index + 1));
         const order = Number.isFinite(rawOrder) && rawOrder > 0 ? rawOrder : (index + 1);

@@ -275,44 +275,6 @@
   color: var(--accent);
 }
 
-/* Sidebar Promo */
-.sidebarPromo {
-  background: #1B365D;
-  padding: 1.5rem;
-  border-radius: 12px;
-  color: white;
-}
-
-.promoTitle {
-  color: var(--accent);
-  font-weight: 700;
-  margin-bottom: 0.5rem;
-}
-
-.promoText {
-  font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.8);
-  margin-bottom: 1rem;
-}
-
-.promoBtn {
-  width: 100%;
-  padding: 0.5rem;
-  background: transparent;
-  border: 1px solid var(--accent);
-  color: var(--accent);
-  font-size: 0.75rem;
-  font-weight: 700;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: all 0.2s;
-}
-
-.promoBtn:hover {
-  background: var(--accent);
-  color: white;
-}
-
 /* Product Grid */
 .productGrid {
   flex: 1;

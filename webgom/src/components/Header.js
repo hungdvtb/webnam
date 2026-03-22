@@ -29,23 +29,26 @@ const normalizeBrandTitle = (value = "") => {
   return toComparableText(trimmed) === "gom dai thanh" ? DEFAULT_BRAND_TITLE : trimmed;
 };
 
+const toUpperNavLabel = (value = "") => String(value || "").toLocaleUpperCase("vi-VN");
+
 const renderNavLink = (item) => {
   const href = String(item?.url || item?.link || "#").trim() || "#";
   const label = String(item?.title || item?.label || "").trim();
+  const displayLabel = toUpperNavLabel(label);
 
-  if (!label) return null;
+  if (!displayLabel) return null;
 
   if (isExternalUrl(href)) {
     return (
       <a href={href} className="nav-link" target="_blank" rel="noopener noreferrer">
-        {label}
+        {displayLabel}
       </a>
     );
   }
 
   return (
     <Link href={href} className="nav-link">
-      {label}
+      {displayLabel}
     </Link>
   );
 };
@@ -106,17 +109,17 @@ export default function Header({
               <>
                 <li className="nav-item">
                   <Link href="/products" className="nav-link">
-                    {"S\u1ea3n ph\u1ea9m"}
+                    {"S\u1ea2N PH\u1ea8M"}
                   </Link>
                 </li>
                 <li className="nav-item">
                   <Link href="/blog" className="nav-link">
-                    {"Tin t\u1ee9c"}
+                    {"KI\u1ebeN TH\u1ee8C G\u1ed0M"}
                   </Link>
                 </li>
                 <li className="nav-item">
                   <Link href="/stores" className="nav-link">
-                    {"C\u1eeda h\u00e0ng"}
+                    {"H\u1ec6 TH\u1ed0NG C\u1eeca H\u00c0NG"}
                   </Link>
                 </li>
               </>

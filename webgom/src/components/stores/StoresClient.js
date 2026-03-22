@@ -1,463 +1,813 @@
-"use client";
+﻿"use client";
 
-import { useState, useMemo } from 'react';
-import Link from 'next/link';
+import { useMemo, useState } from 'react';
 
-const STORES = [
-  {
-    id: 1,
-    name: 'Showroom Hà Nội',
-    city: 'Hà Nội',
-    address: 'Số 15 Lý Quốc Sư, Quận Hoàn Kiếm, Hà Nội',
-    phone: '(+84) 24 3828 5555',
-    hours: '08:00 – 21:00 (Hằng ngày)',
-    tag: 'Showroom chính',
-    mapEmbed: 'https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3724.095607743636!2d105.84846077599747!3d21.028779088004698!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x3135ab9b734b3969%3A0x74855b5d2e52e1b4!2zTMO9IFF14buRYyBT01IsIEhvw6BuIEtp4bq_bSwgSMOgIE7hu5Np!5e0!3m2!1sen!2svn!4v1700000000000!5m2!1sen!2svn',
-    mapLink: 'https://maps.google.com/?q=Lý+Quốc+Sư,+Hoàn+Kiếm,+Hà+Nội',
-    lat: 21.0288,
-    lng: 105.8485,
-  },
-  {
-    id: 2,
-    name: 'Xưởng Gốm Bát Tràng',
-    city: 'Hà Nội',
-    address: 'Xóm 3, Làng cổ Bát Tràng, Gia Lâm, Hà Nội',
-    phone: '(+84) 24 3874 1234',
-    hours: '07:30 – 18:30 (Hằng ngày)',
-    tag: 'Xưởng sản xuất',
-    mapEmbed: 'https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3723.5!2d105.9029!3d21.0333!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x3135a961b9c0f7fb%3A0x5376f5b1e4e8b72e!2zQsOhdCBUcsOgbmcsIEdpYSBMw6JtLCBIw6AgTuG7mWk!5e0!3m2!1sen!2svn!4v1700000000001!5m2!1sen!2svn',
-    mapLink: 'https://maps.google.com/?q=Bát+Tràng,+Gia+Lâm,+Hà+Nội',
-    lat: 21.033,
-    lng: 105.903,
-  },
-  {
-    id: 3,
-    name: 'Chi Nhánh TP. HCM',
-    city: 'TP. Hồ Chí Minh',
-    address: '88 Đồng Khởi, Quận 1, TP. Hồ Chí Minh',
-    phone: '(+84) 28 3823 4567',
-    hours: '09:00 – 22:00 (Hằng ngày)',
-    tag: 'Chi nhánh',
-    mapEmbed: 'https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3919.4553735506!2d106.70131!3d10.77873!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x31752f4670702e31%3A0xa5777fb3a5bb9f8b!2zxJDhu5NuZyBLaOG7n2ksIFF14bqtbiAxLCBUaMOgbmggcGjhu5EgSOG7kyBDaMOtIE1pbmg!5e0!3m2!1sen!2svn!4v1700000000002!5m2!1sen!2svn',
-    mapLink: 'https://maps.google.com/?q=88+Đồng+Khởi,+Quận+1,+TP+HCM',
-    lat: 10.7787,
-    lng: 106.7013,
-  },
-  {
-    id: 4,
-    name: 'Cửa Hàng Đà Nẵng',
-    city: 'Đà Nẵng',
-    address: '150 Trần Phú, Quận Hải Châu, Đà Nẵng',
-    phone: '(+84) 23 6382 1111',
-    hours: '08:30 – 20:30 (Hằng ngày)',
-    tag: 'Cửa hàng',
-    mapEmbed: 'https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3834.2!2d108.2208!3d16.0678!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x314219c792252a13%3A0xd0b1aaec03dba0ef!2zVHLhuqduIFBow7osIEjhuqNpIENow6J1LCDEkMOgIE7hurVuZw!5e0!3m2!1sen!2svn!4v1700000000003!5m2!1sen!2svn',
-    mapLink: 'https://maps.google.com/?q=150+Trần+Phú,+Hải+Châu,+Đà+Nẵng',
-    lat: 16.0678,
-    lng: 108.2208,
-  },
-];
+const EMPTY_TITLE = 'Hệ thống cửa hàng đang cập nhật';
+const EMPTY_DESCRIPTION = 'Thông tin showroom và chi nhánh sẽ hiển thị tại đây ngay sau khi được cập nhật trong Cài đặt web.';
 
-export default function StoresClient() {
-  const [activeId, setActiveId] = useState(1);
+const asText = (value) => String(value || '').trim();
+
+const buildPhoneLink = (value) => `tel:${asText(value).replace(/[^\d+]/g, '')}`;
+const buildMailLink = (value) => `mailto:${asText(value)}`;
+
+const buildMapQuery = (store) => [store.name, store.address, store.city].filter(Boolean).join(', ');
+
+const buildMapEmbedUrl = (store) => {
+  const query = buildMapQuery(store);
+  return query ? `https://www.google.com/maps?q=${encodeURIComponent(query)}&output=embed` : '';
+};
+
+const buildMapExternalUrl = (store) => {
+  if (store.googleMapsLink) {
+    return store.googleMapsLink;
+  }
+
+  const query = buildMapQuery(store);
+  return query ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}` : '';
+};
+
+const normalizeStores = (stores) => {
+  if (!Array.isArray(stores)) {
+    return [];
+  }
+
+  return stores
+    .filter((item) => item && typeof item === 'object')
+    .map((item, index) => {
+      const normalized = {
+        id: asText(item.id) || `store-${index + 1}`,
+        name: asText(item.name),
+        city: asText(item.city),
+        tag: asText(item.tag),
+        address: asText(item.address),
+        phone: asText(item.phone),
+        hotline: asText(item.hotline),
+        email: asText(item.email),
+        openingHours: asText(item.opening_hours || item.hours),
+        googleMapsLink: asText(item.google_maps_link || item.mapLink),
+        imageUrl: asText(item.image_url || item.imageUrl),
+        note: asText(item.note),
+        isActive: item.is_active === undefined ? true : Boolean(item.is_active),
+        order: Number(item.order ?? item.sort_order ?? (index + 1)) || (index + 1),
+      };
+
+      return {
+        ...normalized,
+        mapEmbedUrl: buildMapEmbedUrl(normalized),
+        mapExternalUrl: buildMapExternalUrl(normalized),
+      };
+    })
+    .filter((store) => store.isActive && (store.name || store.address))
+    .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, 'vi'));
+};
+
+export default function StoresClient({ stores = [] }) {
+  const normalizedStores = useMemo(() => normalizeStores(stores), [stores]);
+  const [activeId, setActiveId] = useState('');
   const [search, setSearch] = useState('');
 
-  const filtered = useMemo(() => {
-    if (!search.trim()) return STORES;
-    const q = search.trim().toLowerCase();
-    return STORES.filter(s =>
-      s.name.toLowerCase().includes(q) ||
-      s.city.toLowerCase().includes(q) ||
-      s.address.toLowerCase().includes(q)
+  const filteredStores = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    if (!keyword) {
+      return normalizedStores;
+    }
+
+    return normalizedStores.filter((store) =>
+      [store.name, store.city, store.address, store.tag, store.phone, store.hotline, store.email]
+        .filter(Boolean)
+        .some((value) => value.toLowerCase().includes(keyword))
     );
-  }, [search]);
+  }, [normalizedStores, search]);
 
-  const activeStore = STORES.find(s => s.id === activeId) || STORES[0];
+  const resolvedActiveId = useMemo(() => {
+    if (!filteredStores.length) {
+      return '';
+    }
 
+    return filteredStores.some((store) => store.id === activeId) ? activeId : filteredStores[0].id;
+  }, [filteredStores, activeId]);
+
+  const activeStore = useMemo(
+    () => filteredStores.find((store) => store.id === resolvedActiveId) || filteredStores[0] || null,
+    [filteredStores, resolvedActiveId]
+  );
+
+  const supportHotline = useMemo(
+    () => normalizedStores.find((store) => store.hotline)?.hotline || normalizedStores.find((store) => store.phone)?.phone || '',
+    [normalizedStores]
+  );
+
+  const hasConfiguredStores = normalizedStores.length > 0;
+  const hasSearchResults = filteredStores.length > 0;
   return (
     <div className="stores-page">
-      {/* Sidebar */}
       <aside className="stores-sidebar">
-        {/* Sidebar Header */}
         <div className="stores-sidebar-header">
-          <h2 className="stores-sidebar-title">Hệ Thống Cửa Hàng</h2>
+          <p className="stores-sidebar-eyebrow">SHOWROOM & CHI NHÁNH</p>
+          <h1 className="stores-sidebar-title">Hệ thống cửa hàng</h1>
+
           <div className="stores-search-wrap">
-            <span className="material-symbols-outlined stores-search-icon">location_on</span>
+            <span className="material-symbols-outlined stores-search-icon">search</span>
             <input
               className="stores-search-input"
               type="text"
-              placeholder="Tìm theo thành phố..."
+              placeholder={hasConfiguredStores ? 'Tìm theo tên, thành phố, địa chỉ...' : 'Chưa có dữ liệu cửa hàng'}
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={(event) => setSearch(event.target.value)}
+              disabled={!hasConfiguredStores}
             />
-            {search && (
-              <button className="stores-search-clear" onClick={() => setSearch('')}>
+            {search ? (
+              <button
+                type="button"
+                className="stores-search-clear"
+                onClick={() => setSearch('')}
+                aria-label="Xóa từ khóa tìm kiếm"
+              >
                 <span className="material-symbols-outlined">close</span>
               </button>
-            )}
+            ) : null}
           </div>
         </div>
 
-        {/* Store List */}
         <div className="stores-list">
-          {filtered.length === 0 ? (
+          {!hasConfiguredStores ? (
+            <div className="stores-empty">
+              <span className="material-symbols-outlined">storefront</span>
+              <h2>{EMPTY_TITLE}</h2>
+              <p>{EMPTY_DESCRIPTION}</p>
+            </div>
+          ) : !hasSearchResults ? (
             <div className="stores-empty">
               <span className="material-symbols-outlined">search_off</span>
-              <p>Không tìm thấy cửa hàng nào.</p>
+              <h2>Không tìm thấy cửa hàng phù hợp</h2>
+              <p>Thử đổi từ khóa tìm kiếm hoặc xóa bộ lọc để xem toàn bộ hệ thống cửa hàng.</p>
+              <button type="button" className="stores-empty-btn" onClick={() => setSearch('')}>
+                Xóa tìm kiếm
+              </button>
             </div>
-          ) : filtered.map(store => (
-            <div
-              key={store.id}
-              className={`stores-card${activeId === store.id ? ' stores-card--active' : ''}`}
-              onClick={() => setActiveId(store.id)}
-            >
-              <div className="stores-card-top">
-                <h3 className="stores-card-name">{store.name}</h3>
-                <span className="stores-card-tag">{store.tag}</span>
-              </div>
-              <div className="stores-card-info">
-                <div className="stores-card-row">
-                  <span className="material-symbols-outlined">map</span>
-                  <p>{store.address}</p>
+          ) : (
+            filteredStores.map((store) => (
+              <div
+                key={store.id}
+                role="button"
+                tabIndex={0}
+                className={`stores-card${activeStore?.id === store.id ? ' stores-card--active' : ''}`}
+                onClick={() => setActiveId(store.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    setActiveId(store.id);
+                  }
+                }}
+              >
+                {store.imageUrl ? (
+                  <div className="stores-card-media">
+                    <img src={store.imageUrl} alt={store.name || 'Cửa hàng'} className="stores-card-thumb" />
+                  </div>
+                ) : null}
+
+                <div className="stores-card-body">
+                  <div className="stores-card-top">
+                    <div className="stores-card-headline">
+                      <h2 className="stores-card-name">{store.name}</h2>
+                      {store.city ? <p className="stores-card-city">{store.city}</p> : null}
+                    </div>
+                    {store.tag ? <span className="stores-card-tag">{store.tag}</span> : null}
+                  </div>
+
+                  <div className="stores-card-info">
+                    {store.address ? (
+                      <div className="stores-card-row">
+                        <span className="material-symbols-outlined">location_on</span>
+                        <p>{store.address}</p>
+                      </div>
+                    ) : null}
+                    {store.phone ? (
+                      <div className="stores-card-row">
+                        <span className="material-symbols-outlined">call</span>
+                        <a href={buildPhoneLink(store.phone)} onClick={(event) => event.stopPropagation()}>
+                          {store.phone}
+                        </a>
+                      </div>
+                    ) : null}
+                    {store.openingHours ? (
+                      <div className="stores-card-row">
+                        <span className="material-symbols-outlined">schedule</span>
+                        <p>{store.openingHours}</p>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {store.mapExternalUrl ? (
+                    <div className="stores-card-actions">
+                      <a
+                        href={store.mapExternalUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="stores-card-btn"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <span className="material-symbols-outlined">directions</span>
+                        Chỉ đường
+                      </a>
+                    </div>
+                  ) : null}
                 </div>
-                <div className="stores-card-row">
-                  <span className="material-symbols-outlined">call</span>
-                  <a href={`tel:${store.phone}`} onClick={e => e.stopPropagation()}>{store.phone}</a>
-                </div>
-                <div className="stores-card-row">
-                  <span className="material-symbols-outlined">schedule</span>
-                  <p>{store.hours}</p>
-                </div>
               </div>
-              <div className="stores-card-actions">
-                <a
-                  href={store.mapLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="stores-card-btn"
-                  onClick={e => e.stopPropagation()}
-                >
-                  <span className="material-symbols-outlined">directions</span>
-                  Chỉ đường
-                </a>
-              </div>
-            </div>
-          ))}
+            ))
+          )}
         </div>
 
-        {/* Hotline Footer */}
         <div className="stores-hotline">
           <p className="stores-hotline-label">Hỗ trợ khách hàng</p>
-          <p className="stores-hotline-number">
-            <span className="material-symbols-outlined">headset_mic</span>
-            Hotline: 1800 6688
-          </p>
+          {supportHotline ? (
+            <a href={buildPhoneLink(supportHotline)} className="stores-hotline-number">
+              <span className="material-symbols-outlined">headset_mic</span>
+              Hotline: {supportHotline}
+            </a>
+          ) : (
+            <p className="stores-hotline-number stores-hotline-number--muted">Đang cập nhật hotline</p>
+          )}
         </div>
       </aside>
 
-      {/* Map Section */}
       <section className="stores-map">
-        {/* Map iframe */}
-        <iframe
-          key={activeStore.id}
-          className="stores-map-iframe"
-          src={activeStore.mapEmbed}
-          allowFullScreen=""
-          loading="lazy"
-          referrerPolicy="no-referrer-when-downgrade"
-          title={`Bản đồ ${activeStore.name}`}
-        />
+        {activeStore && hasSearchResults ? (
+          <>
+            <iframe
+              key={activeStore.id}
+              className="stores-map-iframe"
+              src={activeStore.mapEmbedUrl}
+              allowFullScreen=""
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+              title={`Bản đồ ${activeStore.name}`}
+            />
 
-        {/* Active store info overlay */}
-        <div className="stores-map-pin">
-          <div className="stores-map-popup">
-            <p className="stores-map-popup-label">Bạn đang xem</p>
-            <p className="stores-map-popup-name">{activeStore.name}</p>
-          </div>
-          <span className="material-symbols-outlined stores-map-pin-icon">location_on</span>
-        </div>
-
-        {/* Map controls overlay */}
-        <div className="stores-map-controls">
-          <a
-            href={activeStore.mapLink}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="stores-map-ctrl stores-map-ctrl--location"
-            title="Chỉ đường"
-          >
-            <span className="material-symbols-outlined">my_location</span>
-          </a>
-        </div>
-
-        {/* Store quick info overlay (bottom) */}
-        <div className="stores-map-info-bar">
-          <div className="stores-map-info-left">
-            <span className="material-symbols-outlined stores-map-info-icon">storefront</span>
-            <div>
-              <p className="stores-map-info-name">{activeStore.name}</p>
-              <p className="stores-map-info-addr">{activeStore.address}</p>
+            <div className="stores-map-pin">
+              <div className="stores-map-popup">
+                <p className="stores-map-popup-label">Bạn đang xem</p>
+                <p className="stores-map-popup-name">{activeStore.name}</p>
+              </div>
+              <span className="material-symbols-outlined stores-map-pin-icon">location_on</span>
             </div>
-          </div>
-          <div className="stores-map-info-right">
-            <span className="material-symbols-outlined">schedule</span>
-            <span>{activeStore.hours}</span>
-          </div>
-        </div>
 
-        {/* Gradient vignette */}
-        <div className="stores-map-vignette-top" />
-        <div className="stores-map-vignette-bottom" />
+            {activeStore.mapExternalUrl ? (
+              <div className="stores-map-controls">
+                <a
+                  href={activeStore.mapExternalUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="stores-map-ctrl stores-map-ctrl--location"
+                  title="Mở trong Google Maps"
+                >
+                  <span className="material-symbols-outlined">my_location</span>
+                </a>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className="stores-map-empty">
+            <span className="material-symbols-outlined">
+              {hasConfiguredStores ? 'travel_explore' : 'location_off'}
+            </span>
+            <h2>{hasConfiguredStores ? 'Không có kết quả phù hợp' : EMPTY_TITLE}</h2>
+            <p>
+              {hasConfiguredStores
+                ? 'Không tìm thấy cửa hàng trùng với từ khóa hiện tại. Hãy thử tên, địa chỉ hoặc thành phố khác.'
+                : EMPTY_DESCRIPTION}
+            </p>
+          </div>
+        )}
       </section>
 
       <style>{`
-        /* ─── Page layout ─── */
         .stores-page {
-          display: flex;
-          height: calc(100vh - 88px);
-          overflow: hidden;
-          background: #F9F5F0;
+          --stores-card-name-size: 1rem;
+          --stores-title-size: calc(var(--stores-card-name-size) * 1.2);
+          display: grid;
+          grid-template-columns: minmax(320px, 384px) minmax(0, 1fr);
+          min-height: calc(100vh - 84px);
+          background: #f7f1e8;
           font-family: 'Noto Serif', serif;
         }
 
-        /* ─── Sidebar ─── */
         .stores-sidebar {
-          width: 400px;
-          flex-shrink: 0;
           display: flex;
           flex-direction: column;
-          background: #F9F5F0;
-          border-right: 1px solid rgba(197,160,101,0.2);
-          box-shadow: 4px 0 20px rgba(27,54,93,0.08);
-          z-index: 10;
+          min-width: 0;
+          background: linear-gradient(180deg, #fbf6ef 0%, #f4ece2 100%);
+          border-right: 1px solid rgba(197, 160, 101, 0.2);
+          box-shadow: 14px 0 34px rgba(27, 54, 93, 0.08);
+          z-index: 2;
+        }
+
+        .stores-sidebar-header {
+          padding: 1.35rem;
+          border-bottom: 1px solid rgba(197, 160, 101, 0.16);
+        }
+
+        .stores-sidebar-eyebrow {
+          margin: 0 0 0.42rem;
+          font-size: 0.66rem;
+          font-weight: 800;
+          letter-spacing: 0.24em;
+          color: rgba(27, 54, 93, 0.55);
+          text-transform: uppercase;
+        }
+
+        .stores-sidebar-title {
+          margin: 0;
+          font-family: 'Playfair Display', serif;
+          font-size: var(--stores-title-size);
+          line-height: 1.2;
+          color: #1b365d;
+        }
+
+        .stores-search-wrap {
+          position: relative;
+          margin-top: 0.7rem;
+        }
+
+        .stores-search-icon {
+          position: absolute;
+          left: 0.85rem;
+          top: 50%;
+          transform: translateY(-50%);
+          color: #c5a065;
+          font-size: 1.1rem;
+        }
+
+        .stores-search-input {
+          width: 100%;
+          height: 44px;
+          padding: 0 2.75rem 0 2.7rem;
+          border: 1px solid rgba(27, 54, 93, 0.14);
+          border-radius: 14px;
+          background: rgba(255, 255, 255, 0.95);
+          color: #1b365d;
+          font-size: 0.88rem;
+          outline: none;
+          transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+        }
+
+        .stores-search-input:focus {
+          border-color: rgba(27, 54, 93, 0.45);
+          box-shadow: 0 0 0 4px rgba(27, 54, 93, 0.08);
+        }
+
+        .stores-search-input:disabled {
+          cursor: not-allowed;
+          color: rgba(27, 54, 93, 0.4);
+          background: rgba(255, 255, 255, 0.6);
+        }
+
+        .stores-search-input::placeholder {
+          color: rgba(27, 54, 93, 0.38);
+        }
+
+        .stores-search-clear {
+          position: absolute;
+          right: 0.65rem;
+          top: 50%;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 30px;
+          height: 30px;
+          transform: translateY(-50%);
+          border: none;
+          background: transparent;
+          color: rgba(27, 54, 93, 0.42);
+          cursor: pointer;
+        }
+
+        .stores-list {
+          flex: 1;
+          min-height: 0;
+          overflow-y: auto;
+          padding: 1rem;
+          display: flex;
+          flex-direction: column;
+          gap: 0.82rem;
+        }
+
+        .stores-list::-webkit-scrollbar {
+          width: 6px;
+        }
+
+        .stores-list::-webkit-scrollbar-thumb {
+          background: rgba(197, 160, 101, 0.6);
+          border-radius: 999px;
+        }
+
+        .stores-empty {
+          min-height: 240px;
+          border: 1px dashed rgba(27, 54, 93, 0.16);
+          border-radius: 24px;
+          background: rgba(255, 255, 255, 0.58);
+          padding: 2rem 1.5rem;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          text-align: center;
+          color: rgba(27, 54, 93, 0.72);
+        }
+
+        .stores-empty .material-symbols-outlined {
+          font-size: 2.9rem;
+          color: #c5a065;
+        }
+
+        .stores-empty h2 {
+          margin: 0.9rem 0 0.45rem;
+          font-family: 'Playfair Display', serif;
+          font-size: 1.35rem;
+          color: #1b365d;
+        }
+
+        .stores-empty p {
+          margin: 0;
+          max-width: 28rem;
+          line-height: 1.7;
+        }
+
+        .stores-empty-btn {
+          margin-top: 1rem;
+          height: 40px;
+          padding: 0 1rem;
+          border: 1px solid rgba(27, 54, 93, 0.16);
+          border-radius: 999px;
+          background: #1b365d;
+          color: #fff;
+          font-size: 0.78rem;
+          font-weight: 800;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+          cursor: pointer;
+        }
+
+        .stores-card {
+          width: 100%;
+          border: 1px solid rgba(27, 54, 93, 0.08);
+          border-radius: 20px;
+          background: rgba(255, 255, 255, 0.95);
+          box-shadow: 0 12px 28px rgba(27, 54, 93, 0.06);
+          padding: 0.9rem;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr);
+          gap: 0.95rem;
+          text-align: left;
+          cursor: pointer;
+          transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+        }
+
+        .stores-card:hover,
+        .stores-card--active {
+          transform: translateY(-1px);
+          border-color: rgba(197, 160, 101, 0.48);
+          box-shadow: 0 16px 36px rgba(27, 54, 93, 0.12);
+        }
+
+        .stores-card:focus-visible {
+          outline: 3px solid rgba(197, 160, 101, 0.38);
+          outline-offset: 3px;
+        }
+
+        .stores-card-media {
+          width: 88px;
+          height: 88px;
+          border-radius: 16px;
+          overflow: hidden;
+          background: #efe7db;
+          flex-shrink: 0;
+        }
+
+        .stores-card-thumb {
+          width: 100%;
           height: 100%;
+          object-fit: cover;
+        }
+
+        .stores-card-body {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 0.8rem;
+        }
+
+        .stores-card-top {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 0.75rem;
+        }
+
+        .stores-card-headline {
+          min-width: 0;
+        }
+
+        .stores-card-name {
+          margin: 0;
+          font-family: 'Playfair Display', serif;
+          font-size: var(--stores-card-name-size);
+          line-height: 1.3;
+          color: #1b365d;
+        }
+
+        .stores-card-city {
+          margin: 0.25rem 0 0;
+          font-size: 0.78rem;
+          font-weight: 700;
+          color: rgba(27, 54, 93, 0.62);
+          text-transform: uppercase;
+          letter-spacing: 0.14em;
+        }
+
+        .stores-card-tag {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 28px;
+          padding: 0.16rem 0.62rem;
+          border-radius: 999px;
+          background: rgba(197, 160, 101, 0.16);
+          color: #1b365d;
+          font-size: 0.64rem;
+          font-weight: 800;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+          white-space: nowrap;
+        }
+
+        .stores-card-info {
+          display: flex;
+          flex-direction: column;
+          gap: 0.45rem;
+        }
+
+        .stores-card-row {
+          display: flex;
+          align-items: flex-start;
+          gap: 0.55rem;
+          font-size: 0.84rem;
+          line-height: 1.55;
+          color: rgba(27, 54, 93, 0.76);
+        }
+
+        .stores-card-row .material-symbols-outlined {
+          margin-top: 0.12rem;
+          font-size: 1rem;
+          color: #c5a065;
+          flex-shrink: 0;
+        }
+
+        .stores-card-row p,
+        .stores-card-row a {
+          margin: 0;
+          color: inherit;
+          text-decoration: none;
+        }
+
+        .stores-card-row a:hover {
+          color: #1b365d;
+          text-decoration: underline;
+        }
+
+        .stores-card-actions {
+          padding-top: 0.1rem;
+        }
+
+        .stores-card-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.35rem;
+          min-height: 36px;
+          padding: 0 0.82rem;
+          border-radius: 999px;
+          background: #1b365d;
+          color: #fff;
+          font-size: 0.7rem;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          text-decoration: none;
+          transition: background 0.2s ease, transform 0.2s ease;
+        }
+
+        .stores-card-btn:hover {
+          background: #c5a065;
+          transform: translateY(-1px);
+        }
+
+        .stores-hotline {
+          padding: 0.95rem 1.2rem 1.15rem;
+          background: #1b365d;
+        }
+
+        .stores-hotline-label {
+          margin: 0 0 0.35rem;
+          font-size: 0.64rem;
+          font-weight: 800;
+          letter-spacing: 0.2em;
+          text-transform: uppercase;
+          color: rgba(249, 245, 240, 0.62);
+        }
+
+        .stores-hotline-number {
+          margin: 0;
+          display: inline-flex;
+          align-items: center;
+          gap: 0.45rem;
+          color: #fff;
+          text-decoration: none;
+          font-family: 'Playfair Display', serif;
+          font-size: 0.94rem;
+          line-height: 1.4;
+          transition: opacity 0.2s ease;
+        }
+
+        .stores-hotline-number:hover {
+          opacity: 0.85;
+        }
+
+        .stores-hotline-number--muted {
+          color: rgba(249, 245, 240, 0.7);
+        }
+
+        .stores-map {
+          position: relative;
+          min-width: 0;
+          background: linear-gradient(135deg, #e8dece 0%, #d9cdbb 100%);
           overflow: hidden;
         }
 
-        /* Sidebar header */
-        .stores-sidebar-header {
-          padding: 1.5rem;
-          border-bottom: 1px solid rgba(197,160,101,0.15);
-          flex-shrink: 0;
+        .stores-map-iframe,
+        .stores-map-empty {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
         }
-        .stores-sidebar-title {
-          font-family: 'Playfair Display', serif;
-          font-size: 1.8rem; font-weight: 700;
-          color: #1B365D; margin: 0 0 1rem;
-        }
-        .stores-search-wrap {
-          position: relative;
-        }
-        .stores-search-icon {
-          position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%);
-          color: #C5A065; font-size: 1.1rem;
-        }
-        .stores-search-input {
-          width: 100%; padding: 0.75rem 2.5rem 0.75rem 2.5rem;
-          background: white; border: 1px solid rgba(197,160,101,0.35);
-          border-radius: 2px; font-size: 0.9rem; color: #1B365D;
-          font-family: 'Noto Serif', serif; outline: none;
-          box-shadow: 0 1px 4px rgba(27,54,93,0.06);
-          transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        .stores-search-input:focus {
-          border-color: #1B365D;
-          box-shadow: 0 0 0 2px rgba(27,54,93,0.1);
-        }
-        .stores-search-input::placeholder { color: #94a3b8; }
-        .stores-search-clear {
-          position: absolute; right: 0.6rem; top: 50%; transform: translateY(-50%);
-          color: #94a3b8; background: none; border: none; cursor: pointer; padding: 2px;
-        }
-        .stores-search-clear .material-symbols-outlined { font-size: 1rem; }
 
-        /* Store list */
-        .stores-list {
-          flex: 1; overflow-y: auto; padding: 1.25rem;
-          display: flex; flex-direction: column; gap: 0.85rem;
-        }
-        .stores-list::-webkit-scrollbar { width: 4px; }
-        .stores-list::-webkit-scrollbar-track { background: #F9F5F0; }
-        .stores-list::-webkit-scrollbar-thumb { background: #C5A065; border-radius: 2px; }
-
-        .stores-empty {
-          display: flex; flex-direction: column; align-items: center;
-          gap: 0.5rem; padding: 3rem; color: #94a3b8;
-          font-style: italic; font-size: 0.9rem;
-        }
-        .stores-empty .material-symbols-outlined { font-size: 2.5rem; }
-
-        /* Store card */
-        .stores-card {
-          background: white; cursor: pointer;
-          border-left: 4px solid rgba(197,160,101,0.25);
-          box-shadow: 0 1px 4px rgba(27,54,93,0.06);
-          padding: 1.1rem 1.1rem 0.85rem;
-          transition: all 0.25s;
-        }
-        .stores-card:hover {
-          border-left-color: #1B365D;
-          box-shadow: 0 4px 16px rgba(27,54,93,0.12);
-          transform: translateX(2px);
-        }
-        .stores-card--active {
-          border-left-color: #1B365D;
-          box-shadow: 0 4px 16px rgba(27,54,93,0.14);
-        }
-        .stores-card-top {
-          display: flex; align-items: flex-start; justify-content: space-between;
-          gap: 0.5rem; margin-bottom: 0.75rem;
-        }
-        .stores-card-name {
-          font-family: 'Playfair Display', serif;
-          font-size: 1.1rem; font-weight: 700; color: #1B365D; margin: 0;
-          transition: color 0.2s; line-height: 1.3;
-        }
-        .stores-card:hover .stores-card-name,
-        .stores-card--active .stores-card-name { color: #C5A065; }
-        .stores-card-tag {
-          font-size: 0.65rem; font-weight: 700; letter-spacing: 0.1em;
-          text-transform: uppercase; color: #1B365D;
-          background: rgba(197,160,101,0.15); padding: 0.2rem 0.55rem;
-          border: 1px solid rgba(197,160,101,0.3); white-space: nowrap; flex-shrink: 0;
-        }
-        .stores-card--active .stores-card-tag {
-          background: #1B365D; color: white; border-color: #1B365D;
-        }
-        .stores-card-info { display: flex; flex-direction: column; gap: 0.4rem; }
-        .stores-card-row {
-          display: flex; align-items: flex-start; gap: 0.5rem;
-          font-size: 0.85rem; color: #64748b; line-height: 1.5;
-        }
-        .stores-card-row .material-symbols-outlined {
-          font-size: 0.95rem; color: #C5A065; flex-shrink: 0; margin-top: 2px;
-        }
-        .stores-card-row a { color: #64748b; text-decoration: none; }
-        .stores-card-row a:hover { color: #1B365D; text-decoration: underline; }
-        .stores-card-actions {
-          display: flex; gap: 0.5rem; margin-top: 0.85rem;
-          padding-top: 0.75rem; border-top: 1px solid rgba(197,160,101,0.12);
-        }
-        .stores-card-btn {
-          display: inline-flex; align-items: center; gap: 0.3rem;
-          font-size: 0.78rem; font-weight: 600; color: #1B365D;
-          text-transform: uppercase; letter-spacing: 0.06em;
-          padding: 0.35rem 0.85rem; border: 1px solid rgba(27,54,93,0.25);
-          transition: all 0.2s; text-decoration: none;
-        }
-        .stores-card-btn:hover { background: #1B365D; color: white; border-color: #1B365D; }
-        .stores-card-btn .material-symbols-outlined { font-size: 0.9rem; }
-
-        /* Hotline */
-        .stores-hotline {
-          padding: 1rem 1.5rem; background: #1B365D; text-align: center; flex-shrink: 0;
-        }
-        .stores-hotline-label {
-          font-size: 0.65rem; font-weight: 700; letter-spacing: 0.2em;
-          text-transform: uppercase; color: rgba(197,160,101,0.8); margin: 0;
-        }
-        .stores-hotline-number {
-          font-family: 'Playfair Display', serif;
-          font-size: 1.05rem; color: white; margin: 0.25rem 0 0;
-          display: flex; align-items: center; justify-content: center; gap: 0.4rem;
-        }
-        .stores-hotline-number .material-symbols-outlined { font-size: 1rem; color: #C5A065; }
-
-        /* ─── Map section ─── */
-        .stores-map {
-          flex: 1; position: relative; overflow: hidden; background: #e2ddd6;
-        }
         .stores-map-iframe {
-          position: absolute; inset: 0; width: 100%; height: 100%;
-          border: none; filter: saturate(0.85) contrast(1.05);
-          transition: opacity 0.3s;
+          border: none;
+          filter: saturate(0.88) contrast(1.04);
         }
 
-        /* Active store popup */
         .stores-map-pin {
-          position: absolute; top: 28%; left: 42%;
-          z-index: 20; display: flex; flex-direction: column; align-items: center;
-          pointer-events: none; animation: mapPinBounce 2s ease-in-out infinite;
+          position: absolute;
+          top: 15%;
+          left: 50%;
+          z-index: 3;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          transform: translateX(-50%);
+          pointer-events: none;
         }
-        @keyframes mapPinBounce {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-6px); }
-        }
+
         .stores-map-popup {
-          background: white; padding: 0.6rem 1rem; margin-bottom: -2px;
-          box-shadow: 0 4px 20px rgba(27,54,93,0.2);
-          border: 4px double #C5A065; white-space: nowrap;
+          padding: 0.62rem 0.9rem;
+          border-radius: 16px;
+          background: rgba(255, 255, 255, 0.96);
+          box-shadow: 0 18px 32px rgba(27, 54, 93, 0.18);
+          text-align: center;
+          white-space: nowrap;
         }
+
         .stores-map-popup-label {
-          font-size: 0.6rem; color: #C5A065; font-weight: 700;
-          text-transform: uppercase; letter-spacing: 0.15em; margin: 0;
+          margin: 0 0 0.16rem;
+          color: rgba(27, 54, 93, 0.5);
+          font-size: 0.62rem;
+          font-weight: 800;
+          letter-spacing: 0.16em;
+          text-transform: uppercase;
         }
+
         .stores-map-popup-name {
-          font-family: 'Playfair Display', serif; font-size: 0.9rem;
-          font-weight: 700; color: #1B365D; margin: 0;
-        }
-        .stores-map-pin-icon { font-size: 3.5rem; color: #1B365D; filter: drop-shadow(0 4px 8px rgba(27,54,93,0.4)); }
-
-        /* Controls */
-        .stores-map-controls {
-          position: absolute; bottom: 5.5rem; right: 1.25rem;
-          z-index: 20; display: flex; flex-direction: column; gap: 0.5rem;
-        }
-        .stores-map-ctrl {
-          width: 44px; height: 44px; background: white; color: #1B365D;
-          display: flex; align-items: center; justify-content: center;
-          box-shadow: 0 2px 8px rgba(27,54,93,0.15);
-          border: none; cursor: pointer; transition: all 0.2s; border-radius: 2px;
-          text-decoration: none;
-        }
-        .stores-map-ctrl:hover { background: #C5A065; color: white; }
-        .stores-map-ctrl--location { background: #1B365D; color: white; }
-        .stores-map-ctrl--location:hover { background: #C5A065; }
-        .stores-map-ctrl .material-symbols-outlined { font-size: 1.3rem; }
-
-        /* Bottom info bar */
-        .stores-map-info-bar {
-          position: absolute; bottom: 0; left: 0; right: 0; z-index: 20;
-          background: rgba(27,54,93,0.92); backdrop-filter: blur(8px);
-          padding: 0.9rem 1.5rem;
-          display: flex; align-items: center; justify-content: space-between;
-          gap: 1rem; flex-wrap: wrap;
-        }
-        .stores-map-info-left {
-          display: flex; align-items: flex-start; gap: 0.75rem;
-        }
-        .stores-map-info-icon { color: #C5A065; font-size: 1.5rem; flex-shrink: 0; margin-top: 2px; }
-        .stores-map-info-name {
+          margin: 0;
+          color: #1b365d;
           font-family: 'Playfair Display', serif;
-          font-size: 1rem; font-weight: 700; color: white; margin: 0;
-        }
-        .stores-map-info-addr { font-size: 0.8rem; color: rgba(249,245,240,0.75); margin: 0.15rem 0 0; }
-        .stores-map-info-right {
-          display: flex; align-items: center; gap: 0.4rem;
-          font-size: 0.82rem; color: rgba(249,245,240,0.85); flex-shrink: 0;
-        }
-        .stores-map-info-right .material-symbols-outlined { font-size: 1rem; color: #C5A065; }
-
-        /* Vignette */
-        .stores-map-vignette-top {
-          position: absolute; top: 0; left: 0; right: 0; height: 48px;
-          background: linear-gradient(to bottom, rgba(249,245,240,0.4), transparent);
-          pointer-events: none; z-index: 5;
-        }
-        .stores-map-vignette-bottom {
-          position: absolute; bottom: 56px; left: 0; right: 0; height: 40px;
-          background: linear-gradient(to top, rgba(27,54,93,0.15), transparent);
-          pointer-events: none; z-index: 5;
+          font-size: 0.9rem;
+          font-weight: 700;
         }
 
-        /* ─── Responsive ─── */
-        @media (max-width: 900px) {
-          .stores-page { flex-direction: column; height: auto; }
-          .stores-sidebar { width: 100%; height: auto; max-height: 55vh; }
-          .stores-map { height: 50vh; }
-          .stores-map-pin { display: none; }
+        .stores-map-pin-icon {
+          margin-top: -0.1rem;
+          font-size: 2.6rem;
+          color: #1b365d;
+          filter: drop-shadow(0 12px 18px rgba(27, 54, 93, 0.24));
+        }
+
+        .stores-map-controls {
+          position: absolute;
+          top: 1.25rem;
+          right: 1.25rem;
+          z-index: 3;
+        }
+
+        .stores-map-ctrl {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 44px;
+          height: 44px;
+          border-radius: 14px;
+          background: rgba(27, 54, 93, 0.95);
+          color: #fff;
+          text-decoration: none;
+          box-shadow: 0 12px 30px rgba(27, 54, 93, 0.22);
+          transition: background 0.2s ease, transform 0.2s ease;
+        }
+
+        .stores-map-ctrl:hover {
+          background: #c5a065;
+          transform: translateY(-1px);
+        }
+
+        .stores-map-empty {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          text-align: center;
+          padding: 2rem;
+          color: rgba(27, 54, 93, 0.72);
+        }
+
+        .stores-map-empty .material-symbols-outlined {
+          font-size: 4rem;
+          color: #c5a065;
+        }
+
+        .stores-map-empty h2 {
+          margin: 1rem 0 0.5rem;
+          font-family: 'Playfair Display', serif;
+          font-size: 1.4rem;
+          color: #1b365d;
+        }
+
+        .stores-map-empty p {
+          max-width: 36rem;
+          margin: 0;
+          line-height: 1.68;
+        }
+
+        @media (max-width: 920px) {
+          .stores-page {
+            grid-template-columns: 1fr;
+            min-height: auto;
+          }
+
+          .stores-sidebar {
+            box-shadow: none;
+            border-right: none;
+            border-bottom: 1px solid rgba(197, 160, 101, 0.18);
+          }
+
+          .stores-list {
+            max-height: 56vh;
+          }
+
+          .stores-map {
+            min-height: 70vh;
+          }
+
+          .stores-map-pin {
+            display: none;
+          }
+        }
+
+        @media (max-width: 640px) {
+          .stores-sidebar-header,
+          .stores-list,
+          .stores-hotline {
+            padding-left: 1rem;
+            padding-right: 1rem;
+          }
+
+          .stores-card {
+            grid-template-columns: 1fr;
+          }
+
+          .stores-card-media {
+            width: 100%;
+            height: 160px;
+          }
+
+          .stores-card-top {
+            flex-direction: column;
+            align-items: flex-start;
+          }
+
+          .stores-map {
+            min-height: 64vh;
+          }
         }
       `}</style>
     </div>
   );
 }
+

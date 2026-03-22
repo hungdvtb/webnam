@@ -6,12 +6,14 @@ use App\Http\Controllers\Controller;
 use App\Models\SiteSetting;
 use App\Models\Account;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Validator;
 
 class SiteSettingController extends Controller
 {
     private const JSON_SETTING_KEYS = [
         'header_menu_items',
         'footer_menu_groups',
+        'store_locations',
         'inventory_import_print_templates',
     ];
 
@@ -48,6 +50,31 @@ class SiteSettingController extends Controller
             'account_id' => 'required|exists:accounts,id',
             'settings' => 'required|array',
         ]);
+
+        $storeLocations = $validated['settings']['store_locations'] ?? null;
+        if ($storeLocations !== null) {
+            Validator::make(
+                ['store_locations' => $storeLocations],
+                [
+                    'store_locations' => 'array',
+                    'store_locations.*.id' => 'nullable|string|max:100',
+                    'store_locations.*.name' => 'required|string|max:255',
+                    'store_locations.*.city' => 'nullable|string|max:120',
+                    'store_locations.*.tag' => 'nullable|string|max:120',
+                    'store_locations.*.address' => 'required|string|max:500',
+                    'store_locations.*.phone' => 'nullable|string|max:80',
+                    'store_locations.*.hotline' => 'nullable|string|max:80',
+                    'store_locations.*.email' => 'nullable|email|max:255',
+                    'store_locations.*.opening_hours' => 'nullable|string|max:255',
+                    'store_locations.*.google_maps_link' => 'nullable|url|max:1000',
+                    'store_locations.*.image_url' => 'nullable|string|max:1000',
+                    'store_locations.*.note' => 'nullable|string|max:4000',
+                    'store_locations.*.order' => 'nullable|integer|min:1',
+                    'store_locations.*.sort_order' => 'nullable|integer|min:1',
+                    'store_locations.*.is_active' => 'nullable|boolean',
+                ]
+            )->validate();
+        }
 
         foreach ($validated['settings'] as $key => $value) {
             SiteSetting::setValue(

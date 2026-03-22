@@ -215,11 +215,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/inventory/import-invoices/{id}', [InventoryController::class, 'showInvoiceAnalysis'])->whereNumber('id');
     Route::get('/inventory/imports', [InventoryController::class, 'imports']);
     Route::post('/inventory/imports', [InventoryController::class, 'storeImport']);
+    Route::post('/inventory/imports/bulk-delete', [InventoryController::class, 'bulkDestroyImports']);
     Route::put('/inventory/imports/{id}', [InventoryController::class, 'updateImport'])->whereNumber('id');
     Route::delete('/inventory/imports/{id}', [InventoryController::class, 'destroyImport'])->whereNumber('id');
     Route::get('/inventory/imports/{id}', [InventoryController::class, 'showImport'])->whereNumber('id');
     Route::get('/inventory/documents/{type}', [InventoryController::class, 'documents']);
     Route::post('/inventory/documents/{type}', [InventoryController::class, 'storeDocument']);
+    Route::post('/inventory/documents/{type}/bulk-delete', [InventoryController::class, 'bulkDestroyDocuments']);
     Route::put('/inventory/documents/{type}/{id}', [InventoryController::class, 'updateDocument'])->whereNumber('id');
     Route::delete('/inventory/documents/{type}/{id}', [InventoryController::class, 'destroyDocument'])->whereNumber('id');
     Route::get('/inventory/documents/{type}/{id}', [InventoryController::class, 'showDocument'])->whereNumber('id');

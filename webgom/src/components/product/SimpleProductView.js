@@ -48,9 +48,9 @@ export default function SimpleProductView({
 
               <div className={styles.meta}>
                 <span className={styles.sku}>SKU: <span className={styles.skuValue}>{product.sku}</span></span>
-                <span className={styles.statusDot} style={{ backgroundColor: product.stock_quantity > 0 ? '#10b981' : '#ef4444' }}></span>
-                <span className={styles.statusText} style={{ color: product.stock_quantity > 0 ? '#059669' : '#dc2626' }}>
-                  {product.stock_quantity > 0 ? 'Còn hàng' : 'Hết hàng'}
+                <span className={styles.statusDot} style={{ backgroundColor: '#10b981' }}></span>
+                <span className={styles.statusText} style={{ color: '#059669' }}>
+                  Sẵn sàng giao ngay
                 </span>
               </div>
             </div>
@@ -75,3 +75,4 @@ export default function SimpleProductView({
     </>
   );
 }
+

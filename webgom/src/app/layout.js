@@ -60,7 +60,8 @@ const normalizeHeaderMenuItems = (items = []) =>
   items
     .map((item, index) => {
       const title = String(item?.label ?? item?.title ?? "").trim();
-      const url = String(item?.link ?? item?.url ?? "#").trim() || "#";
+      const rawUrl = String(item?.link ?? item?.url ?? "#").trim() || "#";
+      const url = rawUrl === "/he-thong-cua-hang" ? "/stores" : rawUrl;
       const order = Number(item?.order ?? item?.sort_order ?? index + 1);
 
       return {

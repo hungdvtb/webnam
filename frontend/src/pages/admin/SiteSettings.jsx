@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { motion } from 'framer-motion';
 import { cmsApi, mediaApi, quoteTemplateApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 import { createDefaultHeaderMenus, normalizeHeaderMenus } from '../../utils/headerSettings';
@@ -44,6 +43,7 @@ const defaultSettings = {
     footer_copyright_text: '',
     footer_newsletter_placeholder: '',
     footer_menu_groups: createDefaultFooterMenuGroups(),
+    store_locations: [],
 };
 
 const createHeaderMenuItem = () => ({
@@ -69,6 +69,58 @@ const createFooterMenuItem = () => ({
     enabled: true,
     order: 999,
 });
+
+const createStoreLocation = () => ({
+    id: `store-location-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    name: '',
+    city: '',
+    tag: '',
+    address: '',
+    phone: '',
+    hotline: '',
+    email: '',
+    opening_hours: '',
+    google_maps_link: '',
+    image_url: '',
+    note: '',
+    is_active: true,
+    order: 999,
+});
+
+const normalizeStoreLocations = (value) => {
+    const parsed = Array.isArray(value)
+        ? value
+        : (() => {
+            if (typeof value !== 'string' || !value.trim()) return [];
+            try {
+                const decoded = JSON.parse(value);
+                return Array.isArray(decoded) ? decoded : [];
+            } catch {
+                return [];
+            }
+        })();
+
+    return parsed
+        .filter((item) => item && typeof item === 'object')
+        .map((item, index) => ({
+            id: String(item.id || `store-location-${index + 1}`),
+            name: String(item.name || '').trim(),
+            city: String(item.city || '').trim(),
+            tag: String(item.tag || '').trim(),
+            address: String(item.address || '').trim(),
+            phone: String(item.phone || '').trim(),
+            hotline: String(item.hotline || '').trim(),
+            email: String(item.email || '').trim(),
+            opening_hours: String(item.opening_hours || item.hours || '').trim(),
+            google_maps_link: String(item.google_maps_link || item.mapLink || '').trim(),
+            image_url: String(item.image_url || item.imageUrl || '').trim(),
+            note: String(item.note || '').trim(),
+            is_active: item.is_active === undefined ? true : Boolean(item.is_active),
+            order: Number(item.order ?? item.sort_order ?? (index + 1)) || (index + 1),
+        }))
+        .sort((a, b) => a.order - b.order)
+        .map((item, index) => ({ ...item, order: index + 1 }));
+};
 
 const inputClasses = 'w-full h-10 bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary transition-all placeholder:text-primary/20';
 const textareaClasses = 'w-full min-h-[96px] bg-white border border-primary/20 rounded-sm px-3 py-2 text-[13px] font-bold text-primary focus:outline-none focus:border-primary transition-all placeholder:text-primary/20 resize-none';
@@ -126,7 +178,7 @@ const HEADER_ROUTE_REFERENCE_ROWS = [
     { page: 'Admin - Báo cáo', route: '/admin/reports', note: 'Báo cáo kinh doanh', scope: 'Admin', exists: true },
     { page: 'Admin - Cấu hình trạng thái đơn', route: '/admin/order-status-settings', note: 'Thiết lập trạng thái đơn', scope: 'Admin', exists: true },
     { page: 'Admin - Mapping hãng vận chuyển', route: '/admin/carrier-mappings', note: 'Thiết lập carrier mapping', scope: 'Admin', exists: true },
-    { page: 'Hệ thống cửa hàng', route: '/he-thong-cua-hang', note: 'Chưa tạo trong router hiện tại (placeholder)', scope: 'Placeholder', exists: false },
+    { page: 'Hệ thống cửa hàng', route: '/stores', note: 'Trang danh sách showroom / cửa hàng đang hoạt động', scope: 'Public', exists: true },
     { page: 'Giỏ hàng (storefront mới)', route: '/cart', note: 'Chưa tạo trong storefront mới, đang có /old/cart', scope: 'Placeholder', exists: false },
     { page: 'Thanh toán (route mẫu)', route: '/checkout', note: 'Chưa tạo trong storefront mới, đang dùng /dat-hang', scope: 'Placeholder', exists: false },
     { page: 'Cảm ơn / hoàn tất đơn (route mẫu)', route: '/order-success', note: 'Chưa tạo, hiện dùng /cam-on', scope: 'Placeholder', exists: false },
@@ -179,6 +231,186 @@ const ImageUploadCard = ({ imageUrl, onUpload, onRemove, emptyLabel, previewClas
     </div>
 );
 
+const StoreLocationEditor = ({
+    store,
+    index,
+    total,
+    onChange,
+    onToggleActive,
+    onMove,
+    onRemove,
+    onUploadImage,
+    onRemoveImage,
+}) => (
+    <div className="rounded-sm border border-primary/10 bg-white shadow-sm overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-primary/10 bg-primary/[0.02] px-5 py-3">
+            <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/35">Cửa hàng #{index + 1}</p>
+                <h3 className="text-[16px] font-black text-primary leading-tight truncate">
+                    {store.name?.trim() || `Cửa hàng mới ${index + 1}`}
+                </h3>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+                <button
+                    type="button"
+                    onClick={onToggleActive}
+                    className={`h-9 px-3 rounded-sm border text-[11px] font-black uppercase tracking-wider transition-all ${store.is_active
+                        ? 'border-green-200 bg-green-50 text-green-700'
+                        : 'border-stone-200 bg-stone-50 text-stone-500'
+                        }`}
+                >
+                    {store.is_active ? 'Đang hiển thị' : 'Đã ẩn'}
+                </button>
+                <button
+                    type="button"
+                    onClick={() => onMove('up')}
+                    disabled={index === 0}
+                    className="size-9 rounded-sm border border-primary/20 text-primary inline-flex items-center justify-center hover:bg-primary/[0.04] disabled:opacity-35 disabled:cursor-not-allowed"
+                    title="Di chuyển lên"
+                >
+                    <span className="material-symbols-outlined text-[18px]">keyboard_arrow_up</span>
+                </button>
+                <button
+                    type="button"
+                    onClick={() => onMove('down')}
+                    disabled={index === total - 1}
+                    className="size-9 rounded-sm border border-primary/20 text-primary inline-flex items-center justify-center hover:bg-primary/[0.04] disabled:opacity-35 disabled:cursor-not-allowed"
+                    title="Di chuyển xuống"
+                >
+                    <span className="material-symbols-outlined text-[18px]">keyboard_arrow_down</span>
+                </button>
+                <button
+                    type="button"
+                    onClick={onRemove}
+                    className="size-9 rounded-sm border border-brick/20 text-brick inline-flex items-center justify-center hover:bg-brick hover:text-white transition-all"
+                    title="Xóa cửa hàng"
+                >
+                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                </button>
+            </div>
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-[240px_minmax(0,1fr)] gap-6 p-5">
+            <div className="space-y-3">
+                <label className={labelClasses}>Ảnh cửa hàng</label>
+                <ImageUploadCard
+                    imageUrl={store.image_url}
+                    onUpload={onUploadImage}
+                    onRemove={onRemoveImage}
+                    emptyLabel="Tải ảnh đại diện cửa hàng"
+                    previewClassName="h-52"
+                />
+            </div>
+
+            <div className="space-y-5">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    <div>
+                        <label className={labelClasses}>Tên cửa hàng</label>
+                        <input
+                            type="text"
+                            value={store.name}
+                            onChange={(e) => onChange({ name: e.target.value })}
+                            className={inputClasses}
+                            placeholder="Showroom Hà Nội"
+                        />
+                    </div>
+                    <div>
+                        <label className={labelClasses}>Khu vực / tỉnh thành</label>
+                        <input
+                            type="text"
+                            value={store.city}
+                            onChange={(e) => onChange({ city: e.target.value })}
+                            className={inputClasses}
+                            placeholder="Hà Nội, TP. HCM..."
+                        />
+                    </div>
+                    <div>
+                        <label className={labelClasses}>Số điện thoại</label>
+                        <input
+                            type="text"
+                            value={store.phone}
+                            onChange={(e) => onChange({ phone: e.target.value })}
+                            className={inputClasses}
+                            placeholder="024 3828 5555"
+                        />
+                    </div>
+                    <div>
+                        <label className={labelClasses}>Hotline</label>
+                        <input
+                            type="text"
+                            value={store.hotline}
+                            onChange={(e) => onChange({ hotline: e.target.value })}
+                            className={inputClasses}
+                            placeholder="1800 6688"
+                        />
+                    </div>
+                    <div>
+                        <label className={labelClasses}>Email</label>
+                        <input
+                            type="email"
+                            value={store.email}
+                            onChange={(e) => onChange({ email: e.target.value })}
+                            className={inputClasses}
+                            placeholder="showroom@domain.com"
+                        />
+                    </div>
+                    <div>
+                        <label className={labelClasses}>Giờ mở cửa</label>
+                        <input
+                            type="text"
+                            value={store.opening_hours}
+                            onChange={(e) => onChange({ opening_hours: e.target.value })}
+                            className={inputClasses}
+                            placeholder="08:00 - 21:00"
+                        />
+                    </div>
+                    <div>
+                        <label className={labelClasses}>Nhãn hiển thị</label>
+                        <input
+                            type="text"
+                            value={store.tag}
+                            onChange={(e) => onChange({ tag: e.target.value })}
+                            className={inputClasses}
+                            placeholder="Showroom chính / Chi nhánh"
+                        />
+                    </div>
+                    <div>
+                        <label className={labelClasses}>Đường dẫn Google Maps</label>
+                        <input
+                            type="text"
+                            value={store.google_maps_link}
+                            onChange={(e) => onChange({ google_maps_link: e.target.value })}
+                            className={inputClasses}
+                            placeholder="https://maps.google.com/..."
+                        />
+                    </div>
+                </div>
+
+                <div>
+                    <label className={labelClasses}>Địa chỉ</label>
+                    <textarea
+                        value={store.address}
+                        onChange={(e) => onChange({ address: e.target.value })}
+                        className={textareaClasses}
+                        placeholder="Nhập địa chỉ đầy đủ của cửa hàng..."
+                    />
+                </div>
+
+                <div>
+                    <label className={labelClasses}>Ghi chú thêm</label>
+                    <textarea
+                        value={store.note}
+                        onChange={(e) => onChange({ note: e.target.value })}
+                        className={textareaClasses}
+                        placeholder="Ghi chú thêm về bãi đỗ xe, khu vực trưng bày, lưu ý khách hàng..."
+                    />
+                </div>
+            </div>
+        </div>
+    </div>
+);
+
 const SiteSettings = () => {
     const { showModal } = useUI();
     const [searchParams, setSearchParams] = useSearchParams();
@@ -193,6 +425,7 @@ const SiteSettings = () => {
     const [savingQuoteTemplateId, setSavingQuoteTemplateId] = useState(null);
     const [headerMenus, setHeaderMenus] = useState(createDefaultHeaderMenus());
     const [footerMenuGroups, setFooterMenuGroups] = useState(createDefaultFooterMenuGroups());
+    const [storeLocations, setStoreLocations] = useState([]);
     const [copiedRoute, setCopiedRoute] = useState('');
 
     const activeAccountId = localStorage.getItem('activeAccountId');
@@ -201,8 +434,8 @@ const SiteSettings = () => {
         try {
             const response = await cmsApi.domains.getAll();
             setDomains(response.data || []);
-        } catch (error) {
-            console.error('Error fetching domains', error);
+        } catch {
+            console.error('Error fetching domains');
         }
     }, []);
 
@@ -210,8 +443,8 @@ const SiteSettings = () => {
         try {
             const response = await quoteTemplateApi.getAll();
             setQuoteTemplates(response.data || []);
-        } catch (error) {
-            console.error('Error fetching quote templates', error);
+        } catch {
+            console.error('Error fetching quote templates');
         }
     }, []);
 
@@ -222,9 +455,11 @@ const SiteSettings = () => {
             const incomingSettings = response.data || {};
             const normalizedHeaderMenus = normalizeHeaderMenus(incomingSettings.header_menu_items);
             const normalizedFooterMenuGroups = normalizeFooterMenuGroups(incomingSettings.footer_menu_groups);
+            const normalizedStoreLocations = normalizeStoreLocations(incomingSettings.store_locations);
 
             setHeaderMenus(normalizedHeaderMenus);
             setFooterMenuGroups(normalizedFooterMenuGroups);
+            setStoreLocations(normalizedStoreLocations);
             setSettings((prev) => ({
                 ...prev,
                 ...incomingSettings,
@@ -236,9 +471,10 @@ const SiteSettings = () => {
                 footer_hotline: incomingSettings.footer_hotline || incomingSettings.contact_phone || prev.footer_hotline,
                 footer_email: incomingSettings.footer_email || incomingSettings.contact_email || prev.footer_email,
                 footer_menu_groups: normalizedFooterMenuGroups,
+                store_locations: normalizedStoreLocations,
             }));
-        } catch (error) {
-            console.error('Error fetching settings', error);
+        } catch {
+            console.error('Error fetching settings');
         } finally {
             setLoading(false);
         }
@@ -387,6 +623,69 @@ const SiteSettings = () => {
         })));
     };
 
+    const withStoreLocationOrder = (stores) => normalizeStoreLocations(stores);
+
+    const updateStoreLocation = (storeId, patch) => {
+        setStoreLocations((prev) => withStoreLocationOrder(prev.map((store) => (
+            store.id === storeId ? { ...store, ...patch } : store
+        ))));
+    };
+
+    const handleAddStoreLocation = () => {
+        setStoreLocations((prev) => withStoreLocationOrder([
+            ...prev,
+            createStoreLocation(),
+        ]));
+    };
+
+    const handleRemoveStoreLocation = (storeId) => {
+        setStoreLocations((prev) => withStoreLocationOrder(prev.filter((store) => store.id !== storeId)));
+    };
+
+    const handleMoveStoreLocation = (storeId, direction) => {
+        setStoreLocations((prev) => {
+            const currentIndex = prev.findIndex((store) => store.id === storeId);
+            if (currentIndex === -1) return prev;
+
+            const nextIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+            if (nextIndex < 0 || nextIndex >= prev.length) return prev;
+
+            const next = [...prev];
+            const [picked] = next.splice(currentIndex, 1);
+            next.splice(nextIndex, 0, picked);
+            return withStoreLocationOrder(next);
+        });
+    };
+
+    const validateStoreLocations = (stores) => {
+        const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+        for (let index = 0; index < stores.length; index += 1) {
+            const store = stores[index];
+            if (!store.name.trim()) {
+                return `Cửa hàng #${index + 1} chưa có tên cửa hàng.`;
+            }
+
+            if (!store.address.trim()) {
+                return `Cửa hàng #${index + 1} chưa có địa chỉ.`;
+            }
+
+            if (store.email && !emailPattern.test(store.email)) {
+                return `Email của cửa hàng #${index + 1} không hợp lệ.`;
+            }
+
+            if (store.google_maps_link) {
+                try {
+                    new URL(store.google_maps_link);
+                } catch {
+                    return `Link Google Maps của cửa hàng #${index + 1} không hợp lệ.`;
+                }
+            }
+        }
+
+        return null;
+    };
+
     const handleCopyRoute = async (route) => {
         const value = String(route || '').trim();
         if (!value) return;
@@ -402,8 +701,8 @@ const SiteSettings = () => {
                 markCopied();
                 return;
             }
-        } catch (error) {
-            console.warn('Clipboard API not available', error);
+        } catch {
+            console.warn('Clipboard API not available');
         }
 
         try {
@@ -417,8 +716,8 @@ const SiteSettings = () => {
             document.execCommand('copy');
             document.body.removeChild(textarea);
             markCopied();
-        } catch (error) {
-            console.error('Copy route failed', error);
+        } catch {
+            console.error('Copy route failed');
             showModal({ title: 'Lỗi', content: 'Không thể copy route. Vui lòng thử lại.', type: 'error' });
         }
     };
@@ -441,7 +740,7 @@ const SiteSettings = () => {
         try {
             const url = await uploadImage(file);
             onSuccess(url);
-        } catch (error) {
+        } catch {
             showModal({ title: 'Lỗi', content: 'Không thể tải ảnh lên.', type: 'error' });
         }
     };
@@ -453,14 +752,24 @@ const SiteSettings = () => {
             return;
         }
 
+        const normalizedHeaderMenus = normalizeHeaderMenus(headerMenus);
+        const normalizedFooterMenuGroups = normalizeFooterMenuGroups(footerMenuGroups);
+        const normalizedStoreLocations = normalizeStoreLocations(storeLocations);
+        const storeValidationError = validateStoreLocations(normalizedStoreLocations);
+
+        if (storeValidationError) {
+            setActiveTab('stores');
+            showModal({ title: 'Thiếu dữ liệu cửa hàng', content: storeValidationError, type: 'error' });
+            return;
+        }
+
         setSaving(true);
         try {
-            const normalizedHeaderMenus = normalizeHeaderMenus(headerMenus);
-            const normalizedFooterMenuGroups = normalizeFooterMenuGroups(footerMenuGroups);
             const payloadSettings = {
                 ...settings,
                 header_menu_items: normalizedHeaderMenus,
                 footer_menu_groups: normalizedFooterMenuGroups,
+                store_locations: normalizedStoreLocations,
             };
 
             await cmsApi.settings.update({
@@ -469,14 +778,16 @@ const SiteSettings = () => {
             });
             setHeaderMenus(normalizedHeaderMenus);
             setFooterMenuGroups(normalizedFooterMenuGroups);
+            setStoreLocations(normalizedStoreLocations);
             setSettings((prev) => ({
                 ...prev,
                 header_menu_items: normalizedHeaderMenus,
                 footer_menu_groups: normalizedFooterMenuGroups,
+                store_locations: normalizedStoreLocations,
             }));
             showModal({ title: 'Thành công', content: 'Đã lưu cấu hình.', type: 'success' });
-        } catch (error) {
-            console.error('Error saving settings', error);
+        } catch {
+            console.error('Error saving settings');
             showModal({ title: 'Lỗi', content: 'Không thể lưu cấu hình.', type: 'error' });
         } finally {
             setSaving(false);
@@ -490,8 +801,8 @@ const SiteSettings = () => {
             setNewDomain('');
             fetchDomains();
             showModal({ title: 'Thành công', content: 'Đã thêm tên miền.', type: 'success' });
-        } catch (error) {
-            showModal({ title: 'Lỗi', content: error.response?.data?.message || 'Không thể thêm tên miền.', type: 'error' });
+        } catch {
+            showModal({ title: 'Lỗi', content: 'Không thể thêm tên miền.', type: 'error' });
         }
     };
 
@@ -503,7 +814,7 @@ const SiteSettings = () => {
         try {
             await cmsApi.domains.update(domain.id, { ...domain, is_active: !domain.is_active });
             fetchDomains();
-        } catch (error) {
+        } catch {
             showModal({ title: 'Lỗi', content: 'Không thể cập nhật trạng thái tên miền.', type: 'error' });
         }
     };
@@ -512,7 +823,7 @@ const SiteSettings = () => {
         try {
             await cmsApi.domains.update(domainId, { is_default: true });
             fetchDomains();
-        } catch (error) {
+        } catch {
             showModal({ title: 'Lỗi', content: 'Không thể đặt mặc định.', type: 'error' });
         }
     };
@@ -522,7 +833,7 @@ const SiteSettings = () => {
         try {
             await cmsApi.domains.destroy(domainId);
             fetchDomains();
-        } catch (error) {
+        } catch {
             showModal({ title: 'Lỗi', content: 'Không thể xóa tên miền.', type: 'error' });
         }
     };
@@ -544,7 +855,7 @@ const SiteSettings = () => {
             setQuoteTemplateDraft({ name: '', image_url: '' });
             fetchQuoteTemplates();
             showModal({ title: 'Thành công', content: 'Đã thêm bộ/mẫu báo giá.', type: 'success' });
-        } catch (error) {
+        } catch {
             showModal({ title: 'Lỗi', content: 'Không thể thêm bộ/mẫu báo giá.', type: 'error' });
         } finally {
             setSavingQuoteTemplateId(null);
@@ -573,7 +884,7 @@ const SiteSettings = () => {
             });
             fetchQuoteTemplates();
             showModal({ title: 'Thành công', content: 'Đã lưu bộ/mẫu báo giá.', type: 'success' });
-        } catch (error) {
+        } catch {
             showModal({ title: 'Lỗi', content: 'Không thể lưu bộ/mẫu báo giá.', type: 'error' });
         } finally {
             setSavingQuoteTemplateId(null);
@@ -588,7 +899,7 @@ const SiteSettings = () => {
             await quoteTemplateApi.destroy(templateId);
             fetchQuoteTemplates();
             showModal({ title: 'Thành công', content: 'Đã xóa bộ/mẫu báo giá.', type: 'success' });
-        } catch (error) {
+        } catch {
             showModal({ title: 'Lỗi', content: 'Không thể xóa bộ/mẫu báo giá.', type: 'error' });
         } finally {
             setSavingQuoteTemplateId(null);
@@ -603,10 +914,11 @@ const SiteSettings = () => {
         );
     }
 
-    const tabs = [
+    const _tabs = [
         { id: 'contact', title: 'Liên hệ & Mạng xã hội', icon: 'contact_support' },
         { id: 'header', title: 'Cài đặt Header', icon: 'web' },
         { id: 'footer', title: 'Cài đặt Footer', icon: 'bottom_panel_open' },
+        { id: 'stores', title: 'Hệ thống cửa hàng', icon: 'storefront' },
         { id: 'pixel', title: 'Pixel & Tracking', icon: 'analytics' },
         { id: 'domains', title: 'Quản lý tên miền', icon: 'language' },
         { id: 'bank', title: 'Cài đặt STK', icon: 'account_balance' },
@@ -618,6 +930,7 @@ const SiteSettings = () => {
         { id: 'contact', title: 'Liên hệ & Mạng xã hội', icon: 'contact_support' },
         { id: 'header', title: 'Cài đặt Header', icon: 'web' },
         { id: 'footer', title: 'Cài đặt Footer', icon: 'bottom_panel_open' },
+        { id: 'stores', title: 'Hệ thống cửa hàng', icon: 'storefront' },
         { id: 'pixel', title: 'Pixel & Tracking', icon: 'analytics' },
         { id: 'domains', title: 'Quản lý tên miền', icon: 'language' },
         { id: 'bank', title: 'Cài đặt STK', icon: 'account_balance' },
@@ -638,7 +951,7 @@ const SiteSettings = () => {
             <div className="flex justify-between items-center mb-8">
                 <div className="flex flex-col">
                     <h1 className="text-2xl font-black text-primary uppercase tracking-tight italic">Cài đặt web</h1>
-                    <p className="text-[10px] font-black text-primary/40 uppercase tracking-[0.2em] mt-1 italic font-sans">Quản lý liên hệ, thanh toán và mẫu báo giá</p>
+                    <p className="text-[10px] font-black text-primary/40 uppercase tracking-[0.2em] mt-1 italic font-sans">Quản lý liên hệ, cửa hàng, thanh toán và mẫu báo giá</p>
                 </div>
 
                 {activeTab !== 'domains' && (
@@ -667,7 +980,7 @@ const SiteSettings = () => {
                     >
                         <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
                         {tab.title}
-                        {activeTab === tab.id && <motion.div layoutId="activeTab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />}
+                        {activeTab === tab.id && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />}
                     </button>
                 ))}
             </div>
@@ -1107,6 +1420,66 @@ const SiteSettings = () => {
                                             </div>
                                         </div>
                                     ))}
+                                </div>
+                            </SectionCard>
+                        </div>
+                    )}
+
+                    {activeTab === 'stores' && (
+                        <div className="space-y-6">
+                            <SectionCard
+                                icon="storefront"
+                                title="Hệ thống cửa hàng hiển thị ở /stores"
+                                rightSlot={(
+                                    <button
+                                        type="button"
+                                        onClick={handleAddStoreLocation}
+                                        className="h-9 px-4 rounded-sm bg-primary text-white text-[11px] font-black uppercase tracking-wider hover:bg-primary/90 transition-all inline-flex items-center gap-1"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">add_business</span>
+                                        Thêm cửa hàng
+                                    </button>
+                                )}
+                            >
+                                <div className="space-y-5">
+                                    <div className="rounded-sm border border-primary/10 bg-primary/[0.02] px-4 py-3 text-[12px] leading-5 text-primary/60">
+                                        Dữ liệu trong tab này sẽ được lưu vào cấu hình website và trang <strong>/stores</strong> sẽ đọc trực tiếp danh sách cửa hàng đang bật theo đúng thứ tự bạn sắp xếp ở đây.
+                                    </div>
+
+                                    {storeLocations.length === 0 ? (
+                                        <div className="rounded-sm border border-dashed border-primary/15 bg-white px-6 py-12 text-center">
+                                            <span className="material-symbols-outlined text-[40px] text-primary/20">storefront</span>
+                                            <p className="mt-3 text-[14px] font-bold text-primary">Chưa có cửa hàng nào</p>
+                                            <p className="mt-1 text-[12px] leading-5 text-primary/45">
+                                                Thêm cửa hàng đầu tiên để trang /stores hiển thị danh sách showroom, chi nhánh hoặc xưởng sản xuất.
+                                            </p>
+                                            <button
+                                                type="button"
+                                                onClick={handleAddStoreLocation}
+                                                className="mt-5 h-10 px-5 rounded-sm bg-primary text-white text-[12px] font-black uppercase tracking-wider hover:bg-primary/90 transition-all inline-flex items-center gap-2"
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]">add_business</span>
+                                                Tạo cửa hàng đầu tiên
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-4">
+                                            {storeLocations.map((store, index) => (
+                                                <StoreLocationEditor
+                                                    key={store.id}
+                                                    store={store}
+                                                    index={index}
+                                                    total={storeLocations.length}
+                                                    onChange={(patch) => updateStoreLocation(store.id, patch)}
+                                                    onToggleActive={() => updateStoreLocation(store.id, { is_active: !store.is_active })}
+                                                    onMove={(direction) => handleMoveStoreLocation(store.id, direction)}
+                                                    onRemove={() => handleRemoveStoreLocation(store.id)}
+                                                    onUploadImage={(e) => handleImageUpload(e, (url) => updateStoreLocation(store.id, { image_url: url }))}
+                                                    onRemoveImage={() => updateStoreLocation(store.id, { image_url: '' })}
+                                                />
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             </SectionCard>
                         </div>

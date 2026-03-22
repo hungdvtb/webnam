@@ -376,11 +376,6 @@ export default async function ProductsPage({ searchParams }) {
               );
             })}
 
-            <div className={styles.sidebarPromo}>
-              <h4 className={styles.promoTitle}>Bát Tràng Premium</h4>
-              <p className={styles.promoText}>Tất cả sản phẩm đều được nghệ nhân vẽ tay thủ công 100%.</p>
-              <button className={styles.promoBtn}>XEM CHI TIẾT CHẾ TÁC</button>
-            </div>
           </aside>
 
           {/* Product Grid Container */}

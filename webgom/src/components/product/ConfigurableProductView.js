@@ -51,9 +51,9 @@ export default function ConfigurableProductView({
 
               <div className={styles.meta}>
                 <span className={styles.sku}>SKU: <span className={styles.skuValue}>{currentProduct.sku}</span></span>
-                <span className={styles.statusDot} style={{ backgroundColor: currentProduct.stock_quantity > 0 ? '#10b981' : '#ef4444' }}></span>
-                <span className={styles.statusText} style={{ color: currentProduct.stock_quantity > 0 ? '#059669' : '#dc2626' }}>
-                  {currentProduct.stock_quantity > 0 ? 'Còn hàng' : 'Hết hàng'}
+                <span className={styles.statusDot} style={{ backgroundColor: '#10b981' }}></span>
+                <span className={styles.statusText} style={{ color: '#059669' }}>
+                  Sẵn sàng giao ngay
                 </span>
               </div>
             </div>
@@ -70,7 +70,7 @@ export default function ConfigurableProductView({
                   // Filter options that are possible with current selections of OTHER attributes
                   const validOptions = (attr.options || []).filter(opt => {
                     return product.variations?.some(variant => {
-                      // Check if this variant matches all OTHER selected options and has stock
+                      // Check if this variant matches all OTHER selected options
                       const othersMatch = Object.entries(selectedOptions).every(([otherCode, otherValue]) => {
                         if (otherCode === attr.code) return true;
                         return variant.attribute_values?.some(av =>
@@ -84,7 +84,7 @@ export default function ConfigurableProductView({
                         (av.attribute?.code === attr.code || av.attribute_id === attr.id) && av.value === opt.value
                       );
 
-                      return othersMatch && thisMatches && variant.stock_quantity > 0;
+                      return othersMatch && thisMatches;
                     });
                   });
 
@@ -151,3 +151,4 @@ export default function ConfigurableProductView({
     </>
   );
 }
+

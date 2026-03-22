@@ -192,8 +192,8 @@ export default function ComponentSelectionModal({
                       )}
                       <p className={styles.productCardPrice}>{formatPrice(item.price || 0)}</p>
                       {item.stock_quantity !== undefined && (
-                        <span className={item.stock_quantity > 0 ? styles.inStock : styles.outStock}>
-                          {item.stock_quantity > 0 ? '● Còn hàng' : '○ Hết hàng'}
+                        <span className={styles.inStock}>
+                          ● Sẵn sàng giao ngay
                         </span>
                       )}
                     </div>
@@ -242,3 +242,4 @@ export default function ComponentSelectionModal({
     </div>
   );
 }
+

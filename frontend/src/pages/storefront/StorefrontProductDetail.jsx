@@ -445,9 +445,8 @@ const StorefrontProductDetail = () => {
     const maxVariantPrice = variantPrices.length > 0 ? Math.max(...variantPrices) : null;
     const showPriceRange = !displayVariant && hasVariants && minVariantPrice !== null && maxVariantPrice !== null && minVariantPrice !== maxVariantPrice;
     const mustChooseVariant = hasSuperAttributes && hasVariants && !currentVariant;
-    const inStock = true;
-    const stockLabel = mustChooseVariant ? 'Chọn biến thể' : (inStock ? 'Sẵn sàng giao ngay' : 'Hết hàng');
-    const stockClass = mustChooseVariant ? 'text-amber-600' : (inStock ? 'text-green-600' : 'text-red-500');
+    const stockLabel = mustChooseVariant ? 'Chọn biến thể' : 'Sẵn sàng giao ngay';
+    const stockClass = mustChooseVariant ? 'text-amber-600' : 'text-green-600';
     const storefrontStatusLabel = 'S\u1eb5n s\u00e0ng giao ngay';
     const storefrontStatusClass = 'text-green-600';
     const buyProductId = displayVariant?.id || product.id;

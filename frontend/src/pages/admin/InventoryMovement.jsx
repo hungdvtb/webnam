@@ -3167,6 +3167,20 @@ const InventoryMovement = () => {
             return product;
         }));
     };
+    const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {}) => {
+        const nextUnitCost = Number(responseData?.unit_cost ?? responseData?.supplier_unit_cost ?? fallbackValues.unit_cost ?? row.unit_cost ?? 0);
+        const nextUpdatedAt = responseData?.updated_at ?? responseData?.supplier_price_updated_at ?? new Date().toISOString();
+
+        return {
+            supplier_price_id: responseData?.id ?? responseData?.supplier_price_id ?? row.supplier_price_id ?? null,
+            supplier_product_code: String(responseData?.supplier_product_code ?? fallbackValues.supplier_product_code ?? row.supplier_product_code ?? '').trim(),
+            unit_cost: nextUnitCost,
+            notes: responseData?.notes ?? fallbackValues.notes ?? row.notes ?? '',
+            updated_at: nextUpdatedAt,
+            updater_name: responseData?.updater?.name ?? responseData?.updater_name ?? row.updater_name ?? null,
+            ...upsertSupplierComparison(row, nextUnitCost, nextUpdatedAt),
+        };
+    };
     const findLocalDuplicateSupplierCodeRow = (row, supplierProductCode) => {
         const normalizedCode = normalizeSupplierCodeKey(supplierProductCode);
         if (!normalizedCode) return null;
@@ -3191,7 +3205,7 @@ const InventoryMovement = () => {
                 supplier_id: supplier.id,
                 supplier_name: supplier.name,
                 supplier_code: supplier.code || null,
-                unit_cost,
+                unit_cost: unitCost,
                 updated_at: updatedAt,
             } : null,
         ].filter(Boolean));
@@ -3317,10 +3331,12 @@ const InventoryMovement = () => {
     };
 
     const saveSupplierPriceRow = async (row, overrides = {}) => {
-        const rawValue = overrides.unit_cost ?? priceDrafts[row.id] ?? row.unit_cost ?? '';
+        const hasUnitCostOverride = Object.prototype.hasOwnProperty.call(overrides, 'unit_cost');
+        const hasSupplierCodeOverride = Object.prototype.hasOwnProperty.call(overrides, 'supplier_product_code');
+        const rawValue = hasUnitCostOverride ? (overrides.unit_cost ?? '') : (row.unit_cost ?? '');
         const cleaned = stripNumericValue(rawValue);
-        const numericValue = cleaned === '' ? 0 : Number(cleaned);
-        const supplierProductCode = String(overrides.supplier_product_code ?? codeDrafts[row.id] ?? row.supplier_product_code ?? '').trim();
+        const numericValue = cleaned === '' ? Number(row.unit_cost || 0) : Number(cleaned);
+        const supplierProductCode = String(hasSupplierCodeOverride ? (overrides.supplier_product_code ?? '') : (row.supplier_product_code ?? '')).trim();
         const currentSupplierCode = String(row.supplier_product_code || '').trim();
         const productId = Number(row.product_id || row.id || 0);
         if (!selectedSupplierId || row.row_kind === 'group') return false;
@@ -3350,10 +3366,19 @@ const InventoryMovement = () => {
             const responseData = response.data || {};
             const nextCodeDraft = String(responseData.supplier_product_code ?? supplierProductCode).trim();
             const nextPriceDraft = stripNumericValue(String(responseData.unit_cost ?? numericValue));
+            const savedRowUpdates = buildSavedSupplierPriceRowUpdates(row, responseData, {
+                supplier_product_code: nextCodeDraft,
+                unit_cost: nextPriceDraft,
+                notes: payload.notes,
+            });
 
-            setPriceDrafts((prev) => ({ ...prev, [row.id]: nextPriceDraft }));
-            setCodeDrafts((prev) => ({ ...prev, [row.id]: nextCodeDraft }));
-            await fetchSupplierCatalog(supplierCatalogPagination.current_page || 1, pageSizes.supplierPrices);
+            patchSupplierCatalogRow(productId, savedRowUpdates);
+            if (hasUnitCostOverride) {
+                setPriceDrafts((prev) => ({ ...prev, [row.id]: nextPriceDraft }));
+            }
+            if (hasSupplierCodeOverride) {
+                setCodeDrafts((prev) => ({ ...prev, [row.id]: nextCodeDraft }));
+            }
             return true;
         } catch (error) {
             fail(error, 'Không thể lưu giá dự kiến.');
@@ -3379,7 +3404,6 @@ const InventoryMovement = () => {
 
         await saveSupplierPriceRow(row, {
             supplier_product_code: normalizedCode,
-            unit_cost: priceDrafts[row.id] ?? row.unit_cost ?? 0,
         });
     };
 

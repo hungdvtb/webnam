@@ -288,6 +288,27 @@ class InventoryController extends Controller
         return response()->json($this->productPayload($product->fresh()));
     }
 
+    public function updateInventoryImportStar(Request $request, int $id)
+    {
+        $product = Product::withTrashed()->findOrFail($id);
+        $validated = $request->validate([
+            'inventory_import_starred' => 'required|boolean',
+        ]);
+
+        $product->inventory_import_starred = (bool) $validated['inventory_import_starred'];
+        $product->save();
+
+        return response()->json([
+            'message' => $product->inventory_import_starred
+                ? 'Đã ưu tiên sản phẩm này trong phiếu nhập.'
+                : 'Đã bỏ ưu tiên sản phẩm này khỏi phiếu nhập.',
+            'product' => [
+                'id' => (int) $product->id,
+                'inventory_import_starred' => (bool) $product->inventory_import_starred,
+            ],
+        ]);
+    }
+
     public function suppliers(Request $request)
     {
         $query = Supplier::query()
@@ -470,6 +491,7 @@ class InventoryController extends Controller
                             'products.expected_cost',
                             'products.cost_price',
                             'products.inventory_unit_id',
+                            'products.inventory_import_starred',
                             'products.stock_quantity',
                             'products.damaged_quantity',
                             'products.status',
@@ -1133,7 +1155,7 @@ class InventoryController extends Controller
             ->with([
                 'supplier:id,name,phone,email,address',
                 'statusConfig:id,code,name,color,affects_inventory',
-                'items.product:id,sku,name,price,stock_quantity,inventory_unit_id',
+                'items.product:id,sku,name,price,stock_quantity,inventory_unit_id,inventory_import_starred',
                 'items.product.unit:id,name',
                 'items.batch',
                 'items.supplierPrice',
@@ -1521,19 +1543,33 @@ class InventoryController extends Controller
     public function exports(Request $request)
     {
         $query = Order::query()
+            ->where(function ($builder) {
+                $builder
+                    ->where('type', 'inventory_export')
+                    ->orWhere(function ($exportQuery) {
+                        $exportQuery
+                            ->whereNotNull('shipping_tracking_code')
+                            ->where('shipping_tracking_code', '!=', '');
+                    });
+            })
             ->select([
                 'id',
                 'order_number',
                 'customer_name',
                 'customer_phone',
+                'shipping_address',
                 'status',
-                'total_price',
-                'cost_total',
-                'profit_total',
                 'source',
+                'type',
+                'notes',
+                'shipping_carrier_name',
+                'shipping_tracking_code',
+                'shipping_dispatched_at',
                 'created_at',
             ])
-            ->withCount('items');
+            ->withCount('items')
+            ->withSum('items as total_quantity', 'quantity')
+            ->selectRaw('COALESCE(shipping_dispatched_at, created_at) as exported_at');
 
         if ($request->filled('search')) {
             $search = trim((string) $request->input('search'));
@@ -1542,6 +1578,8 @@ class InventoryController extends Controller
                     'order_number',
                     'customer_name',
                     'customer_phone',
+                    'shipping_tracking_code',
+                    'shipping_address',
                 ], $search);
 
                 $builder->orWhereHas('items', function ($itemQuery) use ($search) {
@@ -1562,34 +1600,69 @@ class InventoryController extends Controller
         }
 
         if ($request->filled('date_from')) {
-            $query->whereDate('created_at', '>=', $request->input('date_from'));
+            $query->whereDate(DB::raw('COALESCE(shipping_dispatched_at, created_at)'), '>=', $request->input('date_from'));
         }
 
         if ($request->filled('date_to')) {
-            $query->whereDate('created_at', '<=', $request->input('date_to'));
+            $query->whereDate(DB::raw('COALESCE(shipping_dispatched_at, created_at)'), '<=', $request->input('date_to'));
         }
 
         $perPage = min(max((int) $request->input('per_page', 20), 20), 500);
 
         $this->applyMappedSort($query, $request, [
             'code' => 'order_number',
+            'source' => 'source',
             'customer' => 'customer_name',
-            'date' => 'created_at',
+            'tracking' => 'shipping_tracking_code',
+            'date' => 'exported_at',
             'line_count' => 'items_count',
-            'revenue' => 'total_price',
-            'cost' => 'cost_total',
-            'profit' => 'profit_total',
+            'qty' => 'total_quantity',
             'status' => 'status',
         ], 'date', ['id' => 'desc']);
 
-        return response()->json(
-            $query->paginate($perPage)
-        );
+        $paginated = $query->paginate($perPage);
+
+        $paginated->getCollection()->transform(function (Order $order) {
+            $isManualExport = $order->type === 'inventory_export';
+
+            return [
+                'id' => $order->id,
+                'order_number' => $order->order_number,
+                'customer_name' => $order->customer_name,
+                'customer_phone' => $order->customer_phone,
+                'shipping_address' => $order->shipping_address,
+                'status' => $order->status,
+                'source' => $order->source,
+                'type' => $order->type,
+                'notes' => $order->notes,
+                'shipping_carrier_name' => $order->shipping_carrier_name,
+                'shipping_tracking_code' => $order->shipping_tracking_code,
+                'shipping_dispatched_at' => $order->shipping_dispatched_at,
+                'created_at' => $order->created_at,
+                'exported_at' => $order->exported_at,
+                'items_count' => (int) $order->items_count,
+                'total_quantity' => (float) ($order->total_quantity ?? 0),
+                'export_kind' => $isManualExport ? 'manual' : 'dispatch_auto',
+                'export_kind_label' => $isManualExport ? 'Phiếu tạo tay' : 'Tự tạo từ vận chuyển',
+                'can_delete' => $isManualExport,
+            ];
+        });
+
+        return response()->json($paginated);
     }
 
     public function showExport(int $id)
     {
         $order = Order::query()
+            ->where(function ($builder) {
+                $builder
+                    ->where('type', 'inventory_export')
+                    ->orWhere(function ($exportQuery) {
+                        $exportQuery
+                            ->whereNotNull('shipping_tracking_code')
+                            ->where('shipping_tracking_code', '!=', '');
+                    });
+            })
             ->with([
                 'items.product:id,sku,name',
                 'items.batchAllocations.batch',
@@ -1599,6 +1672,43 @@ class InventoryController extends Controller
             ->findOrFail($id);
 
         return response()->json($order);
+    }
+
+    private function exportInvoiceMetaPayload(Order $order): array
+    {
+        $attributes = $order->attributeValues
+            ->filter(fn ($value) => $value->attribute?->code)
+            ->mapWithKeys(fn ($value) => [$value->attribute->code => $value->value]);
+
+        return [
+            'sale_channel' => $attributes->get('sale_channel') ?: $order->source ?: 'online',
+            'invoice_requested' => $this->normalizeExportBooleanAttribute($attributes->get('invoice_requested'), true),
+            'invoice_mode' => $attributes->get('invoice_mode') ?: 'standard',
+            'invoice_buyer_type' => $attributes->get('invoice_buyer_type') ?: 'individual',
+            'invoice_buyer_name' => $attributes->get('invoice_buyer_name') ?: $order->customer_name,
+            'invoice_company_name' => $attributes->get('invoice_company_name') ?: null,
+            'invoice_tax_code' => $attributes->get('invoice_tax_code') ?: null,
+            'invoice_email' => $attributes->get('invoice_email') ?: $order->customer_email,
+            'invoice_address' => $attributes->get('invoice_address') ?: $order->shipping_address,
+            'payment_method' => $attributes->get('payment_method') ?: null,
+            'tax_rate' => $attributes->get('tax_rate') ?: '10',
+            'storefront_reference' => $attributes->get('storefront_reference') ?: null,
+        ];
+    }
+
+    private function normalizeExportBooleanAttribute($value, bool $default = false): bool
+    {
+        if ($value === null || $value === '') {
+            return $default;
+        }
+
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        $normalized = strtolower(trim((string) $value));
+
+        return in_array($normalized, ['1', 'true', 'yes', 'y', 'on'], true);
     }
 
     private function sortDirection(Request $request): string
@@ -1938,6 +2048,7 @@ class InventoryController extends Controller
             'products.expected_cost',
             'products.cost_price',
             'products.inventory_unit_id',
+            'products.inventory_import_starred',
             'products.stock_quantity',
             'products.damaged_quantity',
             'products.status',
@@ -2460,6 +2571,7 @@ class InventoryController extends Controller
             'supplier_product_code' => $supplierPrice?->supplier_product_code ?? $fallbackSupplierPrice?->supplier_product_code,
             'name' => $product->name,
             'inventory_unit_id' => $product->inventory_unit_id ? (int) $product->inventory_unit_id : null,
+            'inventory_import_starred' => (bool) ($product->inventory_import_starred ?? false),
             'unit_name' => $product->relationLoaded('unit') ? $product->unit?->name : null,
             'price' => (float) ($product->price ?? 0),
             'stock_quantity' => (int) ($product->stock_quantity ?? 0),
@@ -2532,6 +2644,7 @@ class InventoryController extends Controller
             'supplier_product_code' => $supplierPrice?->supplier_product_code,
             'name' => $product->name,
             'inventory_unit_id' => $product->inventory_unit_id ? (int) $product->inventory_unit_id : null,
+            'inventory_import_starred' => (bool) ($product->inventory_import_starred ?? false),
             'unit_name' => $product->relationLoaded('unit') ? $product->unit?->name : null,
             'price' => (float) ($product->price ?? 0),
             'stock_quantity' => (int) ($product->stock_quantity ?? 0),

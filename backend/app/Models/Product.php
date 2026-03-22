@@ -12,7 +12,7 @@ class Product extends Model
     protected $fillable = [
         'type', 'name', 'slug', 'description', 'specifications', 'price', 'price_type', 'cost_price', 'expected_cost', 'special_price', 'special_price_from', 'special_price_to', 
         'category_id', 'stock_quantity', 'damaged_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
-        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'inventory_unit_id', 'supplier_id', 'video_url', 'additional_info', 'bundle_title', 'site_domain_id'
+        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'inventory_unit_id', 'inventory_import_starred', 'supplier_id', 'video_url', 'additional_info', 'bundle_title', 'site_domain_id'
     ];
 
     public function siteDomain()
@@ -24,6 +24,10 @@ class Product extends Model
         'status' => true,
         'is_new' => true,
         'is_featured' => false,
+    ];
+
+    protected $casts = [
+        'inventory_import_starred' => 'boolean',
     ];
 
     protected $appends = ['average_rating', 'current_price', 'main_image', 'primary_image', 'inventory_display_cost', 'inventory_cost_source'];

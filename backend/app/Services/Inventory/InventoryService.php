@@ -853,7 +853,7 @@ class InventoryService
             'items' => function ($builder) {
                 $builder->orderBy('sort_order')->orderBy('id');
             },
-            'items.product:id,sku,name,price,stock_quantity,inventory_unit_id',
+            'items.product:id,sku,name,price,stock_quantity,inventory_unit_id,inventory_import_starred',
             'items.product.unit:id,name',
             'items.batch',
             'items.supplierPrice:id,supplier_id,product_id,supplier_product_code,unit_cost,notes,updated_at',

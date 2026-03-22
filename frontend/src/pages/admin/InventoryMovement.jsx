@@ -50,6 +50,150 @@ const documentTabs = [
     ['adjustments', 'Phiếu điều chỉnh'],
 ];
 
+const defaultProductFilters = { search: '', status: '', cost_source: '', type: '', category_id: '', variant_scope: '', date_from: '', date_to: '' };
+const defaultSupplierFilters = { search: '', status: '', month: '', date_from: '', date_to: '' };
+const defaultSupplierCatalogFilters = { sku: '', name: '', category_id: '', type: '', variant_scope: '', missing_supplier_price: '', multiple_suppliers: '' };
+const createDefaultSimpleFilters = () => ({
+    imports: { search: '', date_from: '', date_to: '', inventory_import_status_id: '', entry_mode: '', has_invoice: '' },
+    exports: { search: '', date_from: '', date_to: '' },
+    returns: { search: '', date_from: '', date_to: '' },
+    damaged: { search: '', date_from: '', date_to: '' },
+    adjustments: { search: '', date_from: '', date_to: '' },
+    lots: { search: '', date_from: '', date_to: '' },
+    trash: { search: '', date_from: '', date_to: '' },
+});
+
+const filterOptionLabel = (options, value) => options.find((option) => String(option.value) === String(value))?.label || String(value || '');
+const buildFilterChip = (key, label, value, onRemove) => {
+    const normalizedValue = typeof value === 'string' ? value.trim() : value;
+    if (normalizedValue == null || normalizedValue === '') return null;
+    return { key, label, value: String(normalizedValue), onRemove };
+};
+const formatMonthFilterValue = (value) => {
+    const matched = String(value || '').match(/^(\d{4})-(\d{2})$/);
+    if (!matched) return value;
+    return `${matched[2]}/${matched[1]}`;
+};
+
+const productStatusFilterOptions = [
+    { value: 'active', label: 'Đang bán' },
+    { value: 'inactive', label: 'Ngừng bán' },
+];
+const productCostSourceFilterOptions = [
+    { value: 'actual', label: 'Đang dùng giá vốn' },
+    { value: 'expected', label: 'Đang dùng giá dự kiến' },
+    { value: 'empty', label: 'Chưa có giá' },
+];
+const productTypeFilterOptions = [
+    { value: 'simple', label: 'Sản phẩm thường' },
+    { value: 'configurable', label: 'Sản phẩm có biến thể' },
+];
+const productVariantScopeFilterOptions = [
+    { value: 'has_variants', label: 'Có biến thể' },
+    { value: 'no_variants', label: 'Không có biến thể' },
+    { value: 'only_variants', label: 'Chỉ biến thể con' },
+    { value: 'roots', label: 'Chỉ sản phẩm gốc' },
+];
+const supplierStatusFilterOptions = [
+    { value: '1', label: 'Đang dùng' },
+    { value: '0', label: 'Ngừng dùng' },
+];
+const supplierCatalogVariantScopeFilterOptions = [
+    { value: 'no_variants', label: 'Sản phẩm thường' },
+    { value: 'only_variants', label: 'Biến thể' },
+    { value: 'has_variants', label: 'Nhóm có biến thể' },
+    { value: 'roots', label: 'Nhóm gốc' },
+];
+const importEntryModeFilterOptions = [
+    { value: 'manual', label: 'Nhập tay' },
+    { value: 'invoice_ai', label: 'AI đọc hóa đơn' },
+];
+const importHasInvoiceFilterOptions = [
+    { value: 'with_invoice', label: 'Đã có hóa đơn' },
+    { value: 'without_invoice', label: 'Chưa có hóa đơn' },
+];
+const exportSourceOptions = [
+    { value: 'online', label: 'Bán online' },
+    { value: 'store', label: 'Bán tại cửa hàng' },
+    { value: 'internal', label: 'Xuất nội bộ' },
+    { value: 'display', label: 'Xuất trưng bày' },
+];
+const exportInvoiceModeOptions = [
+    { value: 'standard', label: 'Hóa đơn điện tử chuẩn' },
+    { value: 'cash_register', label: 'HĐĐT từ máy tính tiền' },
+];
+const exportInvoiceBuyerTypeOptions = [
+    { value: 'individual', label: 'Cá nhân' },
+    { value: 'business', label: 'Doanh nghiệp' },
+];
+const exportPaymentMethodOptions = [
+    { value: 'cash', label: 'Tiền mặt' },
+    { value: 'bank_transfer', label: 'Chuyển khoản' },
+    { value: 'card', label: 'Thẻ / POS' },
+    { value: 'e_wallet', label: 'Ví điện tử' },
+    { value: 'cod', label: 'COD' },
+];
+const exportTaxRateOptions = [
+    { value: '0', label: '0%' },
+    { value: '5', label: '5%' },
+    { value: '8', label: '8%' },
+    { value: '10', label: '10%' },
+];
+const defaultExportInvoiceMeta = {
+    sale_channel: 'online',
+    invoice_requested: true,
+    invoice_mode: 'standard',
+    invoice_buyer_type: 'individual',
+    invoice_buyer_name: '',
+    invoice_company_name: '',
+    invoice_tax_code: '',
+    invoice_email: '',
+    invoice_address: '',
+    payment_method: 'bank_transfer',
+    tax_rate: '10',
+    storefront_reference: '',
+};
+const normalizeExportInvoiceRequested = (value) => value === true || value === '1' || value === 1 || value === 'true';
+const getExportSaleChannelLabel = (value) => filterOptionLabel(exportSourceOptions, value);
+const getExportInvoiceModeLabel = (value) => filterOptionLabel(exportInvoiceModeOptions, value);
+const getExportBuyerTypeLabel = (value) => filterOptionLabel(exportInvoiceBuyerTypeOptions, value);
+const getExportPaymentMethodLabel = (value) => filterOptionLabel(exportPaymentMethodOptions, value);
+const buildExportInvoiceMeta = (raw = {}) => ({
+    ...defaultExportInvoiceMeta,
+    ...raw,
+    invoice_requested: normalizeExportInvoiceRequested(raw.invoice_requested ?? defaultExportInvoiceMeta.invoice_requested),
+});
+const getExportInvoiceStatusMeta = (invoiceMeta = {}, fallbackCustomerName = '') => {
+    const meta = buildExportInvoiceMeta(invoiceMeta);
+    if (!meta.invoice_requested) {
+        return { label: 'Không xuất HĐĐT', tone: 'slate', detail: 'Phiếu xuất này chưa yêu cầu hóa đơn điện tử.' };
+    }
+
+    const buyerName = String(meta.invoice_buyer_name || fallbackCustomerName || '').trim();
+    const hasBusinessFields = String(meta.invoice_company_name || '').trim() && String(meta.invoice_tax_code || '').trim() && String(meta.invoice_address || '').trim();
+    const isReady = meta.invoice_buyer_type === 'business'
+        ? Boolean(hasBusinessFields)
+        : Boolean(buyerName);
+
+    if (isReady) {
+        return {
+            label: 'Sẵn sàng Sinvoice',
+            tone: 'emerald',
+            detail: meta.invoice_buyer_type === 'business'
+                ? 'Đã có đủ thông tin doanh nghiệp để map sang hóa đơn điện tử.'
+                : 'Đã có đủ thông tin người mua để tạo hóa đơn điện tử.',
+        };
+    }
+
+    return {
+        label: 'Thiếu dữ liệu HĐĐT',
+        tone: 'amber',
+        detail: meta.invoice_buyer_type === 'business'
+            ? 'Cần tên đơn vị, mã số thuế và địa chỉ để lên hóa đơn doanh nghiệp.'
+            : 'Cần tối thiểu tên người mua để đồng bộ phát hành hóa đơn.',
+    };
+};
+
 const isDocumentTab = (tabKey) => documentTabs.some(([key]) => key === tabKey);
 
 const documentTypeMap = { returns: 'return', damaged: 'damaged', adjustments: 'adjustment' };
@@ -400,6 +544,21 @@ const buildInventorySearchMeta = (row) => [
 ]
     .filter(Boolean)
     .join(' • ');
+const compareInventorySearchRows = (left, right, prioritizeImportStar = false) => {
+    if (prioritizeImportStar && Boolean(right?.inventory_import_starred) !== Boolean(left?.inventory_import_starred)) {
+        return left?.inventory_import_starred ? -1 : 1;
+    }
+    if ((right?._search_score || 0) !== (left?._search_score || 0)) {
+        return (right?._search_score || 0) - (left?._search_score || 0);
+    }
+    if ((left?._source_rank ?? 0) !== (right?._source_rank ?? 0)) {
+        return (left?._source_rank ?? 0) - (right?._source_rank ?? 0);
+    }
+    return String(left?.name || '').localeCompare(String(right?.name || ''), 'vi');
+};
+const sortInventorySearchRows = (rows = [], prioritizeImportStar = false) => [...rows]
+    .sort((left, right) => compareInventorySearchRows(left, right, prioritizeImportStar));
+const clearInventorySearchCache = () => inventorySearchCache.clear();
 const scoreInventorySearchRow = (row, normalizedQuery) => {
     if (!normalizedQuery) return 0;
 
@@ -481,15 +640,15 @@ const pruneInventorySearchCache = () => {
         inventorySearchCache.delete(oldestKey);
     }
 };
-const inventorySearchCacheKey = ({ query, supplierId = null, limit = 20 }) => {
+const inventorySearchCacheKey = ({ query, supplierId = null, limit = 20, prioritizeImportStar = false }) => {
     const normalizedQuery = normalizeSearchText(query);
-    return `${supplierId || 'all'}::${limit}::${normalizedQuery}`;
+    return `${supplierId || 'all'}::${limit}::${prioritizeImportStar ? 'import_star' : 'default'}::${normalizedQuery}`;
 };
-const fetchInventorySearchResults = async ({ query, supplierId = null, limit = 20, signal } = {}) => {
+const fetchInventorySearchResults = async ({ query, supplierId = null, limit = 20, signal, prioritizeImportStar = false } = {}) => {
     const trimmed = String(query ?? '').trim();
     if (!trimmed) return [];
 
-    const cacheKey = inventorySearchCacheKey({ query: trimmed, supplierId, limit });
+    const cacheKey = inventorySearchCacheKey({ query: trimmed, supplierId, limit, prioritizeImportStar });
     const cachedEntry = inventorySearchCache.get(cacheKey);
     if (cachedEntry && Date.now() - cachedEntry.timestamp <= INVENTORY_SEARCH_CACHE_TTL) {
         return cachedEntry.data;
@@ -507,22 +666,13 @@ const fetchInventorySearchResults = async ({ query, supplierId = null, limit = 2
         without_summary: 1,
     }, signal);
 
-    const rows = flattenInventorySearchProducts(response.data?.data || [], normalizedQuery)
+    const rows = sortInventorySearchRows(flattenInventorySearchProducts(response.data?.data || [], normalizedQuery)
         .map((row, index) => ({
             ...row,
             _search_score: scoreInventorySearchRow(row, normalizedQuery),
             _source_rank: index,
         }))
-        .sort((left, right) => {
-            if (right._search_score !== left._search_score) {
-                return right._search_score - left._search_score;
-            }
-            if (left._source_rank !== right._source_rank) {
-                return left._source_rank - right._source_rank;
-            }
-            return String(left.name || '').localeCompare(String(right.name || ''), 'vi');
-        })
-        .slice(0, limit);
+    , prioritizeImportStar).slice(0, limit);
 
     inventorySearchCache.set(cacheKey, {
         timestamp: Date.now(),
@@ -531,6 +681,54 @@ const fetchInventorySearchResults = async ({ query, supplierId = null, limit = 2
     pruneInventorySearchCache();
     return rows;
 };
+
+const moveArrayItem = (items = [], fromIndex, toIndex) => {
+    if (
+        fromIndex === toIndex
+        || fromIndex < 0
+        || toIndex < 0
+        || fromIndex >= items.length
+        || toIndex >= items.length
+    ) {
+        return items;
+    }
+
+    const nextItems = [...items];
+    const [movedItem] = nextItems.splice(fromIndex, 1);
+    nextItems.splice(toIndex, 0, movedItem);
+    return nextItems;
+};
+const sortImportItemsByStarPriority = (items = []) => items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+        if (Boolean(right.item?.inventory_import_starred) !== Boolean(left.item?.inventory_import_starred)) {
+            return left.item?.inventory_import_starred ? -1 : 1;
+        }
+        return left.index - right.index;
+    })
+    .map(({ item }) => item);
+const updateInventoryImportStarInProductCollection = (rows = [], productId, starred) => (
+    (Array.isArray(rows) ? rows : []).map((row) => ({
+        ...row,
+        inventory_import_starred: Number(row?.id || 0) === Number(productId) ? starred : Boolean(row?.inventory_import_starred),
+        variants: Array.isArray(row?.variants)
+            ? updateInventoryImportStarInProductCollection(row.variants, productId, starred)
+            : row?.variants,
+    }))
+);
+const applyImportProductData = (item, product) => ({
+    ...item,
+    product_id: product.id,
+    product_name: product.name,
+    product_sku: product.sku,
+    supplier_product_code: product.supplier_product_code || item.supplier_product_code || '',
+    unit_name: product.unit_name || product.unit?.name || item.unit_name || '',
+    unit_cost: String(Math.round(Number(product.supplier_unit_cost ?? product.current_cost ?? product.expected_cost ?? 0))),
+    received_quantity: item.received_quantity || '0',
+    mapping_status: 'matched',
+    mapping_label: item.mapping_status === 'unmatched' ? 'Đã map thủ công' : '',
+    inventory_import_starred: Boolean(product.inventory_import_starred),
+});
 
 const createLine = (overrides = {}) => ({
     key: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -544,6 +742,7 @@ const createLine = (overrides = {}) => ({
     unit_cost: '',
     notes: '',
     update_supplier_price: true,
+    inventory_import_starred: false,
     mapping_status: 'manual',
     mapping_label: '',
     stock_bucket: 'sellable',
@@ -585,6 +784,7 @@ const mapSupplierCatalogEntry = (item) => ({
     category_name: item.category_name || null,
     price: item.price ?? null,
     unit_cost: item.supplier_unit_cost ?? null,
+    inventory_import_starred: Boolean(item.inventory_import_starred),
     current_cost: item.current_cost ?? item.expected_cost ?? null,
     notes: item.supplier_notes || '',
     updated_at: item.supplier_price_updated_at || null,
@@ -601,6 +801,23 @@ const mapSupplierCatalogEntry = (item) => ({
 
 const createImportForm = (data = null) => {
     const chargeInputs = buildImportChargeInputsFromData(data);
+    const mappedItems = (data?.items || []).length
+        ? data.items.map((item) => createLine({
+            product_id: item.product_id,
+            product_name: item.product?.name || item.product_name_snapshot || '',
+            product_sku: item.product?.sku || item.product_sku_snapshot || '',
+            supplier_product_code: item.supplier_product_code_snapshot || item.supplierPrice?.supplier_product_code || '',
+            quantity: String(item.quantity || 1),
+            received_quantity: String(item.received_quantity ?? 0),
+            unit_name: item.unit_name_snapshot || item.product?.unit?.name || item.product?.unit_name || '',
+            unit_cost: String(Math.round(Number(item.unit_cost || 0))),
+            notes: item.notes || '',
+            update_supplier_price: data?.update_supplier_prices ?? true,
+            inventory_import_starred: Boolean(item.product?.inventory_import_starred ?? item.inventory_import_starred),
+            mapping_status: item.product_id ? 'matched' : 'manual',
+            mapping_label: item.product_id ? 'Đã map sản phẩm' : '',
+        }))
+        : [];
 
     return {
         id: data?.id || null,
@@ -624,22 +841,7 @@ const createImportForm = (data = null) => {
             ? data.attachments.map(mapImportAttachment)
             : [],
         local_attachment_files: [],
-        items: (data?.items || []).length
-            ? data.items.map((item) => createLine({
-                product_id: item.product_id,
-                product_name: item.product?.name || item.product_name_snapshot || '',
-                product_sku: item.product?.sku || item.product_sku_snapshot || '',
-                supplier_product_code: item.supplier_product_code_snapshot || item.supplierPrice?.supplier_product_code || '',
-                quantity: String(item.quantity || 1),
-                received_quantity: String(item.received_quantity ?? 0),
-                unit_name: item.unit_name_snapshot || item.product?.unit?.name || item.product?.unit_name || '',
-                unit_cost: String(Math.round(Number(item.unit_cost || 0))),
-                notes: item.notes || '',
-                update_supplier_price: data?.update_supplier_prices ?? true,
-                mapping_status: item.product_id ? 'matched' : 'manual',
-                mapping_label: item.product_id ? 'Đã map sản phẩm' : '',
-            }))
-            : [],
+        items: data?.id ? mappedItems : sortImportItemsByStarPriority(mappedItems),
     };
 };
 
@@ -676,6 +878,30 @@ const createDocumentForm = (tabKey, data = null) => ({
             notes: item.notes || '',
             stock_bucket: item.stock_bucket || 'sellable',
             direction: item.direction || 'in',
+        }))
+        : [createLine()],
+});
+
+const createExportForm = (data = null) => ({
+    id: data?.id || null,
+    customer_name: data?.customer_name || '',
+    customer_phone: data?.customer_phone || '',
+    customer_email: data?.customer_email || '',
+    shipping_address: data?.shipping_address || '',
+    source: data?.source || data?.invoice_meta?.sale_channel || exportSourceOptions[0].value,
+    notes: data?.notes || '',
+    invoice_meta: buildExportInvoiceMeta(data?.invoice_meta || {}),
+    items: (data?.items || []).length
+        ? data.items.map((item) => createLine({
+            product_id: item.product_id,
+            product_name: item.product?.name || item.product_name_snapshot || '',
+            product_sku: item.product?.sku || item.product_sku_snapshot || '',
+            quantity: String(item.quantity || 1),
+            unit_name: item.product?.unit?.name || item.product?.unit_name || item.unit_name || '',
+            unit_cost: item.price != null
+                ? String(Math.round(Number(item.price || 0)))
+                : String(Math.round(Number(item.product?.current_price ?? item.product?.price ?? 0))),
+            notes: item.options?.note || item.notes || '',
         }))
         : [createLine()],
 });
@@ -1154,13 +1380,13 @@ const importColumns = [
 ];
 
 const exportColumns = [
-    { id: 'code', label: 'Mã đơn', minWidth: 140 },
-    { id: 'customer', label: 'Khách hàng', minWidth: 220 },
-    { id: 'date', label: 'Ngày tạo', minWidth: 150 },
+    { id: 'code', label: 'Mã phiếu', minWidth: 140 },
+    { id: 'source', label: 'Nguồn xuất', minWidth: 180 },
+    { id: 'customer', label: 'Người nhận / nơi nhận', minWidth: 240 },
+    { id: 'tracking', label: 'Mã vận đơn', minWidth: 190 },
+    { id: 'date', label: 'Ngày xuất', minWidth: 150 },
     { id: 'line_count', label: 'Số dòng', minWidth: 90, align: 'right' },
-    { id: 'revenue', label: 'Doanh thu', minWidth: 120, align: 'right' },
-    { id: 'cost', label: 'Giá vốn', minWidth: 120, align: 'right' },
-    { id: 'profit', label: 'Lãi gộp', minWidth: 120, align: 'right' },
+    { id: 'qty', label: 'Tổng SL', minWidth: 110, align: 'right' },
     { id: 'status', label: 'Trạng thái', minWidth: 120 },
     { id: 'actions', label: 'Thao tác', minWidth: 145, align: 'center' },
 ];
@@ -1260,12 +1486,12 @@ const inventorySortColumnMaps = {
     },
     exports: {
         code: 'code',
+        source: 'source',
         customer: 'customer',
+        tracking: 'tracking',
         date: 'date',
         line_count: 'line_count',
-        revenue: 'revenue',
-        cost: 'cost',
-        profit: 'profit',
+        qty: 'qty',
         status: 'status',
     },
     documents: {
@@ -1293,30 +1519,75 @@ const inventorySortColumnMaps = {
     },
 };
 
-const PanelHeader = ({ title, description, toggles = [], leadingActions = null, actions = null }) => (
-    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-primary/10 px-3 py-2.5">
-        <div className="min-w-0">
-            <div className="text-[13px] font-black text-primary">{title}</div>
-            {description ? <div className="text-[11px] text-primary/45">{description}</div> : null}
+const ActiveFilterChips = ({ items = [], onClearAll = null }) => {
+    const visibleItems = items.filter(Boolean);
+    if (visibleItems.length === 0) return null;
+
+    return (
+        <div className="border-y border-primary/10 bg-[#fbfcfe] px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2">
+                <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/45">Đang lọc</div>
+                {visibleItems.map((item) => (
+                    <button
+                        key={item.key}
+                        type="button"
+                        onClick={item.onRemove}
+                        className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/15 bg-white px-3 py-1 text-left text-[12px] text-primary transition hover:border-brick/35 hover:text-brick"
+                        title={`Bỏ lọc ${String(item.label || '').toLowerCase()}`}
+                    >
+                        <span className="max-w-[260px] truncate">
+                            <span className="font-semibold text-primary/55">{item.label}:</span>
+                            {' '}
+                            <span className="font-black text-primary">{item.value}</span>
+                        </span>
+                        <span className="material-symbols-outlined text-[16px]">close</span>
+                    </button>
+                ))}
+                {onClearAll ? (
+                    <button
+                        type="button"
+                        onClick={onClearAll}
+                        className="inline-flex items-center rounded-full border border-primary/15 px-3 py-1 text-[12px] font-bold text-primary transition hover:border-primary hover:bg-white"
+                    >
+                        Xóa hết
+                    </button>
+                ) : null}
+            </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-            {leadingActions}
-            {toggles.map((toggle) => (
-                <button
-                    key={toggle.id}
-                    type="button"
-                    onClick={toggle.onClick}
-                    disabled={toggle.disabled}
-                    className={`${iconButton(toggle.active)} ${toggle.disabled ? 'cursor-not-allowed opacity-45 hover:border-primary/15 hover:bg-white hover:text-primary' : ''}`}
-                    title={toggle.disabled ? (toggle.disabledTitle || toggle.label) : toggle.label}
-                >
-                    <span className="material-symbols-outlined text-[18px]">{toggle.icon}</span>
-                </button>
-            ))}
-            {actions}
-        </div>
-    </div>
-);
+    );
+};
+
+const PanelHeader = ({ title, description, toggles = [], leadingActions = null, actions = null, activeFilterChips = [], onClearAllFilters = null }) => {
+    const hasActiveFilterChips = activeFilterChips.filter(Boolean).length > 0;
+
+    return (
+        <>
+            <div className={`flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 ${hasActiveFilterChips ? '' : 'border-b border-primary/10'}`}>
+                <div className="min-w-0">
+                    <div className="text-[13px] font-black text-primary">{title}</div>
+                    {description ? <div className="text-[11px] text-primary/45">{description}</div> : null}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                    {leadingActions}
+                    {toggles.map((toggle) => (
+                        <button
+                            key={toggle.id}
+                            type="button"
+                            onClick={toggle.onClick}
+                            disabled={toggle.disabled}
+                            className={`${iconButton(toggle.active)} ${toggle.disabled ? 'cursor-not-allowed opacity-45 hover:border-primary/15 hover:bg-white hover:text-primary' : ''}`}
+                            title={toggle.disabled ? (toggle.disabledTitle || toggle.label) : toggle.label}
+                        >
+                            <span className="material-symbols-outlined text-[18px]">{toggle.icon}</span>
+                        </button>
+                    ))}
+                    {actions}
+                </div>
+            </div>
+            {hasActiveFilterChips ? <ActiveFilterChips items={activeFilterChips} onClearAll={onClearAllFilters} /> : null}
+        </>
+    );
+};
 
 const FilterPanel = ({ children, actions }) => (
     <div className="border-b border-primary/10 bg-[#fbfcfe] px-3 py-2.5">
@@ -1478,9 +1749,11 @@ const ProductLookupInput = ({ supplierId = null, onSelect, placeholder = 'Tìm t
 
 const ImportProductQuickSearch = ({
     onSelect,
+    onToggleStar = null,
     supplierId = null,
     disabled = false,
     placeholder = 'Tìm tên, mã sản phẩm, mã NCC hoặc từ khóa liên quan',
+    starLoadingProductIds = [],
 }) => {
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
@@ -1527,6 +1800,7 @@ const ImportProductQuickSearch = ({
                     supplierId,
                     limit: 20,
                     signal: controller.signal,
+                    prioritizeImportStar: true,
                 });
 
                 if (active) {
@@ -1562,6 +1836,29 @@ const ImportProductQuickSearch = ({
         }
         setOpen(true);
         requestAnimationFrame(() => inputRef.current?.focus());
+    };
+
+    const handleToggleStar = async (event, row) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!onToggleStar) return;
+
+        try {
+            const nextStarred = !Boolean(row.inventory_import_starred);
+            const updatedProduct = await Promise.resolve(onToggleStar(row, nextStarred));
+            const nextResults = sortInventorySearchRows(results.map((item) => (
+                Number(item.id) === Number(row.id)
+                    ? {
+                        ...item,
+                        inventory_import_starred: Boolean(updatedProduct?.inventory_import_starred ?? nextStarred),
+                    }
+                    : item
+            )), true);
+            setResults(nextResults);
+            setActiveIndex(nextResults.findIndex((item) => Number(item.id) === Number(row.id)));
+        } catch (error) {
+            // Toast is already handled by the parent callback.
+        }
     };
 
     const clearQuery = () => {
@@ -1613,18 +1910,38 @@ const ImportProductQuickSearch = ({
                         {loading ? <div className="px-3 py-4 text-[12px] text-primary/55">Đang tìm sản phẩm...</div> : null}
                         {!loading && results.length === 0 ? <div className="px-3 py-4 text-[12px] text-primary/55">Không tìm thấy sản phẩm phù hợp.</div> : null}
                         {!loading && results.map((row, index) => (
-                            <button
+                            <div
                                 key={`quick_import_${row.id}`}
-                                type="button"
-                                onClick={() => selectRow(row, index)}
-                                className={`flex w-full items-center justify-between border-b border-primary/10 px-3 py-2 text-left transition last:border-b-0 ${activeIndex === index ? 'bg-primary/[0.07]' : 'hover:bg-primary/[0.04]'}`}
+                                className={`flex items-stretch border-b border-primary/10 last:border-b-0 ${activeIndex === index ? 'bg-primary/[0.07]' : 'hover:bg-primary/[0.04]'}`}
                             >
-                                <div className="min-w-0">
-                                    <div className="truncate text-[13px] font-semibold text-primary">{row.name}</div>
-                                    <div className="truncate text-[11px] text-primary/50">{buildInventorySearchMeta(row) || 'Chưa có thông tin mã sản phẩm'}</div>
-                                </div>
-                                <span className="ml-3 shrink-0 text-[11px] font-bold text-primary/70">Thêm</span>
-                            </button>
+                                <button
+                                    type="button"
+                                    onClick={() => selectRow(row, index)}
+                                    className="flex min-w-0 flex-1 items-center justify-between px-3 py-2 text-left"
+                                >
+                                    <div className="min-w-0">
+                                        <div className="flex items-center gap-1.5">
+                                            <div className="truncate text-[13px] font-semibold text-primary">{row.name}</div>
+                                            {row.inventory_import_starred ? <span className="material-symbols-outlined text-[16px] text-amber-500">star</span> : null}
+                                        </div>
+                                        <div className="truncate text-[11px] text-primary/50">{buildInventorySearchMeta(row) || 'Chưa có thông tin mã sản phẩm'}</div>
+                                    </div>
+                                    <span className="ml-3 shrink-0 text-[11px] font-bold text-primary/70">Thêm</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={(event) => handleToggleStar(event, row)}
+                                    disabled={starLoadingProductIds.includes(Number(row.id))}
+                                    className={`mr-2 inline-flex w-10 shrink-0 items-center justify-center rounded-sm text-[18px] transition ${
+                                        row.inventory_import_starred
+                                            ? 'text-amber-500 hover:bg-amber-50'
+                                            : 'text-primary/35 hover:bg-primary/5 hover:text-amber-500'
+                                    } ${starLoadingProductIds.includes(Number(row.id)) ? 'cursor-not-allowed opacity-50' : ''}`}
+                                    title={row.inventory_import_starred ? 'Bỏ ưu tiên sản phẩm này' : 'Ưu tiên sản phẩm này lên đầu'}
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">{row.inventory_import_starred ? 'star' : 'star_outline'}</span>
+                                </button>
+                            </div>
                         ))}
                     </div>
                 </div>
@@ -1669,33 +1986,32 @@ const ImportItemsEditorTable = ({
     onOpenPrint,
     onUpdateLine,
     onRemoveLine,
+    onMoveLine = null,
+    onToggleProductStar = null,
+    starLoadingProductIds = [],
     readOnly = false,
     hideActions = false,
     storageKey = 'inventory_import_modal_table_v3',
-    headerMessage = 'Dòng chưa về đủ được ưu tiên lên đầu để theo dõi.',
+    headerMessage = 'Kéo biểu tượng ở tên sản phẩm để đổi thứ tự dòng. Sản phẩm gắn sao sẽ được ưu tiên khi tạo phiếu mới.',
 }) => {
-    const sortedRows = useMemo(() => {
-        return items
-            .map((item, index) => {
-                const quantity = Number(item.quantity || 0);
-                const received = Number(item.received_quantity ?? 0);
-                return {
-                    ...item,
-                    _row_index: index,
-                    _is_incomplete: received < quantity,
-                };
-            })
-            .sort((left, right) => {
-                if (left._is_incomplete === right._is_incomplete) {
-                    return left._row_index - right._row_index;
-                }
-                return left._is_incomplete ? -1 : 1;
-            });
-    }, [items]);
+    const displayRows = useMemo(() => (
+        items.map((item, index) => {
+            const quantity = Number(item.quantity || 0);
+            const received = Number(item.received_quantity ?? 0);
+            return {
+                ...item,
+                _row_index: index,
+                _is_incomplete: received < quantity,
+            };
+        })
+    ), [items]);
     const tableColumns = useMemo(() => ([
         { id: 'stt', label: 'STT', minWidth: 68, align: 'center', draggable: false },
         ...importItemColumns.filter((column) => column.id !== 'stt' && (!hideActions || column.id !== 'actions')),
     ]), [hideActions]);
+    const rowDragEnabled = Boolean(onMoveLine && !readOnly && !hideActions && displayRows.length > 1);
+    const [draggingRowIndex, setDraggingRowIndex] = useState(null);
+    const [dragOverRowIndex, setDragOverRowIndex] = useState(null);
 
     const {
         availableColumns,
@@ -1712,6 +2028,41 @@ const ImportItemsEditorTable = ({
         saveAsDefault,
     } = useTableColumns(storageKey, tableColumns);
 
+    const clearRowDragState = () => {
+        setDraggingRowIndex(null);
+        setDragOverRowIndex(null);
+    };
+
+    const handleRowDragStart = (event, rowIndex) => {
+        if (!rowDragEnabled) return;
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(rowIndex));
+        setDraggingRowIndex(rowIndex);
+        setDragOverRowIndex(rowIndex);
+    };
+
+    const handleRowDragOver = (event, rowIndex) => {
+        if (!rowDragEnabled || draggingRowIndex === null) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        if (dragOverRowIndex !== rowIndex) {
+            setDragOverRowIndex(rowIndex);
+        }
+    };
+
+    const handleRowDrop = (event, rowIndex) => {
+        if (!rowDragEnabled) return;
+        event.preventDefault();
+        const fromIndex = draggingRowIndex ?? Number(event.dataTransfer.getData('text/plain'));
+        if (!Number.isInteger(fromIndex) || fromIndex < 0 || fromIndex === rowIndex) {
+            clearRowDragState();
+            return;
+        }
+
+        onMoveLine?.(fromIndex, rowIndex);
+        clearRowDragState();
+    };
+
     const renderCell = (row, columnId, rowIndex) => {
         if (columnId === 'stt') {
             return <div className="flex h-8 items-center justify-center text-[12px] font-bold text-primary/75">{rowIndex + 1}</div>;
@@ -1720,16 +2071,45 @@ const ImportItemsEditorTable = ({
         if (columnId === 'product_name') {
             const secondaryText = [row.product_sku, row.supplier_product_code].filter(Boolean).join(' • ');
             return (
-                <div className="space-y-1">
-                    {row.product_id ? (
-                        <CellText primary={row.product_name || '-'} secondary={secondaryText || '-'} />
-                    ) : (
-                        <div className="space-y-1">
-                            <div className="text-[12px] font-semibold text-primary/80">{row.product_name || 'Chưa gắn sản phẩm'}</div>
-                            <div className="text-[11px] text-primary/45">{row.supplier_product_code || row.product_sku || 'Chưa có mã tham chiếu'}</div>
-                            {row.mapping_status === 'unmatched' ? <StatusPill label="Chưa map" color="#D97706" subtle="#FEF3C7" /> : null}
-                        </div>
-                    )}
+                <div className="flex items-start gap-2">
+                    {rowDragEnabled ? (
+                        <button
+                            type="button"
+                            draggable
+                            onDragStart={(event) => handleRowDragStart(event, row._row_index)}
+                            onDragEnd={clearRowDragState}
+                            className="mt-0.5 inline-flex h-7 w-7 shrink-0 cursor-grab items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/45 transition hover:border-primary/20 hover:text-primary active:cursor-grabbing"
+                            title="Kéo để đổi thứ tự dòng"
+                        >
+                            <span className="material-symbols-outlined text-[18px]">drag_indicator</span>
+                        </button>
+                    ) : null}
+                    <div className="min-w-0 flex-1 space-y-1">
+                        {row.product_id ? (
+                            <CellText primary={row.product_name || '-'} secondary={secondaryText || '-'} />
+                        ) : (
+                            <div className="space-y-1">
+                                <div className="text-[12px] font-semibold text-primary/80">{row.product_name || 'Chưa gắn sản phẩm'}</div>
+                                <div className="text-[11px] text-primary/45">{row.supplier_product_code || row.product_sku || 'Chưa có mã tham chiếu'}</div>
+                                {row.mapping_status === 'unmatched' ? <StatusPill label="Chưa map" color="#D97706" subtle="#FEF3C7" /> : null}
+                            </div>
+                        )}
+                    </div>
+                    {row.product_id && onToggleProductStar ? (
+                        <button
+                            type="button"
+                            onClick={() => { void onToggleProductStar(row, !Boolean(row.inventory_import_starred)); }}
+                            disabled={starLoadingProductIds.includes(Number(row.product_id))}
+                            className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-sm border transition ${
+                                row.inventory_import_starred
+                                    ? 'border-amber-300 bg-amber-50 text-amber-500'
+                                    : 'border-primary/10 bg-white text-primary/35 hover:border-amber-200 hover:text-amber-500'
+                            } ${starLoadingProductIds.includes(Number(row.product_id)) ? 'cursor-not-allowed opacity-50' : ''}`}
+                            title={row.inventory_import_starred ? 'Bỏ ưu tiên sản phẩm này' : 'Ưu tiên sản phẩm này lên đầu'}
+                        >
+                            <span className="material-symbols-outlined text-[18px]">{row.inventory_import_starred ? 'star' : 'star_outline'}</span>
+                        </button>
+                    ) : null}
                 </div>
             );
         }
@@ -1880,13 +2260,24 @@ const ImportItemsEditorTable = ({
                         </tr>
                     </thead>
                     <tbody>
-                        {sortedRows.length === 0 ? (
+                        {displayRows.length === 0 ? (
                             <tr>
                                 <td colSpan={renderedColumns.length} className="px-4 py-6 text-center text-[13px] text-primary/55">Chưa có dòng sản phẩm.</td>
                             </tr>
                         ) : null}
-                        {sortedRows.map((row, rowIndex) => (
-                            <tr key={row.key} className={row._is_incomplete ? 'bg-amber-50/70' : ''}>
+                        {displayRows.map((row, rowIndex) => (
+                            <tr
+                                key={row.key}
+                                onDragOver={rowDragEnabled ? (event) => handleRowDragOver(event, row._row_index) : undefined}
+                                onDrop={rowDragEnabled ? (event) => handleRowDrop(event, row._row_index) : undefined}
+                                onDragEnd={rowDragEnabled ? clearRowDragState : undefined}
+                                className={[
+                                    row._is_incomplete ? 'bg-amber-50/70' : '',
+                                    row.inventory_import_starred ? 'shadow-[inset_3px_0_0_0_rgba(245,158,11,0.95)]' : '',
+                                    draggingRowIndex === row._row_index ? 'opacity-55' : '',
+                                    dragOverRowIndex === row._row_index && draggingRowIndex !== row._row_index ? 'bg-primary/[0.06]' : '',
+                                ].filter(Boolean).join(' ')}
+                            >
                                 {renderedColumns.map((column) => (
                                     <td key={`${row.key}_${column.id}`} className={`overflow-hidden border-b border-r border-primary/10 px-2.5 py-1.5 align-middle text-[12px] text-primary ${column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : 'text-left'}`}>
                                         <div className="min-w-0">{renderCell(row, column.id, rowIndex)}</div>
@@ -2045,6 +2436,8 @@ const InventoryMovement = () => {
     const restoredSupplierContextRef = useRef(false);
     const skipSupplierSearchResetRef = useRef(false);
     const savingSupplierPriceRowsRef = useRef(new Set());
+    const supplierSearchSyncRef = useRef('');
+    const supplierCatalogSearchSyncRef = useRef({ search: '', sku: '', name: '' });
     const simpleSearchSyncRef = useRef({
         imports: '',
         exports: '',
@@ -2107,19 +2500,11 @@ const InventoryMovement = () => {
         trash: { filters: false, stats: false, columns: false },
     });
 
-    const [productFilters, setProductFilters] = useState({ search: '', status: '', cost_source: '', type: '', category_id: '', variant_scope: '', date_from: '', date_to: '' });
-    const [supplierFilters, setSupplierFilters] = useState({ search: '', status: '', month: '', date_from: '', date_to: '' });
-    const [supplierCatalogFilters, setSupplierCatalogFilters] = useState({ sku: '', name: '', category_id: '', type: '', variant_scope: '', missing_supplier_price: '', multiple_suppliers: '' });
+    const [productFilters, setProductFilters] = useState(defaultProductFilters);
+    const [supplierFilters, setSupplierFilters] = useState(defaultSupplierFilters);
+    const [supplierCatalogFilters, setSupplierCatalogFilters] = useState(defaultSupplierCatalogFilters);
     const [supplierQuickSearch, setSupplierQuickSearch] = useState('');
-    const [simpleFilters, setSimpleFilters] = useState({
-        imports: { search: '', date_from: '', date_to: '', inventory_import_status_id: '', entry_mode: '', has_invoice: '' },
-        exports: { search: '', date_from: '', date_to: '' },
-        returns: { search: '', date_from: '', date_to: '' },
-        damaged: { search: '', date_from: '', date_to: '' },
-        adjustments: { search: '', date_from: '', date_to: '' },
-        lots: { search: '', date_from: '', date_to: '' },
-        trash: { search: '', date_from: '', date_to: '' },
-    });
+    const [simpleFilters, setSimpleFilters] = useState(() => createDefaultSimpleFilters());
 
     const [expandedGroups, setExpandedGroups] = useState({});
     const [expandedComparisons, setExpandedComparisons] = useState({});
@@ -2143,6 +2528,7 @@ const InventoryMovement = () => {
     const [importInvoiceReplacingId, setImportInvoiceReplacingId] = useState(null);
     const [importInvoiceDeletingId, setImportInvoiceDeletingId] = useState(null);
     const [importCompleteToggleSnapshot, setImportCompleteToggleSnapshot] = useState(null);
+    const [importStarLoadingProductIds, setImportStarLoadingProductIds] = useState([]);
     const [importTableSettingsOpen, setImportTableSettingsOpen] = useState(false);
     const [importTableExpanded, setImportTableExpanded] = useState(false);
     const [importPrintModalOpen, setImportPrintModalOpen] = useState(false);
@@ -2160,6 +2546,7 @@ const InventoryMovement = () => {
     const [importDetailTableSettingsOpen, setImportDetailTableSettingsOpen] = useState(false);
     const [importStatusModal, setImportStatusModal] = useState({ open: false, form: createImportStatusForm() });
     const [documentModal, setDocumentModal] = useState({ open: false, tabKey: 'returns', form: createDocumentForm('returns') });
+    const [exportModal, setExportModal] = useState({ open: false, form: createExportForm() });
     const [pageSizes, setPageSizes] = useState(() => ({
         products: getStoredPageSize('products'),
         suppliers: getStoredPageSize('suppliers'),
@@ -2541,6 +2928,7 @@ const InventoryMovement = () => {
         setImportTableExpanded(false);
         closeImportPrintModal();
         setImportCompleteToggleSnapshot(null);
+        setImportStarLoadingProductIds([]);
         setImportModal({
             open: false,
             form: createImportForm({
@@ -2814,6 +3202,74 @@ const InventoryMovement = () => {
         });
     };
 
+    const moveImportLine = (fromIndex, toIndex) => {
+        setImportModal((prev) => {
+            const nextItems = moveArrayItem(prev.form.items, fromIndex, toIndex);
+            if (nextItems === prev.form.items) {
+                return prev;
+            }
+
+            return {
+                ...prev,
+                form: synchronizeImportFormCompletion({
+                    ...prev.form,
+                    items: nextItems,
+                }),
+            };
+        });
+    };
+
+    const toggleImportProductStar = async (productOrRow, nextStarred) => {
+        const productId = Number(productOrRow?.product_id || productOrRow?.id || 0);
+        if (!productId) return null;
+
+        setImportStarLoadingProductIds((prev) => (
+            prev.includes(productId) ? prev : [...prev, productId]
+        ));
+
+        try {
+            const response = await inventoryApi.setImportStar(productId, {
+                inventory_import_starred: Boolean(nextStarred),
+            });
+            const resolvedStarred = Boolean(response.data?.product?.inventory_import_starred ?? nextStarred);
+
+            clearInventorySearchCache();
+            setProducts((prev) => updateInventoryImportStarInProductCollection(prev, productId, resolvedStarred));
+            setImportModal((prev) => {
+                const nextItems = prev.form.items.map((item) => (
+                    Number(item.product_id || 0) === productId
+                        ? { ...item, inventory_import_starred: resolvedStarred }
+                        : item
+                ));
+
+                return {
+                    ...prev,
+                    form: synchronizeImportFormCompletion({
+                        ...prev.form,
+                        items: resolvedStarred ? sortImportItemsByStarPriority(nextItems) : nextItems,
+                    }),
+                };
+            });
+
+            showToast({
+                type: 'success',
+                message: response.data?.message || (resolvedStarred
+                    ? 'Đã ưu tiên sản phẩm này trong phiếu nhập.'
+                    : 'Đã bỏ ưu tiên sản phẩm này khỏi phiếu nhập.'),
+            });
+
+            return {
+                id: productId,
+                inventory_import_starred: resolvedStarred,
+            };
+        } catch (error) {
+            fail(error, nextStarred ? 'Không thể ưu tiên sản phẩm này.' : 'Không thể bỏ ưu tiên sản phẩm này.');
+            throw error;
+        } finally {
+            setImportStarLoadingProductIds((prev) => prev.filter((id) => id !== productId));
+        }
+    };
+
     const syncImportItemsFromSupplier = async (supplierId) => {
         const numericSupplierId = Number(supplierId || 0);
         if (!numericSupplierId) return;
@@ -2996,24 +3452,13 @@ const InventoryMovement = () => {
         setImportModal((prev) => {
             const nextItems = prev.form.items.map((item, itemIndex) => (
                 itemIndex === index
-                    ? {
-                        ...item,
-                        product_id: product.id,
-                        product_name: product.name,
-                        product_sku: product.sku,
-                        supplier_product_code: product.supplier_product_code || item.supplier_product_code || '',
-                        unit_name: product.unit_name || product.unit?.name || item.unit_name || '',
-                        unit_cost: String(Math.round(Number(product.supplier_unit_cost ?? product.current_cost ?? product.expected_cost ?? 0))),
-                        received_quantity: item.received_quantity || '0',
-                        mapping_status: 'matched',
-                        mapping_label: item.mapping_status === 'unmatched' ? 'Đã map thủ công' : '',
-                    }
+                    ? applyImportProductData(item, product)
                     : item
             ));
 
             const syncedForm = synchronizeImportFormCompletion({
                 ...prev.form,
-                items: nextItems,
+                items: product.inventory_import_starred ? sortImportItemsByStarPriority(nextItems) : nextItems,
             });
 
             return {
@@ -3037,24 +3482,13 @@ const InventoryMovement = () => {
 
             nextItems = nextItems.map((item, itemIndex) => (
                 itemIndex === targetIndex
-                    ? {
-                        ...item,
-                        product_id: product.id,
-                        product_name: product.name,
-                        product_sku: product.sku,
-                        supplier_product_code: product.supplier_product_code || item.supplier_product_code || '',
-                        unit_name: product.unit_name || product.unit?.name || item.unit_name || '',
-                        unit_cost: String(Math.round(Number(product.supplier_unit_cost ?? product.current_cost ?? product.expected_cost ?? 0))),
-                        received_quantity: item.received_quantity || '0',
-                        mapping_status: 'matched',
-                        mapping_label: item.mapping_status === 'unmatched' ? 'Đã map thủ công' : '',
-                    }
+                    ? applyImportProductData(item, product)
                     : item
             ));
 
             const syncedForm = synchronizeImportFormCompletion({
                 ...prev.form,
-                items: nextItems,
+                items: product.inventory_import_starred ? sortImportItemsByStarPriority(nextItems) : nextItems,
             });
 
             return { ...prev, form: syncedForm };
@@ -3084,10 +3518,10 @@ const InventoryMovement = () => {
         }
     };
 
-    const fetchProducts = async (page = 1, perPage = pageSizes.products, sortOverride = null) => {
+    const fetchProducts = async (page = 1, perPage = pageSizes.products, sortOverride = null, filtersOverride = productFilters) => {
         setFlag('products', true);
         try {
-            const response = await inventoryApi.getProducts({ ...productFilters, page, per_page: perPage, ...buildSortParams('products', sortOverride) });
+            const response = await inventoryApi.getProducts({ ...filtersOverride, page, per_page: perPage, ...buildSortParams('products', sortOverride) });
             setProducts(response.data.data || []);
             setProductSummary(response.data.summary || null);
             pageState(setProductPagination, response);
@@ -3098,10 +3532,10 @@ const InventoryMovement = () => {
         }
     };
 
-    const fetchSuppliers = async (page = 1, perPage = pageSizes.suppliers, sortOverride = null) => {
+    const fetchSuppliers = async (page = 1, perPage = pageSizes.suppliers, sortOverride = null, filtersOverride = supplierFilters) => {
         setFlag('suppliers', true);
         try {
-            const response = await inventoryApi.getSuppliers({ ...supplierFilters, page, per_page: perPage, ...buildSortParams('suppliers', sortOverride) });
+            const response = await inventoryApi.getSuppliers({ ...filtersOverride, page, per_page: perPage, ...buildSortParams('suppliers', sortOverride) });
             const rows = response.data.data || [];
             setSuppliers(rows);
             setSupplierSummary(response.data.summary || null);
@@ -3114,13 +3548,19 @@ const InventoryMovement = () => {
         }
     };
 
-    const fetchSupplierCatalog = async (page = 1, perPage = pageSizes.supplierPrices, sortOverride = null) => {
+    const fetchSupplierCatalog = async (
+        page = 1,
+        perPage = pageSizes.supplierPrices,
+        sortOverride = null,
+        filtersOverride = supplierCatalogFilters,
+        searchOverride = supplierQuickSearch
+    ) => {
         if (!selectedSupplierId) return;
         setFlag('supplierCatalog', true);
         try {
             const response = await inventoryApi.getSupplierPrices(selectedSupplierId, {
-                ...supplierCatalogFilters,
-                search: supplierQuickSearch.trim(),
+                ...filtersOverride,
+                search: String(searchOverride || '').trim(),
                 page,
                 per_page: perPage,
                 ...buildSortParams('supplierPrices', sortOverride),
@@ -3167,15 +3607,15 @@ const InventoryMovement = () => {
         }
     };
 
-    const fetchImports = (page = 1, perPage = pageSizes.imports, sortOverride = null) => fetchSimple('imports', (currentPage, currentPerPage) => inventoryApi.getImports({ ...simpleFilters.imports, page: currentPage, per_page: currentPerPage, ...buildSortParams('imports', sortOverride) }), setImports, setImportPagination, page, perPage);
-    const fetchExports = (page = 1, perPage = pageSizes.exports, sortOverride = null) => fetchSimple('exports', (currentPage, currentPerPage) => inventoryApi.getExports({ ...simpleFilters.exports, page: currentPage, per_page: currentPerPage, ...buildSortParams('exports', sortOverride) }), setExportsData, setExportPagination, page, perPage);
-    const fetchDocuments = (type, page = 1, perPage = pageSizes[{ return: 'returns', damaged: 'damaged', adjustment: 'adjustments' }[type]], sortOverride = null) => {
+    const fetchImports = (page = 1, perPage = pageSizes.imports, sortOverride = null, filtersOverride = simpleFilters.imports) => fetchSimple('imports', (currentPage, currentPerPage) => inventoryApi.getImports({ ...filtersOverride, page: currentPage, per_page: currentPerPage, ...buildSortParams('imports', sortOverride) }), setImports, setImportPagination, page, perPage);
+    const fetchExports = (page = 1, perPage = pageSizes.exports, sortOverride = null, filtersOverride = simpleFilters.exports) => fetchSimple('exports', (currentPage, currentPerPage) => inventoryApi.getExports({ ...filtersOverride, page: currentPage, per_page: currentPerPage, ...buildSortParams('exports', sortOverride) }), setExportsData, setExportPagination, page, perPage);
+    const fetchDocuments = (type, page = 1, perPage = pageSizes[{ return: 'returns', damaged: 'damaged', adjustment: 'adjustments' }[type]], sortOverride = null, filtersOverride = simpleFilters[{ return: 'returns', damaged: 'damaged', adjustment: 'adjustments' }[type]]) => {
         const map = { return: ['returns', setReturnsData, setReturnPagination], damaged: ['damaged', setDamagedData, setDamagedPagination], adjustment: ['adjustments', setAdjustments, setAdjustmentPagination] };
         const [key, setter, paginationSetter] = map[type];
-        return fetchSimple(key, (currentPage, currentPerPage) => inventoryApi.getDocuments(type, { ...simpleFilters[key], page: currentPage, per_page: currentPerPage, ...buildSortParams(key, sortOverride) }), setter, paginationSetter, page, perPage);
+        return fetchSimple(key, (currentPage, currentPerPage) => inventoryApi.getDocuments(type, { ...filtersOverride, page: currentPage, per_page: currentPerPage, ...buildSortParams(key, sortOverride) }), setter, paginationSetter, page, perPage);
     };
-    const fetchLots = (page = 1, perPage = pageSizes.lots, sortOverride = null) => fetchSimple('lots', (currentPage, currentPerPage) => inventoryApi.getBatches({ ...simpleFilters.lots, page: currentPage, per_page: currentPerPage, remaining_only: 1, ...buildSortParams('lots', sortOverride) }), setLots, setLotPagination, page, perPage);
-    const fetchTrash = (page = 1, perPage = pageSizes.trash, sortOverride = null) => fetchSimple('trash', (currentPage, currentPerPage) => inventoryApi.getProducts({ ...simpleFilters.trash, page: currentPage, per_page: currentPerPage, trash: 1, ...buildSortParams('trash', sortOverride) }), setTrashItems, setTrashPagination, page, perPage);
+    const fetchLots = (page = 1, perPage = pageSizes.lots, sortOverride = null, filtersOverride = simpleFilters.lots) => fetchSimple('lots', (currentPage, currentPerPage) => inventoryApi.getBatches({ ...filtersOverride, page: currentPage, per_page: currentPerPage, remaining_only: 1, ...buildSortParams('lots', sortOverride) }), setLots, setLotPagination, page, perPage);
+    const fetchTrash = (page = 1, perPage = pageSizes.trash, sortOverride = null, filtersOverride = simpleFilters.trash) => fetchSimple('trash', (currentPage, currentPerPage) => inventoryApi.getProducts({ ...filtersOverride, page: currentPage, per_page: currentPerPage, trash: 1, ...buildSortParams('trash', sortOverride) }), setTrashItems, setTrashPagination, page, perPage);
     const handleTableSort = (section, columnId) => {
         const next = nextSortConfig(sortConfigs[section], columnId);
         setSortConfigs((prev) => ({ ...prev, [section]: next }));
@@ -3192,6 +3632,123 @@ const InventoryMovement = () => {
         if (section === 'trash') return fetchTrash(1, pageSizes.trash, next);
         return undefined;
     };
+
+    const fetchSimpleTabByKey = (tabKey, page = 1, perPage = pageSizes[tabKey], sortOverride = null, filtersOverride = simpleFilters[tabKey]) => {
+        if (tabKey === 'imports') return fetchImports(page, perPage, sortOverride, filtersOverride);
+        if (tabKey === 'exports') return fetchExports(page, perPage, sortOverride, filtersOverride);
+        if (tabKey === 'returns') return fetchDocuments('return', page, perPage, sortOverride, filtersOverride);
+        if (tabKey === 'damaged') return fetchDocuments('damaged', page, perPage, sortOverride, filtersOverride);
+        if (tabKey === 'adjustments') return fetchDocuments('adjustment', page, perPage, sortOverride, filtersOverride);
+        if (tabKey === 'lots') return fetchLots(page, perPage, sortOverride, filtersOverride);
+        if (tabKey === 'trash') return fetchTrash(page, perPage, sortOverride, filtersOverride);
+        return undefined;
+    };
+
+    const getCategoryNameById = (categoryId) => categories.find((category) => String(category.id) === String(categoryId))?.name || String(categoryId || '');
+    const getImportStatusNameById = (statusId) => importStatuses.find((status) => String(status.id) === String(statusId))?.name || String(statusId || '');
+
+    const clearProductFilter = (key) => {
+        const nextFilters = { ...productFilters, [key]: defaultProductFilters[key] ?? '' };
+        setProductFilters(nextFilters);
+        fetchProducts(1, pageSizes.products, null, nextFilters);
+    };
+    const clearAllProductFilters = () => {
+        const nextFilters = { ...defaultProductFilters };
+        setProductFilters(nextFilters);
+        fetchProducts(1, pageSizes.products, null, nextFilters);
+    };
+
+    const clearSupplierFilter = (key) => {
+        const nextFilters = { ...supplierFilters, [key]: defaultSupplierFilters[key] ?? '' };
+        setSupplierFilters(nextFilters);
+        if (key === 'search') {
+            supplierSearchSyncRef.current = nextFilters.search;
+            fetchSuppliers(1, pageSizes.suppliers, null, nextFilters);
+            return;
+        }
+        fetchSuppliers(1, pageSizes.suppliers, null, nextFilters);
+    };
+    const clearAllSupplierFilters = () => {
+        const nextFilters = { ...defaultSupplierFilters };
+        supplierSearchSyncRef.current = nextFilters.search;
+        setSupplierFilters(nextFilters);
+        fetchSuppliers(1, pageSizes.suppliers, null, nextFilters);
+    };
+
+    const clearSupplierCatalogFilter = (key) => {
+        const nextFilters = { ...supplierCatalogFilters, [key]: defaultSupplierCatalogFilters[key] ?? '' };
+        setSupplierCatalogFilters(nextFilters);
+        if (key === 'sku' || key === 'name') {
+            supplierCatalogSearchSyncRef.current = {
+                search: supplierQuickSearch,
+                sku: nextFilters.sku,
+                name: nextFilters.name,
+            };
+        }
+        fetchSupplierCatalog(1, pageSizes.supplierPrices, null, nextFilters, supplierQuickSearch);
+    };
+    const clearSupplierQuickSearchFilter = () => {
+        supplierCatalogSearchSyncRef.current = {
+            search: '',
+            sku: supplierCatalogFilters.sku,
+            name: supplierCatalogFilters.name,
+        };
+        setSupplierQuickSearch('');
+        fetchSupplierCatalog(1, pageSizes.supplierPrices, null, supplierCatalogFilters, '');
+    };
+    const clearAllSupplierCatalogFilters = () => {
+        const nextFilters = { ...defaultSupplierCatalogFilters };
+        supplierCatalogSearchSyncRef.current = { search: '', sku: '', name: '' };
+        setSupplierQuickSearch('');
+        setSupplierCatalogFilters(nextFilters);
+        fetchSupplierCatalog(1, pageSizes.supplierPrices, null, nextFilters, '');
+    };
+
+    const clearSimpleFilter = (tabKey, key) => {
+        const baseFilters = createDefaultSimpleFilters()[tabKey] || {};
+        const nextFilters = { ...simpleFilters[tabKey], [key]: baseFilters[key] ?? '' };
+        if (key === 'search') {
+            simpleSearchSyncRef.current[tabKey] = nextFilters.search;
+        }
+        setSimpleFilters((prev) => ({ ...prev, [tabKey]: nextFilters }));
+        fetchSimpleTabByKey(tabKey, 1, pageSizes[tabKey], null, nextFilters);
+    };
+    const clearAllSimpleFilters = (tabKey) => {
+        const nextFilters = { ...(createDefaultSimpleFilters()[tabKey] || {}) };
+        simpleSearchSyncRef.current[tabKey] = nextFilters.search || '';
+        setSimpleFilters((prev) => ({ ...prev, [tabKey]: nextFilters }));
+        fetchSimpleTabByKey(tabKey, 1, pageSizes[tabKey], null, nextFilters);
+    };
+
+    const productFilterChips = [
+        buildFilterChip('products_search', 'Tìm kiếm', productFilters.search, () => clearProductFilter('search')),
+        buildFilterChip('products_status', 'Trạng thái bán', productFilters.status ? filterOptionLabel(productStatusFilterOptions, productFilters.status) : '', () => clearProductFilter('status')),
+        buildFilterChip('products_cost_source', 'Trạng thái giá', productFilters.cost_source ? filterOptionLabel(productCostSourceFilterOptions, productFilters.cost_source) : '', () => clearProductFilter('cost_source')),
+        buildFilterChip('products_type', 'Loại sản phẩm', productFilters.type ? filterOptionLabel(productTypeFilterOptions, productFilters.type) : '', () => clearProductFilter('type')),
+        buildFilterChip('products_category', 'Danh mục', productFilters.category_id ? getCategoryNameById(productFilters.category_id) : '', () => clearProductFilter('category_id')),
+        buildFilterChip('products_variant_scope', 'Biến thể', productFilters.variant_scope ? filterOptionLabel(productVariantScopeFilterOptions, productFilters.variant_scope) : '', () => clearProductFilter('variant_scope')),
+        buildFilterChip('products_date_from', 'Từ ngày', productFilters.date_from ? formatPrintDate(productFilters.date_from) : '', () => clearProductFilter('date_from')),
+        buildFilterChip('products_date_to', 'Đến ngày', productFilters.date_to ? formatPrintDate(productFilters.date_to) : '', () => clearProductFilter('date_to')),
+    ].filter(Boolean);
+
+    const supplierFilterChips = [
+        buildFilterChip('suppliers_search', 'Tìm kiếm', supplierFilters.search, () => clearSupplierFilter('search')),
+        buildFilterChip('suppliers_status', 'Trạng thái', supplierFilters.status ? filterOptionLabel(supplierStatusFilterOptions, supplierFilters.status) : '', () => clearSupplierFilter('status')),
+        buildFilterChip('suppliers_month', 'Tháng', supplierFilters.month ? formatMonthFilterValue(supplierFilters.month) : '', () => clearSupplierFilter('month')),
+        buildFilterChip('suppliers_date_from', 'Từ ngày', supplierFilters.date_from ? formatPrintDate(supplierFilters.date_from) : '', () => clearSupplierFilter('date_from')),
+        buildFilterChip('suppliers_date_to', 'Đến ngày', supplierFilters.date_to ? formatPrintDate(supplierFilters.date_to) : '', () => clearSupplierFilter('date_to')),
+    ].filter(Boolean);
+
+    const supplierCatalogFilterChips = [
+        buildFilterChip('supplier_prices_search', 'Tìm nhanh', supplierQuickSearch, clearSupplierQuickSearchFilter),
+        buildFilterChip('supplier_prices_sku', 'Mã SP / Mã NCC', supplierCatalogFilters.sku, () => clearSupplierCatalogFilter('sku')),
+        buildFilterChip('supplier_prices_name', 'Tên sản phẩm', supplierCatalogFilters.name, () => clearSupplierCatalogFilter('name')),
+        buildFilterChip('supplier_prices_category', 'Danh mục', supplierCatalogFilters.category_id ? getCategoryNameById(supplierCatalogFilters.category_id) : '', () => clearSupplierCatalogFilter('category_id')),
+        buildFilterChip('supplier_prices_type', 'Loại sản phẩm', supplierCatalogFilters.type ? filterOptionLabel(productTypeFilterOptions, supplierCatalogFilters.type) : '', () => clearSupplierCatalogFilter('type')),
+        buildFilterChip('supplier_prices_variant_scope', 'Biến thể', supplierCatalogFilters.variant_scope ? filterOptionLabel(supplierCatalogVariantScopeFilterOptions, supplierCatalogFilters.variant_scope) : '', () => clearSupplierCatalogFilter('variant_scope')),
+        buildFilterChip('supplier_prices_missing_price', 'Trạng thái giá', supplierCatalogFilters.missing_supplier_price === '1' ? 'Chưa có giá nhập' : '', () => clearSupplierCatalogFilter('missing_supplier_price')),
+        buildFilterChip('supplier_prices_multiple_suppliers', 'Nguồn nhập', supplierCatalogFilters.multiple_suppliers === '1' ? 'Có nhiều nhà cung cấp' : '', () => clearSupplierCatalogFilter('multiple_suppliers')),
+    ].filter(Boolean);
 
     useEffect(() => {
         const loadCategories = async () => {
@@ -3328,6 +3885,10 @@ const InventoryMovement = () => {
 
     useEffect(() => {
         if (activeTab !== 'suppliers') return undefined;
+        const currentSearch = supplierFilters.search ?? '';
+        const previousSearch = supplierSearchSyncRef.current ?? '';
+        if (currentSearch === previousSearch) return undefined;
+        supplierSearchSyncRef.current = currentSearch;
         const timer = setTimeout(() => {
             fetchSuppliers(1);
         }, 250);
@@ -3367,10 +3928,25 @@ const InventoryMovement = () => {
 
     useEffect(() => {
         if (activeTab !== 'supplierPrices' || !selectedSupplierId) return undefined;
+        const currentSearchState = {
+            search: supplierQuickSearch,
+            sku: supplierCatalogFilters.sku,
+            name: supplierCatalogFilters.name,
+        };
         if (skipSupplierSearchResetRef.current) {
             skipSupplierSearchResetRef.current = false;
+            supplierCatalogSearchSyncRef.current = currentSearchState;
             return undefined;
         }
+        const previousSearchState = supplierCatalogSearchSyncRef.current;
+        if (
+            currentSearchState.search === previousSearchState.search
+            && currentSearchState.sku === previousSearchState.sku
+            && currentSearchState.name === previousSearchState.name
+        ) {
+            return undefined;
+        }
+        supplierCatalogSearchSyncRef.current = currentSearchState;
         const timer = setTimeout(() => {
             fetchSupplierCatalog(1);
         }, 250);
@@ -4223,6 +4799,84 @@ const InventoryMovement = () => {
         });
     };
 
+    const closeExportModal = () => {
+        setExportModal({ open: false, form: createExportForm() });
+    };
+
+    const openCreateExport = async () => {
+        setActiveTab('exports');
+        setExportModal({ open: true, form: createExportForm() });
+    };
+
+    const updateExportInvoiceMetaField = (field, value) => {
+        setExportModal((prev) => ({
+            ...prev,
+            form: {
+                ...prev.form,
+                invoice_meta: {
+                    ...prev.form.invoice_meta,
+                    [field]: value,
+                },
+            },
+        }));
+    };
+
+    const updateExportSaleChannel = (value) => {
+        const nextChannel = value || 'online';
+        setExportModal((prev) => ({
+            ...prev,
+            form: {
+                ...prev.form,
+                source: nextChannel,
+                invoice_meta: {
+                    ...prev.form.invoice_meta,
+                    sale_channel: nextChannel,
+                    invoice_mode: nextChannel === 'store' ? 'cash_register' : prev.form.invoice_meta.invoice_mode === 'cash_register' ? 'standard' : prev.form.invoice_meta.invoice_mode,
+                    payment_method: nextChannel === 'store' && prev.form.invoice_meta.payment_method === 'cod'
+                        ? 'cash'
+                        : prev.form.invoice_meta.payment_method,
+                },
+            },
+        }));
+    };
+
+    const syncExportInvoiceBuyerFromCustomer = () => {
+        setExportModal((prev) => ({
+            ...prev,
+            form: {
+                ...prev.form,
+                invoice_meta: {
+                    ...prev.form.invoice_meta,
+                    invoice_buyer_name: prev.form.customer_name || prev.form.invoice_meta.invoice_buyer_name,
+                    invoice_email: prev.form.customer_email || prev.form.invoice_meta.invoice_email,
+                    invoice_address: prev.form.shipping_address || prev.form.invoice_meta.invoice_address,
+                },
+            },
+        }));
+    };
+
+    const attachExportProductToLine = (index, product) => {
+        setExportModal((prev) => ({
+            ...prev,
+            form: {
+                ...prev.form,
+                items: prev.form.items.map((item, itemIndex) => (
+                    itemIndex === index
+                        ? {
+                            ...item,
+                            product_id: product.id,
+                            product_name: product.name,
+                            product_sku: product.sku,
+                            unit_name: product.unit_name || product.unit?.name || item.unit_name || '',
+                            unit_cost: String(Math.round(Number(product.current_price ?? product.price ?? product.current_cost ?? product.expected_cost ?? 0))),
+                            notes: item.notes || '',
+                        }
+                        : item
+                )),
+            },
+        }));
+    };
+
     const openEditImport = async (row) => {
         await ensureSuppliersLoaded();
         await fetchInventoryUnits();
@@ -4349,6 +5003,51 @@ const InventoryMovement = () => {
         }
     };
 
+    const saveExport = async () => {
+        const form = exportModal.form;
+        const source = form.source || exportSourceOptions[0].value;
+        const items = form.items
+            .filter((item) => Number(item.product_id || 0) > 0 && Number(item.quantity || 0) > 0)
+            .map((item) => ({
+                product_id: Number(item.product_id),
+                quantity: Number(item.quantity || 0),
+                price: Number(item.unit_cost || 0),
+                options: {
+                        note: item.notes || null,
+                },
+            }))
+            .filter((item) => item.product_id && item.quantity > 0);
+
+        if (!items.length) {
+            return showToast({ type: 'warning', message: 'Phiếu xuất cần ít nhất một dòng sản phẩm.' });
+        }
+
+        setFlag('saving', true);
+        try {
+            await orderApi.store({
+                customer_name: form.customer_name.trim() || 'Xuất kho trực tiếp',
+                customer_phone: form.customer_phone.trim(),
+                customer_email: form.customer_email.trim(),
+                shipping_address: form.shipping_address.trim(),
+                notes: form.notes.trim() || null,
+                source,
+                type: 'inventory_export',
+                items,
+            });
+
+            showToast({ type: 'success', message: 'Đã tạo phiếu xuất.' });
+            closeExportModal();
+            fetchExports(exportPagination.current_page || 1);
+            fetchProducts(productPagination.current_page || 1);
+            fetchOverview();
+            fetchLots(lotPagination.current_page || 1);
+        } catch (error) {
+            fail(error, 'Không thể tạo phiếu xuất.');
+        } finally {
+            setFlag('saving', false);
+        }
+    };
+
     const saveDocument = async () => {
         const { tabKey, form } = documentModal;
         const type = documentTypeMap[tabKey];
@@ -4417,6 +5116,9 @@ const InventoryMovement = () => {
     };
 
     const deleteExport = async (row) => {
+        if (!row.can_delete) {
+            return showToast({ type: 'warning', message: 'Phiếu xuất này được tạo tự động từ đơn có mã vận đơn. Hãy vào đơn hàng để xử lý.' });
+        }
         if (!window.confirm(`Xóa đơn ${row.order_number}?`)) return;
         try {
             await orderApi.destroy(row.id);
@@ -4493,10 +5195,10 @@ const InventoryMovement = () => {
             { label: 'Tiền trang', value: formatCurrency(imports.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)) },
         ],
         exports: [
-            { label: 'Tổng đơn', value: formatNumber(exportPagination.total) },
-            { label: 'Doanh thu trang', value: formatCurrency(exportsData.reduce((sum, row) => sum + Number(row.total_price || 0), 0)) },
-            { label: 'Giá vốn trang', value: formatCurrency(exportsData.reduce((sum, row) => sum + Number(row.cost_total || 0), 0)) },
-            { label: 'Lãi gộp trang', value: formatCurrency(exportsData.reduce((sum, row) => sum + Number(row.profit_total || 0), 0)) },
+            { label: 'Tổng phiếu', value: formatNumber(exportPagination.total) },
+            { label: 'Tự tạo từ vận chuyển', value: formatNumber(exportsData.filter((row) => row.export_kind === 'dispatch_auto').length) },
+            { label: 'Phiếu tạo tay', value: formatNumber(exportsData.filter((row) => row.export_kind === 'manual').length) },
+            { label: 'Số lượng trang', value: formatNumber(exportsData.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0)) },
         ],
         returns: [
             { label: 'Tổng phiếu', value: formatNumber(returnPagination.total) },
@@ -4824,15 +5526,66 @@ const InventoryMovement = () => {
     };
 
     const renderExportCell = (row, columnId) => {
-        if (columnId === 'code') return <CellText primary={row.order_number} mono />;
-        if (columnId === 'customer') return <CellText primary={row.customer_name || '-'} secondary={row.customer_phone || row.source || '-'} />;
-        if (columnId === 'date') return formatDateTime(row.created_at);
+        const isManualExport = row.export_kind === 'manual';
+        const sourceLabel = getExportSaleChannelLabel(row.source || (isManualExport ? 'internal' : 'online')) || 'Chưa rõ nguồn';
+        const exportKindLabel = row.export_kind_label || (isManualExport ? 'Phiếu tạo tay' : 'Tự tạo từ vận chuyển');
+        const exportKindColor = isManualExport ? '#7C3AED' : '#0F766E';
+        if (columnId === 'code') {
+            return (
+                <CellText
+                    primary={row.order_number}
+                    secondary={isManualExport ? 'Phiếu xuất nội bộ' : 'Từ đơn hàng đã gửi vận chuyển'}
+                    mono
+                />
+            );
+        }
+        if (columnId === 'source') {
+            return (
+                <div className="space-y-1">
+                    <StatusPill label={exportKindLabel} color={exportKindColor} />
+                    <div className="text-[11px] text-primary/45">{sourceLabel}</div>
+                </div>
+            );
+        }
+        if (columnId === 'customer') {
+            const primaryLabel = row.customer_name || (isManualExport ? 'Xuất kho nội bộ' : 'Khách chưa có tên');
+            const secondaryParts = [
+                row.customer_phone || null,
+                row.shipping_address || null,
+            ].filter(Boolean);
+            return <CellText primary={primaryLabel} secondary={secondaryParts.join(' • ') || sourceLabel} />;
+        }
+        if (columnId === 'tracking') {
+            if (!row.shipping_tracking_code) {
+                return <CellText primary="Chưa có mã vận đơn" secondary={isManualExport ? 'Phiếu tạo tay không cần vận đơn' : 'Sẽ tự lên phiếu khi có mã vận đơn'} />;
+            }
+            return (
+                <CellText
+                    primary={row.shipping_tracking_code}
+                    secondary={row.shipping_carrier_name || 'Đã gửi sang đơn vị vận chuyển'}
+                    mono
+                />
+            );
+        }
+        if (columnId === 'date') return formatDateTime(row.exported_at || row.shipping_dispatched_at || row.created_at);
         if (columnId === 'line_count') return formatNumber(row.items_count || 0);
-        if (columnId === 'revenue') return formatCurrency(row.total_price || 0);
-        if (columnId === 'cost') return formatCurrency(row.cost_total || 0);
-        if (columnId === 'profit') return <span className="font-black text-emerald-600">{formatCurrency(row.profit_total || 0)}</span>;
-        if (columnId === 'status') return row.status || '-';
-        if (columnId === 'actions') return <div className="flex items-center justify-center gap-2"><button type="button" onClick={() => navigate(`/admin/orders/edit/${row.id}`)} className={ghostButton}>Sửa</button><button type="button" onClick={() => deleteExport(row)} className={dangerButton}>Xóa</button></div>;
+        if (columnId === 'qty') return formatNumber(row.total_quantity || 0);
+        if (columnId === 'status') {
+            return (
+                <div className="space-y-1">
+                    <StatusPill label={isManualExport ? 'Phiếu nội bộ' : 'Đã gửi vận chuyển'} color={isManualExport ? '#6366F1' : '#0F766E'} />
+                    <div className="text-[11px] text-primary/55">{row.notes || row.status || '-'}</div>
+                </div>
+            );
+        }
+        if (columnId === 'actions') {
+            return (
+                <div className="flex items-center justify-center gap-2">
+                    <button type="button" onClick={() => navigate(`/admin/orders/edit/${row.id}`)} className={ghostButton}>{isManualExport ? 'Mở phiếu' : 'Mở đơn'}</button>
+                    {row.can_delete ? <button type="button" onClick={() => deleteExport(row)} className={dangerButton}>Xóa</button> : null}
+                </div>
+            );
+        }
         return '-';
     };
 
@@ -4880,6 +5633,16 @@ const InventoryMovement = () => {
         const columns = isImportTab ? importListColumns : tabKey === 'exports' ? exportColumns : tabKey === 'lots' ? lotColumns : tabKey === 'trash' ? trashColumns : documentColumns;
         const renderCell = isImportTab ? renderImportCell : tabKey === 'exports' ? renderExportCell : tabKey === 'lots' ? renderLotCell : tabKey === 'trash' ? renderTrashCell : (row, columnId) => renderDocumentCell(row, columnId, tabKey);
         const sortMap = ['returns', 'damaged', 'adjustments'].includes(tabKey) ? inventorySortColumnMaps.documents : inventorySortColumnMaps[tabKey];
+        const simpleFilterChips = [
+            buildFilterChip(`${tabKey}_search`, 'Tìm kiếm', filters.search, () => clearSimpleFilter(tabKey, 'search')),
+            buildFilterChip(`${tabKey}_date_from`, 'Từ ngày', filters.date_from ? formatPrintDate(filters.date_from) : '', () => clearSimpleFilter(tabKey, 'date_from')),
+            buildFilterChip(`${tabKey}_date_to`, 'Đến ngày', filters.date_to ? formatPrintDate(filters.date_to) : '', () => clearSimpleFilter(tabKey, 'date_to')),
+            ...(isImportTab ? [
+                buildFilterChip(`${tabKey}_status`, 'Trạng thái', filters.inventory_import_status_id ? getImportStatusNameById(filters.inventory_import_status_id) : '', () => clearSimpleFilter(tabKey, 'inventory_import_status_id')),
+                buildFilterChip(`${tabKey}_entry_mode`, 'Cách tạo', filters.entry_mode ? filterOptionLabel(importEntryModeFilterOptions, filters.entry_mode) : '', () => clearSimpleFilter(tabKey, 'entry_mode')),
+                buildFilterChip(`${tabKey}_has_invoice`, 'Hóa đơn', filters.has_invoice ? filterOptionLabel(importHasInvoiceFilterOptions, filters.has_invoice) : '', () => clearSimpleFilter(tabKey, 'has_invoice')),
+            ] : []),
+        ].filter(Boolean);
         const quickSearchControl = (
             <div className="relative w-full sm:w-[220px] sm:min-w-[220px]">
                 <span className="material-symbols-outlined pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">search</span>
@@ -4899,7 +5662,7 @@ const InventoryMovement = () => {
                         <button type="button" onClick={openCreateImport} className={primaryButton}>Tạo phiếu</button>
                     </>
                 ) : null}
-                {tabKey === 'exports' ? <button type="button" onClick={() => navigate('/admin/orders/new')} className={primaryButton}>Tạo phiếu</button> : null}
+                {tabKey === 'exports' ? <button type="button" onClick={openCreateExport} className={primaryButton}>Tạo phiếu</button> : null}
                 {['returns', 'damaged', 'adjustments'].includes(tabKey) ? <button type="button" onClick={() => openCreateDocument(tabKey)} className={primaryButton}>Tạo phiếu</button> : null}
             </>
         );
@@ -4935,6 +5698,8 @@ const InventoryMovement = () => {
                     <PanelHeader
                         title={tabKey === 'imports' ? 'Danh sách phiếu nhập' : tabKey === 'exports' ? 'Danh sách phiếu xuất bán' : tabKey === 'lots' ? 'Danh sách lô hàng' : tabKey === 'trash' ? 'Thùng rác sản phẩm' : documentTitleMap[tabKey]}
                         leadingActions={shouldLiftQuickSearch ? quickSearchControl : null}
+                        activeFilterChips={simpleFilterChips}
+                        onClearAllFilters={simpleFilterChips.length ? () => clearAllSimpleFilters(tabKey) : null}
                         toggles={[
                             { id: `${tabKey}_filters`, icon: 'filter_alt', label: 'Bộ lọc', active: openPanels[tabKey].filters, onClick: () => togglePanel(tabKey, 'filters') },
                             ...(isImportTab ? [{
@@ -4959,17 +5724,87 @@ const InventoryMovement = () => {
                         if (tabKey === 'damaged') return fetchDocuments('damaged', 1, nextSize);
                         if (tabKey === 'adjustments') return fetchDocuments('adjustment', 1, nextSize);
                         return tabFetch[tabKey](1, nextSize);
-                    }} sortConfig={sortConfigs[tabKey]} onSort={(columnId) => handleTableSort(tabKey, columnId)} sortColumnMap={sortMap} onRowDoubleClick={isImportTab ? openImportDetail : undefined} />
+                    }} sortConfig={sortConfigs[tabKey]} onSort={(columnId) => handleTableSort(tabKey, columnId)} sortColumnMap={sortMap} onRowDoubleClick={isImportTab ? openEditImport : undefined} />
                 </div>
             </div>
         );
     };
+
+    const productsTabContent = (
+        <div className={panelClass}>
+            <PanelHeader
+                title="Sản phẩm kho"
+                activeFilterChips={productFilterChips}
+                onClearAllFilters={productFilterChips.length ? clearAllProductFilters : null}
+                toggles={[
+                    { id: 'products_filters', icon: 'filter_alt', label: 'Bộ lọc', active: openPanels.products.filters, onClick: () => togglePanel('products', 'filters') },
+                    { id: 'products_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.products.stats, onClick: () => togglePanel('products', 'stats') },
+                    { id: 'products_columns', icon: 'view_column', label: 'Cài đặt cột', active: openPanels.products.columns, onClick: () => togglePanel('products', 'columns') },
+                ]}
+                actions={<button type="button" onClick={() => navigate('/admin/products/new')} className={primaryButton}>Tạo sản phẩm</button>}
+            />
+            {openPanels.products.filters ? (
+                <FilterPanel actions={<button type="button" onClick={() => fetchProducts(1)} className={primaryButton}>Lọc</button>}>
+                    <input value={productFilters.search} onChange={(event) => setProductFilters((prev) => ({ ...prev, search: event.target.value }))} placeholder="Tìm mã hoặc tên" className={`w-[220px] ${inputClass}`} />
+                    <select value={productFilters.status} onChange={(event) => setProductFilters((prev) => ({ ...prev, status: event.target.value }))} className={`w-[150px] ${selectClass}`}>
+                        <option value="">Tất cả trạng thái bán</option>
+                        <option value="active">Đang bán</option>
+                        <option value="inactive">Ngừng bán</option>
+                    </select>
+                    <select value={productFilters.cost_source} onChange={(event) => setProductFilters((prev) => ({ ...prev, cost_source: event.target.value }))} className={`w-[170px] ${selectClass}`}>
+                        <option value="">Tất cả trạng thái giá</option>
+                        <option value="actual">Đang dùng giá vốn</option>
+                        <option value="expected">Đang dùng giá dự kiến</option>
+                        <option value="empty">Chưa có giá</option>
+                    </select>
+                    <select value={productFilters.type} onChange={(event) => setProductFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[165px] ${selectClass}`}>
+                        <option value="">Tất cả loại sản phẩm</option>
+                        <option value="simple">Sản phẩm thường</option>
+                        <option value="configurable">Sản phẩm có biến thể</option>
+                    </select>
+                    <select value={productFilters.category_id} onChange={(event) => setProductFilters((prev) => ({ ...prev, category_id: event.target.value }))} className={`w-[165px] ${selectClass}`}>
+                        <option value="">Tất cả danh mục</option>
+                        {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                    </select>
+                    <select value={productFilters.variant_scope} onChange={(event) => setProductFilters((prev) => ({ ...prev, variant_scope: event.target.value }))} className={`w-[165px] ${selectClass}`}>
+                        <option value="">Có biến thể / không</option>
+                        <option value="has_variants">Có biến thể</option>
+                        <option value="no_variants">Không có biến thể</option>
+                        <option value="only_variants">Chỉ biến thể con</option>
+                        <option value="roots">Chỉ sản phẩm gốc</option>
+                    </select>
+                    <input type="date" value={productFilters.date_from} onChange={(event) => setProductFilters((prev) => ({ ...prev, date_from: event.target.value }))} className={`w-[145px] ${inputClass}`} />
+                    <input type="date" value={productFilters.date_to} onChange={(event) => setProductFilters((prev) => ({ ...prev, date_to: event.target.value }))} className={`w-[145px] ${inputClass}`} />
+                </FilterPanel>
+            ) : null}
+            {openPanels.products.stats ? <SummaryPanel items={productSummaryItems} /> : null}
+            <InventoryTable
+                storageKey={`inventory_products_table_${inventoryTableStorageVersion}`}
+                columns={productColumns}
+                rows={products}
+                renderCell={productCell}
+                loading={loading.products}
+                pagination={productPagination}
+                onPageChange={fetchProducts}
+                footer={`Kết quả: ${formatNumber(productPagination.total)} mã`}
+                settingsOpen={openPanels.products.columns}
+                onCloseSettings={() => togglePanel('products', 'columns')}
+                currentPerPage={pageSizes.products}
+                onPerPageChange={(value) => fetchProducts(1, updatePageSize('products', value))}
+                sortConfig={sortConfigs.products}
+                onSort={(columnId) => handleTableSort('products', columnId)}
+                sortColumnMap={inventorySortColumnMaps.products}
+            />
+        </div>
+    );
 
     const suppliersTabContent = (
         <div className={panelClass}>
             <PanelHeader
                 title="Quản lý nhà cung cấp"
                 description="Chọn một nhà cung cấp rồi bấm Xem để mở tab giá nhập riêng."
+                activeFilterChips={supplierFilterChips}
+                onClearAllFilters={supplierFilterChips.length ? clearAllSupplierFilters : null}
                 toggles={[
                     { id: 'suppliers_filters', icon: 'filter_alt', label: 'Bộ lọc', active: openPanels.suppliers.filters, onClick: () => togglePanel('suppliers', 'filters') },
                     { id: 'suppliers_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.suppliers.stats, onClick: () => togglePanel('suppliers', 'stats') },
@@ -5040,6 +5875,8 @@ const InventoryMovement = () => {
             <PanelHeader
                 title={currentSupplier ? `Giá nhập - ${currentSupplier.name}` : 'Giá nhập từng nhà'}
                 description={currentSupplier ? 'Mỗi nhà cung cấp có một bảng giá nhập riêng. Khi tạo phiếu nhập, giá sẽ tự đổ từ bảng này và vẫn có thể sửa tay.' : 'Chọn nhà cung cấp trong tab Nhà cung cấp hoặc đổi nhanh ngay tại đây để mở thư viện giá nhập.'}
+                activeFilterChips={supplierCatalogFilterChips}
+                onClearAllFilters={supplierCatalogFilterChips.length ? clearAllSupplierCatalogFilters : null}
                 actions={
                     <>
                         <select
@@ -5300,9 +6137,16 @@ const InventoryMovement = () => {
         };
     }, [importModal.form.items]);
     const documentLineTotal = useMemo(() => documentModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unit_cost || 0), 0), [documentModal.form.items]);
+    const exportLineTotal = useMemo(() => exportModal.form.items.reduce((sum, item) => sum + (Number(item.product_id || 0) > 0 ? Number(item.quantity || 0) * Number(item.unit_cost || 0) : 0), 0), [exportModal.form.items]);
+    const exportTotalQuantity = useMemo(() => exportModal.form.items.reduce((sum, item) => sum + (Number(item.product_id || 0) > 0 ? Number(item.quantity || 0) : 0), 0), [exportModal.form.items]);
+    const exportInvoiceMeta = exportModal.form.invoice_meta;
+    const exportInvoiceStatusSummary = useMemo(
+        () => getExportInvoiceStatusMeta(exportModal.form.invoice_meta, exportModal.form.customer_name),
+        [exportModal.form.customer_name, exportModal.form.invoice_meta]
+    );
     const createSlipActions = [
         { key: 'imports', label: 'Phiếu nhập', icon: 'inventory_2', onClick: async () => { setCreateMenuOpen(false); await openCreateImport(); } },
-        { key: 'exports', label: 'Phiếu xuất', icon: 'shopping_cart', onClick: () => { setCreateMenuOpen(false); navigate('/admin/orders/new'); } },
+        { key: 'exports', label: 'Phiếu xuất', icon: 'shopping_cart', onClick: async () => { setCreateMenuOpen(false); await openCreateExport(); } },
         { key: 'returns', label: 'Phiếu hoàn', icon: 'assignment_return', onClick: async () => { setCreateMenuOpen(false); setActiveTab('returns'); await openCreateDocument('returns'); } },
         { key: 'damaged', label: 'Phiếu hỏng', icon: 'broken_image', onClick: async () => { setCreateMenuOpen(false); setActiveTab('damaged'); await openCreateDocument('damaged'); } },
         { key: 'adjustments', label: 'Phiếu điều chỉnh', icon: 'tune', onClick: async () => { setCreateMenuOpen(false); setActiveTab('adjustments'); await openCreateDocument('adjustments'); } },
@@ -5370,7 +6214,7 @@ const InventoryMovement = () => {
                 </div>
             </div>
             {activeTab === 'overview' ? <div className={panelClass}><PanelHeader title="Tổng quan kho" toggles={[{ id: 'overview_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.overview.stats, onClick: () => togglePanel('overview', 'stats') }]} />{openPanels.overview.stats ? <SummaryPanel items={overviewItems} /> : null}</div> : null}
-            {activeTab === 'products' ? <div className={panelClass}><PanelHeader title="Sản phẩm kho" toggles={[{ id: 'products_filters', icon: 'filter_alt', label: 'Bộ lọc', active: openPanels.products.filters, onClick: () => togglePanel('products', 'filters') }, { id: 'products_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.products.stats, onClick: () => togglePanel('products', 'stats') }, { id: 'products_columns', icon: 'view_column', label: 'Cài đặt cột', active: openPanels.products.columns, onClick: () => togglePanel('products', 'columns') }]} actions={<button type="button" onClick={() => navigate('/admin/products/new')} className={primaryButton}>Tạo sản phẩm</button>} />{openPanels.products.filters ? <FilterPanel actions={<button type="button" onClick={() => fetchProducts(1)} className={primaryButton}>Lọc</button>}><input value={productFilters.search} onChange={(event) => setProductFilters((prev) => ({ ...prev, search: event.target.value }))} placeholder="Tìm mã hoặc tên" className={`w-[220px] ${inputClass}`} /><select value={productFilters.status} onChange={(event) => setProductFilters((prev) => ({ ...prev, status: event.target.value }))} className={`w-[150px] ${selectClass}`}><option value="">Tất cả trạng thái bán</option><option value="active">Đang bán</option><option value="inactive">Ngừng bán</option></select><select value={productFilters.cost_source} onChange={(event) => setProductFilters((prev) => ({ ...prev, cost_source: event.target.value }))} className={`w-[170px] ${selectClass}`}><option value="">Tất cả trạng thái giá</option><option value="actual">Đang dùng giá vốn</option><option value="expected">Đang dùng giá dự kiến</option><option value="empty">Chưa có giá</option></select><select value={productFilters.type} onChange={(event) => setProductFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[165px] ${selectClass}`}><option value="">Tất cả loại sản phẩm</option><option value="simple">Sản phẩm thường</option><option value="configurable">Sản phẩm có biến thể</option></select><select value={productFilters.category_id} onChange={(event) => setProductFilters((prev) => ({ ...prev, category_id: event.target.value }))} className={`w-[165px] ${selectClass}`}><option value="">Tất cả danh mục</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select><select value={productFilters.variant_scope} onChange={(event) => setProductFilters((prev) => ({ ...prev, variant_scope: event.target.value }))} className={`w-[165px] ${selectClass}`}><option value="">Có biến thể / không</option><option value="has_variants">Có biến thể</option><option value="no_variants">Không có biến thể</option><option value="only_variants">Chỉ biến thể con</option><option value="roots">Chỉ sản phẩm gốc</option></select><input type="date" value={productFilters.date_from} onChange={(event) => setProductFilters((prev) => ({ ...prev, date_from: event.target.value }))} className={`w-[145px] ${inputClass}`} /><input type="date" value={productFilters.date_to} onChange={(event) => setProductFilters((prev) => ({ ...prev, date_to: event.target.value }))} className={`w-[145px] ${inputClass}`} /></FilterPanel> : null}{openPanels.products.stats ? <SummaryPanel items={productSummaryItems} /> : null}<InventoryTable storageKey={`inventory_products_table_${inventoryTableStorageVersion}`} columns={productColumns} rows={products} renderCell={productCell} loading={loading.products} pagination={productPagination} onPageChange={fetchProducts} footer={`Kết quả: ${formatNumber(productPagination.total)} mã`} settingsOpen={openPanels.products.columns} onCloseSettings={() => togglePanel('products', 'columns')} currentPerPage={pageSizes.products} onPerPageChange={(value) => fetchProducts(1, updatePageSize('products', value))} sortConfig={sortConfigs.products} onSort={(columnId) => handleTableSort('products', columnId)} sortColumnMap={inventorySortColumnMaps.products} /></div> : null}
+            {activeTab === 'products' ? productsTabContent : null}
             {activeTab === 'suppliers' ? suppliersTabContent : null}
             {activeTab === 'supplierPrices' ? supplierPricesTabContent : null}
             {false ? (
@@ -5813,6 +6657,8 @@ const InventoryMovement = () => {
                             <ImportProductQuickSearch
                                 supplierId={importModal.form.supplier_id ? Number(importModal.form.supplier_id) : null}
                                 onSelect={appendImportProductFromQuickSearch}
+                                onToggleStar={toggleImportProductStar}
+                                starLoadingProductIds={importStarLoadingProductIds}
                                 placeholder={importModal.form.supplier_id ? 'Tìm tên, mã SP, mã NCC hoặc từ khóa của nhà cung cấp đã chọn' : 'Tìm tên, mã SP, mã NCC hoặc từ khóa trong toàn bộ sản phẩm'}
                             />
                         </div>
@@ -5908,6 +6754,9 @@ const InventoryMovement = () => {
                         onOpenPrint={openImportPrintModal}
                         onUpdateLine={updateImportLine}
                         onRemoveLine={removeImportLine}
+                        onMoveLine={moveImportLine}
+                        onToggleProductStar={toggleImportProductStar}
+                        starLoadingProductIds={importStarLoadingProductIds}
                     />
 
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -5938,6 +6787,9 @@ const InventoryMovement = () => {
                     onOpenPrint={openImportPrintModal}
                     onUpdateLine={updateImportLine}
                     onRemoveLine={removeImportLine}
+                    onMoveLine={moveImportLine}
+                    onToggleProductStar={toggleImportProductStar}
+                    starLoadingProductIds={importStarLoadingProductIds}
                 />
             </ModalShell>
             <ModalShell
@@ -6200,6 +7052,139 @@ const InventoryMovement = () => {
                         <input type="checkbox" checked={importStatusModal.form.is_active} onChange={(event) => setImportStatusModal((prev) => ({ ...prev, form: { ...prev.form, is_active: event.target.checked } }))} className="size-4 accent-primary" />
                         Đang sử dụng
                     </label>
+                </div>
+            </ModalShell>
+            <ModalShell
+                open={exportModal.open}
+                title="Tạo phiếu xuất"
+                onClose={closeExportModal}
+                maxWidth="max-w-6xl"
+                footer={(
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="grid gap-2 sm:grid-cols-4">
+                            <div className="rounded-sm border border-primary/10 bg-[#fbfcfe] px-3 py-2">
+                                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Nguồn xuất</div>
+                                <div className="mt-1 text-[15px] font-black text-primary">{getExportSaleChannelLabel(exportModal.form.source || exportSourceOptions[0].value)}</div>
+                            </div>
+                            <div className="rounded-sm border border-primary/10 bg-[#fbfcfe] px-3 py-2">
+                                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Số dòng</div>
+                                <div className="mt-1 text-[15px] font-black text-primary">{formatNumber(exportModal.form.items.filter((item) => item.product_id).length)}</div>
+                            </div>
+                            <div className="rounded-sm border border-primary/10 bg-[#fbfcfe] px-3 py-2">
+                                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Tổng số lượng</div>
+                                <div className="mt-1 text-[15px] font-black text-primary">{formatNumber(exportTotalQuantity)}</div>
+                            </div>
+                            <div className="rounded-sm border border-primary/10 bg-[#fbfcfe] px-3 py-2">
+                                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Giá trị tạm tính</div>
+                                <div className="mt-1 text-[15px] font-black text-primary">{formatCurrency(exportLineTotal)}</div>
+                            </div>
+                        </div>
+                        <div className="flex justify-end gap-2">
+                            <button type="button" onClick={closeExportModal} className={ghostButton}>Hủy</button>
+                            <button type="button" onClick={saveExport} className={primaryButton} disabled={loading.saving}>{loading.saving ? 'Đang lưu' : 'Lưu phiếu xuất'}</button>
+                        </div>
+                    </div>
+                )}
+            >
+                <div className="space-y-4">
+                    <div className="rounded-sm border border-primary/10 bg-[#fbfcfe] px-4 py-3 text-[13px] text-primary/70">
+                        Đơn hàng nào đã gửi sang đơn vị vận chuyển và có mã vận đơn sẽ tự xuất hiện ở tab này như một phiếu xuất tự động.
+                        Mẫu dưới đây chỉ dùng cho các phiếu xuất tạo tay hoặc xuất nội bộ.
+                    </div>
+
+                    <div className="grid gap-4 xl:grid-cols-[360px,minmax(0,1fr)]">
+                        <div className="space-y-4">
+                            <div className="rounded-sm border border-primary/10 bg-[#fbfcfe] p-4">
+                                <div className="mb-3 text-[12px] font-black uppercase tracking-[0.12em] text-primary/55">Thông tin phiếu xuất</div>
+                                <div className="space-y-3">
+                                    <div>
+                                        <div className={importFieldLabelClass}>Nguồn xuất</div>
+                                        <select value={exportModal.form.source} onChange={(event) => updateExportSaleChannel(event.target.value)} className={`w-full ${selectClass}`}>
+                                            {exportSourceOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                        <div>
+                                            <div className={importFieldLabelClass}>Người nhận / bộ phận</div>
+                                            <input value={exportModal.form.customer_name} onChange={(event) => setExportModal((prev) => ({ ...prev, form: { ...prev.form, customer_name: event.target.value } }))} placeholder="Ví dụ: Khách lẻ / Bộ phận bán hàng" className={`w-full ${inputClass}`} />
+                                        </div>
+                                        <div>
+                                            <div className={importFieldLabelClass}>Số điện thoại</div>
+                                            <input value={exportModal.form.customer_phone} onChange={(event) => setExportModal((prev) => ({ ...prev, form: { ...prev.form, customer_phone: event.target.value } }))} placeholder="Không bắt buộc" className={`w-full ${inputClass}`} />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div className={importFieldLabelClass}>Nơi giao / nơi nhận</div>
+                                        <input value={exportModal.form.shipping_address} onChange={(event) => setExportModal((prev) => ({ ...prev, form: { ...prev.form, shipping_address: event.target.value } }))} placeholder="Ví dụ: Quầy cửa hàng, kho giao nhanh, địa chỉ khách" className={`w-full ${inputClass}`} />
+                                    </div>
+                                    <div>
+                                        <div className={importFieldLabelClass}>Ghi chú vận hành</div>
+                                        <textarea value={exportModal.form.notes} onChange={(event) => setExportModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú thêm về lần xuất này" className="min-h-[120px] w-full rounded-sm border border-primary/15 p-3 text-[13px] text-primary outline-none focus:border-primary" />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div className="rounded-sm border border-primary/10 bg-white p-4">
+                                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <div className="text-[12px] font-black uppercase tracking-[0.12em] text-primary/55">Sản phẩm xuất kho</div>
+                                        <div className="text-[12px] text-primary/45">Chỉ quản lí số lượng và giá trị tạm tính để theo dõi tồn kho nội bộ.</div>
+                                    </div>
+                                    <button type="button" onClick={() => addLine(setExportModal)} className={ghostButton}>Thêm dòng</button>
+                                </div>
+                                <ProductLookupInput
+                                    onSelect={(product) => {
+                                        const index = exportModal.form.items.findIndex((item) => !item.product_id);
+                                        const targetIndex = index >= 0 ? index : exportModal.form.items.length;
+                                        if (index < 0) addLine(setExportModal);
+                                        attachExportProductToLine(targetIndex, product);
+                                    }}
+                                    placeholder="Tìm tên, mã sản phẩm để thêm nhanh vào phiếu xuất"
+                                    buttonLabel="Thêm vào phiếu"
+                                />
+                                <div className="mt-4 overflow-hidden rounded-sm border border-primary/10">
+                                    <table className="w-full border-collapse">
+                                        <thead className="bg-[#f6f9fc]">
+                                            <tr>
+                                                {['Sản phẩm', 'Số lượng', 'Đơn giá xuất', 'Thành tiền', 'Ghi chú dòng', 'Xóa'].map((label) => (
+                                                    <th key={label} className="border-b border-r border-primary/10 px-3 py-2.5 text-center text-[12px] font-bold text-primary last:border-r-0">{label}</th>
+                                                ))}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {exportModal.form.items.map((item, index) => (
+                                                <tr key={item.key}>
+                                                    <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
+                                                        <div className="space-y-2">
+                                                            {item.product_id ? <CellText primary={item.product_name || '-'} secondary={[item.product_sku || '-', item.unit_name || null].filter(Boolean).join(' • ')} /> : <div className="text-[12px] text-primary/45">Chưa chọn sản phẩm</div>}
+                                                            <ProductLookupInput onSelect={(product) => attachExportProductToLine(index, product)} placeholder="Đổi sản phẩm" buttonLabel="Chọn" />
+                                                        </div>
+                                                    </td>
+                                                    <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
+                                                        <input value={item.quantity} onChange={(event) => updateLine(setExportModal, index, 'quantity', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} />
+                                                    </td>
+                                                    <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
+                                                        <input value={formatWholeNumberInput(item.unit_cost)} onChange={(event) => updateLine(setExportModal, index, 'unit_cost', stripNumericValue(event.target.value))} className={`w-full text-right ${inputClass}`} />
+                                                    </td>
+                                                    <td className="border-b border-r border-primary/10 px-3 py-2 align-top text-right text-[13px] font-black text-primary">
+                                                        {formatCurrency(Number(item.quantity || 0) * Number(item.unit_cost || 0))}
+                                                    </td>
+                                                    <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
+                                                        <input value={item.notes} onChange={(event) => updateLine(setExportModal, index, 'notes', event.target.value)} className={`w-full ${inputClass}`} placeholder="Ghi chú riêng cho dòng này" />
+                                                    </td>
+                                                    <td className="border-b border-primary/10 px-3 py-2 align-top text-center">
+                                                        <button type="button" onClick={() => removeLine(setExportModal, index)} className={dangerButton}>Xóa</button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </ModalShell>
             <ModalShell open={documentModal.open} title={documentModal.form.id ? `Sửa ${documentTitleMap[documentModal.tabKey]}` : `Tạo ${documentTitleMap[documentModal.tabKey]}`} onClose={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} footer={<div className="flex items-center justify-between gap-3"><div className="text-[13px] font-black text-primary">{documentModal.tabKey === 'damaged' ? `Tổng số lượng: ${formatNumber(documentModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}` : `Tổng giá trị tạm tính: ${formatCurrency(documentLineTotal)}`}</div><div className="flex gap-2"><button type="button" onClick={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} className={ghostButton}>Hủy</button><button type="button" onClick={saveDocument} className={primaryButton} disabled={loading.saving}>{loading.saving ? 'Đang lưu' : 'Lưu phiếu'}</button></div></div>}><div className="space-y-4"><div className="grid gap-3 md:grid-cols-3"><input type="date" value={documentModal.form.document_date} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, document_date: event.target.value } }))} className={inputClass} /><select value={documentModal.form.supplier_id} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, supplier_id: event.target.value } }))} className={selectClass}><option value="">Không gắn nhà cung cấp</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select><div className="flex items-center rounded-sm border border-primary/15 px-3 text-[13px] font-semibold text-primary">{documentTitleMap[documentModal.tabKey]}</div></div><ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => { const index = documentModal.form.items.findIndex((item) => !item.product_id); const targetIndex = index >= 0 ? index : documentModal.form.items.length; if (index < 0) addLine(setDocumentModal); attachProductToLine(setDocumentModal, targetIndex, product); }} buttonLabel="Thêm vào phiếu" /><div className="overflow-hidden rounded-sm border border-primary/10"><table className="w-full border-collapse"><thead className="bg-[#f6f9fc]"><tr>{['Sản phẩm', 'Số lượng', documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? 'Giá vốn' : null, documentModal.tabKey === 'adjustments' ? 'Loại tồn' : null, documentModal.tabKey === 'adjustments' ? 'Hướng' : null, 'Ghi chú', 'Xóa'].filter(Boolean).map((label) => <th key={label} className="border-b border-r border-primary/10 px-3 py-2.5 text-center text-[12px] font-bold text-primary">{label}</th>)}</tr></thead><tbody>{documentModal.form.items.map((item, index) => <tr key={item.key}><td className="border-b border-r border-primary/10 px-3 py-2"><div className="space-y-2">{item.product_id ? <CellText primary={item.product_name || '-'} secondary={item.product_sku || '-'} /> : <div className="text-[12px] text-primary/45">Chưa chọn sản phẩm</div>}<ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => attachProductToLine(setDocumentModal, index, product)} placeholder="Đổi sản phẩm" buttonLabel="Chọn" /></div></td><td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.quantity} onChange={(event) => updateLine(setDocumentModal, index, 'quantity', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} /></td>{documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.unit_cost} onChange={(event) => updateLine(setDocumentModal, index, 'unit_cost', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} /></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.stock_bucket} onChange={(event) => updateLine(setDocumentModal, index, 'stock_bucket', event.target.value)} className={`w-full ${selectClass}`}><option value="sellable">Tồn bán được</option><option value="damaged">Tồn hỏng</option></select></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.direction} onChange={(event) => updateLine(setDocumentModal, index, 'direction', event.target.value)} className={`w-full ${selectClass}`}><option value="in">Cộng</option><option value="out">Trừ</option></select></td> : null}<td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.notes} onChange={(event) => updateLine(setDocumentModal, index, 'notes', event.target.value)} className={`w-full ${inputClass}`} placeholder="Ghi chú" /></td><td className="border-b border-primary/10 px-3 py-2 text-center"><button type="button" onClick={() => removeLine(setDocumentModal, index)} className={dangerButton}>Xóa</button></td></tr>)}</tbody></table></div><div className="flex justify-between gap-2"><button type="button" onClick={() => addLine(setDocumentModal)} className={ghostButton}>Thêm dòng</button><textarea value={documentModal.form.notes} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú phiếu kho" className="min-h-[96px] flex-1 rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary" /></div></div></ModalShell>

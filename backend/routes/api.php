@@ -197,6 +197,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/inventory/products', [InventoryController::class, 'products']);
     Route::post('/inventory/products', [InventoryController::class, 'storeProduct']);
     Route::put('/inventory/products/{id}', [InventoryController::class, 'updateProduct'])->whereNumber('id');
+    Route::put('/inventory/products/{id}/import-star', [InventoryController::class, 'updateInventoryImportStar'])->whereNumber('id');
     Route::get('/inventory/suppliers', [InventoryController::class, 'suppliers']);
     Route::post('/inventory/suppliers', [InventoryController::class, 'storeSupplier']);
     Route::put('/inventory/suppliers/{id}', [InventoryController::class, 'updateSupplier'])->whereNumber('id');

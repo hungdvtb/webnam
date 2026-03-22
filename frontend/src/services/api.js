@@ -172,6 +172,7 @@ export const inventoryApi = {
     getProducts: (params, signal) => api.get('/inventory/products', { params, signal }),
     createProduct: (data) => api.post('/inventory/products', data),
     updateProduct: (id, data) => api.put(`/inventory/products/${id}`, data),
+    setImportStar: (id, data) => api.put(`/inventory/products/${id}/import-star`, data),
     getSuppliers: (params) => api.get('/inventory/suppliers', { params }),
     createSupplier: (data) => api.post('/inventory/suppliers', data),
     updateSupplier: (id, data) => api.put(`/inventory/suppliers/${id}`, data),

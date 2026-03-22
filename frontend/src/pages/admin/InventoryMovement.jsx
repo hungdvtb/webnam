@@ -4511,25 +4511,7 @@ const InventoryMovement = () => {
         { key: 'damaged', label: 'Phiếu hỏng', icon: 'broken_image', onClick: async () => { setCreateMenuOpen(false); setActiveTab('damaged'); await openCreateDocument('damaged'); } },
         { key: 'adjustments', label: 'Phiếu điều chỉnh', icon: 'tune', onClick: async () => { setCreateMenuOpen(false); setActiveTab('adjustments'); await openCreateDocument('adjustments'); } },
     ];
-    const documentWorkspace = isDocumentTab(activeTab) ? (
-        <div className="space-y-3">
-            <div className={`${panelClass} p-2`}>
-                <div className="flex flex-wrap gap-2">
-                    {documentTabs.map(([key, label]) => (
-                        <button
-                            key={key}
-                            type="button"
-                            onClick={() => setActiveTab(key)}
-                            className={`h-10 shrink-0 rounded-sm border px-4 text-[12px] font-black transition ${activeTab === key ? 'border-primary bg-primary text-white' : 'border-primary/15 bg-white text-primary hover:border-primary/35 hover:bg-primary/[0.03]'}`}
-                        >
-                            {label}
-                        </button>
-                    ))}
-                </div>
-            </div>
-            {renderSimpleTab(activeTab)}
-        </div>
-    ) : null;
+    const documentWorkspace = isDocumentTab(activeTab) ? renderSimpleTab(activeTab) : null;
 
     return (
         <div className="space-y-4 px-5 pb-6 pt-4">
@@ -4561,23 +4543,32 @@ const InventoryMovement = () => {
             <div className={`${panelClass} p-2`}>
                 <div className="flex flex-nowrap gap-2 overflow-x-auto">
                     {topTabs.map(([key, label]) => {
-                        const selected = key === 'documents' ? isDocumentTab(activeTab) : activeTab === key;
                         return (
-                            <button
-                                key={key}
-                                type="button"
-                                onClick={() => {
-                                    setCreateMenuOpen(false);
-                                    if (key === 'documents') {
-                                        setActiveTab(isDocumentTab(activeTab) ? activeTab : 'imports');
-                                        return;
-                                    }
-                                    setActiveTab(key);
-                                }}
-                                className={`h-10 shrink-0 rounded-sm border px-4 text-[12px] font-black transition ${selected ? 'border-primary bg-primary text-white' : 'border-primary/15 bg-white text-primary hover:border-primary/35 hover:bg-primary/[0.03]'}`}
-                            >
-                                {label}
-                            </button>
+                            <React.Fragment key={key}>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setCreateMenuOpen(false);
+                                        setActiveTab(key);
+                                    }}
+                                    className={`h-10 shrink-0 rounded-sm border px-4 text-[12px] font-black transition ${activeTab === key ? 'border-primary bg-primary text-white' : 'border-primary/15 bg-white text-primary hover:border-primary/35 hover:bg-primary/[0.03]'}`}
+                                >
+                                    {label}
+                                </button>
+                                {key === 'supplierPrices' ? documentTabs.map(([documentKey, documentLabel]) => (
+                                    <button
+                                        key={documentKey}
+                                        type="button"
+                                        onClick={() => {
+                                            setCreateMenuOpen(false);
+                                            setActiveTab(documentKey);
+                                        }}
+                                        className={`h-10 shrink-0 rounded-sm border px-4 text-[12px] font-black transition ${activeTab === documentKey ? 'border-primary bg-primary text-white' : 'border-primary/15 bg-white text-primary hover:border-primary/35 hover:bg-primary/[0.03]'}`}
+                                    >
+                                        {documentLabel}
+                                    </button>
+                                )) : null}
+                            </React.Fragment>
                         );
                     })}
                 </div>

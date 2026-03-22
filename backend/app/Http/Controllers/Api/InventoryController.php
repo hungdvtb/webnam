@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\InventoryBatch;
 use App\Models\InventoryDocument;
 use App\Models\InventoryImport;
+use App\Models\InventoryImportAttachment;
 use App\Models\InventoryImportStatus;
 use App\Models\InventoryInvoiceAnalysisLog;
 use App\Models\InventoryUnit;
@@ -1145,6 +1146,89 @@ class InventoryController extends Controller
         return response()->json($import);
     }
 
+    public function importAttachments(int $id)
+    {
+        $import = InventoryImport::query()
+            ->with([
+                'supplier:id,name',
+                'attachments' => function ($builder) {
+                    $builder->latest('created_at')->latest('id');
+                },
+                'attachments.invoiceAnalysisLog:id,status,provider',
+            ])
+            ->withCount('attachments')
+            ->findOrFail($id);
+
+        return response()->json(
+            $this->importAttachmentsPayload($import)
+        );
+    }
+
+    public function storeImportAttachments(Request $request, int $id)
+    {
+        $import = InventoryImport::query()->findOrFail($id);
+        $files = $this->validatedStoredImportAttachmentFiles($request);
+
+        $attachments = collect($files)->map(function (array $file) use ($import) {
+            return InventoryImportAttachment::query()->create([
+                'account_id' => $import->account_id,
+                'import_id' => $import->id,
+                'invoice_analysis_log_id' => null,
+                'source_type' => 'manual',
+                'disk' => $file['disk'] ?? 'public',
+                'file_path' => $file['file_path'],
+                'original_name' => $file['original_name'] ?? basename((string) $file['file_path']),
+                'mime_type' => $file['mime_type'] ?? null,
+                'file_size' => $file['file_size'] ?? 0,
+                'uploaded_by' => auth()->id(),
+            ]);
+        })->values();
+
+        $attachments->load(['invoiceAnalysisLog:id,status,provider']);
+
+        return response()->json([
+            'message' => 'Đã thêm hóa đơn.',
+            'attachments' => $attachments,
+            'attachments_count' => $import->attachments()->count(),
+        ], 201);
+    }
+
+    public function replaceImportAttachment(Request $request, int $id, int $attachmentId)
+    {
+        $import = InventoryImport::query()->findOrFail($id);
+        $attachment = $import->attachments()->findOrFail($attachmentId);
+        $file = $this->validatedStoredImportAttachmentFile($request);
+
+        $attachment->forceFill([
+            'invoice_analysis_log_id' => null,
+            'source_type' => 'manual',
+            'disk' => $file['disk'] ?? 'public',
+            'file_path' => $file['file_path'],
+            'original_name' => $file['original_name'] ?? basename((string) $file['file_path']),
+            'mime_type' => $file['mime_type'] ?? null,
+            'file_size' => $file['file_size'] ?? 0,
+            'uploaded_by' => auth()->id(),
+        ])->save();
+
+        return response()->json([
+            'message' => 'Đã thay hóa đơn.',
+            'attachment' => $attachment->fresh(['invoiceAnalysisLog:id,status,provider']),
+            'attachments_count' => $import->attachments()->count(),
+        ]);
+    }
+
+    public function destroyImportAttachment(int $id, int $attachmentId)
+    {
+        $import = InventoryImport::query()->findOrFail($id);
+        $attachment = $import->attachments()->findOrFail($attachmentId);
+        $attachment->delete();
+
+        return response()->json([
+            'message' => 'Đã xóa hóa đơn.',
+            'attachments_count' => $import->attachments()->count(),
+        ]);
+    }
+
     public function updateImport(Request $request, int $id)
     {
         $accountId = (int) $request->header('X-Account-Id');
@@ -1552,7 +1636,7 @@ class InventoryController extends Controller
         foreach (array_values($columns) as $index => $column) {
             $method = $index === 0 ? 'whereRaw' : 'orWhereRaw';
             $query->{$method}(
-                "LOWER(COALESCE({$column}, '')) LIKE LOWER(?) ESCAPE '\\\\'",
+                "LOWER(COALESCE({$column}, '')) LIKE LOWER(?) ESCAPE '\\'",
                 [$like]
             );
         }
@@ -2232,6 +2316,70 @@ class InventoryController extends Controller
         $decoded = json_decode($value, true);
 
         return is_array($decoded) ? $decoded : [];
+    }
+
+    private function importAttachmentsPayload(InventoryImport $import): array
+    {
+        $import->loadMissing([
+            'supplier:id,name',
+            'attachments' => function ($builder) {
+                $builder->latest('created_at')->latest('id');
+            },
+            'attachments.invoiceAnalysisLog:id,status,provider',
+        ]);
+        $import->loadCount('attachments');
+
+        return [
+            'import' => [
+                'id' => $import->id,
+                'import_number' => $import->import_number,
+                'import_date' => $import->import_date?->toDateString(),
+                'supplier_name' => $import->supplier?->name ?: $import->supplier_name,
+                'attachments_count' => (int) ($import->attachments_count ?? $import->attachments->count()),
+            ],
+            'attachments' => $import->attachments->values(),
+        ];
+    }
+
+    private function validatedStoredImportAttachmentFiles(Request $request): array
+    {
+        validator([
+            'attachments' => $request->file('attachments'),
+            'attachment_files' => $request->file('attachment_files'),
+        ], [
+            'attachments.*' => 'file|max:15360|mimes:pdf,jpg,jpeg,png,webp,gif,bmp',
+            'attachment_files.*' => 'file|max:15360|mimes:pdf,jpg,jpeg,png,webp,gif,bmp',
+        ])->validate();
+
+        $files = $this->storeImportAttachmentFiles($request);
+
+        if (empty($files)) {
+            throw ValidationException::withMessages([
+                'attachments' => ['Vui lòng chọn ít nhất một hóa đơn dạng ảnh hoặc PDF.'],
+            ]);
+        }
+
+        return $files;
+    }
+
+    private function validatedStoredImportAttachmentFile(Request $request): array
+    {
+        validator([
+            'file' => $request->file('file'),
+        ], [
+            'file' => 'required|file|max:15360|mimes:pdf,jpg,jpeg,png,webp,gif,bmp',
+        ])->validate();
+
+        $file = $request->file('file');
+        $path = $file->store('uploads/inventory/import-attachments', 'public');
+
+        return [
+            'disk' => 'public',
+            'file_path' => $path,
+            'original_name' => $file->getClientOriginalName(),
+            'mime_type' => $file->getMimeType(),
+            'file_size' => $file->getSize(),
+        ];
     }
 
     private function storeImportAttachmentFiles(Request $request): array

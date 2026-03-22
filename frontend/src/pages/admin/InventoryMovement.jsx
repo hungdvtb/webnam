@@ -87,6 +87,55 @@ const nextSortConfig = (current, columnId) => {
 const formatCurrency = (value) => `${new Intl.NumberFormat('vi-VN').format(Math.round(Number(value || 0)))}đ`;
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0));
 const stripNumericValue = (value) => String(value ?? '').replace(/[^0-9]/g, '');
+const supplierPasteModeConfigs = {
+    sku_price: {
+        label: 'SKU + Giá',
+        hint: 'Dán theo mẫu: `SKU TAB Giá` hoặc `SKU,Giá`',
+        placeholder: 'SKU-01\t120000\nSKU-02\t150000',
+        actionLabel: 'Nhận giá',
+    },
+    sku_supplier_code: {
+        label: 'SKU + Mã NCC',
+        hint: 'Dán theo mẫu: `SKU TAB Mã NCC` hoặc `SKU,Mã NCC`',
+        placeholder: 'SKU-01\tSP000451\nSKU-02\t121212',
+        actionLabel: 'Nhận mã NCC',
+    },
+    sku_supplier_code_price: {
+        label: 'SKU + Mã NCC + Giá',
+        hint: 'Dán theo mẫu: `SKU TAB Mã NCC TAB Giá` hoặc `SKU,Mã NCC,Giá`',
+        placeholder: 'SKU-01\tSP000451\t120000\nSKU-02\t121212\t150000',
+        actionLabel: 'Nhận dữ liệu',
+    },
+};
+const parseSupplierPasteLine = (line, mode = 'sku_price') => {
+    const parts = String(line ?? '')
+        .split(/\t|,|;/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+    if (!parts.length) return null;
+
+    const sku = String(parts[0] || '').trim();
+    if (!sku) return null;
+
+    if (mode === 'sku_supplier_code') {
+        if (parts.length < 2) return null;
+        const supplierProductCode = String(parts[1] || '').trim();
+        return supplierProductCode ? { sku, supplier_product_code: supplierProductCode } : null;
+    }
+
+    if (mode === 'sku_supplier_code_price') {
+        if (parts.length < 3) return null;
+        const supplierProductCode = String(parts[1] || '').trim();
+        const unitCost = stripNumericValue(parts[2]);
+        if (!supplierProductCode || !unitCost) return null;
+        return { sku, supplier_product_code: supplierProductCode, unit_cost: unitCost };
+    }
+
+    if (parts.length < 2) return null;
+    const unitCost = stripNumericValue(parts[1]);
+    return unitCost ? { sku, unit_cost: unitCost } : null;
+};
 const formatWholeNumberInput = (value) => {
     const cleaned = stripNumericValue(value);
     return cleaned ? formatNumber(cleaned) : '';
@@ -290,6 +339,53 @@ const formatDateTime = (value) => {
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? value : date.toLocaleString('vi-VN');
 };
+const formatPrintDate = (value) => {
+    if (!value) return '-';
+    const normalizedValue = /^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? `${value}T00:00:00` : value;
+    const date = new Date(normalizedValue);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString('vi-VN');
+};
+const formatFileSize = (value) => {
+    const size = Number(value || 0);
+    if (!Number.isFinite(size) || size <= 0) return '0 B';
+    if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+    if (size >= 1024) return `${Math.round(size / 1024)} KB`;
+    return `${size} B`;
+};
+const getImportAttachmentName = (attachment) => attachment?.original_name || attachment?.file_path?.split('/').pop() || 'Hóa đơn đính kèm';
+const getImportAttachmentExtension = (attachment) => {
+    const source = `${attachment?.original_name || ''}.${attachment?.file_path || ''}`.toLowerCase();
+    const matched = source.match(/\.([a-z0-9]+)(?:$|\?)/);
+    return matched?.[1] || '';
+};
+const isPdfAttachment = (attachment) => {
+    const mimeType = String(attachment?.mime_type || '').toLowerCase();
+    return mimeType.includes('pdf') || getImportAttachmentExtension(attachment) === 'pdf';
+};
+const isImageAttachment = (attachment) => {
+    const mimeType = String(attachment?.mime_type || '').toLowerCase();
+    const extension = getImportAttachmentExtension(attachment);
+    return mimeType.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(extension);
+};
+const getImportAttachmentTypeLabel = (attachment) => {
+    if (!attachment) return 'Hóa đơn';
+    if (attachment.source_type === 'invoice') return 'Từ AI hóa đơn';
+    return 'Tải lên thủ công';
+};
+const mapImportAttachment = (attachment) => ({
+    id: attachment?.id || null,
+    invoice_analysis_log_id: attachment?.invoice_analysis_log_id || null,
+    source_type: attachment?.source_type || 'manual',
+    disk: attachment?.disk || 'public',
+    file_path: attachment?.file_path || '',
+    original_name: attachment?.original_name || 'Hóa đơn đính kèm',
+    mime_type: attachment?.mime_type || null,
+    file_size: attachment?.file_size || 0,
+    url: attachment?.url || null,
+    created_at: attachment?.created_at || null,
+    updated_at: attachment?.updated_at || null,
+    invoiceAnalysisLog: attachment?.invoiceAnalysisLog || null,
+});
 const normalizeSearchText = (value) => String(value ?? '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -508,7 +604,9 @@ const createImportForm = (data = null) => {
 
     return {
         id: data?.id || null,
+        import_number: data?.import_number || data?.document_number || '',
         supplier_id: data?.supplier_id ? String(data.supplier_id) : '',
+        supplier_name: data?.supplier?.name || data?.supplier_name || '',
         inventory_import_status_id: data?.inventory_import_status_id ? String(data.inventory_import_status_id) : '',
         status_is_manual: data?.status_is_manual ?? Boolean(data?.id && data?.inventory_import_status_id),
         import_date: data?.import_date ? String(data.import_date).slice(0, 10) : todayValue,
@@ -523,17 +621,7 @@ const createImportForm = (data = null) => {
         invoice_number: data?.invoice_number || data?.invoiceAnalysisLogs?.[0]?.analysis_result?.raw_invoice?.invoice_number || '',
         analysis_log: data?.invoiceAnalysisLogs?.[0] || null,
         attachments: Array.isArray(data?.attachments)
-            ? data.attachments.map((attachment) => ({
-                id: attachment.id,
-                invoice_analysis_log_id: attachment.invoice_analysis_log_id || null,
-                source_type: attachment.source_type || 'manual',
-                disk: attachment.disk || 'public',
-                file_path: attachment.file_path,
-                original_name: attachment.original_name || 'Tệp đính kèm',
-                mime_type: attachment.mime_type || null,
-                file_size: attachment.file_size || 0,
-                url: attachment.url || null,
-            }))
+            ? data.attachments.map(mapImportAttachment)
             : [],
         local_attachment_files: [],
         items: (data?.items || []).length
@@ -562,6 +650,14 @@ const createImportStatusForm = (status = null) => ({
     affects_inventory: Boolean(status?.affects_inventory),
     is_active: status?.is_active ?? true,
     is_default: Boolean(status?.is_default),
+});
+
+const createImportInvoiceModalState = () => ({
+    open: false,
+    row: null,
+    importInfo: null,
+    attachments: [],
+    selectedAttachmentId: null,
 });
 
 const createDocumentForm = (tabKey, data = null) => ({
@@ -682,6 +778,8 @@ const escapePrintHtml = (value) => String(value ?? '')
     .replace(/'/g, '&#39;');
 const buildImportPrintHtml = ({
     supplierName = 'Tất cả sản phẩm',
+    importNumber = '',
+    importDate = '',
     printedAt = '',
     columns = [],
     items = [],
@@ -689,19 +787,41 @@ const buildImportPrintHtml = ({
     surcharge = 0,
     total = 0,
     notes = '',
+    documents = [],
 } = {}) => {
     const normalizedColumns = (Array.isArray(columns) ? columns : []).filter(Boolean);
     const totalWeight = normalizedColumns.reduce((sum, column) => sum + Number(column.widthWeight || 1), 0) || normalizedColumns.length || 1;
     const orientation = normalizedColumns.length > 6 || totalWeight > 11 ? 'landscape' : 'portrait';
-    const printedAtLabel = formatDateTime(printedAt || new Date().toISOString());
+    const normalizedDocuments = (Array.isArray(documents) && documents.length
+        ? documents
+        : [{
+            supplierName,
+            importNumber,
+            importDate,
+            items,
+            subtotal,
+            surcharge,
+            total,
+            notes,
+        }]
+    ).map((document) => ({
+        supplierName: document?.supplierName || 'Tất cả sản phẩm',
+        importNumber: document?.importNumber || '',
+        importDate: document?.importDate || '',
+        items: Array.isArray(document?.items) ? document.items : [],
+        subtotal: Number(document?.subtotal || 0),
+        surcharge: Number(document?.surcharge || 0),
+        total: Number(document?.total || 0),
+        notes: document?.notes || '',
+    }));
 
     const headerCells = normalizedColumns.map((column) => {
         const width = ((Number(column.widthWeight || 1) / totalWeight) * 100).toFixed(2);
         return `<th class="align-${column.align || 'left'}" style="width:${width}%">${escapePrintHtml(column.label)}</th>`;
     }).join('');
 
-    const bodyRows = items.length
-        ? items.map((item, index) => `
+    const renderBodyRows = (documentItems) => (documentItems.length
+        ? documentItems.map((item, index) => `
             <tr>
                 ${normalizedColumns.map((column) => {
                     const cellValue = typeof column.render === 'function' ? column.render(item, index) : item?.[column.id];
@@ -710,33 +830,102 @@ const buildImportPrintHtml = ({
                 }).join('')}
             </tr>
         `).join('')
-        : `<tr><td colspan="${Math.max(normalizedColumns.length, 1)}" class="empty">Chưa có dòng sản phẩm.</td></tr>`;
+        : `<tr><td colspan="${Math.max(normalizedColumns.length, 1)}" class="empty">Chưa có dòng sản phẩm.</td></tr>`);
 
-    const totalRow = normalizedColumns.length > 1
+    const renderTotalRow = (documentTotal) => (normalizedColumns.length > 1
         ? `
             <tfoot>
                 <tr class="summary-row">
                     <td colspan="${normalizedColumns.length - 1}">Tổng tiền đơn</td>
-                    <td class="align-right">${escapePrintHtml(formatCurrency(total))}</td>
+                    <td class="align-right">${escapePrintHtml(formatCurrency(documentTotal))}</td>
                 </tr>
             </tfoot>
         `
         : `
             <tfoot>
                 <tr class="summary-row">
-                    <td class="align-right">Tổng tiền đơn: ${escapePrintHtml(formatCurrency(total))}</td>
+                    <td class="align-right">Tổng tiền đơn: ${escapePrintHtml(formatCurrency(documentTotal))}</td>
                 </tr>
             </tfoot>
-        `;
+        `);
 
-    const notesSection = String(notes || '').trim()
+    const renderNotesSection = (documentNotes) => String(documentNotes || '').trim()
         ? `
             <div class="notes-block">
                 <div class="section-title">Ghi chú</div>
-                <div>${escapePrintHtml(notes)}</div>
+                <div>${escapePrintHtml(documentNotes)}</div>
             </div>
         `
         : '';
+
+    const sheetsHtml = normalizedDocuments.map((document, index) => {
+        const printedAtLabel = formatDateTime(printedAt || new Date().toISOString());
+        const sheetLabel = normalizedDocuments.length > 1
+            ? `Bản in tối ưu cho khổ giấy A4 • Phiếu ${index + 1}/${normalizedDocuments.length}`
+            : 'Bản in tối ưu cho khổ giấy A4';
+
+        return `
+            <section class="sheet">
+                <div class="header">
+                    <div class="title-block">
+                        <h1>Phiếu nhập</h1>
+                        <p>${escapePrintHtml(sheetLabel)}</p>
+                    </div>
+                    <div class="meta-card">
+                        ${document.importNumber ? `
+                            <div class="meta-row">
+                                <div class="meta-label">Mã phiếu</div>
+                                <div>${escapePrintHtml(document.importNumber)}</div>
+                            </div>
+                        ` : ''}
+                        ${document.importDate ? `
+                            <div class="meta-row">
+                                <div class="meta-label">Ngày nhập</div>
+                                <div>${escapePrintHtml(formatPrintDate(document.importDate))}</div>
+                            </div>
+                        ` : ''}
+                        <div class="meta-row">
+                            <div class="meta-label">Nhà cung cấp</div>
+                            <div>${escapePrintHtml(document.supplierName)}</div>
+                        </div>
+                        <div class="meta-row">
+                            <div class="meta-label">Ngày giờ in</div>
+                            <div>${escapePrintHtml(printedAtLabel)}</div>
+                        </div>
+                        <div class="meta-row">
+                            <div class="meta-label">Số dòng</div>
+                            <div>${escapePrintHtml(formatNumber(document.items.length))}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <table>
+                    <thead>
+                        <tr>${headerCells}</tr>
+                    </thead>
+                    <tbody>${renderBodyRows(document.items)}</tbody>
+                    ${renderTotalRow(document.total)}
+                </table>
+
+                <div class="totals">
+                    <div class="total-card">
+                        <span>Tổng tiền hàng</span>
+                        <strong>${escapePrintHtml(formatCurrency(document.subtotal))}</strong>
+                    </div>
+                    <div class="total-card">
+                        <span>Phụ phí</span>
+                        <strong>${escapePrintHtml(formatCurrency(document.surcharge))}</strong>
+                    </div>
+                    <div class="total-card">
+                        <span>Tổng tiền đơn</span>
+                        <strong>${escapePrintHtml(formatCurrency(document.total))}</strong>
+                    </div>
+                </div>
+
+                ${renderNotesSection(document.notes)}
+            </section>
+        `;
+    }).join('');
 
     return `<!DOCTYPE html>
 <html lang="vi">
@@ -754,6 +943,11 @@ const buildImportPrintHtml = ({
         }
         .sheet {
             width: 100%;
+        }
+        .sheet + .sheet {
+            break-before: page;
+            page-break-before: always;
+            margin-top: 8mm;
         }
         .header {
             display: flex;
@@ -878,53 +1072,7 @@ const buildImportPrintHtml = ({
     </style>
 </head>
 <body>
-    <div class="sheet">
-        <div class="header">
-            <div class="title-block">
-                <h1>Phiếu nhập</h1>
-                <p>Bản in tối ưu cho khổ giấy A4</p>
-            </div>
-            <div class="meta-card">
-                <div class="meta-row">
-                    <div class="meta-label">Nhà cung cấp</div>
-                    <div>${escapePrintHtml(supplierName)}</div>
-                </div>
-                <div class="meta-row">
-                    <div class="meta-label">Ngày giờ in</div>
-                    <div>${escapePrintHtml(printedAtLabel)}</div>
-                </div>
-                <div class="meta-row">
-                    <div class="meta-label">Số dòng</div>
-                    <div>${escapePrintHtml(formatNumber(items.length))}</div>
-                </div>
-            </div>
-        </div>
-
-        <table>
-            <thead>
-                <tr>${headerCells}</tr>
-            </thead>
-            <tbody>${bodyRows}</tbody>
-            ${totalRow}
-        </table>
-
-        <div class="totals">
-            <div class="total-card">
-                <span>Tổng tiền hàng</span>
-                <strong>${escapePrintHtml(formatCurrency(subtotal))}</strong>
-            </div>
-            <div class="total-card">
-                <span>Phụ phí</span>
-                <strong>${escapePrintHtml(formatCurrency(surcharge))}</strong>
-            </div>
-            <div class="total-card">
-                <span>Tổng tiền đơn</span>
-                <strong>${escapePrintHtml(formatCurrency(total))}</strong>
-            </div>
-        </div>
-
-        ${notesSection}
-    </div>
+    ${sheetsHtml}
 </body>
 </html>`;
 };
@@ -996,10 +1144,12 @@ const importColumns = [
     { id: 'supplier', label: 'Nhà cung cấp', minWidth: 220 },
     { id: 'date', label: 'Ngày nhập', minWidth: 150 },
     { id: 'status', label: 'Trạng thái', minWidth: 150 },
+    { id: 'invoice', label: 'Hóa đơn', minWidth: 92, align: 'center' },
     { id: 'line_count', label: 'Số dòng', minWidth: 90, align: 'right' },
     { id: 'qty', label: 'Tổng số lượng', minWidth: 110, align: 'right' },
     { id: 'amount', label: 'Tổng tiền', minWidth: 130, align: 'right' },
     { id: 'note', label: 'Ghi chú', minWidth: 200 },
+    { id: 'detail', label: 'Chi tiết', minWidth: 92, align: 'center', draggable: false, sortable: false },
     { id: 'actions', label: 'Thao tác', minWidth: 145, align: 'center' },
 ];
 
@@ -1152,7 +1302,14 @@ const PanelHeader = ({ title, description, toggles = [], leadingActions = null, 
         <div className="flex flex-wrap items-center gap-2">
             {leadingActions}
             {toggles.map((toggle) => (
-                <button key={toggle.id} type="button" onClick={toggle.onClick} className={iconButton(toggle.active)} title={toggle.label}>
+                <button
+                    key={toggle.id}
+                    type="button"
+                    onClick={toggle.onClick}
+                    disabled={toggle.disabled}
+                    className={`${iconButton(toggle.active)} ${toggle.disabled ? 'cursor-not-allowed opacity-45 hover:border-primary/15 hover:bg-white hover:text-primary' : ''}`}
+                    title={toggle.disabled ? (toggle.disabledTitle || toggle.label) : toggle.label}
+                >
                     <span className="material-symbols-outlined text-[18px]">{toggle.icon}</span>
                 </button>
             ))}
@@ -1888,6 +2045,15 @@ const InventoryMovement = () => {
     const restoredSupplierContextRef = useRef(false);
     const skipSupplierSearchResetRef = useRef(false);
     const savingSupplierPriceRowsRef = useRef(new Set());
+    const simpleSearchSyncRef = useRef({
+        imports: '',
+        exports: '',
+        returns: '',
+        damaged: '',
+        adjustments: '',
+        lots: '',
+        trash: '',
+    });
 
     const [activeTab, setActiveTab] = useState('products');
     const [dashboard, setDashboard] = useState(null);
@@ -1924,6 +2090,7 @@ const InventoryMovement = () => {
         returns: false, damaged: false, adjustments: false, lots: false, trash: false, saving: false,
         supplierModal: false, supplierPriceModal: false, importModal: false, documentModal: false,
         importStatuses: false, importStatusModal: false, invoiceAnalysis: false, importPriceRefresh: false,
+        importInvoiceModal: false, importInvoiceUpload: false,
     });
 
     const [openPanels, setOpenPanels] = useState({
@@ -1945,7 +2112,7 @@ const InventoryMovement = () => {
     const [supplierCatalogFilters, setSupplierCatalogFilters] = useState({ sku: '', name: '', category_id: '', type: '', variant_scope: '', missing_supplier_price: '', multiple_suppliers: '' });
     const [supplierQuickSearch, setSupplierQuickSearch] = useState('');
     const [simpleFilters, setSimpleFilters] = useState({
-        imports: { search: '', date_from: '', date_to: '', inventory_import_status_id: '', entry_mode: '' },
+        imports: { search: '', date_from: '', date_to: '', inventory_import_status_id: '', entry_mode: '', has_invoice: '' },
         exports: { search: '', date_from: '', date_to: '' },
         returns: { search: '', date_from: '', date_to: '' },
         damaged: { search: '', date_from: '', date_to: '' },
@@ -1957,6 +2124,7 @@ const InventoryMovement = () => {
     const [expandedGroups, setExpandedGroups] = useState({});
     const [expandedComparisons, setExpandedComparisons] = useState({});
     const [selectedPriceIds, setSelectedPriceIds] = useState({});
+    const [selectedImportIds, setSelectedImportIds] = useState({});
     const [priceDrafts, setPriceDrafts] = useState({});
     const [codeDrafts, setCodeDrafts] = useState({});
     const [savingPriceIds, setSavingPriceIds] = useState({});
@@ -1965,15 +2133,21 @@ const InventoryMovement = () => {
     const [bulkPrice, setBulkPrice] = useState('');
     const [bulkNote, setBulkNote] = useState('');
     const [pasteText, setPasteText] = useState('');
+    const [pasteMode, setPasteMode] = useState('sku_price');
     const [showPasteBox, setShowPasteBox] = useState(false);
     const [createMenuOpen, setCreateMenuOpen] = useState(false);
     const [supplierModal, setSupplierModal] = useState({ open: false, form: createSupplierForm() });
     const [supplierPriceModal, setSupplierPriceModal] = useState({ open: false, form: createSupplierPriceForm() });
     const [importModal, setImportModal] = useState({ open: false, form: createImportForm() });
+    const [importInvoiceModal, setImportInvoiceModal] = useState(createImportInvoiceModalState());
+    const [importInvoiceReplacingId, setImportInvoiceReplacingId] = useState(null);
+    const [importInvoiceDeletingId, setImportInvoiceDeletingId] = useState(null);
     const [importCompleteToggleSnapshot, setImportCompleteToggleSnapshot] = useState(null);
     const [importTableSettingsOpen, setImportTableSettingsOpen] = useState(false);
     const [importTableExpanded, setImportTableExpanded] = useState(false);
     const [importPrintModalOpen, setImportPrintModalOpen] = useState(false);
+    const [importPrintLoading, setImportPrintLoading] = useState(false);
+    const [importPrintSource, setImportPrintSource] = useState({ mode: 'modal', forms: [] });
     const [importPrintTemplates, setImportPrintTemplates] = useState(() => ensureDefaultImportPrintTemplates([]));
     const [importPrintTemplateId, setImportPrintTemplateId] = useState(IMPORT_PRINT_DEFAULT_TEMPLATE_ID);
     const [importPrintTemplateName, setImportPrintTemplateName] = useState(IMPORT_PRINT_DEFAULT_TEMPLATE_NAME);
@@ -1982,6 +2156,8 @@ const InventoryMovement = () => {
     const [importPrintSettingsLoaded, setImportPrintSettingsLoaded] = useState(false);
     const [importPrintSettingsLoading, setImportPrintSettingsLoading] = useState(false);
     const [importPrintSettingsSaving, setImportPrintSettingsSaving] = useState(false);
+    const [importDetailModal, setImportDetailModal] = useState({ open: false, loading: false, form: createImportForm(), row: null });
+    const [importDetailTableSettingsOpen, setImportDetailTableSettingsOpen] = useState(false);
     const [importStatusModal, setImportStatusModal] = useState({ open: false, form: createImportStatusForm() });
     const [documentModal, setDocumentModal] = useState({ open: false, tabKey: 'returns', form: createDocumentForm('returns') });
     const [pageSizes, setPageSizes] = useState(() => ({
@@ -2138,7 +2314,14 @@ const InventoryMovement = () => {
         }
     };
 
-    const openImportPrintModal = async () => {
+    const closeImportPrintModal = () => {
+        setImportPrintModalOpen(false);
+        setImportPrintLoading(false);
+        setImportPrintSource({ mode: 'modal', forms: [] });
+    };
+
+    const openImportPrintModalWithForms = async (forms = [], mode = 'selected') => {
+        setImportPrintSource({ mode, forms });
         setImportPrintModalOpen(true);
         setImportPrintPreviewPrintedAt(new Date().toISOString());
 
@@ -2148,6 +2331,29 @@ const InventoryMovement = () => {
         }
 
         applyImportPrintTemplate(importPrintTemplateId, importPrintTemplates);
+    };
+
+    const openImportPrintModal = async () => {
+        await openImportPrintModalWithForms([], 'modal');
+    };
+
+    const openSelectedImportsPrintModal = async () => {
+        const targetRows = imports.filter((row) => Boolean(selectedImportIds[String(row.id)]));
+        if (!targetRows.length) {
+            showToast({ type: 'warning', message: 'Hãy chọn ít nhất một phiếu nhập để in.' });
+            return;
+        }
+
+        setImportPrintLoading(true);
+        try {
+            const responses = await Promise.all(targetRows.map((row) => inventoryApi.getImport(row.id)));
+            const forms = responses.map((response) => synchronizeImportFormCompletion(createImportForm(response.data)));
+            await openImportPrintModalWithForms(forms, 'selected');
+        } catch (error) {
+            fail(error, targetRows.length > 1 ? 'Không thể tải các phiếu nhập đã chọn để in.' : 'Không thể tải phiếu nhập để in.');
+        } finally {
+            setImportPrintLoading(false);
+        }
     };
 
     const toggleImportPrintColumn = (columnId) => {
@@ -2207,16 +2413,16 @@ const InventoryMovement = () => {
             return;
         }
 
+        if (!importPrintDocuments.length) {
+            showToast({ type: 'warning', message: 'Không có phiếu nhập hợp lệ để in.' });
+            return;
+        }
+
         const printedAt = new Date().toISOString();
         const printHtml = buildImportPrintHtml({
-            supplierName: importPrintSupplierName,
             printedAt,
             columns: selectedColumns,
-            items: importPrintableItems,
-            subtotal: importSubtotal,
-            surcharge: importSurchargeAmount,
-            total: importLineTotal,
-            notes: importModal.form.notes || '',
+            documents: importPrintDocuments,
         });
 
         const printWindow = window.open('', '_blank', 'width=1024,height=720');
@@ -2333,7 +2539,7 @@ const InventoryMovement = () => {
     const closeImportModal = () => {
         setImportTableSettingsOpen(false);
         setImportTableExpanded(false);
-        setImportPrintModalOpen(false);
+        closeImportPrintModal();
         setImportCompleteToggleSnapshot(null);
         setImportModal({
             open: false,
@@ -2342,6 +2548,187 @@ const InventoryMovement = () => {
                 update_supplier_prices: true,
             }),
         });
+    };
+
+    const closeImportInvoiceModal = () => {
+        setImportInvoiceReplacingId(null);
+        setImportInvoiceDeletingId(null);
+        setImportInvoiceModal(createImportInvoiceModalState());
+    };
+
+    const syncImportInvoiceCountInList = (importId, attachmentsCount) => {
+        const nextCount = Math.max(Number(attachmentsCount || 0), 0);
+        setImports((prev) => prev.map((row) => (
+            Number(row.id) === Number(importId)
+                ? { ...row, attachments_count: nextCount }
+                : row
+        )));
+    };
+
+    const openImportInvoiceModal = async (row, preferredAttachmentId = null) => {
+        if (!row?.id) return;
+
+        setImportInvoiceReplacingId(null);
+        setImportInvoiceDeletingId(null);
+        setImportInvoiceModal({
+            open: true,
+            row,
+            importInfo: {
+                id: row.id,
+                import_number: row.import_number,
+                import_date: row.import_date,
+                supplier_name: row.supplier?.name || row.supplier_name || '-',
+                attachments_count: Number(row.attachments_count || 0),
+            },
+            attachments: [],
+            selectedAttachmentId: null,
+        });
+        setFlag('importInvoiceModal', true);
+
+        try {
+            const response = await inventoryApi.getImportAttachments(row.id);
+            const importInfo = response.data?.import || {};
+            const attachments = Array.isArray(response.data?.attachments)
+                ? response.data.attachments.map(mapImportAttachment)
+                : [];
+            const nextSelectedAttachmentId = attachments.some((attachment) => Number(attachment.id) === Number(preferredAttachmentId))
+                ? Number(preferredAttachmentId)
+                : (attachments[0]?.id || null);
+            const nextCount = Number(importInfo.attachments_count ?? attachments.length);
+
+            setImportInvoiceModal({
+                open: true,
+                row,
+                importInfo: {
+                    id: importInfo.id || row.id,
+                    import_number: importInfo.import_number || row.import_number,
+                    import_date: importInfo.import_date || row.import_date,
+                    supplier_name: importInfo.supplier_name || row.supplier?.name || row.supplier_name || '-',
+                    attachments_count: nextCount,
+                },
+                attachments,
+                selectedAttachmentId: nextSelectedAttachmentId,
+            });
+            syncImportInvoiceCountInList(row.id, nextCount);
+        } catch (error) {
+            closeImportInvoiceModal();
+            fail(error, 'Không thể tải danh sách hóa đơn.');
+        } finally {
+            setFlag('importInvoiceModal', false);
+        }
+    };
+
+    const addImportInvoiceFiles = async (fileList) => {
+        const files = Array.from(fileList || []).filter(Boolean);
+        if (!importInvoiceModal.row?.id || !files.length) return;
+
+        setFlag('importInvoiceUpload', true);
+        try {
+            const submitData = new FormData();
+            files.forEach((file) => submitData.append('attachments[]', file));
+
+            const response = await inventoryApi.addImportAttachments(importInvoiceModal.row.id, submitData);
+            const createdAttachments = Array.isArray(response.data?.attachments)
+                ? response.data.attachments.map(mapImportAttachment)
+                : [];
+            const nextCount = Number(response.data?.attachments_count ?? (importInvoiceModal.attachments.length + createdAttachments.length));
+
+            setImportInvoiceModal((prev) => {
+                const remainingAttachments = prev.attachments.filter(
+                    (attachment) => !createdAttachments.some((createdAttachment) => Number(createdAttachment.id) === Number(attachment.id))
+                );
+                const mergedAttachments = [...createdAttachments, ...remainingAttachments];
+
+                return {
+                    ...prev,
+                    attachments: mergedAttachments,
+                    selectedAttachmentId: createdAttachments[0]?.id || prev.selectedAttachmentId || mergedAttachments[0]?.id || null,
+                    importInfo: {
+                        ...(prev.importInfo || {}),
+                        attachments_count: nextCount,
+                    },
+                };
+            });
+
+            syncImportInvoiceCountInList(importInvoiceModal.row.id, nextCount);
+            fetchImports(importPagination.current_page || 1);
+            showToast({ type: 'success', message: response.data?.message || 'Đã thêm hóa đơn.' });
+        } catch (error) {
+            fail(error, 'Không thể thêm hóa đơn.');
+        } finally {
+            setFlag('importInvoiceUpload', false);
+        }
+    };
+
+    const replaceImportInvoiceAttachment = async (attachment, file) => {
+        if (!attachment?.id || !file || !importInvoiceModal.row?.id) return;
+
+        setImportInvoiceReplacingId(attachment.id);
+        try {
+            const submitData = new FormData();
+            submitData.append('file', file);
+
+            const response = await inventoryApi.replaceImportAttachment(importInvoiceModal.row.id, attachment.id, submitData);
+            const updatedAttachment = response.data?.attachment ? mapImportAttachment(response.data.attachment) : null;
+            const nextCount = Number(response.data?.attachments_count ?? importInvoiceModal.attachments.length);
+
+            if (updatedAttachment) {
+                setImportInvoiceModal((prev) => ({
+                    ...prev,
+                    attachments: prev.attachments.map((currentAttachment) => (
+                        Number(currentAttachment.id) === Number(updatedAttachment.id)
+                            ? updatedAttachment
+                            : currentAttachment
+                    )),
+                    selectedAttachmentId: updatedAttachment.id,
+                    importInfo: {
+                        ...(prev.importInfo || {}),
+                        attachments_count: nextCount,
+                    },
+                }));
+                syncImportInvoiceCountInList(importInvoiceModal.row.id, nextCount);
+            }
+
+            showToast({ type: 'success', message: response.data?.message || 'Đã thay hóa đơn.' });
+        } catch (error) {
+            fail(error, 'Không thể thay hóa đơn.');
+        } finally {
+            setImportInvoiceReplacingId(null);
+        }
+    };
+
+    const deleteImportInvoiceAttachment = async (attachment) => {
+        if (!attachment?.id || !importInvoiceModal.row?.id) return;
+        if (!window.confirm(`Xóa hóa đơn "${getImportAttachmentName(attachment)}"?`)) return;
+
+        setImportInvoiceDeletingId(attachment.id);
+        try {
+            const response = await inventoryApi.deleteImportAttachment(importInvoiceModal.row.id, attachment.id);
+            const nextCount = Number(response.data?.attachments_count ?? 0);
+
+            setImportInvoiceModal((prev) => {
+                const remainingAttachments = prev.attachments.filter((currentAttachment) => Number(currentAttachment.id) !== Number(attachment.id));
+                const hasCurrentSelection = remainingAttachments.some((currentAttachment) => Number(currentAttachment.id) === Number(prev.selectedAttachmentId));
+
+                return {
+                    ...prev,
+                    attachments: remainingAttachments,
+                    selectedAttachmentId: hasCurrentSelection ? prev.selectedAttachmentId : (remainingAttachments[0]?.id || null),
+                    importInfo: {
+                        ...(prev.importInfo || {}),
+                        attachments_count: nextCount,
+                    },
+                };
+            });
+
+            syncImportInvoiceCountInList(importInvoiceModal.row.id, nextCount);
+            fetchImports(importPagination.current_page || 1);
+            showToast({ type: 'success', message: response.data?.message || 'Đã xóa hóa đơn.' });
+        } catch (error) {
+            fail(error, 'Không thể xóa hóa đơn.');
+        } finally {
+            setImportInvoiceDeletingId(null);
+        }
     };
 
     const handleImportStatusChange = (statusId) => {
@@ -2916,15 +3303,15 @@ const InventoryMovement = () => {
     }, [importModal.open, importModal.form.inventory_import_status_id, importStatuses]);
 
     useEffect(() => {
-        if (!importModal.open) {
-            setImportPrintModalOpen(false);
+        if (!importModal.open && importPrintSource.mode === 'modal') {
+            closeImportPrintModal();
             return;
         }
 
         if (!importPrintSettingsLoaded && !importPrintSettingsLoading) {
             loadImportPrintTemplates({ silent: true });
         }
-    }, [importModal.open, importPrintSettingsLoaded, importPrintSettingsLoading]);
+    }, [importModal.open, importPrintSettingsLoaded, importPrintSettingsLoading, importPrintSource.mode]);
 
     useEffect(() => {
         setSelectedPriceIds({});
@@ -2946,6 +3333,37 @@ const InventoryMovement = () => {
         }, 250);
         return () => clearTimeout(timer);
     }, [activeTab, supplierFilters.search]);
+
+    useEffect(() => {
+        const searchableTabs = ['imports', 'exports', 'returns', 'damaged', 'adjustments', 'lots', 'trash'];
+        if (!searchableTabs.includes(activeTab)) return undefined;
+
+        const currentSearch = simpleFilters[activeTab]?.search ?? '';
+        const previousSearch = simpleSearchSyncRef.current[activeTab] ?? '';
+        if (currentSearch === previousSearch) return undefined;
+
+        simpleSearchSyncRef.current[activeTab] = currentSearch;
+        const timer = setTimeout(() => {
+            if (activeTab === 'imports') fetchImports(1);
+            else if (activeTab === 'exports') fetchExports(1);
+            else if (activeTab === 'returns') fetchDocuments('return', 1);
+            else if (activeTab === 'damaged') fetchDocuments('damaged', 1);
+            else if (activeTab === 'adjustments') fetchDocuments('adjustment', 1);
+            else if (activeTab === 'lots') fetchLots(1);
+            else if (activeTab === 'trash') fetchTrash(1);
+        }, 250);
+
+        return () => clearTimeout(timer);
+    }, [
+        activeTab,
+        simpleFilters.imports.search,
+        simpleFilters.exports.search,
+        simpleFilters.returns.search,
+        simpleFilters.damaged.search,
+        simpleFilters.adjustments.search,
+        simpleFilters.lots.search,
+        simpleFilters.trash.search,
+    ]);
 
     useEffect(() => {
         if (activeTab !== 'supplierPrices' || !selectedSupplierId) return undefined;
@@ -3314,21 +3732,55 @@ const InventoryMovement = () => {
 
     const applyPaste = () => {
         const skuMap = new Map(supplierCatalogItemRows.map((row) => [String(row.sku || '').toUpperCase(), row]));
-        const nextDrafts = {};
+        const nextPriceDrafts = {};
+        const nextCodeDrafts = {};
         const nextSelected = {};
+        let matchedCount = 0;
+        let skippedCount = 0;
+
         pasteText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).forEach((line) => {
-            const parts = line.split(/\t|,|;/).map((item) => item.trim()).filter(Boolean);
-            if (parts.length < 2) return;
-            const matched = skuMap.get(parts[0].toUpperCase());
-            if (!matched) return;
-            const cleaned = stripNumericValue(parts[1]);
-            if (!cleaned) return;
-            nextDrafts[matched.id] = cleaned;
+            const parsed = parseSupplierPasteLine(line, pasteMode);
+            if (!parsed) {
+                skippedCount += 1;
+                return;
+            }
+
+            const matched = skuMap.get(String(parsed.sku || '').toUpperCase());
+            if (!matched) {
+                skippedCount += 1;
+                return;
+            }
+
+            if (Object.prototype.hasOwnProperty.call(parsed, 'unit_cost')) {
+                nextPriceDrafts[matched.id] = parsed.unit_cost;
+            }
+            if (Object.prototype.hasOwnProperty.call(parsed, 'supplier_product_code')) {
+                nextCodeDrafts[matched.id] = parsed.supplier_product_code;
+            }
             nextSelected[matched.id] = true;
+            matchedCount += 1;
         });
-        setPriceDrafts((prev) => ({ ...prev, ...nextDrafts }));
+
+        if (!matchedCount) {
+            showToast({ type: 'warning', message: 'Không có dòng nào đúng định dạng hoặc khớp SKU trong bảng hiện tại.' });
+            return;
+        }
+
+        if (Object.keys(nextPriceDrafts).length > 0) {
+            setPriceDrafts((prev) => ({ ...prev, ...nextPriceDrafts }));
+        }
+        if (Object.keys(nextCodeDrafts).length > 0) {
+            setCodeDrafts((prev) => ({ ...prev, ...nextCodeDrafts }));
+        }
         setSelectedPriceIds((prev) => ({ ...prev, ...nextSelected }));
+        showToast({
+            type: 'success',
+            message: skippedCount > 0
+                ? `Đã nhận dữ liệu ${formatNumber(matchedCount)} dòng, bỏ qua ${formatNumber(skippedCount)} dòng không hợp lệ hoặc không khớp SKU.`
+                : `Đã nhận dữ liệu ${formatNumber(matchedCount)} dòng.`,
+        });
     };
+    const currentPasteModeConfig = supplierPasteModeConfigs[pasteMode] || supplierPasteModeConfigs.sku_price;
 
     const saveSupplierPriceRow = async (row, overrides = {}) => {
         const hasUnitCostOverride = Object.prototype.hasOwnProperty.call(overrides, 'unit_cost');
@@ -3760,7 +4212,7 @@ const InventoryMovement = () => {
         const defaultStatus = getDefaultImportStatus();
         setActiveTab('imports');
         setImportTableSettingsOpen(false);
-        setImportPrintModalOpen(false);
+        closeImportPrintModal();
         setImportCompleteToggleSnapshot(null);
         setImportModal({
             open: true,
@@ -3781,13 +4233,50 @@ const InventoryMovement = () => {
         try {
             const response = await inventoryApi.getImport(row.id);
             setImportTableSettingsOpen(false);
-            setImportPrintModalOpen(false);
+            closeImportPrintModal();
             setImportCompleteToggleSnapshot(null);
             setImportModal({ open: true, form: synchronizeImportFormCompletion(createImportForm(response.data)) });
         } catch (error) {
             fail(error, 'Không thể tải phiếu nhập để sửa.');
         } finally {
             setFlag('importModal', false);
+        }
+    };
+
+    const closeImportDetailModal = () => {
+        setImportDetailTableSettingsOpen(false);
+        setImportDetailModal({ open: false, loading: false, form: createImportForm(), row: null });
+    };
+
+    const openImportDetail = async (row) => {
+        setImportDetailTableSettingsOpen(false);
+        setImportDetailModal({
+            open: true,
+            loading: true,
+            form: createImportForm({
+                id: row.id,
+                import_number: row.import_number,
+                supplier_id: row.supplier_id,
+                supplier_name: row.supplier?.name || row.supplier_name || '',
+                import_date: row.import_date,
+                inventory_import_status_id: row.inventory_import_status_id,
+                notes: row.notes || '',
+                items: [],
+            }),
+            row,
+        });
+
+        try {
+            const response = await inventoryApi.getImport(row.id);
+            setImportDetailModal({
+                open: true,
+                loading: false,
+                form: synchronizeImportFormCompletion(createImportForm(response.data)),
+                row: response.data,
+            });
+        } catch (error) {
+            closeImportDetailModal();
+            fail(error, 'Không thể tải chi tiết phiếu nhập.');
         }
     };
 
@@ -4246,7 +4735,33 @@ const InventoryMovement = () => {
         return typeof row[columnId] === 'number' ? formatNumber(row[columnId]) : (row[columnId] || '-');
     };
 
+    const selectedImportInvoiceAttachment = useMemo(() => {
+        if (!importInvoiceModal.attachments.length) return null;
+        return importInvoiceModal.attachments.find(
+            (attachment) => Number(attachment.id) === Number(importInvoiceModal.selectedAttachmentId)
+        ) || importInvoiceModal.attachments[0];
+    }, [importInvoiceModal.attachments, importInvoiceModal.selectedAttachmentId]);
+
     const renderImportCell = (row, columnId) => {
+        if (columnId === 'select') {
+            return (
+                <div className="flex items-center justify-center">
+                    <IndeterminateCheckbox
+                        checked={Boolean(selectedImportIds[String(row.id)])}
+                        onChange={(event) => setSelectedImportIds((prev) => {
+                            const next = { ...prev };
+                            if (event.target.checked) {
+                                next[String(row.id)] = true;
+                            } else {
+                                delete next[String(row.id)];
+                            }
+                            return next;
+                        })}
+                        title="Chọn phiếu nhập để in"
+                    />
+                </div>
+            );
+        }
         if (columnId === 'code') return <CellText primary={row.import_number} mono />;
         if (columnId === 'supplier') return <CellText primary={row.supplier?.name || row.supplier_name || '-'} />;
         if (columnId === 'date') return formatDateTime(row.import_date);
@@ -4261,10 +4776,49 @@ const InventoryMovement = () => {
                 </div>
             );
         }
+        if (columnId === 'invoice') {
+            const attachmentsCount = Number(row.attachments_count || 0);
+            const hasInvoice = attachmentsCount > 0;
+            return (
+                <div className="flex items-center justify-center">
+                    <button
+                        type="button"
+                        onClick={() => openImportInvoiceModal(row)}
+                        className={`relative inline-flex h-9 w-9 items-center justify-center rounded-sm border transition ${
+                            hasInvoice
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-100'
+                                : 'border-primary/15 bg-white text-primary/65 hover:border-primary hover:bg-primary/[0.05] hover:text-primary'
+                        }`}
+                        title={hasInvoice ? `Xem ${formatNumber(attachmentsCount)} hóa đơn đính kèm` : 'Thêm hóa đơn'}
+                    >
+                        <span className="material-symbols-outlined text-[18px]">{hasInvoice ? 'receipt_long' : 'attach_file'}</span>
+                        {hasInvoice ? (
+                            <span className="absolute -right-1 -top-1 inline-flex min-w-[18px] items-center justify-center rounded-full bg-emerald-600 px-1.5 py-0.5 text-[10px] font-black text-white">
+                                {attachmentsCount > 99 ? '99+' : attachmentsCount}
+                            </span>
+                        ) : null}
+                    </button>
+                </div>
+            );
+        }
         if (columnId === 'line_count') return formatNumber(row.items_count || 0);
         if (columnId === 'qty') return formatNumber(row.total_quantity || 0);
         if (columnId === 'amount') return formatCurrency(row.total_amount || 0);
         if (columnId === 'note') return <CellText primary={row.notes || '-'} />;
+        if (columnId === 'detail') {
+            return (
+                <div className="flex items-center justify-center">
+                    <button
+                        type="button"
+                        onClick={() => openImportDetail(row)}
+                        className={iconButton(false)}
+                        title="Xem toàn bộ sản phẩm"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">visibility</span>
+                    </button>
+                </div>
+            );
+        }
         if (columnId === 'actions') return <div className="flex items-center justify-center gap-2"><button type="button" onClick={() => openEditImport(row)} className={ghostButton}>Sửa</button><button type="button" onClick={() => deleteImport(row)} className={dangerButton}>Xóa</button></div>;
         return '-';
     };
@@ -4323,7 +4877,7 @@ const InventoryMovement = () => {
         const filters = simpleFilters[tabKey];
         const isImportTab = tabKey === 'imports';
         const shouldLiftQuickSearch = isDocumentTab(tabKey);
-        const columns = isImportTab ? importColumns : tabKey === 'exports' ? exportColumns : tabKey === 'lots' ? lotColumns : tabKey === 'trash' ? trashColumns : documentColumns;
+        const columns = isImportTab ? importListColumns : tabKey === 'exports' ? exportColumns : tabKey === 'lots' ? lotColumns : tabKey === 'trash' ? trashColumns : documentColumns;
         const renderCell = isImportTab ? renderImportCell : tabKey === 'exports' ? renderExportCell : tabKey === 'lots' ? renderLotCell : tabKey === 'trash' ? renderTrashCell : (row, columnId) => renderDocumentCell(row, columnId, tabKey);
         const sortMap = ['returns', 'damaged', 'adjustments'].includes(tabKey) ? inventorySortColumnMaps.documents : inventorySortColumnMaps[tabKey];
         const quickSearchControl = (
@@ -4365,6 +4919,11 @@ const InventoryMovement = () => {
                             <option value="manual">Nhập tay</option>
                             <option value="invoice_ai">AI đọc hóa đơn</option>
                         </select>
+                        <select value={filters.has_invoice} onChange={(event) => setSimpleFilters((prev) => ({ ...prev, imports: { ...prev.imports, has_invoice: event.target.value } }))} className={`w-[180px] ${selectClass}`}>
+                            <option value="">Tất cả hóa đơn</option>
+                            <option value="with_invoice">Đã có hóa đơn</option>
+                            <option value="without_invoice">Chưa có hóa đơn</option>
+                        </select>
                     </>
                 ) : null}
             </FilterPanel>
@@ -4378,6 +4937,15 @@ const InventoryMovement = () => {
                         leadingActions={shouldLiftQuickSearch ? quickSearchControl : null}
                         toggles={[
                             { id: `${tabKey}_filters`, icon: 'filter_alt', label: 'Bộ lọc', active: openPanels[tabKey].filters, onClick: () => togglePanel(tabKey, 'filters') },
+                            ...(isImportTab ? [{
+                                id: `${tabKey}_print`,
+                                icon: 'print',
+                                label: `In ${formatNumber(importSelectionState.count)} phiếu đã chọn`,
+                                disabledTitle: 'Hãy chọn ít nhất một phiếu nhập để in',
+                                active: importSelectionState.count > 0,
+                                disabled: importPrintLoading || importSelectionState.count === 0,
+                                onClick: openSelectedImportsPrintModal,
+                            }] : []),
                             { id: `${tabKey}_stats`, icon: 'monitoring', label: 'Thống kê', active: openPanels[tabKey].stats, onClick: () => togglePanel(tabKey, 'stats') },
                             { id: `${tabKey}_columns`, icon: 'view_column', label: 'Cài đặt cột', active: openPanels[tabKey].columns, onClick: () => togglePanel(tabKey, 'columns') },
                         ]}
@@ -4385,13 +4953,13 @@ const InventoryMovement = () => {
                     />
                     {filterPanel}
                     {openPanels[tabKey].stats ? <SummaryPanel items={simpleSummaryMap[tabKey] || []} /> : null}
-                    <InventoryTable storageKey={`inventory_${tabKey}_table_${inventoryTableStorageVersion}`} columns={columns} rows={tabRows[tabKey]} renderCell={renderCell} loading={tabLoading[tabKey]} pagination={tabPagination[tabKey]} onPageChange={tabFetch[tabKey]} footer={`Kết quả: ${formatNumber(tabPagination[tabKey].total)}`} settingsOpen={openPanels[tabKey].columns} onCloseSettings={() => togglePanel(tabKey, 'columns')} currentPerPage={pageSizes[tabKey]} onPerPageChange={(value) => {
+                    <InventoryTable storageKey={isImportTab ? `inventory_imports_table_${inventoryTableStorageVersion}_selection_v1` : `inventory_${tabKey}_table_${inventoryTableStorageVersion}`} columns={columns} rows={tabRows[tabKey]} renderCell={renderCell} loading={tabLoading[tabKey]} pagination={tabPagination[tabKey]} onPageChange={tabFetch[tabKey]} footer={isImportTab ? `Kết quả: ${formatNumber(tabPagination[tabKey].total)} • Đã chọn: ${formatNumber(importSelectionState.count)} phiếu` : `Kết quả: ${formatNumber(tabPagination[tabKey].total)}`} settingsOpen={openPanels[tabKey].columns} onCloseSettings={() => togglePanel(tabKey, 'columns')} currentPerPage={pageSizes[tabKey]} onPerPageChange={(value) => {
                         const nextSize = updatePageSize(tabKey, value);
                         if (tabKey === 'returns') return fetchDocuments('return', 1, nextSize);
                         if (tabKey === 'damaged') return fetchDocuments('damaged', 1, nextSize);
                         if (tabKey === 'adjustments') return fetchDocuments('adjustment', 1, nextSize);
                         return tabFetch[tabKey](1, nextSize);
-                    }} sortConfig={sortConfigs[tabKey]} onSort={(columnId) => handleTableSort(tabKey, columnId)} sortColumnMap={sortMap} />
+                    }} sortConfig={sortConfigs[tabKey]} onSort={(columnId) => handleTableSort(tabKey, columnId)} sortColumnMap={sortMap} onRowDoubleClick={isImportTab ? openImportDetail : undefined} />
                 </div>
             </div>
         );
@@ -4521,7 +5089,31 @@ const InventoryMovement = () => {
                 </FilterPanel>
             ) : null}
             {openPanels.supplierPrices.stats ? <SummaryPanel items={supplierPriceSummaryCards} /> : null}
-            {showPasteBox ? <div className="border-b border-primary/10 px-3 py-2.5"><div className="mb-2 text-[12px] text-primary/55">Dán theo mẫu: `SKU TAB Giá` hoặc `SKU,Giá`</div><div className="flex gap-3"><textarea value={pasteText} onChange={(event) => setPasteText(event.target.value)} className="min-h-[88px] flex-1 rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary" placeholder={'SKU-01\t120000\nSKU-02\t150000'} /><button type="button" onClick={applyPaste} className={primaryButton}>Nhận giá</button></div></div> : null}
+            {showPasteBox ? (
+                <div className="border-b border-primary/10 px-3 py-2.5">
+                    <div className="mb-2 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="text-[12px] text-primary/55">{currentPasteModeConfig.hint}</div>
+                        <select
+                            value={pasteMode}
+                            onChange={(event) => setPasteMode(event.target.value)}
+                            className={`w-full lg:w-[220px] ${selectClass}`}
+                        >
+                            {Object.entries(supplierPasteModeConfigs).map(([value, config]) => (
+                                <option key={value} value={value}>{config.label}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="flex gap-3">
+                        <textarea
+                            value={pasteText}
+                            onChange={(event) => setPasteText(event.target.value)}
+                            className="min-h-[88px] flex-1 rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary"
+                            placeholder={currentPasteModeConfig.placeholder}
+                        />
+                        <button type="button" onClick={applyPaste} className={primaryButton}>{currentPasteModeConfig.actionLabel}</button>
+                    </div>
+                </div>
+            ) : null}
             <InventoryTable
                 storageKey={`inventory_supplier_prices_table_${inventoryTableStorageVersion}`}
                 columns={supplierPriceColumns}
@@ -4550,6 +5142,113 @@ const InventoryMovement = () => {
         </div>
     );
 
+    useEffect(() => {
+        const visibleImportIds = new Set(imports.map((row) => String(row.id)));
+        setSelectedImportIds((prev) => {
+            const nextEntries = Object.entries(prev).filter(([id, checked]) => checked && visibleImportIds.has(String(id)));
+            if (nextEntries.length === Object.keys(prev).length) {
+                return prev;
+            }
+            return Object.fromEntries(nextEntries);
+        });
+    }, [imports]);
+
+    const selectedImportRows = useMemo(
+        () => imports.filter((row) => Boolean(selectedImportIds[String(row.id)])),
+        [imports, selectedImportIds]
+    );
+    const importSelectionState = useMemo(() => {
+        const totalRows = imports.length;
+        const selectedCount = selectedImportRows.length;
+        return {
+            checked: totalRows > 0 && selectedCount === totalRows,
+            indeterminate: selectedCount > 0 && selectedCount < totalRows,
+            count: selectedCount,
+        };
+    }, [imports, selectedImportRows.length]);
+    const importListColumns = useMemo(() => ([
+        {
+            id: 'select',
+            label: 'Chọn',
+            minWidth: 72,
+            align: 'center',
+            draggable: false,
+            sortable: false,
+            headerRender: () => (
+                <div className="flex items-center justify-center">
+                    <IndeterminateCheckbox
+                        checked={importSelectionState.checked}
+                        indeterminate={importSelectionState.indeterminate}
+                        onChange={(event) => {
+                            const checked = event.target.checked;
+                            setSelectedImportIds(() => {
+                                if (!checked) return {};
+                                return Object.fromEntries(imports.map((row) => [String(row.id), true]));
+                            });
+                        }}
+                        disabled={!imports.length}
+                        title="Chọn tất cả phiếu trên trang hiện tại"
+                    />
+                </div>
+            ),
+        },
+        ...importColumns,
+    ]), [importSelectionState.checked, importSelectionState.indeterminate, imports]);
+    const buildImportPrintDocument = (form) => {
+        const printableItems = (form?.items || [])
+            .filter((item) => Number(item.product_id || 0) > 0)
+            .map((item) => ({
+                ...item,
+                quantity: Number(item.quantity || 0),
+                received_quantity: Number(item.received_quantity ?? 0),
+                unit_cost: Number(item.unit_cost || 0),
+            }));
+        const subtotal = printableItems.reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.unit_cost || 0)), 0);
+        const surchargeState = parseImportSurchargeFields({
+            amountInput: form?.extra_charge_amount_input,
+            percentInput: form?.extra_charge_percent_input,
+        }, subtotal);
+        const supplierName = form?.supplier_name
+            || suppliers.find((supplier) => String(supplier.id) === String(form?.supplier_id))?.name
+            || 'Tất cả sản phẩm';
+
+        return {
+            importNumber: form?.import_number || '',
+            importDate: form?.import_date || '',
+            supplierName,
+            items: printableItems,
+            subtotal,
+            surcharge: surchargeState.amount,
+            total: subtotal + surchargeState.amount,
+            notes: form?.notes || '',
+        };
+    };
+    const currentImportPrintDocument = useMemo(
+        () => buildImportPrintDocument(importModal.form),
+        [importModal.form, suppliers]
+    );
+    const importPrintDocuments = useMemo(
+        () => (
+            importPrintSource.mode === 'modal'
+                ? [currentImportPrintDocument]
+                : importPrintSource.forms.map((form) => buildImportPrintDocument(form))
+        ),
+        [importPrintSource, currentImportPrintDocument, suppliers]
+    );
+    const importPrintSummary = useMemo(() => ({
+        documentCount: importPrintDocuments.length,
+        lineCount: importPrintDocuments.reduce((sum, document) => sum + Number(document.items.length || 0), 0),
+        total: importPrintDocuments.reduce((sum, document) => sum + Number(document.total || 0), 0),
+    }), [importPrintDocuments]);
+    const importDetailDocument = useMemo(
+        () => buildImportPrintDocument(importDetailModal.form),
+        [importDetailModal.form, suppliers]
+    );
+    const importDetailStatus = useMemo(
+        () => getImportStatusById(importDetailModal.form.inventory_import_status_id) || importDetailModal.row?.statusConfig || null,
+        [importDetailModal.form.inventory_import_status_id, importDetailModal.row, importStatuses]
+    );
+
     const importSubtotal = useMemo(
         () => importModal.form.items.reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.unit_cost || 0)), 0),
         [importModal.form.items]
@@ -4569,21 +5268,6 @@ const InventoryMovement = () => {
         () => importSubtotal + importSurchargeAmount,
         [importSubtotal, importSurchargeAmount]
     );
-    const importPrintSupplierName = useMemo(
-        () => suppliers.find((supplier) => String(supplier.id) === String(importModal.form.supplier_id))?.name || 'Tất cả sản phẩm',
-        [suppliers, importModal.form.supplier_id]
-    );
-    const importPrintableItems = useMemo(
-        () => importModal.form.items
-            .filter((item) => Number(item.product_id || 0) > 0)
-            .map((item) => ({
-                ...item,
-                quantity: Number(item.quantity || 0),
-                received_quantity: Number(item.received_quantity ?? 0),
-                unit_cost: Number(item.unit_cost || 0),
-            })),
-        [importModal.form.items]
-    );
     const importPrintSelectedColumns = useMemo(
         () => orderImportPrintColumnIds(importPrintColumnIds)
             .map((columnId) => importPrintColumnMap.get(columnId))
@@ -4592,24 +5276,14 @@ const InventoryMovement = () => {
     );
     const importPrintPreviewHtml = useMemo(
         () => buildImportPrintHtml({
-            supplierName: importPrintSupplierName,
             printedAt: importPrintPreviewPrintedAt,
             columns: importPrintSelectedColumns,
-            items: importPrintableItems,
-            subtotal: importSubtotal,
-            surcharge: importSurchargeAmount,
-            total: importLineTotal,
-            notes: importModal.form.notes || '',
+            documents: importPrintDocuments,
         }),
         [
-            importPrintSupplierName,
             importPrintPreviewPrintedAt,
             importPrintSelectedColumns,
-            importPrintableItems,
-            importSubtotal,
-            importSurchargeAmount,
-            importLineTotal,
-            importModal.form.notes,
+            importPrintDocuments,
         ]
     );
     const importCompletion = useMemo(() => {
@@ -4844,6 +5518,187 @@ const InventoryMovement = () => {
             ) : null}
             {isDocumentTab(activeTab) ? documentWorkspace : null}
             {['lots', 'trash'].includes(activeTab) ? renderSimpleTab(activeTab) : null}
+            <ModalShell
+                open={importInvoiceModal.open}
+                title={`Hóa đơn phiếu nhập${importInvoiceModal.importInfo?.import_number ? ` • ${importInvoiceModal.importInfo.import_number}` : ''}`}
+                onClose={closeImportInvoiceModal}
+                maxWidth="max-w-[1180px]"
+                footer={(
+                    <div className="flex justify-end gap-2">
+                        <button type="button" onClick={closeImportInvoiceModal} className={ghostButton}>Đóng</button>
+                    </div>
+                )}
+            >
+                <div className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-primary/10 bg-[#f8fafc] px-4 py-3">
+                        <div>
+                            <div className="text-[15px] font-black text-primary">
+                                {importInvoiceModal.importInfo?.supplier_name || 'Chưa có nhà cung cấp'}
+                            </div>
+                            <div className="mt-1 text-[12px] text-primary/55">
+                                Ngày nhập: {formatPrintDate(importInvoiceModal.importInfo?.import_date)}
+                                {' • '}
+                                {formatNumber(importInvoiceModal.importInfo?.attachments_count || importInvoiceModal.attachments.length)} hóa đơn
+                            </div>
+                        </div>
+                        <label className={`${primaryButton} ${loading.importInvoiceUpload ? 'pointer-events-none opacity-60' : ''}`}>
+                            <input
+                                type="file"
+                                multiple
+                                accept=".pdf,image/*"
+                                className="hidden"
+                                disabled={loading.importInvoiceUpload}
+                                onChange={(event) => {
+                                    addImportInvoiceFiles(event.target.files);
+                                    event.target.value = '';
+                                }}
+                            />
+                            <span className="material-symbols-outlined text-[18px]">upload_file</span>
+                            {loading.importInvoiceUpload ? 'Đang tải lên' : 'Thêm hóa đơn'}
+                        </label>
+                    </div>
+
+                    {loading.importInvoiceModal ? (
+                        <div className="flex h-[320px] items-center justify-center rounded-sm border border-primary/10 bg-[#fbfcfe] text-[13px] font-semibold text-primary/60">
+                            Đang tải danh sách hóa đơn...
+                        </div>
+                    ) : (
+                        <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+                            <div className="space-y-3">
+                                <div className="rounded-sm border border-primary/10 bg-white p-4">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <div className="text-[13px] font-black text-primary">Danh sách hóa đơn</div>
+                                            <div className="text-[12px] text-primary/55">Chọn một tệp để xem trước ảnh hoặc PDF.</div>
+                                        </div>
+                                        <div className="text-[12px] font-semibold text-primary/60">
+                                            {formatNumber(importInvoiceModal.attachments.length)} tệp
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {!importInvoiceModal.attachments.length ? (
+                                    <div className="rounded-sm border border-dashed border-primary/20 bg-[#fbfcfe] px-4 py-8 text-center">
+                                        <div className="text-[13px] font-black text-primary">Phiếu này chưa có hóa đơn</div>
+                                        <div className="mt-1 text-[12px] text-primary/55">Bấm "Thêm hóa đơn" để tải ảnh hoặc PDF lên.</div>
+                                    </div>
+                                ) : (
+                                    <div className="max-h-[62vh] space-y-3 overflow-auto pr-1">
+                                        {importInvoiceModal.attachments.map((attachment) => {
+                                            const isSelected = Number(selectedImportInvoiceAttachment?.id) === Number(attachment.id);
+                                            const isReplacing = Number(importInvoiceReplacingId) === Number(attachment.id);
+                                            const isDeleting = Number(importInvoiceDeletingId) === Number(attachment.id);
+
+                                            return (
+                                                <div
+                                                    key={attachment.id || attachment.file_path}
+                                                    className={`rounded-sm border p-3 transition ${
+                                                        isSelected
+                                                            ? 'border-primary bg-primary/[0.04]'
+                                                            : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.02]'
+                                                    }`}
+                                                >
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setImportInvoiceModal((prev) => ({ ...prev, selectedAttachmentId: attachment.id }))}
+                                                        className="flex w-full items-start gap-3 text-left"
+                                                    >
+                                                        <span className={`material-symbols-outlined mt-0.5 text-[20px] ${isPdfAttachment(attachment) ? 'text-rose-600' : 'text-sky-600'}`}>
+                                                            {isPdfAttachment(attachment) ? 'picture_as_pdf' : (isImageAttachment(attachment) ? 'image' : 'description')}
+                                                        </span>
+                                                        <div className="min-w-0 flex-1">
+                                                            <div className="truncate text-[13px] font-black text-primary">{getImportAttachmentName(attachment)}</div>
+                                                            <div className="mt-1 text-[11px] text-primary/55">
+                                                                {getImportAttachmentTypeLabel(attachment)} • {formatFileSize(attachment.file_size)}
+                                                            </div>
+                                                            <div className="mt-1 text-[11px] text-primary/45">
+                                                                {attachment.created_at ? formatDateTime(attachment.created_at) : 'Chưa có thời gian tải lên'}
+                                                            </div>
+                                                        </div>
+                                                    </button>
+
+                                                    <div className="mt-3 flex gap-2">
+                                                        <label className={`${ghostButton} flex-1 ${isReplacing ? 'pointer-events-none opacity-60' : ''}`}>
+                                                            <input
+                                                                type="file"
+                                                                accept=".pdf,image/*"
+                                                                className="hidden"
+                                                                disabled={isReplacing}
+                                                                onChange={(event) => {
+                                                                    replaceImportInvoiceAttachment(attachment, event.target.files?.[0]);
+                                                                    event.target.value = '';
+                                                                }}
+                                                            />
+                                                            <span className="material-symbols-outlined text-[18px]">sync</span>
+                                                            {isReplacing ? 'Đang thay' : 'Thay file'}
+                                                        </label>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => deleteImportInvoiceAttachment(attachment)}
+                                                            disabled={isDeleting}
+                                                            className={dangerButton}
+                                                        >
+                                                            <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                            {isDeleting ? 'Đang xóa' : 'Xóa'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="space-y-3">
+                                <div className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-primary/10 bg-[#f8fafc] px-4 py-3">
+                                    <div>
+                                        <div className="text-[13px] font-black text-primary">Xem trước hóa đơn</div>
+                                        <div className="text-[12px] text-primary/55">
+                                            {selectedImportInvoiceAttachment ? getImportAttachmentName(selectedImportInvoiceAttachment) : 'Chưa chọn tệp nào'}
+                                        </div>
+                                    </div>
+                                    {selectedImportInvoiceAttachment?.url ? (
+                                        <a href={selectedImportInvoiceAttachment.url} target="_blank" rel="noreferrer" className={ghostButton}>
+                                            <span className="material-symbols-outlined text-[18px]">open_in_new</span>
+                                            Mở tab mới
+                                        </a>
+                                    ) : null}
+                                </div>
+
+                                {!selectedImportInvoiceAttachment ? (
+                                    <div className="flex h-[62vh] items-center justify-center rounded-sm border border-dashed border-primary/20 bg-white text-[13px] text-primary/55">
+                                        Hãy chọn một hóa đơn để xem trước.
+                                    </div>
+                                ) : !selectedImportInvoiceAttachment.url ? (
+                                    <div className="flex h-[62vh] items-center justify-center rounded-sm border border-dashed border-primary/20 bg-white px-6 text-center text-[13px] text-primary/55">
+                                        Tệp này chưa có đường dẫn xem trước. Hãy thay lại hóa đơn hoặc mở sau khi tải lên thành công.
+                                    </div>
+                                ) : isImageAttachment(selectedImportInvoiceAttachment) ? (
+                                    <div className="flex h-[62vh] items-center justify-center overflow-hidden rounded-sm border border-primary/10 bg-white">
+                                        <img
+                                            src={selectedImportInvoiceAttachment.url}
+                                            alt={getImportAttachmentName(selectedImportInvoiceAttachment)}
+                                            className="h-full w-full object-contain"
+                                        />
+                                    </div>
+                                ) : isPdfAttachment(selectedImportInvoiceAttachment) ? (
+                                    <iframe
+                                        title={getImportAttachmentName(selectedImportInvoiceAttachment)}
+                                        src={selectedImportInvoiceAttachment.url}
+                                        className="h-[62vh] w-full rounded-sm border border-primary/10 bg-white"
+                                    />
+                                ) : (
+                                    <div className="flex h-[62vh] flex-col items-center justify-center rounded-sm border border-dashed border-primary/20 bg-white px-6 text-center">
+                                        <span className="material-symbols-outlined text-[34px] text-primary/40">description</span>
+                                        <div className="mt-3 text-[13px] font-black text-primary">Định dạng này chưa hỗ trợ xem trực tiếp</div>
+                                        <div className="mt-1 text-[12px] text-primary/55">Bạn có thể mở tệp ở tab mới để xem đầy đủ.</div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </ModalShell>
             <ModalShell open={supplierModal.open} title={supplierModal.form.id ? 'Sửa nhà cung cấp' : 'Thêm nhà cung cấp'} onClose={() => setSupplierModal({ open: false, form: createSupplierForm() })} maxWidth="max-w-3xl" footer={<div className="flex justify-end gap-2"><button type="button" onClick={() => setSupplierModal({ open: false, form: createSupplierForm() })} className={ghostButton}>Hủy</button><button type="button" onClick={saveSupplier} className={primaryButton} disabled={loading.supplierModal}>{loading.supplierModal ? 'Đang lưu' : 'Lưu nhà cung cấp'}</button></div>}><div className="grid gap-3 md:grid-cols-2"><input value={supplierModal.form.code} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, code: event.target.value } }))} placeholder="Mã nhà cung cấp" className={inputClass} /><input value={supplierModal.form.name} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, name: event.target.value } }))} placeholder="Tên nhà cung cấp" className={inputClass} /><input value={supplierModal.form.phone} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, phone: event.target.value } }))} placeholder="Số điện thoại" className={inputClass} /><input value={supplierModal.form.email} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, email: event.target.value } }))} placeholder="Email" className={inputClass} /><input value={supplierModal.form.address} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, address: event.target.value } }))} placeholder="Địa chỉ" className={`md:col-span-2 ${inputClass}`} /><textarea value={supplierModal.form.notes} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú" className="min-h-[120px] rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary md:col-span-2" /><label className="inline-flex items-center gap-2 text-[13px] font-semibold text-primary"><input type="checkbox" checked={supplierModal.form.status} onChange={(event) => setSupplierModal((prev) => ({ ...prev, form: { ...prev.form, status: event.target.checked } }))} className="size-4 accent-primary" />Đang sử dụng</label></div></ModalShell>
             <ModalShell
                 open={importModal.open}
@@ -4914,7 +5769,7 @@ const InventoryMovement = () => {
                         <div className="min-w-0">
                             <div className={importFieldLabelHiddenClass}>Đính kèm</div>
                             <label className={importActionButtonClass}>
-                                <input type="file" multiple className="hidden" onChange={(event) => addImportAttachmentFiles(event.target.files)} />
+                                <input type="file" multiple accept=".pdf,image/*" className="hidden" onChange={(event) => addImportAttachmentFiles(event.target.files)} />
                                 <span className="material-symbols-outlined text-[18px]">attach_file</span>
                                 Đính kèm hóa đơn / chứng từ{(importModal.form.attachments || []).length + (importModal.form.local_attachment_files || []).length > 0 ? ` (${(importModal.form.attachments || []).length + (importModal.form.local_attachment_files || []).length})` : ''}
                             </label>
@@ -5086,24 +5941,97 @@ const InventoryMovement = () => {
                 />
             </ModalShell>
             <ModalShell
-                open={importModal.open && importPrintModalOpen}
-                title="In phiếu nhập"
-                onClose={() => setImportPrintModalOpen(false)}
+                open={importDetailModal.open}
+                title={importDetailModal.form.import_number ? `Chi tiết ${importDetailModal.form.import_number}` : 'Chi tiết phiếu nhập'}
+                onClose={closeImportDetailModal}
+                maxWidth="max-w-[96vw]"
+            >
+                {importDetailModal.loading ? (
+                    <div className="py-14 text-center text-[13px] font-semibold text-primary/60">Đang tải chi tiết phiếu nhập...</div>
+                ) : (
+                    <div className="space-y-4">
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                            <div className="rounded-sm border border-primary/10 bg-[#f8fafc] px-4 py-3">
+                                <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/40">Mã phiếu</div>
+                                <div className="mt-1 text-[15px] font-black text-primary">{importDetailModal.form.import_number || 'Phiếu nhập'}</div>
+                            </div>
+                            <div className="rounded-sm border border-primary/10 bg-[#f8fafc] px-4 py-3">
+                                <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/40">Nhà cung cấp</div>
+                                <div className="mt-1 text-[14px] font-semibold text-primary">{importDetailDocument.supplierName}</div>
+                            </div>
+                            <div className="rounded-sm border border-primary/10 bg-[#f8fafc] px-4 py-3">
+                                <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/40">Ngày nhập</div>
+                                <div className="mt-1 text-[14px] font-semibold text-primary">{formatPrintDate(importDetailModal.form.import_date)}</div>
+                            </div>
+                            <div className="rounded-sm border border-primary/10 bg-[#f8fafc] px-4 py-3">
+                                <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/40">Trạng thái</div>
+                                <div className="mt-1">
+                                    {importDetailStatus ? (
+                                        <StatusPill label={importDetailStatus.name} color={importDetailStatus.color || '#94A3B8'} />
+                                    ) : (
+                                        <span className="text-[13px] font-semibold text-primary/60">Chưa có trạng thái</span>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="grid gap-3 md:grid-cols-3">
+                            <div className="rounded-sm border border-primary/10 bg-white px-4 py-3">
+                                <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/40">Số dòng</div>
+                                <div className="mt-1 text-[15px] font-black text-primary">{formatNumber(importDetailDocument.items.length)}</div>
+                            </div>
+                            <div className="rounded-sm border border-primary/10 bg-white px-4 py-3">
+                                <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/40">Tổng tiền hàng</div>
+                                <div className="mt-1 text-[15px] font-black text-primary">{formatCurrency(importDetailDocument.subtotal)}</div>
+                            </div>
+                            <div className="rounded-sm border border-primary/10 bg-white px-4 py-3">
+                                <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/40">Tổng tiền đơn</div>
+                                <div className="mt-1 text-[15px] font-black text-primary">{formatCurrency(importDetailDocument.total)}</div>
+                            </div>
+                        </div>
+
+                        <ImportItemsEditorTable
+                            items={importDetailModal.form.items}
+                            inventoryUnits={inventoryUnits}
+                            settingsOpen={importDetailTableSettingsOpen}
+                            onToggleSettings={() => setImportDetailTableSettingsOpen((prev) => !prev)}
+                            onCloseSettings={() => setImportDetailTableSettingsOpen(false)}
+                            expanded
+                            onOpenPrint={() => openImportPrintModalWithForms([importDetailModal.form], 'detail')}
+                            readOnly
+                            hideActions
+                            storageKey="inventory_import_detail_table_v1"
+                            headerMessage="Xem toàn bộ danh sách sản phẩm trong phiếu nhập."
+                        />
+
+                        {importDetailModal.form.notes ? (
+                            <div className="rounded-sm border border-primary/10 bg-white p-4">
+                                <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/40">Ghi chú phiếu nhập</div>
+                                <div className="mt-2 text-[13px] leading-6 text-primary/75">{importDetailModal.form.notes}</div>
+                            </div>
+                        ) : null}
+                    </div>
+                )}
+            </ModalShell>
+            <ModalShell
+                open={importPrintModalOpen}
+                title={importPrintSource.mode === 'selected' && (importPrintSummary.documentCount || importSelectionState.count) > 1 ? `In ${formatNumber(importPrintSummary.documentCount || importSelectionState.count)} phiếu nhập` : 'In phiếu nhập'}
+                onClose={closeImportPrintModal}
                 maxWidth="max-w-[1180px]"
                 footer={(
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                         <div className="text-[12px] font-semibold text-primary/65">
-                            {formatNumber(importPrintableItems.length)} dòng sản phẩm • {formatNumber(importPrintSelectedColumns.length)} cột in
+                            {formatNumber(importPrintSummary.documentCount)} phiếu • {formatNumber(importPrintSummary.lineCount)} dòng sản phẩm • {formatNumber(importPrintSelectedColumns.length)} cột in
                         </div>
                         <div className="flex flex-wrap gap-2">
-                            <button type="button" onClick={() => setImportPrintModalOpen(false)} className={ghostButton}>Đóng</button>
-                            <button type="button" onClick={() => saveImportPrintTemplate('update')} className={ghostButton} disabled={importPrintSettingsSaving}>
+                            <button type="button" onClick={closeImportPrintModal} className={ghostButton}>Đóng</button>
+                            <button type="button" onClick={() => saveImportPrintTemplate('update')} className={ghostButton} disabled={importPrintSettingsSaving || importPrintLoading}>
                                 {importPrintSettingsSaving ? 'Đang lưu' : 'Lưu mẫu hiện tại'}
                             </button>
-                            <button type="button" onClick={() => saveImportPrintTemplate('new')} className={ghostButton} disabled={importPrintSettingsSaving}>
+                            <button type="button" onClick={() => saveImportPrintTemplate('new')} className={ghostButton} disabled={importPrintSettingsSaving || importPrintLoading}>
                                 Lưu thành mẫu mới
                             </button>
-                            <button type="button" onClick={printImportSheet} className={primaryButton}>
+                            <button type="button" onClick={printImportSheet} className={primaryButton} disabled={importPrintLoading || !importPrintDocuments.length}>
                                 <span className="material-symbols-outlined text-[18px]">print</span>
                                 In theo mẫu đang chọn
                             </button>
@@ -5145,10 +6073,37 @@ const InventoryMovement = () => {
                                 </button>
 
                                 <div className="rounded-sm border border-primary/10 bg-[#f8fafc] px-3 py-2.5 text-[12px] text-primary/70">
-                                    <div>Nhà cung cấp: <span className="font-bold text-primary">{importPrintSupplierName}</span></div>
+                                    <div>Nguồn in: <span className="font-bold text-primary">{importPrintSource.mode === 'selected' ? (importPrintSummary.documentCount > 1 ? `${formatNumber(importPrintSummary.documentCount)} phiếu đã chọn` : 'Phiếu nhập đã chọn') : importPrintSource.mode === 'detail' ? 'Popup chi tiết phiếu nhập' : 'Popup tạo / sửa phiếu nhập'}</span></div>
+                                    <div className="mt-1">Nhà cung cấp: <span className="font-bold text-primary">{importPrintSummary.documentCount === 1 ? (importPrintDocuments[0]?.supplierName || '-') : 'Nhiều nhà cung cấp'}</span></div>
                                     <div className="mt-1">Ngày giờ preview: <span className="font-bold text-primary">{formatDateTime(importPrintPreviewPrintedAt)}</span></div>
+                                    <div className="mt-1">Số phiếu / tổng tiền: <span className="font-bold text-primary">{formatNumber(importPrintSummary.documentCount)} / {formatCurrency(importPrintSummary.total)}</span></div>
+                                    {importPrintLoading ? <div className="mt-1 text-primary/55">Đang chuẩn bị dữ liệu in...</div> : null}
                                     {importPrintSettingsLoading ? <div className="mt-1 text-primary/55">Đang tải mẫu in đã lưu...</div> : null}
                                 </div>
+                            </div>
+                        </div>
+
+                        <div className="rounded-sm border border-primary/10 bg-white p-4">
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <div className="text-[13px] font-black text-primary">Phiếu đang in</div>
+                                    <div className="text-[12px] text-primary/55">Mỗi phiếu sẽ in trên trang A4 riêng với đúng nhà cung cấp và dữ liệu sản phẩm.</div>
+                                </div>
+                                <div className="text-right text-[12px] font-semibold text-primary/60">
+                                    {formatNumber(importPrintSummary.documentCount)} phiếu
+                                </div>
+                            </div>
+
+                            <div className="mt-3 max-h-56 space-y-2 overflow-auto">
+                                {!importPrintDocuments.length ? (
+                                    <div className="rounded-sm border border-dashed border-primary/15 px-3 py-3 text-[12px] text-primary/55">Chưa có phiếu nhập để xem trước.</div>
+                                ) : importPrintDocuments.map((document, index) => (
+                                    <div key={`${document.importNumber || 'print'}_${index}`} className="rounded-sm border border-primary/10 bg-[#f8fafc] px-3 py-2.5 text-[12px] text-primary/70">
+                                        <div className="font-black text-primary">{document.importNumber || `Phiếu ${index + 1}`}</div>
+                                        <div className="mt-1 truncate">{document.supplierName}</div>
+                                        <div className="mt-1">{formatNumber(document.items.length)} dòng • {formatCurrency(document.total)}</div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
 
@@ -5186,16 +6141,22 @@ const InventoryMovement = () => {
                                 <div className="text-[12px] text-primary/55">Tối ưu cho khổ giấy A4, tự chuyển ngang khi số cột quá nhiều.</div>
                             </div>
                             <div className="text-right text-[12px] text-primary/60">
-                                <div>{formatNumber(importPrintableItems.length)} dòng sản phẩm</div>
-                                <div>{formatCurrency(importLineTotal)} tổng tiền đơn</div>
+                                <div>{formatNumber(importPrintSummary.documentCount)} phiếu • {formatNumber(importPrintSummary.lineCount)} dòng</div>
+                                <div>{formatCurrency(importPrintSummary.total)} tổng tiền in</div>
                             </div>
                         </div>
 
-                        <iframe
-                            title="Xem trước in phiếu nhập"
-                            srcDoc={importPrintPreviewHtml}
-                            className="h-[62vh] w-full rounded-sm border border-primary/10 bg-white"
-                        />
+                        {importPrintLoading ? (
+                            <div className="flex h-[62vh] items-center justify-center rounded-sm border border-primary/10 bg-white text-[13px] font-semibold text-primary/60">
+                                Đang chuẩn bị bản xem trước...
+                            </div>
+                        ) : (
+                            <iframe
+                                title="Xem trước in phiếu nhập"
+                                srcDoc={importPrintPreviewHtml}
+                                className="h-[62vh] w-full rounded-sm border border-primary/10 bg-white"
+                            />
+                        )}
                     </div>
                 </div>
             </ModalShell>

@@ -189,6 +189,10 @@ export const inventoryApi = {
     analyzeImportInvoice: (data) => api.post('/inventory/import-invoices/analyze', data, multipartConfig(data)),
     getImportInvoiceAnalysis: (id) => api.get(`/inventory/import-invoices/${id}`),
     getImports: (params) => api.get('/inventory/imports', { params }),
+    getImportAttachments: (id) => api.get(`/inventory/imports/${id}/attachments`),
+    addImportAttachments: (id, data) => api.post(`/inventory/imports/${id}/attachments`, data, multipartConfig(data)),
+    replaceImportAttachment: (id, attachmentId, data) => api.post(`/inventory/imports/${id}/attachments/${attachmentId}`, data, multipartConfig(data)),
+    deleteImportAttachment: (id, attachmentId) => api.delete(`/inventory/imports/${id}/attachments/${attachmentId}`),
     createImport: (data) => api.post('/inventory/imports', data, multipartConfig(data)),
     updateImport: (id, data) => {
         if (data instanceof FormData) {

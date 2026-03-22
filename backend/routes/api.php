@@ -216,6 +216,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/inventory/imports', [InventoryController::class, 'imports']);
     Route::post('/inventory/imports', [InventoryController::class, 'storeImport']);
     Route::post('/inventory/imports/bulk-delete', [InventoryController::class, 'bulkDestroyImports']);
+    Route::get('/inventory/imports/{id}/attachments', [InventoryController::class, 'importAttachments'])->whereNumber('id');
+    Route::post('/inventory/imports/{id}/attachments', [InventoryController::class, 'storeImportAttachments'])->whereNumber('id');
+    Route::post('/inventory/imports/{id}/attachments/{attachmentId}', [InventoryController::class, 'replaceImportAttachment'])->whereNumber('id')->whereNumber('attachmentId');
+    Route::delete('/inventory/imports/{id}/attachments/{attachmentId}', [InventoryController::class, 'destroyImportAttachment'])->whereNumber('id')->whereNumber('attachmentId');
     Route::put('/inventory/imports/{id}', [InventoryController::class, 'updateImport'])->whereNumber('id');
     Route::delete('/inventory/imports/{id}', [InventoryController::class, 'destroyImport'])->whereNumber('id');
     Route::get('/inventory/imports/{id}', [InventoryController::class, 'showImport'])->whereNumber('id');

@@ -3,105 +3,243 @@ import Image from 'next/image';
 import { getWebProducts, getWebCategories, getWebCategory } from '@/lib/api';
 import config from '@/lib/config';
 import styles from './products.module.css';
-
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
-
-export const metadata = {
-  title: "Sản Phẩm Gốm Sứ Bát Tràng | GỐM ĐẠI THÀNH",
-  description: "Khám phá bộ sưu tập gốm sứ nghệ thuật độc bản, từ gốm men lam truyền thống đến những tác phẩm hiện đại.",
-};
-
+import styles2 from './layout2.module.css';
 import InfiniteProductList from '@/components/InfiniteProductList';
 import InfiniteProductListLayout2 from '@/components/InfiniteProductListLayout2';
 import CategoryDropdown from '@/components/CategoryDropdown';
 import SortSelect from '@/components/SortSelect';
 import AttributeFiltersDropdown from '@/components/AttributeFiltersDropdown';
-import styles2 from './layout2.module.css';
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+export const metadata = {
+  title: 'Sản Phẩm Gốm Sứ Bát Tràng | GỐM ĐẠI THÀNH',
+  description: 'Khám phá bộ sưu tập gốm sứ nghệ thuật độc bản, từ gốm men lam truyền thống đến những tác phẩm hiện đại.',
+};
+
+const PRODUCTS_PER_PAGE = 40;
+const PAGE_GAP = 'gap';
+
+function parsePageParam(value) {
+  const rawValue = Array.isArray(value) ? value[0] : value;
+  const parsed = Number.parseInt(String(rawValue ?? ''), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function appendParam(params, key, value) {
+  if (value === undefined || value === null || value === '') {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item) => appendParam(params, key, item));
+    return;
+  }
+
+  params.append(key, String(value));
+}
+
+function buildProductsHref(currentParams, overrides = {}) {
+  const params = new URLSearchParams();
+
+  Object.entries(currentParams || {}).forEach(([key, value]) => {
+    appendParam(params, key, value);
+  });
+
+  Object.entries(overrides).forEach(([key, value]) => {
+    params.delete(key);
+    appendParam(params, key, value);
+  });
+
+  const query = params.toString();
+  return query ? `/products?${query}` : '/products';
+}
+
+function getVisiblePages(currentPage, lastPage) {
+  if (lastPage <= 7) {
+    return Array.from({ length: lastPage }, (_, index) => index + 1);
+  }
+
+  if (currentPage <= 4) {
+    return [1, 2, 3, 4, 5, PAGE_GAP, lastPage];
+  }
+
+  if (currentPage >= lastPage - 3) {
+    return [1, PAGE_GAP, lastPage - 4, lastPage - 3, lastPage - 2, lastPage - 1, lastPage];
+  }
+
+  return [1, PAGE_GAP, currentPage - 1, currentPage, currentPage + 1, PAGE_GAP, lastPage];
+}
+
+function renderPagination({ stylesModule, currentPage, lastPage, total, itemCount, currentParams }) {
+  if (!lastPage || lastPage <= 1) {
+    return null;
+  }
+
+  const startItem = total > 0 ? ((currentPage - 1) * PRODUCTS_PER_PAGE) + 1 : 0;
+  const endItem = total > 0 ? startItem + itemCount - 1 : 0;
+  const visiblePages = getVisiblePages(currentPage, lastPage);
+
+  return (
+    <div className={stylesModule.paginationWrap}>
+      <p className={stylesModule.paginationMeta}>
+        Hiển thị {startItem}-{endItem} trên {total} sản phẩm
+      </p>
+
+      <nav className={stylesModule.paginationNav} aria-label="Phân trang sản phẩm">
+        {currentPage > 1 ? (
+          <Link
+            href={buildProductsHref(currentParams, { page: currentPage - 1 })}
+            className={`${stylesModule.paginationLink} ${stylesModule.paginationLinkWide}`}
+          >
+            Trước
+          </Link>
+        ) : (
+          <span
+            className={`${stylesModule.paginationLink} ${stylesModule.paginationLinkWide} ${stylesModule.paginationLinkDisabled}`}
+            aria-disabled="true"
+          >
+            Trước
+          </span>
+        )}
+
+        {visiblePages.map((pageItem, index) => {
+          if (pageItem === PAGE_GAP) {
+            return (
+              <span key={`gap-${index}`} className={stylesModule.paginationEllipsis}>
+                ...
+              </span>
+            );
+          }
+
+          const isActive = currentPage === pageItem;
+
+          return (
+            <Link
+              key={pageItem}
+              href={buildProductsHref(currentParams, { page: pageItem })}
+              className={`${stylesModule.paginationLink} ${isActive ? stylesModule.paginationLinkActive : ''}`}
+              aria-current={isActive ? 'page' : undefined}
+            >
+              {pageItem}
+            </Link>
+          );
+        })}
+
+        {currentPage < lastPage ? (
+          <Link
+            href={buildProductsHref(currentParams, { page: currentPage + 1 })}
+            className={`${stylesModule.paginationLink} ${stylesModule.paginationLinkWide}`}
+          >
+            Sau
+          </Link>
+        ) : (
+          <span
+            className={`${stylesModule.paginationLink} ${stylesModule.paginationLinkWide} ${stylesModule.paginationLinkDisabled}`}
+            aria-disabled="true"
+          >
+            Sau
+          </span>
+        )}
+      </nav>
+    </div>
+  );
+}
 
 export default async function ProductsPage({ searchParams }) {
   const resolvedSearchParams = await searchParams;
   const currentCategorySlug = resolvedSearchParams?.category || '';
   const currentSort = resolvedSearchParams?.sort || 'popular';
   const searchQuery = resolvedSearchParams?.search || '';
+  const currentPage = parsePageParam(resolvedSearchParams?.page);
 
-  // Extract attributes from searchParams (e.g., attrs[color]=Red)
   const currentAttrs = {};
-  Object.keys(resolvedSearchParams || {}).forEach(key => {
+  Object.keys(resolvedSearchParams || {}).forEach((key) => {
     if (key.startsWith('attrs[')) {
-      const attrKey = key.match(/\[(.*?)\]/)[1];
-      currentAttrs[attrKey] = resolvedSearchParams[key];
+      const attrKey = key.match(/\[(.*?)\]/)?.[1];
+      if (attrKey) {
+        currentAttrs[attrKey] = resolvedSearchParams[key];
+      }
     }
   });
 
-  // Fetch initial data
-  let productsData = { data: [], current_page: 1, next_page_url: null, available_filters: [] };
+  let productsData = {
+    data: [],
+    current_page: currentPage,
+    last_page: 1,
+    total: 0,
+    available_filters: [],
+  };
   let categories = [];
   let categoryInfo = null;
 
   try {
-    const promises = [
+    const requests = [
       getWebProducts({
         category: currentCategorySlug,
         sort: currentSort,
         search: searchQuery,
         attrs: currentAttrs,
-        per_page: 24
+        page: currentPage,
+        per_page: PRODUCTS_PER_PAGE,
       }),
-      getWebCategories()
+      getWebCategories(),
     ];
 
     if (currentCategorySlug) {
-      promises.push(getWebCategory(currentCategorySlug));
+      requests.push(getWebCategory(currentCategorySlug));
     }
 
-    const results = await Promise.all(promises);
+    const results = await Promise.all(requests);
     productsData = results[0];
     categories = results[1];
+
     if (currentCategorySlug) {
       categoryInfo = results[2];
     }
   } catch (error) {
-    console.error("Failed to fetch products/categories:", error);
+    console.error('Failed to fetch products/categories:', error);
   }
 
-  // Default values if categoryInfo is missing fields
-  // Use the new high-quality generated banner as default
-  let bannerUrl = "/banner-store.png";
+  let bannerUrl = '/banner-store.png';
 
   if (categoryInfo?.banner_path) {
-    const path = categoryInfo.banner_path.startsWith('/') ? categoryInfo.banner_path.substring(1) : categoryInfo.banner_path;
+    const path = categoryInfo.banner_path.startsWith('/')
+      ? categoryInfo.banner_path.substring(1)
+      : categoryInfo.banner_path;
     bannerUrl = `${config.storageUrl}/${path}`;
   }
 
   const categoryTitle = searchQuery
     ? `Kết quả tìm kiếm: "${searchQuery}"`
-    : (categoryInfo?.name || "Cửa hàng gốm sứ");
+    : (categoryInfo?.name || 'Cửa hàng gốm sứ');
 
   const categoryDesc = searchQuery
     ? `Tìm thấy ${productsData.total || 0} sản phẩm phù hợp với từ khóa của bạn.`
     : (categoryInfo?.description || `Khám phá bộ sưu tập ${productsData.total || 0} sản phẩm gốm sứ tinh xảo, chất lượng cao từ làng nghề Bát Tràng.`);
 
-  // Determine relevant category for the "Explore Collection" button
   let collectionUrl = '/products';
   if (currentCategorySlug) {
     collectionUrl = `/products?category=${currentCategorySlug}`;
-  } else if (productsData.data && productsData.data.length > 0) {
-    const catCounts = {};
-    productsData.data.forEach(p => {
-      if (p.category?.slug) {
-        catCounts[p.category.slug] = (catCounts[p.category.slug] || 0) + 1;
+  } else if (productsData.data?.length > 0) {
+    const categoryCounts = {};
+
+    productsData.data.forEach((product) => {
+      if (product.category?.slug) {
+        categoryCounts[product.category.slug] = (categoryCounts[product.category.slug] || 0) + 1;
       }
     });
 
     let maxCount = 0;
     let bestSlug = '';
-    for (const slug in catCounts) {
-      if (catCounts[slug] > maxCount) {
-        maxCount = catCounts[slug];
+
+    Object.entries(categoryCounts).forEach(([slug, count]) => {
+      if (count > maxCount) {
+        maxCount = count;
         bestSlug = slug;
       }
-    }
+    });
 
     if (bestSlug) {
       collectionUrl = `/products?category=${bestSlug}`;
@@ -113,7 +251,6 @@ export default async function ProductsPage({ searchParams }) {
   if (activeLayout === 'layout_2') {
     return (
       <div className={styles2.container}>
-        {/* Breadcrumbs */}
         <nav className={styles2.breadcrumbs}>
           <Link href="/" className={styles2.breadcrumbLink}>Trang chủ</Link>
           <span className="material-symbols-outlined" style={{ fontSize: '14px', opacity: 0.4 }}>chevron_right</span>
@@ -126,34 +263,18 @@ export default async function ProductsPage({ searchParams }) {
           )}
         </nav>
 
-        {/* Page Header */}
         <header className={styles2.header}>
           <h1 className={styles2.title}>{categoryTitle}</h1>
           <p className={styles2.subtitle}>{categoryDesc}</p>
         </header>
 
-
-
-        {/* Sub-category Filter (Horizontal) */}
         {categoryInfo?.children?.length > 0 && (
-          <div className={styles2.subCategoryFilter} style={{ marginBottom: '1rem', display: 'flex', gap: '0.75rem', overflowX: 'auto', paddingBottom: '0.5rem' }}>
-            {categoryInfo.children.map(child => (
-              <Link 
+          <div className={styles2.subCategoryFilter}>
+            {categoryInfo.children.map((child) => (
+              <Link
                 key={child.id}
                 href={`/products?category=${child.slug}`}
-                style={{
-                  padding: '0.5rem 1.25rem',
-                  backgroundColor: 'white',
-                  border: '1px solid rgba(27, 54, 93, 0.1)',
-                  borderRadius: '9999px',
-                  fontSize: '0.8125rem',
-                  fontWeight: '600',
-                  color: '#1B365D',
-                  textDecoration: 'none',
-                  whiteSpace: 'nowrap',
-                  transition: 'all 0.2s'
-                }}
-                className="hover-gold"
+                className={`${styles2.subCategoryChip} ${currentCategorySlug === child.slug ? styles2.subCategoryChipActive : ''}`}
               >
                 {child.name} ({child.products_count || 0})
               </Link>
@@ -161,24 +282,24 @@ export default async function ProductsPage({ searchParams }) {
           </div>
         )}
 
-        {/* Attribute Filters (Dropdowns) */}
         {productsData.available_filters?.length > 0 && (
-          <AttributeFiltersDropdown 
+          <AttributeFiltersDropdown
             filters={productsData.available_filters}
             currentAttrs={currentAttrs}
             currentSort={currentSort}
           />
         )}
 
+        <InfiniteProductListLayout2 initialData={productsData} />
 
-        {/* Products Grid */}
-        <InfiniteProductListLayout2
-          initialData={productsData}
-          category={currentCategorySlug}
-          sort={currentSort}
-          search={searchQuery}
-          initialAttrs={currentAttrs}
-        />
+        {renderPagination({
+          stylesModule: styles2,
+          currentPage: productsData.current_page || currentPage,
+          lastPage: productsData.last_page || 1,
+          total: productsData.total || 0,
+          itemCount: productsData.data?.length || 0,
+          currentParams: resolvedSearchParams,
+        })}
       </div>
     );
   }
@@ -186,7 +307,6 @@ export default async function ProductsPage({ searchParams }) {
   return (
     <div className={styles.productsPage}>
       <main className="container py-8">
-        {/* Breadcrumbs */}
         <nav className={styles.breadcrumbNav}>
           <Link href="/">Trang chủ</Link>
           <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>chevron_right</span>
@@ -205,7 +325,6 @@ export default async function ProductsPage({ searchParams }) {
           )}
         </nav>
 
-        {/* Category Banner */}
         <div className={styles.categoryBanner}>
           <div className={styles.bannerOverlay}></div>
           <Image
@@ -219,42 +338,37 @@ export default async function ProductsPage({ searchParams }) {
           <div className={styles.bannerContent}>
             <h2 className={styles.bannerTitle}>{categoryTitle}</h2>
             <p className={styles.bannerDesc}>{categoryDesc}</p>
-            <Link href={collectionUrl} className="btn-accent" style={{ alignSelf: 'flex-start', padding: '0.8rem 2rem' }}>
+            <Link href={collectionUrl} className={styles.bannerCta}>
               KHÁM PHÁ BỘ SƯU TẬP
             </Link>
           </div>
         </div>
 
-        {/* Filter Bar */}
         <div className={styles.filterBar}>
-          <span className={styles.filterLabel}>
+          <div className={styles.filterBarHeader}>
+            <span className={styles.filterLabel}>
             <span className="material-symbols-outlined" style={{ color: 'var(--accent)' }}>filter_list</span> Bộ lọc:
-          </span>
-          
-          <CategoryDropdown 
-            categories={categories} 
-            currentCategorySlug={currentCategorySlug} 
+            </span>
+          </div>
+
+          <div className={styles.filterBarControls}>
+
+          <CategoryDropdown
+            categories={categories}
+            currentCategorySlug={currentCategorySlug}
           />
 
-          <SortSelect currentSort={currentSort} />
+            <SortSelect currentSort={currentSort} />
+          </div>
         </div>
 
-        {/* Sub-category Filter for Layout 1 */}
         {categoryInfo?.children?.length > 0 && (
-          <div style={{ marginBottom: '1.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            {categoryInfo.children.map(child => (
-              <Link 
+          <div className={styles.subCategoryScroller}>
+            {categoryInfo.children.map((child) => (
+              <Link
                 key={child.id}
                 href={`/products?category=${child.slug}`}
-                style={{
-                  padding: '0.4rem 1rem',
-                  backgroundColor: 'white',
-                  border: '1px solid #ddd',
-                  borderRadius: '4px',
-                  fontSize: '0.8rem',
-                  color: '#333',
-                  textDecoration: 'none'
-                }}
+                className={`${styles.subCategoryChip} ${currentCategorySlug === child.slug ? styles.subCategoryChipActive : ''}`}
               >
                 {child.name}
               </Link>
@@ -263,43 +377,43 @@ export default async function ProductsPage({ searchParams }) {
         )}
 
         <div className={styles.contentLayout}>
-          {/* Sidebar */}
           <aside className={styles.sidebar}>
             <div className={styles.sidebarSection}>
               <h3 className={styles.sidebarTitle}>Danh mục</h3>
               <ul className={styles.sidebarList}>
                 {(() => {
-                  const renderTree = (parentId = null, level = 0) => {
-                    return categories
-                      .filter(cat => (parentId === null ? !cat.parent_id : cat.parent_id === parentId))
-                      .map(cat => (
-                        <li key={cat.id} style={{ marginLeft: level > 0 ? `${level * 12}px` : 0 }}>
+                  const renderTree = (parentId = null, level = 0) => (
+                    categories
+                      .filter((category) => (parentId === null ? !category.parent_id : category.parent_id === parentId))
+                      .map((category) => (
+                        <li key={category.id} style={{ marginLeft: level > 0 ? `${level * 12}px` : 0 }}>
                           <Link
-                            href={`/products?category=${cat.slug}`}
-                            className={`${styles.sidebarLink} ${currentCategorySlug === cat.slug ? styles.active : ''}`}
-                            style={{ 
+                            href={`/products?category=${category.slug}`}
+                            className={`${styles.sidebarLink} ${currentCategorySlug === category.slug ? styles.sidebarLinkActive : ''}`}
+                            style={{
                               fontSize: level === 0 ? '0.9rem' : '0.85rem',
                               fontWeight: level === 0 ? '700' : '500',
-                              opacity: level === 0 ? 1 : 0.8
+                              opacity: level === 0 ? 1 : 0.8,
                             }}
                           >
-                            <span>{level > 0 ? '— ' : ''}{cat.name}</span>
-                            <span className={styles.count}>({cat.products_count || 0})</span>
+                            <span>{level > 0 ? '— ' : ''}{category.name}</span>
+                            <span className={styles.count}>({category.products_count || 0})</span>
                           </Link>
-                          {categories.some(c => c.parent_id === cat.id) && (
+                          {categories.some((item) => item.parent_id === category.id) && (
                             <ul className={styles.sidebarList}>
-                              {renderTree(cat.id, level + 1)}
+                              {renderTree(category.id, level + 1)}
                             </ul>
                           )}
                         </li>
-                      ));
-                  };
+                      ))
+                  );
+
                   return renderTree();
                 })()}
               </ul>
             </div>
-            {/* Attribute Filters */}
-            {productsData.available_filters?.map(filter => {
+
+            {productsData.available_filters?.map((filter) => {
               if (filter.type === 'price_range') {
                 return (
                   <div key={filter.code} className={styles.sidebarSection}>
@@ -309,65 +423,63 @@ export default async function ProductsPage({ searchParams }) {
                         Khoảng giá: {new Intl.NumberFormat('vi-VN').format(filter.min)} - {new Intl.NumberFormat('vi-VN').format(filter.max)}
                       </div>
                       <form action="/products" method="GET" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                         {/* Preserve other filters */}
-                         {Object.entries(resolvedSearchParams || {}).map(([k, v]) => (
-                           k !== 'min_price' && k !== 'max_price' && <input key={k} type="hidden" name={k} value={v} />
-                         ))}
-                         <input 
-                           type="number" 
-                           name="min_price" 
-                           placeholder="Từ" 
-                           defaultValue={resolvedSearchParams?.min_price}
-                           style={{ width: '100%', padding: '0.4rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.8rem' }}
-                         />
-                         <input 
-                           type="number" 
-                           name="max_price" 
-                           placeholder="Đến" 
-                           defaultValue={resolvedSearchParams?.max_price}
-                           style={{ width: '100%', padding: '0.4rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.8rem' }}
-                         />
-                         <button type="submit" className="btn-accent" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem' }}>
-                           Lọc
-                         </button>
+                        {Object.entries(resolvedSearchParams || {}).map(([key, value]) => (
+                          key !== 'min_price' && key !== 'max_price' && key !== 'page' && (
+                            <input key={key} type="hidden" name={key} value={value} />
+                          )
+                        ))}
+                        <input
+                          type="number"
+                          name="min_price"
+                          placeholder="Từ"
+                          defaultValue={resolvedSearchParams?.min_price}
+                          style={{ width: '100%', padding: '0.4rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.8rem' }}
+                        />
+                        <input
+                          type="number"
+                          name="max_price"
+                          placeholder="Đến"
+                          defaultValue={resolvedSearchParams?.max_price}
+                          style={{ width: '100%', padding: '0.4rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.8rem' }}
+                        />
+                        <button type="submit" className="btn-accent" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem' }}>
+                          Lọc
+                        </button>
                       </form>
                     </div>
                   </div>
                 );
               }
-              
+
               return (
                 <div key={filter.code} className={styles.sidebarSection}>
                   <h3 className={styles.sidebarTitle}>{filter.name}</h3>
                   <div className={styles.checkboxList}>
-                    {filter.options?.map(opt => {
-                      const isActive = currentAttrs[filter.code] === opt.value || (Array.isArray(currentAttrs[filter.code]) && currentAttrs[filter.code].includes(opt.value));
-                      
-                      // Create new URL for this filter
-                      const newParams = new URLSearchParams(resolvedSearchParams || {});
-                      if (isActive) {
-                        newParams.delete(`attrs[${filter.code}]`);
-                        // If it was multiselect, we'd need to remove just this one, but for now let's assume single select for simple UI
-                      } else {
-                        newParams.set(`attrs[${filter.code}]`, opt.value);
-                      }
-                      
+                    {filter.options?.map((option) => {
+                      const isActive = currentAttrs[filter.code] === option.value
+                        || (Array.isArray(currentAttrs[filter.code]) && currentAttrs[filter.code].includes(option.value));
+
+                      const nextHref = buildProductsHref(resolvedSearchParams, {
+                        [`attrs[${filter.code}]`]: isActive ? null : option.value,
+                        page: null,
+                      });
+
                       return (
-                        <Link 
-                          key={opt.value}
-                          href={`/products?${newParams.toString()}`}
-                          className={`${styles.checkboxItem} ${isActive ? styles.active : ''}`}
-                          style={{ 
-                            textDecoration: 'none', 
+                        <Link
+                          key={option.value}
+                          href={nextHref}
+                          className={`${styles.checkboxItem} ${isActive ? styles.checkboxItemActive : ''}`}
+                          style={{
+                            textDecoration: 'none',
                             color: isActive ? 'var(--accent)' : 'inherit',
-                            fontWeight: isActive ? '700' : 'normal'
+                            fontWeight: isActive ? '700' : 'normal',
                           }}
                         >
                           <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
                             {isActive ? 'check_box' : 'check_box_outline_blank'}
                           </span>
-                          <span>{opt.label}</span>
-                          <span className={styles.count}>({opt.count})</span>
+                          <span>{option.label}</span>
+                          <span className={styles.count}>({option.count})</span>
                         </Link>
                       );
                     })}
@@ -375,18 +487,19 @@ export default async function ProductsPage({ searchParams }) {
                 </div>
               );
             })}
-
           </aside>
 
-          {/* Product Grid Container */}
-          <div style={{ flex: 1 }}>
-            <InfiniteProductList
-              initialData={productsData}
-              category={currentCategorySlug}
-              sort={currentSort}
-              search={searchQuery}
-              initialAttrs={currentAttrs}
-            />
+          <div className={styles.productGridPanel}>
+            <InfiniteProductList initialData={productsData} />
+
+            {renderPagination({
+              stylesModule: styles,
+              currentPage: productsData.current_page || currentPage,
+              lastPage: productsData.last_page || 1,
+              total: productsData.total || 0,
+              itemCount: productsData.data?.length || 0,
+              currentParams: resolvedSearchParams,
+            })}
           </div>
         </div>
       </main>

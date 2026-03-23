@@ -258,35 +258,63 @@ class StorefrontController extends Controller
      */
     public function relatedProducts(Request $request, $id)
     {
-        $product = Product::findOrFail($id);
         $accountId = $request->header('X-Account-Id');
+        $product = Product::query()
+            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+            ->with('categories:id')
+            ->findOrFail($id);
         
         $limit = 8;
         
-        // 1. Get explicitly linked related products first
         $explicitRelated = $product->relatedProducts()
+            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
-            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')])
+            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->orderBy('sort_order')])
             ->get();
-            
-        $relatedIds = $explicitRelated->pluck('id')->push($product->id)->toArray();
-        
-        // 2. If we need more, fill with random products from the same category
-        $fallback = collect([]);
-        if ($explicitRelated->count() < $limit) {
-            $fallback = Product::query()
-                ->when($accountId, fn($q) => $q->where('account_id', $accountId))
-                ->where('status', true)
-                ->whereDoesntHave('parentConfigurable')
-                ->whereNotIn('id', $relatedIds)
-                ->where('category_id', $product->category_id)
-                ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')])
-                ->inRandomOrder()
-                ->limit($limit - $explicitRelated->count())
-                ->get();
+
+        if ($explicitRelated->isNotEmpty()) {
+            $result = $explicitRelated->map(fn($p) => [
+                'id' => $p->id,
+                'name' => $p->name,
+                'slug' => $p->slug,
+                'price' => $p->price,
+                'current_price' => $p->current_price,
+                'main_image' => $p->main_image,
+                'average_rating' => round($p->average_rating, 1),
+                'primary_image' => $p->primary_image,
+            ])->values();
+
+            return response()->json($result);
         }
 
-        $result = $explicitRelated->concat($fallback)->shuffle()->map(fn($p) => [
+        $categoryIds = collect([$product->category_id])
+            ->merge($product->categories->pluck('id'))
+            ->filter()
+            ->map(fn ($categoryId) => (int) $categoryId)
+            ->unique()
+            ->values();
+
+        if ($categoryIds->isEmpty()) {
+            return response()->json([]);
+        }
+
+        $fallback = Product::query()
+            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+            ->where('status', true)
+            ->whereDoesntHave('parentConfigurable')
+            ->whereKeyNot($product->id)
+            ->where(function ($query) use ($categoryIds) {
+                $query->whereIn('category_id', $categoryIds)
+                    ->orWhereHas('categories', function ($categoryQuery) use ($categoryIds) {
+                        $categoryQuery->whereIn('categories.id', $categoryIds);
+                    });
+            })
+            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->orderBy('sort_order')])
+            ->inRandomOrder()
+            ->limit($limit)
+            ->get();
+
+        $result = $fallback->map(fn($p) => [
             'id' => $p->id,
             'name' => $p->name,
             'slug' => $p->slug,
@@ -295,7 +323,7 @@ class StorefrontController extends Controller
             'main_image' => $p->main_image,
             'average_rating' => round($p->average_rating, 1),
             'primary_image' => $p->primary_image,
-        ]);
+        ])->values();
 
         return response()->json($result);
     }

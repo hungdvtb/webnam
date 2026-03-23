@@ -637,7 +637,7 @@ const ProductList = () => {
         setLoading(true);
         try {
             const response = await productApi.duplicate(id);
-            const newProduct = response.data;
+            const newProduct = response.data?.data || response.data;
             navigate(`/admin/products/edit/${newProduct.id}?mode=duplicate`);
         } catch (error) {
             console.error("Duplicate error:", error);

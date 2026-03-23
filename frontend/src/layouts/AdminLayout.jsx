@@ -55,6 +55,7 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/orders')) return 'orders';
         if (path.startsWith('/admin/customers')) return 'customers';
         if (path.startsWith('/admin/inventory')) return 'inventory';
+        if (path.startsWith('/admin/reports')) return 'reports';
         if (path.startsWith('/admin/finance')) return 'reports';
         if (path.startsWith('/admin/warehouses')) return 'warehouses';
         if (path.startsWith('/admin/attributes')) return 'attributes';
@@ -278,10 +279,6 @@ const AdminLayout = () => {
                     )}
 
                     <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-stone uppercase tracking-[0.2em] opacity-50">Kho & Vận Chuyển</div>
-                        <Link to="/admin/warehouses" className="flex items-center gap-4 p-3 hover:bg-white/10 rounded-sm transition-colors group">
-                            <span className="material-symbols-outlined w-6 text-center text-stone group-hover:text-gold transition-colors">warehouse</span>
-                            <span className="font-sans text-sm font-medium tracking-wider">Danh mục kho</span>
-                        </Link>
                     {canAccess('inventory') && (
                         <Link to="/admin/inventory" className="flex items-center gap-4 p-3 hover:bg-white/10 rounded-sm transition-colors group">
                             <span className="material-symbols-outlined w-6 text-center text-stone group-hover:text-gold transition-colors">inventory</span>
@@ -292,13 +289,13 @@ const AdminLayout = () => {
 
 
                     <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-stone uppercase tracking-[0.2em] opacity-50">Báo cáo & Phân tích</div>
-                    <Link to="/admin/finance" className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/finance' ? 'bg-gold/10 text-gold' : 'hover:bg-white/10 text-white'}`}>
-                        <span className={`material-symbols-outlined w-6 text-center ${location.pathname === '/admin/finance' ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>account_balance_wallet</span>
-                        <span className="font-sans text-sm font-medium tracking-wider">Theo dõi tài chính</span>
+                    <Link to="/admin/reports" className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname.startsWith('/admin/reports') ? 'bg-gold/10 text-gold' : 'hover:bg-white/10 text-white'}`}>
+                        <span className={`material-symbols-outlined w-6 text-center ${location.pathname.startsWith('/admin/reports') ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>table_chart</span>
+                        <span className="font-sans text-sm font-medium tracking-wider">BÃ¡o cÃ¡o doanh sá»‘</span>
                     </Link>
-                    <Link to="/admin/reports" className="flex items-center gap-4 p-3 hover:bg-white/10 rounded-sm transition-colors group">
-                        <span className="material-symbols-outlined w-6 text-center text-stone group-hover:text-gold transition-colors">analytics</span>
-                        <span className="font-sans text-sm font-medium tracking-wider">Báo cáo tổng hợp</span>
+                    <Link to="/admin/finance" className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname.startsWith('/admin/finance') ? 'bg-gold/10 text-gold' : 'hover:bg-white/10 text-white'}`}>
+                        <span className={`material-symbols-outlined w-6 text-center ${location.pathname.startsWith('/admin/finance') ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>account_balance_wallet</span>
+                        <span className="font-sans text-sm font-medium tracking-wider">Chi phí cố định</span>
                     </Link>
                 </nav>
 

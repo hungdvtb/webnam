@@ -55,6 +55,20 @@ class FixedExpenseVersioningTest extends TestCase
             ->assertJsonPath('daily_amount', 200.0)
             ->assertJsonPath('total_monthly_amount', 6000.0);
 
+        $this->getJson('/api/finance/fixed-expenses?date=2026-03-10', $headers)
+            ->assertOk()
+            ->assertJsonPath('current_version.effective_date', '2026-03-01')
+            ->assertJsonPath('rows.0.content', 'Thuê mặt bằng')
+            ->assertJsonPath('rows.0.monthly_amount', 3000.0)
+            ->assertJsonPath('summary.total_monthly_amount', 3000.0);
+
+        $this->getJson('/api/finance/fixed-expenses?date=2026-03-20', $headers)
+            ->assertOk()
+            ->assertJsonPath('current_version.effective_date', '2026-03-15')
+            ->assertJsonPath('rows.0.content', 'Thuê mặt bằng')
+            ->assertJsonPath('rows.0.monthly_amount', 6000.0)
+            ->assertJsonPath('summary.total_monthly_amount', 6000.0);
+
         $reportResponse = $this->getJson('/api/finance/reports?date_from=2026-03-10&date_to=2026-03-16', $headers)
             ->assertOk();
 

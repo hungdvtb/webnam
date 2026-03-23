@@ -368,6 +368,7 @@ class ProductController extends Controller
         $accountId = $this->getAccountId($request);
         $product = Product::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+            ->with('categories:id')
             ->where(function ($q) use ($slug) {
                 $q->where('slug', $slug);
                 if (is_numeric($slug)) {
@@ -377,13 +378,58 @@ class ProductController extends Controller
             ->firstOrFail();
 
         $limit = 8;
-        
-        // Return ONLY explicitly linked related products to ensure WYSIWYG sync with Admin setup
+
         $explicitRelated = $product->relatedProducts()
+            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
-            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->limit(1)])
+            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->orderBy('sort_order')])
             ->get();
-            
-        return response()->json($explicitRelated);
+
+        if ($explicitRelated->isNotEmpty()) {
+            return response()->json($this->formatRelatedProductsResponse($explicitRelated));
+        }
+
+        $categoryIds = collect([$product->category_id])
+            ->merge($product->categories->pluck('id'))
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        if ($categoryIds->isEmpty()) {
+            return response()->json([]);
+        }
+
+        $fallback = Product::query()
+            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+            ->where('status', true)
+            ->whereDoesntHave('parentConfigurable')
+            ->whereKeyNot($product->id)
+            ->where(function ($query) use ($categoryIds) {
+                $query->whereIn('category_id', $categoryIds)
+                    ->orWhereHas('categories', function ($categoryQuery) use ($categoryIds) {
+                        $categoryQuery->whereIn('categories.id', $categoryIds);
+                    });
+            })
+            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->orderBy('sort_order')])
+            ->inRandomOrder()
+            ->limit($limit)
+            ->get();
+
+        return response()->json($this->formatRelatedProductsResponse($fallback));
+    }
+
+    private function formatRelatedProductsResponse($products)
+    {
+        return $products->map(fn ($product) => [
+            'id' => $product->id,
+            'name' => $product->name,
+            'slug' => $product->slug,
+            'price' => $product->price,
+            'current_price' => $product->current_price,
+            'main_image' => $product->main_image,
+            'average_rating' => round($product->average_rating, 1),
+            'primary_image' => $product->primary_image,
+        ])->values();
     }
 }

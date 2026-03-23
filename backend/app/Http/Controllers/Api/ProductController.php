@@ -7,16 +7,23 @@ use App\Models\InventoryUnit;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\BulkUpdateLog;
+use App\Services\ProductSkuService;
 use Illuminate\Http\Request;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 use Illuminate\Database\Eloquent\Builder;
 
 class ProductController extends Controller
 {
+    public function __construct(protected ProductSkuService $productSkuService)
+    {
+    }
+
     protected function supplierExistsRule(Request $request)
     {
         return Rule::exists('suppliers', 'id')->where(function ($query) {
@@ -92,6 +99,133 @@ class ProductController extends Controller
     protected function loadProductResource(Product $product): Product
     {
         return $this->appendSupplierMeta($product->load($this->productResourceRelations()));
+    }
+
+    protected function prepareProductSku(array &$validated, ?Product $product = null): void
+    {
+        $normalizedSku = $this->productSkuService->normalize($validated['sku'] ?? $product?->sku);
+
+        if ($normalizedSku === null) {
+            $normalizedSku = $this->productSkuService->ensureUniqueSku(
+                null,
+                $validated['name'] ?? $product?->name,
+                $product?->id
+            );
+        } elseif ($this->productSkuService->skuExists($normalizedSku, $product?->id)) {
+            throw ValidationException::withMessages([
+                'sku' => ['Mã SKU này đã được sử dụng bởi một sản phẩm khác.'],
+            ]);
+        }
+
+        $validated['sku'] = $normalizedSku;
+    }
+
+    protected function prepareVariantPayloads(array $incomingVariants, string $parentSku, ?Product $product = null): array
+    {
+        $preparedVariants = [];
+        $messages = [];
+        $reservedSkus = array_values(array_filter([$parentSku]));
+        $ownedVariantIds = $product
+            ? array_flip($product->linkedProducts()
+                ->wherePivot('link_type', 'super_link')
+                ->pluck('products.id')
+                ->map(fn ($id) => (int) $id)
+                ->all())
+            : [];
+        $sharedVariantIds = ($product && !empty($ownedVariantIds))
+            ? DB::table('product_links')
+                ->where('link_type', 'super_link')
+                ->whereIn('linked_product_id', array_keys($ownedVariantIds))
+                ->where('product_id', '<>', $product->id)
+                ->pluck('linked_product_id')
+                ->map(fn ($id) => (int) $id)
+                ->flip()
+                ->all()
+            : [];
+
+        foreach ($incomingVariants as $index => $variantData) {
+            $variantId = isset($variantData['id']) && is_numeric($variantData['id'])
+                ? (int) $variantData['id']
+                : null;
+            $isExistingVariant = $variantId !== null;
+
+            if ($isExistingVariant && !isset($ownedVariantIds[$variantId])) {
+                $messages["variants.{$index}.id"][] = 'Biến thể này không thuộc sản phẩm hiện tại.';
+                continue;
+            }
+
+            if ($isExistingVariant && isset($sharedVariantIds[$variantId])) {
+                $messages["variants.{$index}.id"][] = 'Biến thể này đang được gán cho sản phẩm cha khác. Vui lòng tạo biến thể riêng cho sản phẩm hiện tại.';
+                continue;
+            }
+
+            $normalizedSku = $this->productSkuService->normalize($variantData['sku'] ?? null);
+
+            if ($isExistingVariant) {
+                if ($normalizedSku === null) {
+                    $messages["variants.{$index}.sku"][] = 'Mỗi biến thể phải có mã SKU riêng.';
+                } elseif ($normalizedSku === $parentSku) {
+                    $messages["variants.{$index}.sku"][] = 'Mã biến thể không được trùng với mã sản phẩm cha.';
+                } elseif (in_array($normalizedSku, $reservedSkus, true)) {
+                    $messages["variants.{$index}.sku"][] = 'Mã biến thể đang bị trùng trong danh sách hiện tại.';
+                } elseif ($this->productSkuService->skuExists($normalizedSku, $variantId)) {
+                    $messages["variants.{$index}.sku"][] = 'Mã biến thể này đã được sử dụng bởi một sản phẩm khác.';
+                }
+            } else {
+                if (
+                    $normalizedSku === null
+                    || $normalizedSku === $parentSku
+                    || in_array($normalizedSku, $reservedSkus, true)
+                    || $this->productSkuService->skuExists($normalizedSku)
+                ) {
+                    $normalizedSku = $this->productSkuService->generateVariantSku($parentSku, null, $reservedSkus);
+                }
+            }
+
+            if ($normalizedSku !== null) {
+                $reservedSkus[] = $normalizedSku;
+            }
+
+            $variantData['sku'] = $normalizedSku;
+            $preparedVariants[] = $variantData;
+        }
+
+        if (!empty($messages)) {
+            throw ValidationException::withMessages($messages);
+        }
+
+        return $preparedVariants;
+    }
+
+    protected function throwSkuConstraintValidation(QueryException $exception, ?string $message = null): never
+    {
+        $sqlState = (string) ($exception->errorInfo[0] ?? $exception->getCode());
+        $normalizedMessage = Str::lower($exception->getMessage());
+
+        if (in_array($sqlState, ['23000', '23505'], true)) {
+            if (Str::contains($normalizedMessage, [
+                'product_links_unique_super_link_variant',
+                'linked_product_id',
+                'super_link',
+            ])) {
+                throw ValidationException::withMessages([
+                    'variants' => ['Mỗi biến thể chỉ được thuộc về một sản phẩm cha. Dữ liệu hiện tại đang bị trùng, vui lòng tải lại và thử lại.'],
+                ]);
+            }
+
+            if (Str::contains($normalizedMessage, [
+                'products_sku_unique',
+                'products_sku_key',
+                'products.sku',
+                ' sku ',
+            ])) {
+                throw ValidationException::withMessages([
+                    'sku' => [$message ?? 'Mã SKU này đã được sử dụng bởi một sản phẩm khác.'],
+                ]);
+            }
+        }
+
+        throw $exception;
     }
 
     protected function normalizeSupplierIds(Request $request, array $validated = []): array
@@ -586,7 +720,7 @@ class ProductController extends Controller
             'stock_quantity' => 'integer|min:0',
             'weight' => 'nullable|string',
             'inventory_unit_id' => 'nullable|exists:inventory_units,id',
-            'sku' => 'nullable|string|unique:products,sku',
+            'sku' => 'nullable|string|max:120',
             'meta_title' => 'nullable|string',
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
@@ -599,10 +733,9 @@ class ProductController extends Controller
             'supplier_id' => ['nullable', $this->supplierExistsRule($request)],
             'supplier_ids' => 'nullable|array',
             'supplier_ids.*' => ['nullable', $this->supplierExistsRule($request)],
-            // linkages
             'linked_product_ids' => 'nullable|array',
             'link_type' => 'nullable|string',
-            'grouped_items' => 'nullable|array', // For product groups
+            'grouped_items' => 'nullable|array',
             'grouped_items.*.id' => 'required|exists:products,id',
             'grouped_items.*.quantity' => 'required|integer|min:1',
             'grouped_items.*.is_required' => 'required|boolean',
@@ -613,14 +746,20 @@ class ProductController extends Controller
             'grouped_items.*.cost_price' => 'nullable|numeric|min:0',
             'super_attribute_ids' => 'nullable|array',
             'super_attribute_ids.*' => 'exists:attributes,id',
-            // EAV custom values
             'custom_attributes' => 'nullable|array',
-            // images
             'main_image' => 'nullable|image',
             'images' => 'nullable|array',
             'images.*' => 'image',
             'variants' => 'nullable|array',
+            'variants.*.id' => 'nullable|integer',
+            'variants.*.sku' => 'nullable|string|max:120',
+            'variants.*.name' => 'nullable|string|max:255',
+            'variants.*.price' => 'nullable|numeric|min:0',
+            'variants.*.expected_cost' => 'nullable|numeric|min:0',
+            'variants.*.weight' => 'nullable|string',
             'variants.*.inventory_unit_id' => 'nullable|exists:inventory_units,id',
+            'variants.*.stock_quantity' => 'nullable|integer|min:0',
+            'variants.*.attributes' => 'nullable|array',
         ], [
             'type.required' => 'Vui lòng chọn loại sản phẩm.',
             'name.required' => 'Vui lòng nhập tên tác phẩm nghệ thuật.',
@@ -629,197 +768,200 @@ class ProductController extends Controller
             'slug.unique' => 'Đường dẫn (slug) này đã tồn tại, vui lòng chọn tên khác.',
         ]);
 
-        if (empty($validated['slug'])) {
-            $validated['slug'] = Str::slug($validated['name']);
-            // Ensure unique slug if auto-generated
-            $baseSlug = $validated['slug'];
-            $counter = 1;
-            while (Product::where('slug', $validated['slug'])->exists()) {
-                $validated['slug'] = $baseSlug . '-' . $counter++;
-            }
-        } else {
-            // Force lowercase and slug format if manually entered
-            $validated['slug'] = Str::slug($validated['slug']);
-        }
+        $validated['slug'] = $this->productSkuService->generateUniqueSlug(
+            !empty($validated['slug']) ? $validated['slug'] : $validated['name']
+        );
 
         $supplierIds = $this->normalizeSupplierIds($request, $validated);
         $validated['supplier_id'] = $supplierIds[0] ?? null;
         unset($validated['supplier_ids']);
 
-        $product = Product::create(array_merge($validated, ['account_id' => $request->header('X-Account-Id')]));
-        $this->syncProductSuppliers($product, $supplierIds);
+        try {
+            $product = DB::transaction(function () use ($request, $validated, $supplierIds) {
+                $this->prepareProductSku($validated);
+                $preparedVariants = $validated['type'] === 'configurable'
+                    ? $this->prepareVariantPayloads($request->input('variants', []), $validated['sku'])
+                    : [];
 
-        if ($request->has('category_ids')) {
-            $product->categories()->sync($request->category_ids);
-        }
-        elseif ($request->has('category_id') && !empty($request->category_id)) {
-            // Default to primary category if no multi-select provided
-            $product->categories()->sync([$request->category_id]);
-        }
+                $product = Product::create(array_merge($validated, ['account_id' => $request->header('X-Account-Id')]));
+                $this->syncProductSuppliers($product, $supplierIds);
 
-        if ($request->hasFile('main_image')) {
-            $disk = 's3';
-            $imageFile = $request->file('main_image');
-            $path = Storage::disk($disk)->put('products', $imageFile, 'public');
-            
-            // Construct Clean S3 URL
-            $baseUrl = rtrim(config('filesystems.disks.s3.url'), '/');
-            $url = $baseUrl . '/' . ltrim($path, '/');
-
-            ProductImage::create([
-                'product_id' => $product->id,
-                'image_url' => $url,
-                'file_name' => $imageFile->getClientOriginalName(),
-                'file_size' => $imageFile->getSize(),
-                'is_primary' => true
-            ]);
-        }
-
-        if ($request->hasFile('images')) {
-            $disk = 's3';
-            foreach ($request->file('images') as $idx => $image) {
-                $path = Storage::disk($disk)->put('products', $image, 'public');
-                
-                // Construct Clean S3 URL
-                $baseUrl = rtrim(config('filesystems.disks.s3.url'), '/');
-                $url = $baseUrl . '/' . ltrim($path, '/');
-
-                // If no main_image provided, set first in array as primary
-                $isPrimary = (!$request->hasFile('main_image')) && ($idx === 0);
-                ProductImage::create([
-                    'product_id' => $product->id,
-                    'image_url' => $url,
-                    'file_name' => $image->getClientOriginalName(),
-                    'file_size' => $image->getSize(),
-                    'is_primary' => $isPrimary,
-                    'sort_order' => $idx
-                ]);
-            }
-        }
-
-        if ($request->has('custom_attributes')) {
-            $validAttrIds = \App\Models\Attribute::whereIn('id', array_keys($request->custom_attributes))->pluck('id')->toArray();
-            foreach ($request->custom_attributes as $attrId => $val) {
-                if (!in_array($attrId, $validAttrIds)) continue;
-                $rawValue = is_array($val) ? json_encode($val) : $val;
-                \App\Models\ProductAttributeValue::create([
-                    'product_id' => $product->id,
-                    'attribute_id' => $attrId,
-                    'value' => $rawValue
-                ]);
-            }
-        }
-
-        if ($request->has('linked_product_ids')) {
-            $type = $request->get('link_type', 'related');
-            $links = [];
-            foreach ($request->linked_product_ids as $idx => $idOrObj) {
-                if (is_array($idOrObj)) {
-                    if (!empty($idOrObj['id'])) {
-                        $links[$idOrObj['id']] = ['link_type' => $type, 'position' => $idx, 'option_title' => $idOrObj['option_title'] ?? null];
-                    }
-                } else {
-                    if (!empty($idOrObj)) {
-                        $links[$idOrObj] = ['link_type' => $type, 'position' => $idx];
-                    }
+                if ($request->has('category_ids')) {
+                    $product->categories()->sync($request->category_ids);
+                } elseif ($request->has('category_id') && !empty($request->category_id)) {
+                    $product->categories()->sync([$request->category_id]);
                 }
-            }
-            if (!empty($links)) {
-                $product->linkedProducts()->syncWithoutDetaching($links);
-            }
-        }
 
-        if ($request->has('grouped_items') && in_array($product->type, ['grouped', 'bundle'])) {
-            $linkType = $product->type === 'bundle' ? 'bundle' : 'grouped';
-            
-            // We use detach + attach in a loop to support multiple variants of the same product
-            if ($product->type === 'bundle') {
-                $product->bundleItems()->detach();
-            } else {
-                $product->groupedItems()->detach();
-            }
+                if ($request->hasFile('main_image')) {
+                    $disk = 's3';
+                    $imageFile = $request->file('main_image');
+                    $path = Storage::disk($disk)->put('products', $imageFile, 'public');
+                    $baseUrl = rtrim(config('filesystems.disks.s3.url'), '/');
+                    $url = $baseUrl . '/' . ltrim($path, '/');
 
-            foreach ($request->grouped_items as $idx => $item) {
-                $pivotData = [
-                    'quantity' => $item['quantity'],
-                    'is_required' => $item['is_required'],
-                    'link_type' => $linkType,
-                    'position' => $idx,
-                    'option_title' => $item['option_title'] ?? null,
-                    'is_default' => $item['is_default'] ?? false,
-                    'variant_id' => $item['variant_id'] ?? null,
-                    'price' => $item['price'] ?? null,
-                    'cost_price' => $item['cost_price'] ?? null,
-                ];
-
-                if ($product->type === 'bundle') {
-                    $product->bundleItems()->attach($item['id'], $pivotData);
-                } else {
-                    $product->groupedItems()->attach($item['id'], $pivotData);
-                }
-            }
-        }
-
-        if ($request->has('super_attribute_ids') && $product->type === 'configurable') {
-            $attrs = [];
-            foreach ($request->super_attribute_ids as $idx => $id) {
-                $attrs[$id] = ['position' => $idx];
-            }
-            $product->superAttributes()->sync($attrs);
-        }
-
-        // Handle variants creation
-        if ($request->has('variants') && $product->type === 'configurable') {
-            foreach ($request->variants as $idx => $vData) {
-                $vProduct = Product::create([
-                    'account_id' => $product->account_id,
-                    'type' => 'simple',
-                    'name' => $vData['name'] ?? ($product->name . ' - ' . ($vData['sku'] ?? 'Variant')),
-                    'sku' => $vData['sku'],
-                    'price' => $vData['price'],
-                    'expected_cost' => $vData['expected_cost'] ?? null,
-                    'weight' => $vData['weight'] ?? null,
-                    'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
-                    'supplier_id' => $supplierIds[0] ?? $product->supplier_id,
-                    'stock_quantity' => $vData['stock_quantity'] ?? 0,
-                    'category_id' => $product->category_id,
-                    'status' => $product->status ?? true,
-                ]);
-                $this->syncProductSuppliers($vProduct, $supplierIds);
-
-                // Handle variant image
-                if ($request->hasFile("variants.{$idx}.image")) {
-                    $imageFile = $request->file("variants.{$idx}.image");
-                    $path = $imageFile->store('products', 'public');
-                    \App\Models\ProductImage::create([
-                        'product_id' => $vProduct->id,
-                        'image_url' => \Illuminate\Support\Facades\Storage::disk('public')->url($path),
-                        'is_primary' => true,
+                    ProductImage::create([
+                        'product_id' => $product->id,
+                        'image_url' => $url,
                         'file_name' => $imageFile->getClientOriginalName(),
                         'file_size' => $imageFile->getSize(),
+                        'is_primary' => true,
                     ]);
                 }
 
-                $product->linkedProducts()->attach($vProduct->id, [
-                    'link_type' => 'super_link',
-                ]);
+                if ($request->hasFile('images')) {
+                    $disk = 's3';
+                    foreach ($request->file('images') as $idx => $image) {
+                        $path = Storage::disk($disk)->put('products', $image, 'public');
+                        $baseUrl = rtrim(config('filesystems.disks.s3.url'), '/');
+                        $url = $baseUrl . '/' . ltrim($path, '/');
+                        $isPrimary = (!$request->hasFile('main_image')) && ($idx === 0);
 
-                // Save variant attribute values
-                if (isset($vData['attributes'])) {
-                    $vValidAttrIds = \App\Models\Attribute::whereIn('id', array_keys($vData['attributes']))->pluck('id')->toArray();
-                    foreach ($vData['attributes'] as $attrId => $val) {
-                        if (!in_array($attrId, $vValidAttrIds)) continue;
-                        \App\Models\ProductAttributeValue::create([
-                            'product_id' => $vProduct->id,
-                            'attribute_id' => $attrId,
-                            'value' => $val
+                        ProductImage::create([
+                            'product_id' => $product->id,
+                            'image_url' => $url,
+                            'file_name' => $image->getClientOriginalName(),
+                            'file_size' => $image->getSize(),
+                            'is_primary' => $isPrimary,
+                            'sort_order' => $idx,
                         ]);
                     }
                 }
-            }
-        }
 
-        $this->syncSuppliersToVariants($product, $supplierIds);
+                if ($request->has('custom_attributes')) {
+                    $validAttrIds = \App\Models\Attribute::whereIn('id', array_keys($request->custom_attributes))->pluck('id')->toArray();
+                    foreach ($request->custom_attributes as $attrId => $val) {
+                        if (!in_array($attrId, $validAttrIds)) {
+                            continue;
+                        }
+
+                        $rawValue = is_array($val) ? json_encode($val) : $val;
+                        \App\Models\ProductAttributeValue::create([
+                            'product_id' => $product->id,
+                            'attribute_id' => $attrId,
+                            'value' => $rawValue,
+                        ]);
+                    }
+                }
+
+                if ($request->has('linked_product_ids')) {
+                    $type = $request->get('link_type', 'related');
+                    $links = [];
+                    foreach ($request->linked_product_ids as $idx => $idOrObj) {
+                        if (is_array($idOrObj)) {
+                            if (!empty($idOrObj['id'])) {
+                                $links[$idOrObj['id']] = [
+                                    'link_type' => $type,
+                                    'position' => $idx,
+                                    'option_title' => $idOrObj['option_title'] ?? null,
+                                ];
+                            }
+                        } elseif (!empty($idOrObj)) {
+                            $links[$idOrObj] = ['link_type' => $type, 'position' => $idx];
+                        }
+                    }
+
+                    if (!empty($links)) {
+                        $product->linkedProducts()->syncWithoutDetaching($links);
+                    }
+                }
+
+                if ($request->has('grouped_items') && in_array($product->type, ['grouped', 'bundle'], true)) {
+                    $linkType = $product->type === 'bundle' ? 'bundle' : 'grouped';
+
+                    if ($product->type === 'bundle') {
+                        $product->bundleItems()->detach();
+                    } else {
+                        $product->groupedItems()->detach();
+                    }
+
+                    foreach ($request->grouped_items as $idx => $item) {
+                        $pivotData = [
+                            'quantity' => $item['quantity'],
+                            'is_required' => $item['is_required'],
+                            'link_type' => $linkType,
+                            'position' => $idx,
+                            'option_title' => $item['option_title'] ?? null,
+                            'is_default' => $item['is_default'] ?? false,
+                            'variant_id' => $item['variant_id'] ?? null,
+                            'price' => $item['price'] ?? null,
+                            'cost_price' => $item['cost_price'] ?? null,
+                        ];
+
+                        if ($product->type === 'bundle') {
+                            $product->bundleItems()->attach($item['id'], $pivotData);
+                        } else {
+                            $product->groupedItems()->attach($item['id'], $pivotData);
+                        }
+                    }
+                }
+
+                if ($request->has('super_attribute_ids') && $product->type === 'configurable') {
+                    $attrs = [];
+                    foreach ($request->super_attribute_ids as $idx => $id) {
+                        $attrs[$id] = ['position' => $idx];
+                    }
+                    $product->superAttributes()->sync($attrs);
+                }
+
+                if (!empty($preparedVariants) && $product->type === 'configurable') {
+                    foreach ($preparedVariants as $idx => $vData) {
+                        $variantProduct = Product::create([
+                            'account_id' => $product->account_id,
+                            'type' => 'simple',
+                            'name' => $vData['name'] ?? ($product->name . ' - ' . ($vData['sku'] ?? 'Variant')),
+                            'sku' => $vData['sku'],
+                            'price' => $vData['price'] ?? $product->price,
+                            'expected_cost' => $vData['expected_cost'] ?? null,
+                            'weight' => $vData['weight'] ?? null,
+                            'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
+                            'supplier_id' => $supplierIds[0] ?? $product->supplier_id,
+                            'stock_quantity' => $vData['stock_quantity'] ?? 0,
+                            'category_id' => $product->category_id,
+                            'status' => $product->status ?? true,
+                        ]);
+                        $this->syncProductSuppliers($variantProduct, $supplierIds);
+
+                        if ($request->hasFile("variants.{$idx}.image")) {
+                            $imageFile = $request->file("variants.{$idx}.image");
+                            $path = $imageFile->store('products', 'public');
+                            \App\Models\ProductImage::create([
+                                'product_id' => $variantProduct->id,
+                                'image_url' => \Illuminate\Support\Facades\Storage::disk('public')->url($path),
+                                'is_primary' => true,
+                                'file_name' => $imageFile->getClientOriginalName(),
+                                'file_size' => $imageFile->getSize(),
+                            ]);
+                        }
+
+                        $product->linkedProducts()->attach($variantProduct->id, [
+                            'link_type' => 'super_link',
+                            'position' => $idx,
+                        ]);
+
+                        if (isset($vData['attributes'])) {
+                            $validVariantAttrIds = \App\Models\Attribute::whereIn('id', array_keys($vData['attributes']))->pluck('id')->toArray();
+                            foreach ($vData['attributes'] as $attrId => $val) {
+                                if (!in_array($attrId, $validVariantAttrIds)) {
+                                    continue;
+                                }
+
+                                \App\Models\ProductAttributeValue::create([
+                                    'product_id' => $variantProduct->id,
+                                    'attribute_id' => $attrId,
+                                    'value' => $val,
+                                ]);
+                            }
+                        }
+                    }
+                }
+
+                $this->syncSuppliersToVariants($product, $supplierIds);
+
+                return $product;
+            });
+        } catch (QueryException $exception) {
+            $this->throwSkuConstraintValidation($exception, 'Đã phát hiện mã SKU bị trùng trong quá trình lưu. Vui lòng kiểm tra lại mã sản phẩm và biến thể.');
+        }
 
         return response()->json($this->loadProductResource($product), 201);
     }
@@ -896,7 +1038,7 @@ class ProductController extends Controller
             'stock_quantity' => 'nullable|integer|min:0',
             'weight' => 'nullable|string',
             'inventory_unit_id' => 'nullable|exists:inventory_units,id',
-            'sku' => 'nullable|string|unique:products,sku,' . $id,
+            'sku' => 'nullable|string|max:120',
             'status' => 'nullable|boolean',
             'meta_title' => 'nullable|string',
             'meta_description' => 'nullable|string',
@@ -926,7 +1068,15 @@ class ProductController extends Controller
             // EAV custom values
             'custom_attributes' => 'nullable|array',
             'variants' => 'nullable|array',
+            'variants.*.id' => 'nullable|integer',
+            'variants.*.sku' => 'nullable|string|max:120',
+            'variants.*.name' => 'nullable|string|max:255',
+            'variants.*.price' => 'nullable|numeric|min:0',
+            'variants.*.expected_cost' => 'nullable|numeric|min:0',
+            'variants.*.weight' => 'nullable|string',
             'variants.*.inventory_unit_id' => 'nullable|exists:inventory_units,id',
+            'variants.*.stock_quantity' => 'nullable|integer|min:0',
+            'variants.*.attributes' => 'nullable|array',
         ], [
             'name.required' => 'Tên sản phẩm không được để trống.',
             'price.required' => 'Giá bán không được để trống.',
@@ -947,21 +1097,28 @@ class ProductController extends Controller
         unset($validated['supplier_ids'], $validated['clear_supplier_ids']);
 
         if (isset($validated['slug'])) {
-            if (empty($validated['slug'])) {
-                $validated['slug'] = Str::slug($validated['name'] ?? $product->name);
-            } else {
-                $validated['slug'] = Str::slug($validated['slug']);
-            }
+            $validated['slug'] = $this->productSkuService->generateUniqueSlug(
+                !empty($validated['slug']) ? $validated['slug'] : ($validated['name'] ?? $product->name),
+                $product->id
+            );
         }
 
-        $product->fill($validated);
-        $nameChanged = $product->isDirty('name');
-        $skuChanged = $product->isDirty('sku');
-        $product->save();
+        try {
+            $product = DB::transaction(function () use ($request, $validated, $product, $incomingSupplierIds, $supplierIds) {
+                $this->prepareProductSku($validated, $product);
+                $resolvedType = $validated['type'] ?? $product->type;
+                $preparedVariants = ($request->has('variants') && $resolvedType === 'configurable')
+                    ? $this->prepareVariantPayloads($request->input('variants', []), $validated['sku'], $product)
+                    : [];
 
-        if ($incomingSupplierIds) {
-            $this->syncProductSuppliers($product, $supplierIds);
-        }
+                $product->fill($validated);
+                $nameChanged = $product->isDirty('name');
+                $skuChanged = $product->isDirty('sku');
+                $product->save();
+
+                if ($incomingSupplierIds) {
+                    $this->syncProductSuppliers($product, $supplierIds);
+                }
 
         // ─── Sync snapshots on all linked order_items (batch UPDATE) ────────────
         // Runs one SQL query regardless of how many orders reference this product.
@@ -1070,7 +1227,7 @@ class ProductController extends Controller
 
         // Handle variants sync
         if ($request->has('variants') && $product->type === 'configurable') {
-            $incomingVariants = $request->variants;
+            $incomingVariants = $preparedVariants;
             $incomingVariantIds = [];
 
             // 1. Identify which variants to keep vs delete
@@ -1100,7 +1257,7 @@ class ProductController extends Controller
                     $variant->update([
                         'name' => $vData['name'] ?? $variant->name,
                         'sku' => $vData['sku'],
-                        'price' => $vData['price'],
+                        'price' => $vData['price'] ?? $variant->price,
                         'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
                         'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
@@ -1146,6 +1303,15 @@ class ProductController extends Controller
                             );
                         }
                     }
+
+                    DB::table('product_links')
+                        ->where('product_id', $product->id)
+                        ->where('linked_product_id', $variant->id)
+                        ->where('link_type', 'super_link')
+                        ->update([
+                            'position' => $idx,
+                            'updated_at' => now(),
+                        ]);
                 }
                 else {
                     // It's a "new" variant from frontend's perspective.
@@ -1157,7 +1323,7 @@ class ProductController extends Controller
                         'type' => 'simple',
                         'name' => $vData['name'] ?? ($product->name . ' - ' . ($vData['sku'] ?? 'Variant')),
                         'sku' => $vData['sku'],
-                        'price' => $vData['price'],
+                        'price' => $vData['price'] ?? $product->price,
                         'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
                         'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
@@ -1187,7 +1353,10 @@ class ProductController extends Controller
                         ]);
                     }
 
-                    $product->linkedProducts()->attach($variant->id, ['link_type' => 'super_link']);
+                    $product->linkedProducts()->attach($variant->id, [
+                        'link_type' => 'super_link',
+                        'position' => $idx,
+                    ]);
 
                     if (isset($vData['attributes'])) {
                         $vValidAttrIds = \App\Models\Attribute::whereIn('id', array_keys($vData['attributes']))->pluck('id')->toArray();
@@ -1204,8 +1373,14 @@ class ProductController extends Controller
             }
         }
 
-        if ($incomingSupplierIds) {
-            $this->syncSuppliersToVariants($product, $supplierIds);
+                if ($incomingSupplierIds) {
+                    $this->syncSuppliersToVariants($product, $supplierIds);
+                }
+
+                return $product;
+            });
+        } catch (QueryException $exception) {
+            $this->throwSkuConstraintValidation($exception, 'Đã phát hiện mã SKU bị trùng trong quá trình cập nhật. Vui lòng kiểm tra lại mã sản phẩm và biến thể.');
         }
 
         return response()->json($this->loadProductResource($product));
@@ -1216,110 +1391,225 @@ class ProductController extends Controller
      */
     public function duplicate($id)
     {
-        $original = Product::with(['attributeValues', 'images', 'superAttributes', 'suppliers:id,name,code', 'linkedProducts.images', 'linkedProducts.attributeValues', 'linkedProducts.suppliers:id,name,code'])->where('id', $id)->firstOrFail();
-        $originalSupplierIds = $original->suppliers->pluck('id')->map(fn ($value) => (int) $value)->values()->all();
+        try {
+            $clone = DB::transaction(function () use ($id) {
+                $original = Product::with([
+                    'attributeValues',
+                    'images',
+                    'superAttributes',
+                    'suppliers:id,name,code',
+                    'supplierPrices',
+                    'categories:id,name',
+                    'relatedProducts',
+                    'groupedItems',
+                    'bundleItems',
+                    'variations.images',
+                    'variations.attributeValues',
+                    'variations.suppliers:id,name,code',
+                    'variations.supplierPrices',
+                ])->where('id', $id)->firstOrFail();
+                $originalSupplierIds = $original->suppliers
+                    ->pluck('id')
+                    ->map(fn ($value) => (int) $value)
+                    ->values()
+                    ->all();
 
-        // Clone attributes
-        $clone = $original->replicate();
-        $clone->name = $original->name . ' (Copy)';
-        $clone->sku = $original->sku ? $original->sku . '-COPY-' . strtoupper(\Illuminate\Support\Str::random(4)) : null;
-        $clone->slug = \Illuminate\Support\Str::slug($clone->name) . '-' . strtolower(\Illuminate\Support\Str::random(6));
-        $clone->status = false; // Set to inactive by default for clone
-        $clone->is_new = true;
-        $clone->save();
-        $this->syncProductSuppliers($clone, $originalSupplierIds);
+                $clone = $original->replicate();
+                $clone->name = $original->name . ' (Copy)';
+                $clone->sku = $this->productSkuService->generateCopySku($original->sku, $original->name);
+                $clone->slug = $this->productSkuService->generateUniqueSlug($clone->name);
+                $clone->status = false;
+                $clone->is_new = true;
+                $clone->save();
 
-        // Copy images
-        foreach ($original->images as $img) {
-            ProductImage::create([
-                'product_id' => $clone->id,
-                'image_url' => $img->image_url,
-                'is_primary' => $img->is_primary,
-                'sort_order' => $img->sort_order
-            ]);
-        }
+                $this->syncProductSuppliers($clone, $originalSupplierIds);
+                $this->productSkuService->copyProductDecorators($original, $clone);
 
-        // Copy EAV attributes
-        foreach ($original->attributeValues as $av) {
-            \App\Models\ProductAttributeValue::create([
-                'product_id' => $clone->id,
-                'attribute_id' => $av->attribute_id,
-                'value' => $av->value
-            ]);
-        }
-
-        // Copy super attributes (for configurable)
-        if ($original->type === 'configurable') {
-            foreach ($original->superAttributes as $sa) {
-                $clone->superAttributes()->attach($sa->id, ['position' => $sa->pivot->position]);
-            }
-        }
-
-        // Copy linked products (for grouped/bundle/configurable)
-        if (in_array($original->type, ['grouped', 'bundle', 'configurable'])) {
-            foreach ($original->linkedProducts as $lp) {
-                if ($lp->pivot->link_type === 'super_link') {
-                    // For variations, we MUST clone the child product itself
-                    $newVariant = $lp->replicate();
-                    // Generate a new SKU for the variant based on the new parent SKU or original suffix
-                    $vSuffix = \Illuminate\Support\Str::afterLast($lp->sku, '-');
-                    if (is_numeric($vSuffix)) {
-                        $newVariant->sku = $clone->sku . '-' . $vSuffix;
-                    }
-                    else {
-                        $newVariant->sku = $clone->sku . '-' . \Illuminate\Support\Str::random(4);
-                    }
-
-                    $newVariant->name = $lp->name; // Keep name or update? Keep is usually better for variants
-                    $newVariant->slug = \Illuminate\Support\Str::slug($newVariant->name) . '-' . strtolower(\Illuminate\Support\Str::random(6));
-                    $newVariant->save();
-                    $variantSupplierIds = $lp->suppliers->pluck('id')->map(fn ($value) => (int) $value)->values()->all();
-                    $this->syncProductSuppliers($newVariant, !empty($variantSupplierIds) ? $variantSupplierIds : $originalSupplierIds);
-
-                    // Copy variant images
-                    foreach ($lp->images as $img) {
-                        \App\Models\ProductImage::create([
-                            'product_id' => $newVariant->id,
-                            'image_url' => $img->image_url,
-                            'is_primary' => $img->is_primary,
-                            'sort_order' => $img->sort_order
+                if ($original->type === 'configurable') {
+                    foreach ($original->superAttributes as $superAttribute) {
+                        $clone->superAttributes()->attach($superAttribute->id, [
+                            'position' => $superAttribute->pivot->position,
                         ]);
                     }
 
-                    // Copy variant EAV attributes
-                    foreach ($lp->attributeValues as $av) {
-                        \App\Models\ProductAttributeValue::create([
-                            'product_id' => $newVariant->id,
-                            'attribute_id' => $av->attribute_id,
-                            'value' => $av->value
+                    foreach ($original->variations as $index => $variation) {
+                        $this->productSkuService->cloneVariantForParent($variation, $clone, [
+                            'position' => $variation->pivot->position ?? $index,
                         ]);
                     }
+                }
 
-                    $clone->linkedProducts()->attach($newVariant->id, [
-                        'link_type' => 'super_link',
-                        'position' => $lp->pivot->position
+                foreach ($original->relatedProducts as $relatedProduct) {
+                    $clone->relatedProducts()->attach($relatedProduct->id, [
+                        'link_type' => 'related',
+                        'position' => $relatedProduct->pivot->position ?? 0,
+                        'option_title' => $relatedProduct->pivot->option_title ?? null,
                     ]);
                 }
-                else {
-                    // For regular links (related, cross-sell, grouped), just attach the same ID with pivot data
-                    $clone->linkedProducts()->attach($lp->id, [
-                        'link_type' => $lp->pivot->link_type,
-                        'position' => $lp->pivot->position,
-                        'quantity' => $lp->pivot->quantity ?? 1,
-                        'is_required' => $lp->pivot->is_required ?? true,
+
+                foreach ($original->groupedItems as $groupedItem) {
+                    $clone->groupedItems()->attach($groupedItem->id, [
+                        'link_type' => 'grouped',
+                        'position' => $groupedItem->pivot->position ?? 0,
+                        'quantity' => $groupedItem->pivot->quantity ?? 1,
+                        'is_required' => $groupedItem->pivot->is_required ?? true,
+                        'variant_id' => $groupedItem->pivot->variant_id ?? null,
+                        'price' => $groupedItem->pivot->price ?? null,
+                        'cost_price' => $groupedItem->pivot->cost_price ?? null,
+                    ]);
+                }
+
+                foreach ($original->bundleItems as $bundleItem) {
+                    $clone->bundleItems()->attach($bundleItem->id, [
+                        'link_type' => 'bundle',
+                        'position' => $bundleItem->pivot->position ?? 0,
+                        'quantity' => $bundleItem->pivot->quantity ?? 1,
+                        'is_required' => $bundleItem->pivot->is_required ?? true,
+                        'option_title' => $bundleItem->pivot->option_title ?? null,
+                        'is_default' => $bundleItem->pivot->is_default ?? false,
+                        'variant_id' => $bundleItem->pivot->variant_id ?? null,
+                        'price' => $bundleItem->pivot->price ?? null,
+                        'cost_price' => $bundleItem->pivot->cost_price ?? null,
+                    ]);
+                }
+
+                $clone->categories()->sync($original->categories->pluck('id')->toArray());
+
+                return $this->loadProductResource($clone);
+            });
+        } catch (QueryException $exception) {
+            $this->throwSkuConstraintValidation($exception, 'Không thể nhân bản sản phẩm vì mã SKU vừa phát sinh bị trùng. Vui lòng thử lại.');
+        }
+
+        return response()->json([
+            'message' => 'Sản phẩm đã được nhân bản thành công',
+            'data' => $clone,
+        ]);
+
+        $clone = DB::transaction(function () use ($id) {
+            $original = Product::with([
+                'attributeValues',
+                'images',
+                'superAttributes',
+                'suppliers:id,name,code',
+                'supplierPrices',
+                'categories:id,name',
+                'relatedProducts',
+                'groupedItems',
+                'bundleItems',
+                'variations.images',
+                'variations.attributeValues',
+                'variations.suppliers:id,name,code',
+                'variations.supplierPrices',
+            ])->where('id', $id)->firstOrFail();
+            $originalSupplierIds = $original->suppliers->pluck('id')->map(fn ($value) => (int) $value)->values()->all();
+
+            $clone = $original->replicate();
+            $clone->name = $original->name . ' (Copy)';
+            $clone->sku = $this->productSkuService->generateCopySku($original->sku, $original->name);
+            $clone->slug = $this->productSkuService->generateUniqueSlug($clone->name);
+            $clone->status = false;
+            $clone->is_new = true;
+            $clone->save();
+            $this->syncProductSuppliers($clone, $originalSupplierIds);
+            $this->productSkuService->copyProductDecorators($original, $clone);
+
+            if ($original->type === 'configurable') {
+                foreach ($original->superAttributes as $sa) {
+                    $clone->superAttributes()->attach($sa->id, ['position' => $sa->pivot->position]);
+                }
+            }
+
+            if (in_array($original->type, ['grouped', 'bundle', 'configurable'], true)) {
+                foreach ($original->linkedProducts as $linkedProduct) {
+                    if ($linkedProduct->pivot->link_type === 'super_link') {
+                        $this->productSkuService->cloneVariantForParent($linkedProduct, $clone, [
+                            'position' => $linkedProduct->pivot->position,
+                        ]);
+                        continue;
+                    }
+
+                    $clone->linkedProducts()->attach($linkedProduct->id, [
+                        'link_type' => $linkedProduct->pivot->link_type,
+                        'position' => $linkedProduct->pivot->position,
+                        'quantity' => $linkedProduct->pivot->quantity ?? 1,
+                        'is_required' => $linkedProduct->pivot->is_required ?? true,
                     ]);
                 }
             }
-        }
+
+            $clone->categories()->sync($original->categories->pluck('id')->toArray());
+
+            return $this->loadProductResource($clone);
+        });
+
+        return response()->json([
+            'message' => 'Sản phẩm đã được nhân bản thành công',
+            'data' => $clone,
+        ]);
+
+        /*
+
+            $this->productSkuService->copyProductDecorators($original, $clone);
+
+            if ($original->type === 'configurable') {
+                foreach ($original->superAttributes as $superAttribute) {
+                    $clone->superAttributes()->attach($superAttribute->id, ['position' => $superAttribute->pivot->position]);
+                }
+
+                foreach ($original->variations as $index => $variation) {
+                    $this->productSkuService->cloneVariantForParent($variation, $clone, [
+                        'position' => $variation->pivot->position ?? $index,
+                    ]);
+                }
+            }
+
+            foreach ($original->relatedProducts as $relatedProduct) {
+                $clone->relatedProducts()->attach($relatedProduct->id, [
+                    'link_type' => 'related',
+                    'position' => $relatedProduct->pivot->position ?? 0,
+                    'option_title' => $relatedProduct->pivot->option_title ?? null,
+                ]);
+            }
+
+            foreach ($original->groupedItems as $groupedItem) {
+                $clone->groupedItems()->attach($groupedItem->id, [
+                    'link_type' => 'grouped',
+                    'position' => $groupedItem->pivot->position ?? 0,
+                    'quantity' => $groupedItem->pivot->quantity ?? 1,
+                    'is_required' => $groupedItem->pivot->is_required ?? true,
+                    'variant_id' => $groupedItem->pivot->variant_id ?? null,
+                    'price' => $groupedItem->pivot->price ?? null,
+                    'cost_price' => $groupedItem->pivot->cost_price ?? null,
+                ]);
+            }
+
+            foreach ($original->bundleItems as $bundleItem) {
+                $clone->bundleItems()->attach($bundleItem->id, [
+                    'link_type' => 'bundle',
+                    'position' => $bundleItem->pivot->position ?? 0,
+                    'quantity' => $bundleItem->pivot->quantity ?? 1,
+                    'is_required' => $bundleItem->pivot->is_required ?? true,
+                    'option_title' => $bundleItem->pivot->option_title ?? null,
+                    'is_default' => $bundleItem->pivot->is_default ?? false,
+                    'variant_id' => $bundleItem->pivot->variant_id ?? null,
+                    'price' => $bundleItem->pivot->price ?? null,
+                    'cost_price' => $bundleItem->pivot->cost_price ?? null,
+                ]);
+            }
 
         // Copy categories
         $clone->categories()->sync($original->categories->pluck('id')->toArray());
 
-        return response()->json([
+            return $clone;
+        });
+
+        return response()->json($this->loadProductResource($clone)); /*
             'message' => 'Sản phẩm đã được nhân bản thành công',
-            'data' => $this->loadProductResource($clone)
         ]);
+        */
     }
+
 
     /**
      * Remove the specified resource from storage.

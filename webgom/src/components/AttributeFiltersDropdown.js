@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import styles2 from '../app/products/layout2.module.css';
 
 export default function AttributeFiltersDropdown({ filters, currentAttrs, currentSort }) {
@@ -43,7 +43,7 @@ export default function AttributeFiltersDropdown({ filters, currentAttrs, curren
                 <div className={styles2.filterGroup} style={{ width: '100%' }}>
                   <button
                     type="button"
-                    className={`${styles2.filterDropdownBtn} ${isPriceSortActive ? styles2.active : ''}`}
+                    className={`${styles2.filterDropdownBtn} ${isPriceSortActive ? styles2.filterDropdownBtnActive : ''}`}
                     style={{ 
                       width: '100%', 
                       height: '48px', 
@@ -155,7 +155,7 @@ export default function AttributeFiltersDropdown({ filters, currentAttrs, curren
               <div className={styles2.filterGroup} style={{ width: '100%' }}>
                 <button
                   type="button"
-                  className={`${styles2.filterDropdownBtn} ${isActive ? styles2.active : ''}`}
+                  className={`${styles2.filterDropdownBtn} ${isActive ? styles2.filterDropdownBtnActive : ''}`}
                   style={{ 
                     width: '100%', 
                     height: '48px', 

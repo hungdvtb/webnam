@@ -263,6 +263,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/finance/fixed-expenses/{id}', [FinanceController::class, 'updateFixedExpense'])->whereNumber('id');
     Route::delete('/finance/fixed-expenses/{id}', [FinanceController::class, 'destroyFixedExpense'])->whereNumber('id');
     Route::post('/finance/fixed-expenses/{id}/pay', [FinanceController::class, 'payFixedExpense'])->whereNumber('id');
+    Route::get('/finance/daily-profit', [FinanceController::class, 'dailyProfitTable']);
+    Route::post('/finance/daily-profit/config', [FinanceController::class, 'storeDailyProfitConfig']);
     Route::get('/finance/catalogs', [FinanceController::class, 'catalogs']);
     Route::post('/finance/catalogs', [FinanceController::class, 'storeCatalog']);
     Route::put('/finance/catalogs/{id}', [FinanceController::class, 'updateCatalog'])->whereNumber('id');
@@ -353,6 +355,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/reports/inventory', [\App\Http\Controllers\Api\ReportController::class , 'inventoryReport']);
         Route::get('/reports/top-products', [\App\Http\Controllers\Api\ReportController::class , 'topSellingProducts']);
         Route::get('/reports/sales', [\App\Http\Controllers\Api\ReportController::class , 'salesReport']);
+        Route::get('/reports/sales-matrix', [\App\Http\Controllers\Api\ReportController::class , 'salesProductMatrix']);
 
         // Invoices
         Route::get('/invoices', [\App\Http\Controllers\Api\InvoiceController::class , 'index']);

@@ -17,7 +17,9 @@ use App\Models\Supplier;
 use App\Models\SupplierProductPrice;
 use App\Services\Inventory\InvoiceAnalysisService;
 use App\Services\Inventory\InventoryService;
+use App\Services\ProductSkuService;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -30,8 +32,28 @@ class InventoryController extends Controller
     public function __construct(
         private readonly InventoryService $inventoryService,
         private readonly InvoiceAnalysisService $invoiceAnalysisService,
+        private readonly ProductSkuService $productSkuService,
     )
     {
+    }
+
+    protected function throwProductSkuValidation(QueryException $exception, ?string $message = null): never
+    {
+        $sqlState = (string) ($exception->errorInfo[0] ?? $exception->getCode());
+        $normalizedMessage = Str::lower($exception->getMessage());
+
+        if (in_array($sqlState, ['23000', '23505'], true) && Str::contains($normalizedMessage, [
+            'products_sku_unique',
+            'products_sku_key',
+            'products.sku',
+            ' sku ',
+        ])) {
+            throw ValidationException::withMessages([
+                'sku' => [$message ?? 'Mã SKU này đã được sử dụng bởi một sản phẩm khác.'],
+            ]);
+        }
+
+        throw $exception;
     }
 
     public function dashboard(Request $request)
@@ -241,32 +263,42 @@ class InventoryController extends Controller
     {
         $accountId = (int) $request->header('X-Account-Id');
         $validated = $request->validate([
-            'sku' => 'required|string|max:120|unique:products,sku',
+            'sku' => 'required|string|max:120',
             'name' => 'required|string|max:255',
             'price' => 'nullable|numeric|min:0',
             'expected_cost' => 'nullable|numeric|min:0',
             'status' => 'nullable|boolean',
         ]);
 
-        $baseSlug = Str::slug($validated['name']);
-        $slug = $baseSlug !== '' ? $baseSlug : 'san-pham';
-        $suffix = 1;
-        while (Product::withoutGlobalScopes()->where('slug', $slug)->exists()) {
-            $slug = ($baseSlug !== '' ? $baseSlug : 'san-pham') . '-' . $suffix++;
+        $validated['sku'] = $this->productSkuService->normalize($validated['sku']);
+        if ($validated['sku'] === null) {
+            throw ValidationException::withMessages([
+                'sku' => ['Mã SKU không được để trống.'],
+            ]);
         }
 
-        $product = Product::create([
-            'account_id' => $accountId,
-            'type' => 'simple',
-            'sku' => $validated['sku'],
-            'name' => $validated['name'],
-            'slug' => $slug,
-            'price' => $validated['price'] ?? 0,
-            'expected_cost' => $validated['expected_cost'] ?? null,
-            'stock_quantity' => 0,
-            'damaged_quantity' => 0,
-            'status' => $validated['status'] ?? true,
-        ]);
+        if ($this->productSkuService->skuExists($validated['sku'])) {
+            throw ValidationException::withMessages([
+                'sku' => ['Mã SKU này đã được sử dụng bởi một sản phẩm khác.'],
+            ]);
+        }
+
+        try {
+            $product = Product::create([
+                'account_id' => $accountId,
+                'type' => 'simple',
+                'sku' => $validated['sku'],
+                'name' => $validated['name'],
+                'slug' => $this->productSkuService->generateUniqueSlug($validated['name']),
+                'price' => $validated['price'] ?? 0,
+                'expected_cost' => $validated['expected_cost'] ?? null,
+                'stock_quantity' => 0,
+                'damaged_quantity' => 0,
+                'status' => $validated['status'] ?? true,
+            ]);
+        } catch (QueryException $exception) {
+            $this->throwProductSkuValidation($exception, 'Mã SKU này đã được sử dụng bởi một sản phẩm khác.');
+        }
 
         return response()->json($this->productPayload($product->fresh()), 201);
     }
@@ -275,15 +307,34 @@ class InventoryController extends Controller
     {
         $product = Product::withTrashed()->findOrFail($id);
         $validated = $request->validate([
-            'sku' => 'sometimes|required|string|max:120|unique:products,sku,' . $product->id,
+            'sku' => 'sometimes|required|string|max:120',
             'name' => 'sometimes|required|string|max:255',
             'price' => 'nullable|numeric|min:0',
             'expected_cost' => 'nullable|numeric|min:0',
             'status' => 'nullable|boolean',
         ]);
 
-        $product->fill($validated);
-        $product->save();
+        if (array_key_exists('sku', $validated)) {
+            $validated['sku'] = $this->productSkuService->normalize($validated['sku']);
+            if ($validated['sku'] === null) {
+                throw ValidationException::withMessages([
+                    'sku' => ['Mã SKU không được để trống.'],
+                ]);
+            }
+
+            if ($this->productSkuService->skuExists($validated['sku'], $product->id)) {
+                throw ValidationException::withMessages([
+                    'sku' => ['Mã SKU này đã được sử dụng bởi một sản phẩm khác.'],
+                ]);
+            }
+        }
+
+        try {
+            $product->fill($validated);
+            $product->save();
+        } catch (QueryException $exception) {
+            $this->throwProductSkuValidation($exception, 'Mã SKU này đã được sử dụng bởi một sản phẩm khác.');
+        }
 
         return response()->json($this->productPayload($product->fresh()));
     }

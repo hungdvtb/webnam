@@ -4,6 +4,7 @@ namespace App\Services\Finance;
 
 use App\Models\FinanceCatalog;
 use App\Models\FinanceChangeLog;
+use App\Models\FinanceDailyProfitConfigVersion;
 use App\Models\FinanceFixedExpense;
 use App\Models\FinanceFixedExpenseVersion;
 use App\Models\FinanceLoan;
@@ -105,6 +106,18 @@ class FinanceService
         $resolvedMode = $this->resolveFixedExpenseCalculationMode($mode);
 
         return $resolvedMode === 'fixed_30' ? 30 : $resolvedDate->daysInMonth;
+    }
+
+    public function resolveDailyProfitShippingMode(?string $value): string
+    {
+        return $value === 'revenue_percent' ? 'revenue_percent' : 'fixed_per_order';
+    }
+
+    public function dailyProfitShippingModeLabel(string $mode): string
+    {
+        return $mode === 'revenue_percent'
+            ? '% x doanh thu'
+            : 'Số đơn x phí ship cố định';
     }
 
     public function nextDueDate(Carbon $baseDate, string $frequency, int $intervalValue, ?Carbon $currentDueDate = null): Carbon
@@ -826,10 +839,11 @@ class FinanceService
                 'note' => $data['note'] ?? null,
                 'user_id' => $userId,
             ]);
+            $versionPayload = $this->fixedExpenseVersionPayload($version, Carbon::parse($effectiveDate));
 
             return [
-                'rows' => $currentRows->map(fn (FinanceFixedExpense $expense) => $this->fixedExpensePayload($expense))->values(),
-                'version' => $this->fixedExpenseVersionPayload($version, Carbon::parse($effectiveDate)),
+                'rows' => collect($versionPayload['items'] ?? [])->values(),
+                'version' => $versionPayload,
                 'history' => FinanceFixedExpenseVersion::query()
                     ->with('creator:id,name')
                     ->where('account_id', $accountId)
@@ -893,6 +907,7 @@ class FinanceService
             'daily_amount' => $daysInMonth > 0 ? round($totalMonthlyAmount / $daysInMonth, 2) : 0,
             'items' => $currentRows->map(fn (FinanceFixedExpense $expense) => [
                 'line_key' => (string) $expense->id,
+                'id' => $expense->id,
                 'fixed_expense_id' => $expense->id,
                 'content' => $expense->name,
                 'monthly_amount' => round((float) $expense->amount, 2),
@@ -938,6 +953,82 @@ class FinanceService
                 'days_in_month' => $resolved['days_in_month'],
                 'total_monthly_amount' => $resolved['total_monthly_amount'],
                 'daily_amount' => $resolved['daily_amount'],
+            ]);
+
+            $cursor->addDay();
+        }
+
+        return $series;
+    }
+
+    public function storeDailyProfitConfigVersion(int $accountId, array $data): FinanceDailyProfitConfigVersion
+    {
+        return DB::transaction(function () use ($accountId, $data) {
+            $version = FinanceDailyProfitConfigVersion::query()->create([
+                'account_id' => $accountId,
+                'created_by' => $data['user_id'] ?? auth()->id(),
+                'effective_date' => Carbon::parse($data['effective_date'] ?? now())->toDateString(),
+                'return_rate' => round((float) ($data['return_rate'] ?? 0), 4),
+                'packaging_cost_per_order' => round((float) ($data['packaging_cost_per_order'] ?? 0), 2),
+                'shipping_calculation_mode' => $this->resolveDailyProfitShippingMode($data['shipping_calculation_mode'] ?? null),
+                'shipping_cost_per_order' => round((float) ($data['shipping_cost_per_order'] ?? 0), 2),
+                'shipping_cost_rate' => round((float) ($data['shipping_cost_rate'] ?? 0), 4),
+                'tax_rate' => round((float) ($data['tax_rate'] ?? 1.5), 4),
+                'note' => $data['note'] ?? null,
+            ]);
+
+            $this->logChange(
+                $accountId,
+                $version,
+                'created',
+                null,
+                $version->fresh()->getAttributes(),
+                $data['user_id'] ?? auth()->id()
+            );
+
+            return $version->fresh('creator');
+        });
+    }
+
+    public function dailyProfitConfigByDate(int $accountId, Carbon|string $date): array
+    {
+        $resolvedDate = $date instanceof Carbon ? $date->copy() : Carbon::parse($date);
+
+        $version = FinanceDailyProfitConfigVersion::query()
+            ->with('creator:id,name')
+            ->where('account_id', $accountId)
+            ->whereDate('effective_date', '<=', $resolvedDate->toDateString())
+            ->orderByDesc('effective_date')
+            ->orderByDesc('id')
+            ->first();
+
+        return $this->dailyProfitConfigPayload($version, $resolvedDate);
+    }
+
+    public function dailyProfitConfigSeries(int $accountId, Carbon $from, Carbon $to): Collection
+    {
+        $versions = FinanceDailyProfitConfigVersion::query()
+            ->where('account_id', $accountId)
+            ->whereDate('effective_date', '<=', $to->toDateString())
+            ->orderBy('effective_date')
+            ->orderBy('id')
+            ->get();
+
+        $series = collect();
+        $versionIndex = 0;
+        $activeVersion = null;
+        $cursor = $from->copy()->startOfDay();
+
+        while ($cursor <= $to) {
+            while (isset($versions[$versionIndex]) && Carbon::parse($versions[$versionIndex]->effective_date)->startOfDay()->lte($cursor)) {
+                $activeVersion = $versions[$versionIndex];
+                $versionIndex += 1;
+            }
+
+            $resolved = $this->dailyProfitConfigPayload($activeVersion, $cursor);
+            $series->push([
+                'date' => $cursor->toDateString(),
+                ...$resolved,
             ]);
 
             $cursor->addDay();
@@ -1378,6 +1469,7 @@ class FinanceService
             ->map(function (array $item) {
                 return [
                     'line_key' => (string) ($item['line_key'] ?? $item['fixed_expense_id'] ?? Str::uuid()),
+                    'id' => !empty($item['fixed_expense_id']) ? (int) $item['fixed_expense_id'] : null,
                     'fixed_expense_id' => !empty($item['fixed_expense_id']) ? (int) $item['fixed_expense_id'] : null,
                     'content' => $item['content'] ?? '',
                     'monthly_amount' => round((float) ($item['monthly_amount'] ?? 0), 2),
@@ -1402,6 +1494,33 @@ class FinanceService
             'created_at' => optional($version->created_at)->toIso8601String(),
             'created_by' => $version->created_by,
             'created_by_name' => $version->creator?->name,
+            'applies_to_date' => $appliesToDate->toDateString(),
+        ];
+    }
+
+    public function dailyProfitConfigPayload(?FinanceDailyProfitConfigVersion $version, ?Carbon $forDate = null): array
+    {
+        $appliesToDate = ($forDate ?: ($version?->effective_date instanceof Carbon ? $version->effective_date->copy() : now()))->copy();
+        $shippingMode = $this->resolveDailyProfitShippingMode($version?->shipping_calculation_mode);
+        $returnRate = round((float) ($version?->return_rate ?? 0), 4);
+
+        return [
+            'id' => $version?->id,
+            'effective_date' => optional($version?->effective_date)->toDateString(),
+            'return_rate' => $returnRate,
+            'return_rate_ratio' => round($returnRate / 100, 6),
+            'packaging_cost_per_order' => round((float) ($version?->packaging_cost_per_order ?? 0), 2),
+            'shipping_calculation_mode' => $shippingMode,
+            'shipping_calculation_label' => $this->dailyProfitShippingModeLabel($shippingMode),
+            'shipping_cost_per_order' => round((float) ($version?->shipping_cost_per_order ?? 0), 2),
+            'shipping_cost_rate' => round((float) ($version?->shipping_cost_rate ?? 0), 4),
+            'tax_rate' => round((float) ($version?->tax_rate ?? 1.5), 4),
+            'salary_daily_amount' => 0,
+            'facebook_ads_daily_amount' => 0,
+            'note' => $version?->note,
+            'created_at' => optional($version?->created_at)->toIso8601String(),
+            'created_by' => $version?->created_by,
+            'created_by_name' => $version?->creator?->name,
             'applies_to_date' => $appliesToDate->toDateString(),
         ];
     }

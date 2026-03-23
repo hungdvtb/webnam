@@ -241,6 +241,8 @@ export const financeApi = {
     getFixedExpenses: (params) => api.get('/finance/fixed-expenses', { params }),
     getFixedExpenseByDate: (params) => api.get('/finance/fixed-expenses/by-date', { params }),
     syncFixedExpenseSheet: (data) => api.put('/finance/fixed-expenses/sheet', data),
+    getDailyProfitTable: (params) => api.get('/finance/daily-profit', { params }),
+    saveDailyProfitConfig: (data) => api.post('/finance/daily-profit/config', data),
     createFixedExpense: (data) => api.post('/finance/fixed-expenses', data),
     updateFixedExpense: (id, data) => api.put(`/finance/fixed-expenses/${id}`, data),
     deleteFixedExpense: (id) => api.delete(`/finance/fixed-expenses/${id}`),
@@ -299,6 +301,7 @@ export const reportApi = {
     getInventory: () => api.get('/reports/inventory'),
     getTopProducts: () => api.get('/reports/top-products'),
     getSales: (days) => api.get('/reports/sales', { params: { days } }),
+    getSalesMatrix: (params) => api.get('/reports/sales-matrix', { params }),
 };
 
 export const invoiceApi = {

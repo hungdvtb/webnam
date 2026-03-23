@@ -406,6 +406,7 @@ export default function Header({
 
           .header-content {
             min-height: 72px;
+            flex-wrap: nowrap;
           }
 
           .logo-section {
@@ -413,15 +414,22 @@ export default function Header({
           }
 
           .actions-section {
+            flex: 1 1 auto;
+            min-width: 0;
             gap: 0.75rem;
           }
 
+          .search-bar {
+            flex: 1 1 auto;
+            min-width: 0;
+          }
+
           .search-input {
-            width: 160px;
+            width: 100%;
           }
 
           .search-input:focus {
-            width: 180px;
+            width: 100%;
           }
 
           .cart-subtitle {
@@ -431,37 +439,88 @@ export default function Header({
 
         @media (max-width: 640px) {
           .site-header {
-            padding: 12px 16px;
+            min-height: 68px;
+            padding: 10px 12px;
           }
 
           .header-content {
-            min-height: auto;
-            flex-wrap: wrap;
-            row-gap: 0.75rem;
+            min-height: 68px;
+            flex-wrap: nowrap;
+            gap: 0.625rem;
           }
 
           .logo-section {
-            --brand-logo-size: 46px;
-            flex: 1 1 100%;
+            --brand-logo-size: 42px;
+            flex: 0 0 auto;
           }
 
           .actions-section {
-            width: 100%;
-            flex: 1 1 100%;
-            justify-content: space-between;
+            flex: 1 1 auto;
+            width: auto;
+            justify-content: flex-end;
+            min-width: 0;
+            gap: 0.625rem;
           }
 
           .search-bar {
             flex: 1 1 auto;
+            min-width: 0;
           }
 
           .search-input,
           .search-input:focus {
             width: 100%;
+            min-width: 0;
+            font-size: 12px;
+            padding: 6px 14px 6px 34px;
           }
 
           .cart-text {
             display: none;
+          }
+
+          .cart-action {
+            flex: 0 0 auto;
+          }
+
+          .cart-icon {
+            font-size: 29px;
+          }
+        }
+
+        @media (max-width: 420px) {
+          .site-header {
+            padding: 8px 10px;
+          }
+
+          .header-content {
+            gap: 0.5rem;
+          }
+
+          .logo-section {
+            --brand-logo-size: 38px;
+          }
+
+          .logo-img-box {
+            border-radius: 10px;
+          }
+
+          .actions-section {
+            gap: 0.5rem;
+          }
+
+          .search-input,
+          .search-input:focus {
+            padding: 6px 12px 6px 32px;
+          }
+
+          .search-icon {
+            left: 10px;
+            font-size: 18px !important;
+          }
+
+          .cart-icon {
+            font-size: 27px;
           }
         }
       `}</style>

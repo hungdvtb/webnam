@@ -24,12 +24,23 @@ const ProductDetail = () => {
 
     const { user } = useAuth();
     const { showModal } = useUI();
+    const normalizedProductId = Number(id);
+    const hasValidProductId = Number.isInteger(normalizedProductId) && normalizedProductId > 0;
 
     useEffect(() => {
         const fetchProduct = async () => {
+            if (!hasValidProductId) {
+                setProduct(null);
+                setReviews([]);
+                setRelatedProducts([]);
+                setLoading(false);
+                navigate('/old/shop', { replace: true });
+                return;
+            }
+
             setLoading(true);
             try {
-                const response = await productApi.getOne(id);
+                const response = await productApi.getOne(normalizedProductId);
                 setProduct(response.data);
                 setReviews(response.data.approved_reviews || []);
 
@@ -41,7 +52,7 @@ const ProductDetail = () => {
                 // Check wishlist status if user logged in
                 if (user) {
                     const wishRes = await wishlistApi.get();
-                    const isWish = wishRes.data.some(w => w.product_id === parseInt(id));
+                    const isWish = wishRes.data.some(w => w.product_id === normalizedProductId);
                     setInWishlist(isWish);
                 }
 
@@ -51,7 +62,7 @@ const ProductDetail = () => {
                         category_id: response.data.category_id,
                         per_page: 3
                     });
-                    setRelatedProducts(relatedResponse.data.data.filter(p => p.id !== parseInt(id)));
+                    setRelatedProducts(relatedResponse.data.data.filter(p => p.id !== normalizedProductId));
                 }
             } catch (error) {
                 console.error("Error fetching product", error);
@@ -61,7 +72,7 @@ const ProductDetail = () => {
         };
         fetchProduct();
         window.scrollTo(0, 0);
-    }, [id, user]);
+    }, [hasValidProductId, navigate, normalizedProductId, user]);
 
     // Update variant based on attribute selection
     useEffect(() => {

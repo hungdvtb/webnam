@@ -343,6 +343,38 @@ const generateSKUFromName = (name) => {
     return slug.substring(0, 50); // Limit length
 };
 
+const normalizeSkuDraft = (value) => String(value || '').trim().replace(/\s+/g, '-');
+
+const buildAutoVariantSkuList = (parentSku, variants) => {
+    const baseSku = normalizeSkuDraft(parentSku);
+    if (!baseSku) return variants;
+
+    const usedSkus = new Set();
+
+    return variants.map((variant) => {
+        const manualSku = normalizeSkuDraft(variant?.sku);
+        if (!variant?.sku_auto && manualSku) {
+            usedSkus.add(manualSku);
+            return { ...variant, sku: manualSku };
+        }
+
+        let index = 1;
+        let candidate = `${baseSku}-V${index}`;
+        while (usedSkus.has(candidate)) {
+            index += 1;
+            candidate = `${baseSku}-V${index}`;
+        }
+
+        usedSkus.add(candidate);
+
+        return {
+            ...variant,
+            sku: candidate,
+            sku_auto: true,
+        };
+    });
+};
+
 const Field = ({ label, children, className = "", labelClassName = "" }) => (
     <div className={`relative border border-stone/30 rounded-sm px-3 focus-within:border-primary/30 transition-colors flex items-center min-h-[40px] bg-white ${className}`}>
         <label className={`absolute -top-3 left-2 bg-white px-1.5 font-sans text-[13px] font-bold text-orange-700 tracking-tight leading-none ${labelClassName}`}>
@@ -451,6 +483,7 @@ const ProductForm = () => {
     });
 
     const [variants, setVariants] = useState([]);
+    const [serverValidationErrors, setServerValidationErrors] = useState({});
     const [selectedSuperAttributes, setSelectedSuperAttributes] = useState([]);
     const [showVariantConfig, setShowVariantConfig] = useState(false);
     const [refreshingAttributes, setRefreshingAttributes] = useState(false);
@@ -486,6 +519,72 @@ const ProductForm = () => {
     const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
     const [aiInstruction, setAiInstruction] = useState('');
     const quillRef = useRef(null);
+
+    const clearServerValidationErrors = useCallback((prefixes = []) => {
+        if (!Array.isArray(prefixes) || prefixes.length === 0) return;
+        setServerValidationErrors((prev) => {
+            const keys = Object.keys(prev || {});
+            if (keys.length === 0) return prev;
+            const next = { ...prev };
+            keys.forEach((key) => {
+                if (prefixes.some((prefix) => key === prefix || key.startsWith(prefix))) {
+                    delete next[key];
+                }
+            });
+            return next;
+        });
+    }, []);
+
+    const localSkuValidation = useMemo(() => {
+        const parentSku = normalizeSkuDraft(formData.sku);
+        const errors = {
+            parent: '',
+            variants: {},
+        };
+        const seen = new Map();
+
+        if (!parentSku) {
+            errors.parent = 'Mã sản phẩm không được để trống.';
+        } else {
+            seen.set(parentSku, { type: 'parent' });
+        }
+
+        variants.forEach((variant, index) => {
+            const variantSku = normalizeSkuDraft(variant?.sku);
+            if (!variantSku) {
+                errors.variants[index] = 'Biến thể này chưa có mã SKU.';
+                return;
+            }
+
+            const existing = seen.get(variantSku);
+            if (existing) {
+                if (existing.type === 'parent') {
+                    errors.parent = errors.parent || 'Mã sản phẩm cha đang trùng với một biến thể.';
+                } else if (errors.variants[existing.index] === undefined) {
+                    errors.variants[existing.index] = 'Mã biến thể đang bị trùng trong danh sách.';
+                }
+
+                errors.variants[index] = 'Mã biến thể đang bị trùng trong danh sách.';
+                return;
+            }
+
+            seen.set(variantSku, { type: 'variant', index });
+        });
+
+        return {
+            parent: errors.parent,
+            variants: errors.variants,
+            hasErrors: Boolean(errors.parent) || Object.keys(errors.variants).length > 0,
+        };
+    }, [formData.sku, variants]);
+
+    const parentSkuError = localSkuValidation.parent || serverValidationErrors?.sku?.[0] || '';
+    const getVariantSkuError = useCallback((index) => (
+        localSkuValidation.variants[index]
+        || serverValidationErrors?.[`variants.${index}.sku`]?.[0]
+        || serverValidationErrors?.[`variants.${index}.id`]?.[0]
+        || ''
+    ), [localSkuValidation.variants, serverValidationErrors]);
 
     const appendAiInstruction = useCallback((suggestion) => {
         setAiInstruction((prev) => {
@@ -1090,16 +1189,28 @@ const ProductForm = () => {
     const filteredSuggestedProducts = useMemo(() => suggestedProducts, [suggestedProducts]);
     const filteredBundleProducts = useMemo(() => suggestedBundleProducts, [suggestedBundleProducts]);
 
+    useEffect(() => {
+        setVariants((prev) => {
+            if (!Array.isArray(prev) || prev.length === 0) return prev;
+            if (!prev.some((variant) => variant?.sku_auto)) return prev;
+
+            const next = buildAutoVariantSkuList(formData.sku, prev);
+            const changed = next.some((variant, index) => variant.sku !== prev[index]?.sku);
+            return changed ? next : prev;
+        });
+    }, [formData.sku]);
+
     const handleResetVariants = () => {
         setVariants([]);
         setSelectedSuperAttributes([]);
         setShowVariantConfig(true);
+        clearServerValidationErrors(['variants.']);
     };
 
     const handleAddManualVariant = () => {
         const newV = {
             id: `manual_${Date.now()}`,
-            sku: `${formData.sku}-${variants.length + 1}`,
+            sku: '',
             price: formData.price,
             expected_cost: formData.expected_cost,
             current_cost: '',
@@ -1107,9 +1218,11 @@ const ProductForm = () => {
             inventory_unit_id: formData.inventory_unit_id || '',
             stock: 10,
             attributes: {},
-            label: 'Biến thể tùy chỉnh'
+            label: 'Biến thể tùy chỉnh',
+            sku_auto: true,
         };
-        setVariants(prev => [...prev, newV]);
+        setVariants(prev => buildAutoVariantSkuList(formData.sku, [...prev, newV]));
+        clearServerValidationErrors(['variants.']);
     };
 
     const fetchProduct = async () => {
@@ -1282,6 +1395,7 @@ const ProductForm = () => {
                         inventory_unit_id: v.inventory_unit_id ? String(v.inventory_unit_id) : (data.inventory_unit_id ? String(data.inventory_unit_id) : ''),
                         stock: v.stock_quantity ?? 0,
                         sku: v.sku ?? '',
+                        sku_auto: false,
                         attributes: attrs,
                         image_url: primaryImage ? primaryImage.image_url : null,
                         label: v.name ?? (v.attribute_values || []).map(av => av.value).join(' / ') ?? ''
@@ -1751,6 +1865,9 @@ const ProductForm = () => {
     const handleChange = (e) => {
         const { name, value, type, checked } = e.target;
         setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
+        if (name === 'sku') {
+            clearServerValidationErrors(['sku', 'variants.']);
+        }
 
         if (name === 'type' && value === 'configurable' && variants.length === 0) {
             setShowVariantConfig(true);
@@ -1792,17 +1909,10 @@ const ProductForm = () => {
 
         const newVariants = combinations.map((combo, index) => {
             const attrLabel = selectedSuperAttributes.map(attr => combo[attr.id]).join(' / ');
-            
-            // Create a descriptive SKU based on parent SKU + attribute name/value pairs
-            const skuSuffix = selectedSuperAttributes.map(attr => {
-                const namePart = removeAccents(attr.name).replace(/\s+/g, '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-                const valPart = removeAccents(combo[attr.id]).replace(/\s+/g, '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-                return `${namePart}-${valPart}`;
-            }).join('-');
 
             return {
                 id: `new_${Date.now()}_${index}`,
-                sku: `${formData.sku}-${skuSuffix}`,
+                sku: '',
                 price: formData.price,
                 expected_cost: formData.expected_cost,
                 current_cost: '',
@@ -1810,11 +1920,13 @@ const ProductForm = () => {
                 inventory_unit_id: formData.inventory_unit_id || '',
                 stock: 10,
                 attributes: combo,
-                label: `${formData.name} - ${attrLabel}`
+                label: `${formData.name} - ${attrLabel}`,
+                sku_auto: true,
             };
         });
 
-        setVariants(newVariants);
+        setVariants(buildAutoVariantSkuList(formData.sku, newVariants));
+        clearServerValidationErrors(['variants.']);
         setShowVariantConfig(false);
     };
 
@@ -1822,6 +1934,11 @@ const ProductForm = () => {
         const updated = [...variants];
         if (field === 'price' || field === 'stock' || field === 'expected_cost' || field === 'weight') {
             value = value.toString().replace(/[^0-9]/g, '');
+        }
+        if (field === 'sku') {
+            value = normalizeSkuDraft(value);
+            updated[index].sku_auto = false;
+            clearServerValidationErrors([`variants.${index}.sku`, 'sku']);
         }
         updated[index][field] = value;
         setVariants(updated);
@@ -1848,6 +1965,7 @@ const ProductForm = () => {
 
     const removeVariant = (index) => {
         setVariants(variants.filter((_, i) => i !== index));
+        clearServerValidationErrors(['variants.']);
     };
 
     const handleWeightInputChange = (e) => {
@@ -2129,6 +2247,15 @@ const ProductForm = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        setServerValidationErrors({});
+        if (localSkuValidation.hasErrors) {
+            setIsSaving(false);
+            showToast({
+                message: 'Mã sản phẩm hoặc mã biến thể đang bị trùng trong form. Vui lòng kiểm tra lại trước khi lưu.',
+                type: 'error',
+            });
+            return;
+        }
         setIsSaving(true);
         try {
             const submitData = new FormData();
@@ -2210,7 +2337,7 @@ const ProductForm = () => {
                     if (v.id && !v.id.toString().startsWith('new_') && !v.id.toString().startsWith('manual_')) {
                         submitData.append(`variants[${idx}][id]`, v.id);
                     }
-                    submitData.append(`variants[${idx}][sku]`, v.sku);
+                    submitData.append(`variants[${idx}][sku]`, normalizeSkuDraft(v.sku));
                     submitData.append(`variants[${idx}][name]`, v.label); // Send label as name
                     submitData.append(`variants[${idx}][price]`, v.price);
                     submitData.append(`variants[${idx}][expected_cost]`, v.expected_cost || '');
@@ -2263,6 +2390,7 @@ const ProductForm = () => {
         } catch (error) {
             console.error("Save error:", error.response?.data);
             const data = error.response?.data;
+            setServerValidationErrors(data?.errors || {});
             let message = data?.message || 'Vui lòng kiểm tra lại thông tin.';
 
             if (data?.errors) {
@@ -2538,7 +2666,7 @@ const ProductForm = () => {
                                     </div>
 
                                     <div>
-                                        <Field label={<>Mã sản phẩm (SKU) <span className="text-brick text-[14px] ml-1">*</span></>} className="group/sku border-gold/20">
+                                        <Field label={<>Mã sản phẩm (SKU) <span className="text-brick text-[14px] ml-1">*</span></>} className={`group/sku ${parentSkuError ? 'border-brick/50 bg-brick/5' : 'border-gold/20'}`}>
                                             <input
                                                 name="sku"
                                                 value={formData.sku}
@@ -2556,6 +2684,7 @@ const ProductForm = () => {
                                                 <span className="material-symbols-outlined text-[16px]">magic_button</span>
                                             </button>
                                         </Field>
+                                        {parentSkuError ? <p className="mt-2 text-[12px] font-semibold text-brick">{parentSkuError}</p> : null}
                                     </div>
 
                                     <div>
@@ -3231,7 +3360,7 @@ const ProductForm = () => {
                                                                 <div className="relative group/vsku">
                                                                     <textarea
                                                                         rows={1}
-                                                                        className="w-full bg-[#f4f6f8] border border-transparent focus:border-purple-300 focus:bg-white px-2 py-1.5 rounded text-[12px] font-mono font-bold text-stone-600 text-center transition-all resize-none shadow-inner overflow-hidden min-h-[32px] flex items-center justify-center leading-[32px]"
+                                                                        className={`w-full px-2 py-1.5 rounded text-[12px] font-mono font-bold text-center transition-all resize-none shadow-inner overflow-hidden min-h-[32px] flex items-center justify-center leading-[32px] ${getVariantSkuError(index) ? 'bg-brick/5 border border-brick/40 text-brick focus:border-brick' : 'bg-[#f4f6f8] border border-transparent focus:border-purple-300 focus:bg-white text-stone-600'}`}
                                                                         value={v.sku ?? ''}
                                                                         onChange={(e) => {
                                                                             handleVariantChange(index, 'sku', e.target.value);
@@ -3254,6 +3383,7 @@ const ProductForm = () => {
                                                                         </div>
                                                                     )}
                                                                 </div>
+                                                                {getVariantSkuError(index) ? <p className="mt-1 text-[11px] font-semibold text-brick">{getVariantSkuError(index)}</p> : null}
                                                             </td>
                                                             <td className="px-4 py-3 border-r border-stone/20">
                                                                 <div className="relative flex items-center justify-center">

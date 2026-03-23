@@ -407,6 +407,45 @@ class FinanceController extends Controller
         );
     }
 
+    public function dailyProfitTable(Request $request)
+    {
+        $validated = $request->validate([
+            'date_from' => 'nullable|date',
+            'date_to' => 'nullable|date',
+        ]);
+
+        return response()->json(
+            $this->financeReadService->dailyProfitTable($this->accountId($request), $validated)
+        );
+    }
+
+    public function storeDailyProfitConfig(Request $request)
+    {
+        $validated = $request->validate([
+            'effective_date' => 'required|date',
+            'return_rate' => 'nullable|numeric|min:0|max:100',
+            'packaging_cost_per_order' => 'nullable|numeric|min:0',
+            'shipping_calculation_mode' => ['required', Rule::in(['fixed_per_order', 'revenue_percent'])],
+            'shipping_cost_per_order' => 'nullable|numeric|min:0',
+            'shipping_cost_rate' => 'nullable|numeric|min:0|max:100',
+            'tax_rate' => 'nullable|numeric|min:0|max:100',
+            'note' => 'nullable|string|max:5000',
+        ]);
+
+        $version = $this->financeService->storeDailyProfitConfigVersion(
+            $this->accountId($request),
+            [...$validated, 'user_id' => auth()->id()]
+        );
+
+        return response()->json([
+            'version' => $this->financeService->dailyProfitConfigPayload($version),
+            'history' => $this->financeReadService->dailyProfitTable($this->accountId($request), [
+                'date_from' => $validated['effective_date'],
+                'date_to' => $validated['effective_date'],
+            ])['config_history'],
+        ], 201);
+    }
+
     public function payFixedExpense(Request $request, int $id)
     {
         $expense = FinanceFixedExpense::query()->findOrFail($id);

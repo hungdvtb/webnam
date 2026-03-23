@@ -4,6 +4,7 @@ namespace App\Services\Finance;
 
 use App\Models\FinanceCatalog;
 use App\Models\FinanceChangeLog;
+use App\Models\FinanceDailyProfitConfigVersion;
 use App\Models\FinanceFixedExpense;
 use App\Models\FinanceFixedExpenseVersion;
 use App\Models\FinanceLoan;
@@ -421,30 +422,23 @@ class FinanceReadService
 
     public function fixedExpenses(int $accountId, array $filters = []): array
     {
-        $query = FinanceFixedExpense::query()
-            ->with(['category:id,name,color,group_key', 'wallet:id,name,type,bank_name'])
-            ->where('account_id', $accountId);
-
-        if (!empty($filters['search'])) {
-            $search = trim((string) $filters['search']);
-            $query->where(function (Builder $builder) use ($search) {
-                $builder
-                    ->where('code', 'like', '%' . $search . '%')
-                    ->orWhere('name', 'like', '%' . $search . '%')
-                    ->orWhere('note', 'like', '%' . $search . '%');
-            });
-        }
-
-        $rows = $query
-            ->orderBy('sort_order')
-            ->orderBy('id')
-            ->get();
-
         $requestedDate = !empty($filters['date'])
             ? Carbon::parse($filters['date'])
             : now();
 
         $currentVersion = $this->financeService->fixedExpenseByDate($accountId, $requestedDate);
+        $rows = collect($currentVersion['items'] ?? [])
+            ->filter(function (array $item) use ($filters) {
+                if (empty($filters['search'])) {
+                    return true;
+                }
+
+                $search = mb_strtolower(trim((string) $filters['search']));
+                $content = mb_strtolower((string) ($item['content'] ?? ''));
+
+                return $search === '' || str_contains($content, $search);
+            })
+            ->values();
         $history = FinanceFixedExpenseVersion::query()
             ->with('creator:id,name')
             ->where('account_id', $accountId)
@@ -455,12 +449,12 @@ class FinanceReadService
 
         return [
             'date' => $requestedDate->toDateString(),
-            'rows' => $rows->map(fn (FinanceFixedExpense $expense) => $this->financeService->fixedExpensePayload($expense))->values(),
+            'rows' => $rows,
             'current_version' => $currentVersion,
             'history' => $history->map(fn (FinanceFixedExpenseVersion $version) => $this->financeService->fixedExpenseVersionPayload($version))->values(),
             'summary' => [
                 'row_count' => $rows->count(),
-                'total_monthly_amount' => round((float) $rows->sum('amount'), 2),
+                'total_monthly_amount' => round((float) ($currentVersion['total_monthly_amount'] ?? 0), 2),
                 'daily_amount' => round((float) ($currentVersion['daily_amount'] ?? 0), 2),
                 'days_in_month' => (int) ($currentVersion['days_in_month'] ?? $requestedDate->daysInMonth),
                 'day_calculation_mode' => $currentVersion['day_calculation_mode'] ?? $this->financeService->resolveFixedExpenseCalculationMode(null),
@@ -493,6 +487,139 @@ class FinanceReadService
                 ->map(fn (FinanceCatalog $catalog) => $this->financeService->catalogPayload($catalog))
                 ->values(),
             'groups' => collect($this->financeService->catalogGroupLabels()),
+        ];
+    }
+
+    public function dailyProfitTable(int $accountId, array $filters = []): array
+    {
+        [$from, $to] = $this->financeService->resolveDateRange($filters, 30);
+
+        $orders = Order::query()
+            ->where('account_id', $accountId)
+            ->whereBetween('created_at', [$from, $to])
+            ->orderBy('created_at')
+            ->get(['id', 'total_price', 'cost_total', 'status', 'created_at']);
+
+        $ordersByDate = $orders
+            ->filter(fn (Order $order) => !in_array(mb_strtolower((string) $order->status), ['cancelled', 'canceled'], true))
+            ->groupBy(fn (Order $order) => optional($order->created_at)->toDateString());
+
+        $fixedExpenseByDate = $this->financeService
+            ->fixedExpenseDailySeries($accountId, $from, $to)
+            ->keyBy('date');
+
+        $configByDate = $this->financeService
+            ->dailyProfitConfigSeries($accountId, $from, $to)
+            ->keyBy('date');
+
+        $rows = collect();
+        $cursor = $from->copy()->startOfDay();
+
+        while ($cursor <= $to) {
+            $dateKey = $cursor->toDateString();
+            $dayOrders = $ordersByDate->get($dateKey, collect());
+            $config = $configByDate->get($dateKey, $this->financeService->dailyProfitConfigByDate($accountId, $cursor));
+            $fixedExpenseRow = $fixedExpenseByDate->get($dateKey, [
+                'daily_amount' => 0,
+                'effective_date' => null,
+            ]);
+
+            $revenue = round((float) $dayOrders->sum('total_price'), 2);
+            $orderCount = (int) $dayOrders->count();
+            $costGoods = round((float) $dayOrders->sum('cost_total'), 2);
+            $returnFactor = max(0, 1 - ((float) ($config['return_rate'] ?? 0) / 100));
+            $revenueActual = round($revenue * $returnFactor, 2);
+            $costGoodsActual = round($costGoods * $returnFactor, 2);
+            $shippingCost = ($config['shipping_calculation_mode'] ?? 'fixed_per_order') === 'revenue_percent'
+                ? round($revenue * ((float) ($config['shipping_cost_rate'] ?? 0) / 100), 2)
+                : round($orderCount * (float) ($config['shipping_cost_per_order'] ?? 0), 2);
+            $packagingCost = round($orderCount * (float) ($config['packaging_cost_per_order'] ?? 0), 2);
+            $salaryCost = 0.0;
+            $facebookAdsCost = 0.0;
+            $taxCost = round(($revenueActual - $shippingCost) * ((float) ($config['tax_rate'] ?? 1.5) / 100), 2);
+            $fixedExpenseCost = round((float) ($fixedExpenseRow['daily_amount'] ?? 0), 2);
+            $profit = round(
+                $revenueActual
+                - $costGoodsActual
+                - $shippingCost
+                - $packagingCost
+                - $salaryCost
+                - $facebookAdsCost
+                - $taxCost
+                - $fixedExpenseCost,
+                2
+            );
+
+            $rows->push([
+                'date' => $dateKey,
+                'label' => $cursor->locale('vi')->translatedFormat('d/m/Y'),
+                'revenue' => $revenue,
+                'revenue_actual' => $revenueActual,
+                'order_count' => $orderCount,
+                'cost_goods' => $costGoods,
+                'cost_goods_actual' => $costGoodsActual,
+                'shipping_cost' => $shippingCost,
+                'packaging_cost' => $packagingCost,
+                'salary_cost' => $salaryCost,
+                'facebook_ads_cost' => $facebookAdsCost,
+                'tax_cost' => $taxCost,
+                'fixed_expense_cost' => $fixedExpenseCost,
+                'profit' => $profit,
+                'profit_per_order' => $orderCount > 0 ? round($profit / $orderCount, 2) : 0,
+                'cost_goods_ratio' => $revenueActual > 0 ? round($costGoodsActual / $revenueActual, 6) : 0,
+                'ads_ratio' => $revenueActual > 0 ? round($facebookAdsCost / $revenueActual, 6) : 0,
+                'shipping_ratio' => $revenueActual > 0 ? round($shippingCost / $revenueActual, 6) : 0,
+                'config_effective_date' => $config['effective_date'],
+                'fixed_expense_effective_date' => $fixedExpenseRow['effective_date'] ?? null,
+                'return_rate' => round((float) ($config['return_rate'] ?? 0), 4),
+                'packaging_cost_per_order' => round((float) ($config['packaging_cost_per_order'] ?? 0), 2),
+                'shipping_calculation_mode' => $config['shipping_calculation_mode'] ?? 'fixed_per_order',
+                'shipping_calculation_label' => $config['shipping_calculation_label'] ?? $this->financeService->dailyProfitShippingModeLabel('fixed_per_order'),
+                'shipping_cost_per_order' => round((float) ($config['shipping_cost_per_order'] ?? 0), 2),
+                'shipping_cost_rate' => round((float) ($config['shipping_cost_rate'] ?? 0), 4),
+                'tax_rate' => round((float) ($config['tax_rate'] ?? 1.5), 4),
+            ]);
+
+            $cursor->addDay();
+        }
+
+        $totals = [
+            'label' => 'Tổng',
+            'revenue' => round((float) $rows->sum('revenue'), 2),
+            'revenue_actual' => round((float) $rows->sum('revenue_actual'), 2),
+            'order_count' => (int) $rows->sum('order_count'),
+            'cost_goods' => round((float) $rows->sum('cost_goods'), 2),
+            'cost_goods_actual' => round((float) $rows->sum('cost_goods_actual'), 2),
+            'shipping_cost' => round((float) $rows->sum('shipping_cost'), 2),
+            'packaging_cost' => round((float) $rows->sum('packaging_cost'), 2),
+            'salary_cost' => round((float) $rows->sum('salary_cost'), 2),
+            'facebook_ads_cost' => round((float) $rows->sum('facebook_ads_cost'), 2),
+            'tax_cost' => round((float) $rows->sum('tax_cost'), 2),
+            'fixed_expense_cost' => round((float) $rows->sum('fixed_expense_cost'), 2),
+            'profit' => round((float) $rows->sum('profit'), 2),
+        ];
+        $totals['profit_per_order'] = $totals['order_count'] > 0 ? round($totals['profit'] / $totals['order_count'], 2) : 0;
+        $totals['cost_goods_ratio'] = $totals['revenue_actual'] > 0 ? round($totals['cost_goods_actual'] / $totals['revenue_actual'], 6) : 0;
+        $totals['ads_ratio'] = $totals['revenue_actual'] > 0 ? round($totals['facebook_ads_cost'] / $totals['revenue_actual'], 6) : 0;
+        $totals['shipping_ratio'] = $totals['revenue_actual'] > 0 ? round($totals['shipping_cost'] / $totals['revenue_actual'], 6) : 0;
+
+        $history = FinanceDailyProfitConfigVersion::query()
+            ->with('creator:id,name')
+            ->where('account_id', $accountId)
+            ->orderByDesc('effective_date')
+            ->orderByDesc('id')
+            ->limit(20)
+            ->get();
+
+        return [
+            'filters' => [
+                'date_from' => $from->toDateString(),
+                'date_to' => $to->toDateString(),
+            ],
+            'current_config' => $this->financeService->dailyProfitConfigByDate($accountId, $to),
+            'config_history' => $history->map(fn (FinanceDailyProfitConfigVersion $version) => $this->financeService->dailyProfitConfigPayload($version))->values(),
+            'rows' => $rows->values(),
+            'totals' => $totals,
         ];
     }
 

@@ -7,11 +7,34 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Models\InventoryItem;
 use App\Models\StockMovement;
+use App\Services\Reports\SalesProductReportService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
 {
+    public function salesProductMatrix(Request $request, SalesProductReportService $salesProductReportService)
+    {
+        $validated = $request->validate([
+            'date_from' => 'nullable|date',
+            'date_to' => 'nullable|date',
+            'search' => 'nullable|string|max:255',
+            'category_ids' => 'nullable',
+            'product_types' => 'nullable',
+            'warehouse_ids' => 'nullable',
+            'status' => 'nullable',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:10|max:100',
+        ]);
+
+        return response()->json(
+            $salesProductReportService->build(
+                (int) $request->header('X-Account-Id'),
+                $validated
+            )
+        );
+    }
+
     public function dashboardSummary(Request $request)
     {
         $accountId = $request->header('X-Account-Id');

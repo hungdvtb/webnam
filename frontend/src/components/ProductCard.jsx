@@ -7,6 +7,7 @@ const ProductCard = ({ product }) => {
     const { addToCart } = useCart();
     const { user } = useAuth();
     const navigate = useNavigate();
+    const productDetailPath = product?.id ? `/old/details/${product.id}` : '/old/shop';
 
     const handleAddToCart = async (e) => {
         e.preventDefault();
@@ -21,7 +22,7 @@ const ProductCard = ({ product }) => {
 
     return (
         <div className="group flex flex-col items-center gap-6">
-            <Link to={`/details/${product.id}`} className="relative w-full aspect-[4/5] overflow-hidden p-2 bg-white shadow-sm hover-lift cursor-pointer">
+            <Link to={productDetailPath} className="relative w-full aspect-[4/5] overflow-hidden p-2 bg-white shadow-sm hover-lift cursor-pointer">
                 <div className="w-full h-full border-2 border-gold/20 overflow-hidden relative">
                     {(() => {
                         const primaryImage = product.images?.find(img => img.is_primary) || product.images?.[0];
@@ -53,7 +54,7 @@ const ProductCard = ({ product }) => {
                 )}
             </Link>
             <div className="text-center space-y-2">
-                <Link to={`/details/${product.id}`} className="font-display text-2xl text-umber font-bold group-hover:text-primary transition-colors cursor-pointer block">
+                <Link to={productDetailPath} className="font-display text-2xl text-umber font-bold group-hover:text-primary transition-colors cursor-pointer block">
                     {product.name}
                 </Link>
                 <div className="font-body text-xs text-stone italic opacity-60 mb-1">{product.sku}</div>

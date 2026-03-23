@@ -54,7 +54,7 @@ const Cart = () => {
                             <div className="flex-grow flex flex-col justify-between py-2">
                                 <div className="space-y-1">
                                     <div className="flex justify-between items-start">
-                                        <Link to={`/details/${item.product_id}`} className="font-display text-xl font-bold text-primary hover:text-gold transition-colors">{item.product?.name}</Link>
+                                        <Link to={item.product_id ? `/old/details/${item.product_id}` : '/old/shop'} className="font-display text-xl font-bold text-primary hover:text-gold transition-colors">{item.product?.name}</Link>
                                         <button
                                             onClick={() => removeFromCart(item.id)}
                                             className="text-stone hover:text-brick transition-colors"

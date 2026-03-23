@@ -52,6 +52,8 @@ const MOBILE_ORDER_ITEM = {
   icon: "shopping_bag",
   activePrefixes: ["/cart", "/dat-hang", "/checkout", "/cam-on", "/order-success", "/order-history"],
 };
+const SEARCH_HISTORY_STORAGE_KEY = "webgom_mobile_search_history";
+const MAX_SEARCH_HISTORY_ITEMS = 6;
 
 const isExternalUrl = (value = "") => /^https?:\/\//i.test(String(value).trim());
 
@@ -188,18 +190,33 @@ export default function Header({
   productCategories = [],
 }) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchHistory, setSearchHistory] = useState([]);
+  const [isSearchHistoryOpen, setIsSearchHistoryOpen] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [isMobileProductsMenuOpen, setIsMobileProductsMenuOpen] = useState(false);
   const [currentMobileCategorySlug, setCurrentMobileCategorySlug] = useState("");
+  const [currentMobileSearchParamsString, setCurrentMobileSearchParamsString] = useState("");
+  const [mobileOrderNotice, setMobileOrderNotice] = useState("");
   const { cartCount } = useCart();
   const router = useRouter();
   const pathname = usePathname();
+  const searchInputRef = useRef(null);
+  const searchHistoryRef = useRef(null);
   const mobileProductsMenuRef = useRef(null);
   const mobileProductsToggleRef = useRef(null);
+  const mobileOrderNoticeTimerRef = useRef(null);
+  const lastSearchTouchTimestampRef = useRef(0);
   const cartBadgeLabel = cartCount > 99 ? "99+" : cartCount;
   const navigationItems = menuItems.length > 0 ? menuItems : DEFAULT_NAV_ITEMS;
   const mobileMenuItems = buildMobileMenuItems(navigationItems);
   const flattenedProductCategories = flattenProductCategories(productCategories);
+  const currentNormalizedPath = normalizePath(pathname);
+  const isAllProductsView = currentNormalizedPath === "/products" && !currentMobileSearchParamsString;
+  const isProductDetailPage = currentNormalizedPath.startsWith("/product/");
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+  const filteredSearchHistory = searchHistory.filter((term) =>
+    !normalizedSearchQuery || term.toLowerCase().includes(normalizedSearchQuery)
+  );
 
   const resolvedBrandTitle = normalizeBrandTitle(brandText);
   const resolvedLogoUrl = String(logoUrl || "").trim() || "/logo-dai-thanh.png";
@@ -225,6 +242,20 @@ export default function Header({
     mediaQuery.addListener(syncViewport);
 
     return () => mediaQuery.removeListener(syncViewport);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const savedHistory = JSON.parse(window.localStorage.getItem(SEARCH_HISTORY_STORAGE_KEY) || "[]");
+      setSearchHistory(Array.isArray(savedHistory) ? savedHistory.filter(Boolean).slice(0, MAX_SEARCH_HISTORY_ITEMS) : []);
+    } catch (error) {
+      console.error("Failed to read mobile search history:", error);
+      setSearchHistory([]);
+    }
   }, []);
 
   useEffect(() => {
@@ -264,27 +295,232 @@ export default function Header({
 
   useEffect(() => {
     setIsMobileProductsMenuOpen(false);
+    setIsSearchHistoryOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    return () => {
+      if (mobileOrderNoticeTimerRef.current) {
+        window.clearTimeout(mobileOrderNoticeTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isSearchHistoryOpen) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event) => {
+      const target = event.target;
+
+      if (
+        searchHistoryRef.current?.contains(target) ||
+        searchInputRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      setIsSearchHistoryOpen(false);
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+    };
+  }, [isSearchHistoryOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
 
-    const nextCategorySlug = new URLSearchParams(window.location.search).get("category") || "";
+    const nextSearchParamsString = window.location.search.replace(/^\?/, "");
+    const nextCategorySlug = new URLSearchParams(nextSearchParamsString).get("category") || "";
+
+    setCurrentMobileSearchParamsString(nextSearchParamsString);
     setCurrentMobileCategorySlug(nextCategorySlug);
   }, [pathname, isMobileProductsMenuOpen]);
 
+  const showMobileOrderNotice = (message) => {
+    const nextMessage = String(message || "").trim();
+
+    if (!nextMessage) {
+      return;
+    }
+
+    if (mobileOrderNoticeTimerRef.current) {
+      window.clearTimeout(mobileOrderNoticeTimerRef.current);
+    }
+
+    setMobileOrderNotice(nextMessage);
+    mobileOrderNoticeTimerRef.current = window.setTimeout(() => {
+      setMobileOrderNotice("");
+    }, 3200);
+  };
+
+  const persistSearchHistory = (items) => {
+    setSearchHistory(items);
+
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(SEARCH_HISTORY_STORAGE_KEY, JSON.stringify(items));
+    } catch (error) {
+      console.error("Failed to persist mobile search history:", error);
+    }
+  };
+
+  const saveSearchHistoryEntry = (value) => {
+    const nextValue = String(value || "").trim();
+
+    if (!nextValue) {
+      return;
+    }
+
+    setSearchHistory((currentItems) => {
+      const dedupedItems = [
+        nextValue,
+        ...currentItems.filter((item) => item.toLowerCase() !== nextValue.toLowerCase()),
+      ].slice(0, MAX_SEARCH_HISTORY_ITEMS);
+
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(SEARCH_HISTORY_STORAGE_KEY, JSON.stringify(dedupedItems));
+        } catch (error) {
+          console.error("Failed to persist mobile search history:", error);
+        }
+      }
+
+      return dedupedItems;
+    });
+  };
+
+  const clearSearchHistory = () => {
+    persistSearchHistory([]);
+    setIsSearchHistoryOpen(false);
+  };
+
+  const submitSearch = (value) => {
+    const nextValue = String(value || "").trim();
+
+    if (!nextValue) {
+      return;
+    }
+
+    saveSearchHistoryEntry(nextValue);
+    setSearchQuery(nextValue);
+    setIsSearchHistoryOpen(false);
+    router.push(`/products?search=${encodeURIComponent(nextValue)}`);
+  };
+
   const handleSearch = (event) => {
     if ((event.type === "keydown" && event.key === "Enter") || event.type === "click") {
-      if (searchQuery.trim()) {
-        router.push(`/products?search=${encodeURIComponent(searchQuery.trim())}`);
-      }
+      submitSearch(searchQuery);
     }
+  };
+
+  const handleSearchHistorySelect = (value) => {
+    submitSearch(value);
+  };
+
+  const handleSearchInputFocus = () => {
+    if (isMobileViewport && searchHistory.length > 0) {
+      setIsSearchHistoryOpen(true);
+    }
+  };
+
+  const handleSearchInputChange = (event) => {
+    const nextValue = event.target.value;
+    setSearchQuery(nextValue);
+
+    if (isMobileViewport) {
+      setIsSearchHistoryOpen(searchHistory.length > 0);
+    }
+  };
+
+  const selectSearchInputContent = () => {
+    const input = searchInputRef.current;
+
+    if (!input || !input.value) {
+      return;
+    }
+
+    input.focus();
+    input.select();
+
+    if (typeof input.setSelectionRange === "function") {
+      input.setSelectionRange(0, input.value.length);
+    }
+  };
+
+  const handleSearchInputDoubleClick = () => {
+    selectSearchInputContent();
+  };
+
+  const handleSearchInputTouchEnd = () => {
+    const currentTimestamp = Date.now();
+
+    if (currentTimestamp - lastSearchTouchTimestampRef.current < 280) {
+      selectSearchInputContent();
+    }
+
+    lastSearchTouchTimestampRef.current = currentTimestamp;
   };
 
   const toggleMobileProductsMenu = () => {
     setIsMobileProductsMenuOpen((currentValue) => !currentValue);
+  };
+
+  const handleMobileAllProductsClick = (event) => {
+    event.preventDefault();
+    setCurrentMobileCategorySlug("");
+    setIsMobileProductsMenuOpen(false);
+
+    if (currentNormalizedPath !== "/products" || currentMobileSearchParamsString) {
+      router.push("/products");
+    }
+  };
+
+  const handleMobileOrderClick = (event, item) => {
+    event.preventDefault();
+    setIsMobileProductsMenuOpen(false);
+
+    if (isProductDetailPage && typeof window !== "undefined") {
+      let requestHandled = false;
+      let requestSucceeded = false;
+      let requestMessage = "";
+
+      window.dispatchEvent(
+        new CustomEvent("webgom:mobile-order-request", {
+          detail: {
+            source: "mobile-bottom-order",
+            respond: (payload = {}) => {
+              requestHandled = true;
+              requestSucceeded = Boolean(payload.success);
+              requestMessage = String(payload.message || "").trim();
+            },
+          },
+        })
+      );
+
+      if (requestHandled) {
+        if (!requestSucceeded) {
+          showMobileOrderNotice(requestMessage || "Vui lòng chọn đầy đủ thông tin sản phẩm trước khi đặt hàng.");
+        }
+        return;
+      }
+
+      showMobileOrderNotice("Vui lòng chờ tải xong thông tin sản phẩm rồi thử lại.");
+      return;
+    }
+
+    router.push(item?.href || "/cart");
   };
 
   return (
@@ -322,18 +558,45 @@ export default function Header({
         )}
 
         <div className="actions-section">
-          <div className="search-bar">
+          <div className="search-bar" ref={searchHistoryRef}>
             <span className="material-symbols-outlined search-icon" onClick={handleSearch}>
               search
             </span>
             <input
+              ref={searchInputRef}
               type="text"
               placeholder={resolvedSearchPlaceholder}
               value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
+              onChange={handleSearchInputChange}
+              onFocus={handleSearchInputFocus}
               onKeyDown={handleSearch}
+              onDoubleClick={handleSearchInputDoubleClick}
+              onTouchEnd={handleSearchInputTouchEnd}
               className="search-input"
             />
+            {isMobileViewport && isSearchHistoryOpen && filteredSearchHistory.length > 0 ? (
+              <div className="search-history-panel" role="dialog" aria-label="Lịch sử tìm kiếm">
+                <div className="search-history-header">
+                  <span className="search-history-title">Lịch sử tìm kiếm</span>
+                  <button type="button" className="search-history-clear" onClick={clearSearchHistory}>
+                    Xóa
+                  </button>
+                </div>
+                <div className="search-history-list">
+                  {filteredSearchHistory.map((term) => (
+                    <button
+                      key={term}
+                      type="button"
+                      className="search-history-item"
+                      onClick={() => handleSearchHistorySelect(term)}
+                    >
+                      <span className="material-symbols-outlined search-history-item__icon">history</span>
+                      <span className="search-history-item__label">{term}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <Link
@@ -399,8 +662,7 @@ export default function Header({
               aria-hidden={!isMobileProductsMenuOpen}
             >
               <div className="mobile-products-sheet__header">
-                <div>
-                  <p className="mobile-products-sheet__eyebrow">Danh muc nhanh</p>
+                <div className="mobile-products-sheet__title-group">
                   <h3 className="mobile-products-sheet__title">Danh mục sản phẩm</h3>
                 </div>
                 <button
@@ -416,8 +678,8 @@ export default function Header({
               <div className="mobile-products-sheet__list">
                 <Link
                   href="/products"
-                  className={`mobile-products-link ${normalizePath(pathname) === "/products" && !currentMobileCategorySlug ? "mobile-products-link-active" : ""}`}
-                  onClick={() => setIsMobileProductsMenuOpen(false)}
+                  className={`mobile-products-link mobile-products-link-all ${isAllProductsView ? "mobile-products-link-active" : ""}`}
+                  onClick={handleMobileAllProductsClick}
                 >
                   <span className="mobile-products-link__name">Tất cả sản phẩm</span>
                   <span className="material-symbols-outlined mobile-products-link__arrow">chevron_right</span>
@@ -425,7 +687,7 @@ export default function Header({
 
                 {flattenedProductCategories.map((category) => {
                   const isCategoryActive =
-                    normalizePath(pathname) === "/products" &&
+                    currentNormalizedPath === "/products" &&
                     currentMobileCategorySlug === category.slug;
 
                   return (
@@ -448,14 +710,23 @@ export default function Header({
             </div>
           )}
 
+          {mobileOrderNotice ? (
+            <div className="mobile-bottom-order-toast" role="status" aria-live="polite">
+              {mobileOrderNotice}
+            </div>
+          ) : null}
+
           <nav className="mobile-bottom-nav" aria-label="Dieu huong nhanh tren di dong">
             <div className="mobile-bottom-nav__inner">
               {mobileMenuItems.map((item) => {
                 const isProductsTrigger = item.id === "header-default-products" || item.shortLabel === "Sản phẩm";
+                const isOrderItem = item.id === MOBILE_ORDER_ITEM.id;
                 const isActive = isProductsTrigger
                   ? isMobileProductsMenuOpen || isMobileMenuItemActive(pathname, item)
                   : isMobileMenuItemActive(pathname, item);
-                const className = `mobile-bottom-item ${isActive ? "mobile-bottom-item-active" : ""}`;
+                const className = `mobile-bottom-item ${isActive ? "mobile-bottom-item-active" : ""} ${
+                  isOrderItem ? "mobile-bottom-item-order" : ""
+                }`;
 
                 const content = (
                   <span className="mobile-bottom-item__content">
@@ -489,6 +760,21 @@ export default function Header({
                       aria-expanded={isMobileProductsMenuOpen}
                       aria-controls="mobile-products-sheet"
                       onClick={toggleMobileProductsMenu}
+                    >
+                      {content}
+                    </button>
+                  );
+                }
+
+                if (isOrderItem) {
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`${className} mobile-bottom-item-button`}
+                      title={item.title}
+                      aria-current={isActive ? "page" : undefined}
+                      onClick={(event) => handleMobileOrderClick(event, item)}
                     >
                       {content}
                     </button>
@@ -655,6 +941,86 @@ export default function Header({
         .search-input:focus {
           width: clamp(220px, 21vw, 290px);
           background-color: #e2e8f0;
+        }
+
+        .search-history-panel {
+          position: absolute;
+          top: calc(100% + 10px);
+          left: 0;
+          right: 0;
+          z-index: 1200;
+          padding: 0.75rem;
+          border: 1px solid rgba(197, 160, 89, 0.16);
+          border-radius: 16px;
+          background: rgba(255, 255, 255, 0.98);
+          backdrop-filter: blur(18px);
+          box-shadow: 0 18px 36px rgba(15, 23, 42, 0.14);
+        }
+
+        .search-history-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 0.75rem;
+          margin-bottom: 0.6rem;
+        }
+
+        .search-history-title {
+          color: #1a2c4e;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .search-history-clear {
+          border: 0;
+          background: transparent;
+          color: #b9883c;
+          font-size: 11px;
+          font-weight: 800;
+          cursor: pointer;
+          padding: 0;
+        }
+
+        .search-history-list {
+          display: flex;
+          flex-direction: column;
+          gap: 0.45rem;
+        }
+
+        .search-history-item {
+          width: 100%;
+          display: flex;
+          align-items: center;
+          gap: 0.6rem;
+          padding: 0.7rem 0.8rem;
+          border: 1px solid rgba(226, 232, 240, 0.95);
+          border-radius: 12px;
+          background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+          color: #1f2a44;
+          text-align: left;
+          box-shadow: 0 6px 14px rgba(15, 23, 42, 0.05);
+          transition: border-color 160ms ease, background-color 160ms ease, transform 160ms ease;
+        }
+
+        .search-history-item:active {
+          transform: scale(0.985);
+        }
+
+        .search-history-item__icon {
+          color: #b9883c;
+          font-size: 16px !important;
+          flex-shrink: 0;
+        }
+
+        .search-history-item__label {
+          min-width: 0;
+          overflow: hidden;
+          color: #1f2a44;
+          font-size: 12px;
+          font-weight: 700;
+          line-height: 1.35;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .cart-action {
@@ -1012,41 +1378,38 @@ export default function Header({
 
           .mobile-products-sheet__header {
             display: flex;
-            align-items: flex-start;
+            align-items: center;
             justify-content: space-between;
             gap: 0.75rem;
-            padding-bottom: 8px;
+            padding-bottom: 12px;
             border-bottom: 1px solid rgba(226, 232, 240, 0.9);
           }
 
-          .mobile-products-sheet__eyebrow {
-            margin: 0 0 3px;
-            color: #b58a3c;
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
+          .mobile-products-sheet__title-group {
+            min-width: 0;
+            flex: 1;
           }
 
           .mobile-products-sheet__title {
             margin: 0;
             color: #1a2c4e;
-            font-size: 15px;
+            font-size: 16px;
             font-weight: 800;
             line-height: 1.25;
           }
 
           .mobile-products-sheet__close {
-            width: 30px;
-            height: 30px;
+            width: 32px;
+            height: 32px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            border: 0;
+            border: 1px solid rgba(226, 232, 240, 0.9);
             border-radius: 999px;
-            background: #f8fafc;
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
             color: #334155;
             flex-shrink: 0;
+            box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
           }
 
           .mobile-products-sheet__close :global(.material-symbols-outlined) {
@@ -1056,67 +1419,126 @@ export default function Header({
           .mobile-products-sheet__list {
             display: flex;
             flex-direction: column;
-            gap: 5px;
-            margin-top: 10px;
+            gap: 8px;
+            margin-top: 12px;
             overflow: visible;
           }
 
           .mobile-products-link {
             width: 100%;
-            min-height: 40px;
+            min-height: 48px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 8px;
-            padding: 10px 12px;
-            border-radius: 12px;
-            background: #fff;
+            gap: 10px;
+            padding: 11px 13px;
+            border-radius: 14px;
+            border: 1px solid rgba(226, 232, 240, 0.95);
+            background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
             color: #1f2a44;
             text-decoration: none;
-            box-shadow: inset 0 0 0 1px rgba(226, 232, 240, 0.9);
+            box-shadow:
+              0 8px 18px rgba(15, 23, 42, 0.06),
+              inset 0 1px 0 rgba(255, 255, 255, 0.9);
             transition:
               background-color 180ms ease,
               color 180ms ease,
+              border-color 180ms ease,
               box-shadow 180ms ease,
               transform 180ms ease;
+          }
+
+          .mobile-products-link:hover,
+          .mobile-products-link:focus-visible {
+            color: #132544;
+            border-color: rgba(197, 160, 89, 0.28);
+            box-shadow:
+              0 10px 20px rgba(15, 23, 42, 0.08),
+              inset 0 1px 0 rgba(255, 255, 255, 0.9);
+            outline: none;
           }
 
           .mobile-products-link:active {
             transform: scale(0.985);
           }
 
+          .mobile-products-link-all {
+            background: linear-gradient(180deg, rgba(248, 243, 233, 0.55) 0%, #ffffff 100%);
+          }
+
           .mobile-products-link-active {
             background: linear-gradient(180deg, rgba(248, 243, 233, 0.94) 0%, rgba(255, 255, 255, 0.98) 100%);
             color: #1a2c4e;
-            box-shadow: inset 0 0 0 1px rgba(197, 160, 89, 0.26);
+            border-color: rgba(197, 160, 89, 0.28);
+            box-shadow:
+              0 12px 24px rgba(197, 160, 89, 0.12),
+              inset 0 0 0 1px rgba(197, 160, 89, 0.18);
           }
 
           .mobile-products-link__name {
             min-width: 0;
-            font-size: 12px;
+            flex: 1;
+            font-size: 12.5px;
             font-weight: 700;
-            line-height: 1.3;
+            line-height: 1.35;
+            white-space: normal;
+            overflow-wrap: anywhere;
           }
 
           .mobile-products-link__count {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            min-width: 24px;
-            height: 22px;
-            padding: 0 7px;
+            min-width: 26px;
+            height: 24px;
+            padding: 0 8px;
             border-radius: 999px;
+            border: 1px solid rgba(197, 160, 89, 0.18);
             background: #f8f3e9;
             color: #946d26;
             font-size: 10px;
             font-weight: 800;
             flex-shrink: 0;
+            box-shadow: inset 0 -1px 0 rgba(148, 109, 38, 0.08);
           }
 
           .mobile-products-link__arrow {
-            color: #94a3b8;
+            width: 24px;
+            height: 24px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 999px;
+            background: rgba(197, 160, 89, 0.12);
+            color: #946d26;
             font-size: 16px !important;
             flex-shrink: 0;
+          }
+
+          .mobile-products-link-active .mobile-products-link__count,
+          .mobile-products-link-active .mobile-products-link__arrow {
+            background: rgba(197, 160, 89, 0.16);
+            color: #8f6724;
+            border-color: rgba(197, 160, 89, 0.24);
+          }
+
+          .mobile-bottom-order-toast {
+            position: fixed;
+            left: 50%;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 92px);
+            z-index: 997;
+            width: min(calc(100vw - 24px), 320px);
+            padding: 11px 14px;
+            border: 1px solid rgba(239, 68, 68, 0.18);
+            border-radius: 14px;
+            background: rgba(15, 23, 42, 0.96);
+            box-shadow: 0 18px 36px rgba(15, 23, 42, 0.2);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1.4;
+            text-align: center;
+            transform: translateX(-50%);
           }
 
           .mobile-bottom-nav {
@@ -1210,6 +1632,39 @@ export default function Header({
             box-shadow: inset 0 0 0 1px rgba(197, 160, 89, 0.14);
           }
 
+          .mobile-bottom-item-order .mobile-bottom-item__content {
+            border-color: rgba(197, 160, 89, 0.28);
+            background: linear-gradient(180deg, rgba(248, 243, 233, 0.94) 0%, rgba(255, 250, 240, 0.98) 100%);
+            box-shadow:
+              0 10px 22px rgba(197, 160, 89, 0.16),
+              inset 0 0 0 1px rgba(197, 160, 89, 0.12);
+          }
+
+          .mobile-bottom-item-order .mobile-bottom-item__icon-wrap {
+            background: linear-gradient(135deg, #d8b06f 0%, #b9883c 100%);
+            color: #fff;
+            box-shadow: 0 8px 16px rgba(185, 136, 60, 0.24);
+          }
+
+          .mobile-bottom-item-order .mobile-bottom-item__icon {
+            color: currentColor;
+          }
+
+          .mobile-bottom-item-order .mobile-bottom-item__label {
+            color: #8f6724;
+            font-weight: 800;
+          }
+
+          .mobile-bottom-item-order:hover .mobile-bottom-item__content,
+          .mobile-bottom-item-order:focus-visible .mobile-bottom-item__content,
+          .mobile-bottom-item-order.mobile-bottom-item-active .mobile-bottom-item__content {
+            border-color: rgba(185, 136, 60, 0.34);
+            background: linear-gradient(180deg, rgba(255, 247, 230, 0.98) 0%, rgba(255, 252, 246, 1) 100%);
+            box-shadow:
+              0 14px 28px rgba(185, 136, 60, 0.18),
+              inset 0 0 0 1px rgba(185, 136, 60, 0.14);
+          }
+
           .mobile-bottom-item__icon-wrap {
             box-sizing: border-box;
             width: 24px;
@@ -1271,9 +1726,16 @@ export default function Header({
         @media (max-width: 420px) {
           .mobile-products-sheet {
             left: 8px;
-            width: min(calc(100vw - 16px), 282px);
+            width: min(calc(100vw - 16px), 286px);
             bottom: calc(env(safe-area-inset-bottom, 0px) + 82px);
-            padding: 11px;
+            padding: 12px;
+          }
+
+          .mobile-bottom-order-toast {
+            width: min(calc(100vw - 16px), 300px);
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 84px);
+            padding: 10px 12px;
+            font-size: 11.5px;
           }
 
           .mobile-products-sheet__title {
@@ -1281,13 +1743,26 @@ export default function Header({
           }
 
           .mobile-products-link {
-            min-height: 38px;
-            padding: 9px 11px;
-            border-radius: 12px;
+            min-height: 44px;
+            padding: 10px 12px;
+            border-radius: 13px;
           }
 
           .mobile-products-link__name {
-            font-size: 11.5px;
+            font-size: 11.6px;
+          }
+
+          .mobile-products-link__count {
+            min-width: 24px;
+            height: 22px;
+            padding: 0 7px;
+            font-size: 9.5px;
+          }
+
+          .mobile-products-link__arrow {
+            width: 22px;
+            height: 22px;
+            font-size: 15px !important;
           }
 
           .mobile-bottom-nav {

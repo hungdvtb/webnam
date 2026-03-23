@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Account;
 use App\Models\Category;
 use App\Models\Product;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -34,6 +35,54 @@ class RelatedProductsFallbackTest extends TestCase
         $this->assertNotContains($fallbackCandidate->id, $ids);
     }
 
+    public function test_web_related_endpoint_handles_account_scoped_explicit_relations(): void
+    {
+        $account = $this->createAccount('Tai khoan web api');
+        $category = $this->createCategory('Gom su', 'gom-su');
+
+        $product = $this->createProduct('San pham goc', 'san-pham-goc-account', $category->id, $account->id);
+        $selected = $this->createProduct('Lien quan', 'lien-quan-account', $category->id, $account->id);
+
+        $product->relatedProducts()->attach([
+            $selected->id => [
+                'link_type' => 'related',
+                'position' => 0,
+                'account_id' => $account->id,
+            ],
+        ]);
+
+        $response = $this
+            ->withHeaders(['X-Account-Id' => (string) $account->id])
+            ->getJson("/api/web-api/products/{$product->slug}/related")
+            ->assertOk();
+
+        $this->assertSame([$selected->id], collect($response->json())->pluck('id')->all());
+    }
+
+    public function test_storefront_related_endpoint_handles_account_scoped_explicit_relations(): void
+    {
+        $account = $this->createAccount('Tai khoan storefront');
+        $category = $this->createCategory('Do tho', 'do-tho');
+
+        $product = $this->createProduct('San pham goc storefront', 'san-pham-goc-storefront', $category->id, $account->id);
+        $selected = $this->createProduct('Lien quan storefront', 'lien-quan-storefront', $category->id, $account->id);
+
+        $product->relatedProducts()->attach([
+            $selected->id => [
+                'link_type' => 'related',
+                'position' => 0,
+                'account_id' => $account->id,
+            ],
+        ]);
+
+        $response = $this
+            ->withHeaders(['X-Account-Id' => (string) $account->id])
+            ->getJson("/api/storefront/products/{$product->id}/related")
+            ->assertOk();
+
+        $this->assertSame([$selected->id], collect($response->json())->pluck('id')->all());
+    }
+
     public function test_web_related_endpoint_falls_back_to_same_category_when_no_manual_selection_exists(): void
     {
         $category = $this->createCategory('Bo suu tap', 'bo-suu-tap');
@@ -63,13 +112,22 @@ class RelatedProductsFallbackTest extends TestCase
         ]);
     }
 
-    private function createProduct(string $name, string $slug, int $categoryId): Product
+    private function createProduct(string $name, string $slug, int $categoryId, ?int $accountId = null): Product
     {
         return Product::query()->create([
             'name' => $name,
             'slug' => $slug,
             'price' => 100000,
             'category_id' => $categoryId,
+            'account_id' => $accountId,
+            'status' => true,
+        ]);
+    }
+
+    private function createAccount(string $name): Account
+    {
+        return Account::query()->create([
+            'name' => $name,
             'status' => true,
         ]);
     }

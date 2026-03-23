@@ -232,19 +232,19 @@ export default async function RootLayout({ children }) {
             }
 
             .site-content-shell {
-              padding-top: 110px;
+              padding-top: 112px;
             }
           }
 
           @media (max-width: 640px) {
             .site-content-shell {
-              padding-top: 104px;
+              padding-top: 126px;
             }
           }
 
           @media (max-width: 420px) {
             .site-content-shell {
-              padding-top: 98px;
+              padding-top: 120px;
             }
           }
         `,

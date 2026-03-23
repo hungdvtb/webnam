@@ -260,15 +260,15 @@ class StorefrontController extends Controller
     {
         $accountId = $request->header('X-Account-Id');
         $product = Product::query()
-            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+            ->when($accountId, fn($q) => $q->where('products.account_id', $accountId))
             ->with('categories:id')
             ->findOrFail($id);
         
         $limit = 8;
         
         $explicitRelated = $product->relatedProducts()
-            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
-            ->where('status', true)
+            ->when($accountId, fn($q) => $q->where('products.account_id', $accountId))
+            ->where('products.status', true)
             ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->orderBy('sort_order')])
             ->get();
 
@@ -299,8 +299,8 @@ class StorefrontController extends Controller
         }
 
         $fallback = Product::query()
-            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
-            ->where('status', true)
+            ->when($accountId, fn($q) => $q->where('products.account_id', $accountId))
+            ->where('products.status', true)
             ->whereDoesntHave('parentConfigurable')
             ->whereKeyNot($product->id)
             ->where(function ($query) use ($categoryIds) {

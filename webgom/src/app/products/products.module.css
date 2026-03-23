@@ -702,17 +702,25 @@
 
 @media (max-width: 767px) {
   .breadcrumbNav {
-    gap: 0.35rem;
-    font-size: 0.76rem;
-    margin-top: 12px;
+    display: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
 
   .categoryBanner {
     display: none;
   }
 
+  .productsPage main {
+    padding-top: 0 !important;
+  }
+
   .filterBar {
-    padding: 0.875rem;
+    margin-top: 0;
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    border-radius: 16px;
+    box-shadow: 0 1px 3px rgba(17, 24, 39, 0.06);
   }
 
   .filterBarHeader {
@@ -724,7 +732,7 @@
     display: grid;
     grid-template-columns: minmax(0, 1.18fr) minmax(0, 0.94fr);
     align-items: center;
-    gap: 0.625rem;
+    gap: 0.5rem;
   }
 
   .categoryDropdown,
@@ -740,9 +748,9 @@
   .sortSelect {
     margin-left: 0;
     flex: none;
-    min-height: 46px;
-    padding: 0 0.75rem;
-    gap: 0.45rem;
+    min-height: 44px;
+    padding: 0 0.7rem;
+    gap: 0.4rem;
     justify-content: flex-start;
     white-space: nowrap;
   }
@@ -759,8 +767,8 @@
   }
 
   .filterButton {
-    min-height: 46px;
-    padding: 0.75rem 0.875rem;
+    min-height: 44px;
+    padding: 0.7rem 0.825rem;
     gap: 0.45rem;
   }
 

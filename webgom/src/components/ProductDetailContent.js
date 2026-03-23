@@ -13,6 +13,7 @@ import BundleProductView from './product/BundleProductView';
 export default function ProductDetailContent({ product }) {
   const [selectedOptions, setSelectedOptions] = useState({});
   const [selectedVariantId, setSelectedVariantId] = useState(null);
+  const [hasExplicitVariantSelection, setHasExplicitVariantSelection] = useState(false);
   const [selectedGroupItems, setSelectedGroupItems] = useState([]);
   const [bundleItems, setBundleItems] = useState([]);
   const [quantity, setQuantity] = useState(1);
@@ -66,6 +67,8 @@ export default function ProductDetailContent({ product }) {
       setSelectedVariantId(null);
     }
 
+    setHasExplicitVariantSelection(false);
+
     if (product?.type === 'grouped' && product.grouped_items?.length > 0) {
       setSelectedGroupItems(product.grouped_items.map(item => item.id));
     }
@@ -111,6 +114,20 @@ export default function ProductDetailContent({ product }) {
   }, [hasStructuredVariantAttributes, hasVariants, product, selectedOptions, selectedVariantId]);
 
   const currentProduct = matchingVariant || product;
+
+  const hasConfigurableChoices = useMemo(() => {
+    if (!hasVariants) return false;
+
+    if (!hasStructuredVariantAttributes) {
+      return (product?.variations?.length || 0) > 1;
+    }
+
+    const hasMultipleAttributeChoices = (product?.super_attributes || []).some(
+      (attr) => (attr?.options?.length || 0) > 1
+    );
+
+    return hasMultipleAttributeChoices || (product?.variations?.length || 0) > 1;
+  }, [hasStructuredVariantAttributes, hasVariants, product]);
 
   const toggleGroupItem = (id) => {
     const items = product.bundle_items || product.grouped_items || [];
@@ -299,7 +316,76 @@ export default function ProductDetailContent({ product }) {
     return optionPayload;
   };
 
+  const getCurrentItemsToCart = () => {
+    const items = (product.bundle_items?.length ? product.bundle_items : null)
+      || (product.grouped_items?.length ? product.grouped_items : []);
+
+    if (product.type === 'bundle') {
+      return bundleItems
+        .filter(it => it.selected && !it.removed)
+        .map((it, idx) => ({
+          uid: `${it.id}_${it.pivot?.variant_id || idx}`,
+          id: it.id,
+          name: it.name,
+          qty: it.qty,
+          price: it.price,
+          image: it.images?.[0]?.image_url || it.primary_image?.url
+        }));
+    }
+
+    return selectedGroupItems.map((id, idx) => {
+      const item = items.find(i => i.id === id);
+      return {
+        uid: `${id}_${idx}`,
+        id,
+        name: item?.name,
+        qty: item?.pivot?.quantity || 1,
+        price: item?.price
+      };
+    });
+  };
+
+  const addCurrentSelectionToCart = () => {
+    const cartProduct = product.type === 'configurable' ? currentProduct : product;
+    addToCart(cartProduct, quantity, getSelectedOptionsPayload(), getCurrentItemsToCart(), displayPrice);
+  };
+
+  const getMobileQuickOrderValidationMessage = () => {
+    if (!hasVariants) {
+      return '';
+    }
+
+    if (hasStructuredVariantAttributes) {
+      const missingAttributes = (product.super_attributes || []).filter((attr) => !selectedOptions[attr.code]);
+
+      if (missingAttributes.length > 0) {
+        return `Vui lòng chọn ${missingAttributes.map((attr) => attr.name).join(', ')} trước khi đặt hàng.`;
+      }
+
+      if (!matchingVariant || !currentProduct?.id) {
+        return 'Tổ hợp thuộc tính hiện tại chưa hợp lệ. Vui lòng chọn lại trước khi đặt hàng.';
+      }
+
+      if (hasConfigurableChoices && !hasExplicitVariantSelection) {
+        return 'Vui lòng chọn đầy đủ thuộc tính sản phẩm trước khi đặt hàng.';
+      }
+
+      return '';
+    }
+
+    if (!currentProduct?.id || !selectedVariantId) {
+      return 'Vui lòng chọn biến thể sản phẩm trước khi đặt hàng.';
+    }
+
+    if (hasConfigurableChoices && !hasExplicitVariantSelection) {
+      return 'Vui lòng chọn biến thể sản phẩm trước khi đặt hàng.';
+    }
+
+    return '';
+  };
+
   const handleOptionSelect = (attrCode, value) => {
+    setHasExplicitVariantSelection(true);
     setSelectedOptions(prev => {
       const next = { ...prev, [attrCode]: value };
       
@@ -349,37 +435,14 @@ export default function ProductDetailContent({ product }) {
   };
 
   const handleVariantSelect = (variantId) => {
+    setHasExplicitVariantSelection(true);
     setSelectedVariantId(variantId);
     setActiveIndex(0);
   };
 
   const handleAddToCart = (e) => {
     if (e) e.preventDefault();
-    const items = (product.bundle_items?.length ? product.bundle_items : null)
-      || (product.grouped_items?.length ? product.grouped_items : []);
-
-    const itemsToCart = product.type === 'bundle'
-      ? bundleItems.filter(it => it.selected && !it.removed).map((it, idx) => ({
-          uid: `${it.id}_${it.pivot?.variant_id || idx}`,  // unique per slot
-          id: it.id,
-          name: it.name,
-          qty: it.qty,
-          price: it.price,
-          image: it.images?.[0]?.image_url || it.primary_image?.url
-        }))
-      : selectedGroupItems.map((id, idx) => {
-          const item = items.find(i => i.id === id);
-          return {
-            uid: `${id}_${idx}`,
-            id,
-            name: item?.name,
-            qty: item?.pivot?.quantity || 1,
-            price: item?.price
-          };
-      });
-
-    const cartProduct = product.type === 'configurable' ? currentProduct : product;
-    addToCart(cartProduct, quantity, getSelectedOptionsPayload(), itemsToCart, displayPrice);
+    addCurrentSelectionToCart();
     flyToCart(e, images?.[0] ? getImageUrl(images[0]) : '/logo-dai-thanh.png');
   };
 
@@ -397,33 +460,39 @@ export default function ProductDetailContent({ product }) {
 
   const handleBuyNow = (e) => {
     if (e) e.preventDefault();
-    const items = (product.bundle_items?.length ? product.bundle_items : null)
-      || (product.grouped_items?.length ? product.grouped_items : []);
-
-    const itemsToCart = product.type === 'bundle'
-      ? bundleItems.filter(it => it.selected && !it.removed).map((it, idx) => ({
-          uid: `${it.id}_${it.pivot?.variant_id || idx}`,
-          id: it.id,
-          name: it.name,
-          qty: it.qty,
-          price: it.price,
-          image: it.images?.[0]?.image_url || it.primary_image?.url
-        }))
-      : selectedGroupItems.map((id, idx) => {
-          const item = items.find(i => i.id === id);
-          return {
-            uid: `${id}_${idx}`,
-            id,
-            name: item?.name,
-            qty: item?.pivot?.quantity || 1,
-            price: item?.price
-          };
-      });
-
-    const cartProduct = product.type === 'configurable' ? currentProduct : product;
-    addToCart(cartProduct, quantity, getSelectedOptionsPayload(), itemsToCart, displayPrice);
+    addCurrentSelectionToCart();
     router.push('/cart');
   };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const handleMobileOrderRequest = (event) => {
+      const respond = typeof event.detail?.respond === 'function' ? event.detail.respond : () => {};
+      const validationMessage = getMobileQuickOrderValidationMessage();
+
+      if (validationMessage) {
+        respond({ success: false, message: validationMessage });
+        return;
+      }
+
+      addCurrentSelectionToCart();
+      respond({ success: true });
+      router.push('/cart');
+    };
+
+    window.addEventListener('webgom:mobile-order-request', handleMobileOrderRequest);
+
+    return () => {
+      window.removeEventListener('webgom:mobile-order-request', handleMobileOrderRequest);
+    };
+  }, [
+    addCurrentSelectionToCart,
+    getMobileQuickOrderValidationMessage,
+    router
+  ]);
 
   const handleBuyBundleConfig = (configName) => {
     const { itemsToCart, finalPrice } = getBundleSelectionByConfig(configName);

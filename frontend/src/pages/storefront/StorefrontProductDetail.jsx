@@ -193,7 +193,7 @@ const getVideoMediaItem = (videoUrl, fallbackThumbnail) => {
             id: `video-youtube-${youtubeId}`,
             type: 'video',
             provider: 'youtube',
-            embedUrl: `https://www.youtube.com/embed/${youtubeId}`,
+            embedUrl: `https://www.youtube.com/embed/${youtubeId}?playsinline=1&rel=0&modestbranding=1&enablejsapi=1`,
             thumbnailUrl: `https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`,
         };
     }
@@ -248,6 +248,48 @@ const buildMediaItems = (product, displayEntity) => {
 
     const [primaryImage, ...remainingImages] = imageItems;
     return [primaryImage, videoItem, ...remainingImages];
+};
+
+const isAttributeOptionAvailable = (attributeId, optionValue, variants, superAttributes, selectedAttributes) => (
+    variants.some((variant) => (
+        superAttributes.every((attribute) => {
+            const expectedValue = Number(attribute.id) === Number(attributeId)
+                ? optionValue
+                : selectedAttributes[attribute.id];
+
+            if (!expectedValue) {
+                return true;
+            }
+
+            const variantValue = variant.attributes?.find((item) => Number(item.id) === Number(attribute.id))?.value;
+            return variantValue === expectedValue;
+        })
+    ))
+);
+
+const getBundleSelectionKey = (groupTitle, itemId, index) => `${groupTitle || 'bundle'}::${itemId}::${index}`;
+
+const resolveBundleUnitPrice = (item, selectedVariant) => {
+    const bundlePrice = Number(item?.bundle_price);
+    const hasBundlePrice = Number.isFinite(bundlePrice);
+    const selectedVariantId = Number(selectedVariant?.id || 0);
+    const defaultVariantId = Number(item?.selected_variant_id || 0);
+
+    if (selectedVariant && hasBundlePrice && selectedVariantId > 0 && defaultVariantId > 0 && selectedVariantId === defaultVariantId) {
+        return bundlePrice;
+    }
+
+    const variantPrice = Number(selectedVariant?.current_price ?? selectedVariant?.price);
+    if (selectedVariant && Number.isFinite(variantPrice)) {
+        return variantPrice;
+    }
+
+    if (hasBundlePrice) {
+        return bundlePrice;
+    }
+
+    const itemPrice = Number(item?.current_price ?? item?.price);
+    return Number.isFinite(itemPrice) ? itemPrice : 0;
 };
 
 const SectionHeading = ({ icon, eyebrow, title, action = null }) => (
@@ -317,6 +359,7 @@ const ProductMediaGallery = ({ items, title }) => {
         thumbnailUrl: FALLBACK_IMAGE,
     }];
     const activeItem = gallery[activeIndex] || gallery[0];
+    const canSwipe = gallery.length > 1 && activeItem.type !== 'video';
 
     const changeSlide = (direction) => {
         setActiveIndex((prev) => {
@@ -347,7 +390,7 @@ const ProductMediaGallery = ({ items, title }) => {
         }
 
         const deltaX = endX - startX;
-        if (Math.abs(deltaX) > 45 && gallery.length > 1) {
+        if (Math.abs(deltaX) > 45 && canSwipe) {
             changeSlide(deltaX < 0 ? 1 : -1);
         }
 
@@ -358,10 +401,10 @@ const ProductMediaGallery = ({ items, title }) => {
         <div className="bg-white md:rounded-[32px] md:border md:border-stone-200/80 md:p-3 md:shadow-[0_30px_60px_-45px_rgba(27,54,93,0.45)]">
             <div
                 className="relative overflow-hidden bg-stone-100 md:rounded-[28px]"
-                onTouchStart={handleTouchStart}
-                onTouchEnd={handleTouchEnd}
+                onTouchStart={canSwipe ? handleTouchStart : undefined}
+                onTouchEnd={canSwipe ? handleTouchEnd : undefined}
             >
-                <div className="aspect-square">
+                <div className="aspect-[100/92] md:aspect-square">
                     {activeItem.type === 'video' ? (
                         activeItem.provider === 'file' ? (
                             <video
@@ -375,7 +418,7 @@ const ProductMediaGallery = ({ items, title }) => {
                             <iframe
                                 src={activeItem.embedUrl}
                                 title={`${title} video`}
-                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                                 allowFullScreen
                                 className="h-full w-full border-0 bg-black"
                             />
@@ -427,6 +470,7 @@ const ProductMediaGallery = ({ items, title }) => {
                         </div>
                     </>
                 ) : null}
+
             </div>
 
             {gallery.length > 1 ? (
@@ -496,6 +540,181 @@ const Stars = ({ rating }) => (
     </div>
 );
 
+const TrustHighlights = () => (
+    <section className="rounded-[28px] border border-stone-200/80 bg-white p-4 shadow-[0_18px_40px_-34px_rgba(27,54,93,0.42)] md:rounded-[30px] md:p-5">
+        <SectionHeading
+            icon="workspace_premium"
+            eyebrow="Dịch vụ & Tin cậy"
+            title="An tâm trước khi đặt"
+        />
+
+        <div className="mt-4 grid grid-cols-2 gap-3">
+            {[
+                {
+                    icon: 'verified',
+                    title: 'Chính hãng',
+                    description: 'Gốm sứ thủ công tuyển chọn và kiểm tra kỹ trước khi giao.',
+                },
+                {
+                    icon: 'local_shipping',
+                    title: 'Vận chuyển',
+                    description: 'Đóng gói an toàn, hỗ trợ giao toàn quốc cho đơn mobile.',
+                },
+                {
+                    icon: 'support_agent',
+                    title: 'Tư vấn',
+                    description: 'Hỗ trợ chọn men, kích thước và bố cục phù hợp.',
+                },
+                {
+                    icon: 'payments',
+                    title: 'Minh bạch',
+                    description: 'Giá hiển thị rõ ràng, cập nhật theo lựa chọn thực tế.',
+                },
+            ].map((item) => (
+                <div key={item.title} className="rounded-[22px] bg-stone-50 p-3.5">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/8 text-primary">
+                        <span className="material-symbols-outlined text-[20px]">{item.icon}</span>
+                    </div>
+                    <p className="mt-3 text-sm font-black text-stone-900">{item.title}</p>
+                    <p className="mt-1 text-xs leading-5 text-stone-500">{item.description}</p>
+                </div>
+            ))}
+        </div>
+    </section>
+);
+
+const RelatedProductsCarousel = ({ items }) => {
+    const [activePage, setActivePage] = useState(0);
+    const mobileItemsPerPage = 2;
+    const mobilePages = [];
+
+    for (let index = 0; index < items.length; index += mobileItemsPerPage) {
+        mobilePages.push(items.slice(index, index + mobileItemsPerPage));
+    }
+
+    useEffect(() => {
+        setActivePage(0);
+    }, [items]);
+
+    if (items.length === 0) {
+        return null;
+    }
+
+    return (
+        <section className="mt-8 px-3 md:mt-12 md:px-0">
+            <div className="mb-5 flex items-center justify-between gap-3">
+                <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.18em] text-stone-500">
+                        Gợi ý mua kèm
+                    </p>
+                    <h2 className="mt-1 text-xl font-black text-stone-900">
+                        Sản phẩm tương tự
+                    </h2>
+                </div>
+                <Link to="/san-pham" className="text-sm font-black text-primary hover:underline">
+                    Xem tất cả
+                </Link>
+            </div>
+
+            <div className="md:hidden">
+                <div className="relative overflow-hidden">
+                    <div
+                        className="flex transition-transform duration-300 ease-out"
+                        style={{ transform: `translateX(-${activePage * 100}%)` }}
+                    >
+                        {mobilePages.map((pageItems, pageIndex) => (
+                            <div key={`related-page-${pageIndex}`} className="grid w-full shrink-0 grid-cols-2 gap-3">
+                                {pageItems.map((item) => (
+                                    <Link
+                                        key={item.id}
+                                        to={`/san-pham/${item.slug || item.id}`}
+                                        className="group overflow-hidden rounded-[24px] border border-stone-200 bg-white transition hover:-translate-y-0.5 hover:shadow-lg"
+                                    >
+                                        <div className="aspect-square overflow-hidden bg-stone-100">
+                                            <img
+                                                src={item.main_image || item.primary_image?.url || FALLBACK_IMAGE}
+                                                alt={item.name}
+                                                className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                                            />
+                                        </div>
+                                        <div className="p-3">
+                                            <h3 className="line-clamp-2 text-sm font-black leading-5 text-stone-800">
+                                                {item.name}
+                                            </h3>
+                                            <p className="mt-2 text-sm font-black text-red-600">
+                                                {formatCurrency(item.current_price || item.price)}
+                                            </p>
+                                        </div>
+                                    </Link>
+                                ))}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {mobilePages.length > 1 ? (
+                    <div className="mt-4 flex items-center justify-between gap-3">
+                        <button
+                            type="button"
+                            onClick={() => setActivePage((prev) => Math.max(0, prev - 1))}
+                            disabled={activePage === 0}
+                            className="flex h-11 w-11 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            <span className="material-symbols-outlined text-[20px]">chevron_left</span>
+                        </button>
+                        <div className="flex items-center gap-2">
+                            {mobilePages.map((_, index) => (
+                                <button
+                                    key={`related-dot-${index}`}
+                                    type="button"
+                                    onClick={() => setActivePage(index)}
+                                    className={`h-2.5 rounded-full transition-all ${
+                                        activePage === index ? 'w-6 bg-primary' : 'w-2.5 bg-stone-300'
+                                    }`}
+                                />
+                            ))}
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setActivePage((prev) => Math.min(mobilePages.length - 1, prev + 1))}
+                            disabled={activePage === mobilePages.length - 1}
+                            className="flex h-11 w-11 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            <span className="material-symbols-outlined text-[20px]">chevron_right</span>
+                        </button>
+                    </div>
+                ) : null}
+            </div>
+
+            <div className="hidden grid-cols-4 gap-4 md:grid">
+                {items.map((item) => (
+                    <Link
+                        key={item.id}
+                        to={`/san-pham/${item.slug || item.id}`}
+                        className="group overflow-hidden rounded-[24px] border border-stone-200 bg-white transition hover:-translate-y-0.5 hover:shadow-lg"
+                    >
+                        <div className="aspect-square overflow-hidden bg-stone-100">
+                            <img
+                                src={item.main_image || item.primary_image?.url || FALLBACK_IMAGE}
+                                alt={item.name}
+                                className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                            />
+                        </div>
+                        <div className="p-3">
+                            <h3 className="line-clamp-2 text-sm font-black leading-5 text-stone-800">
+                                {item.name}
+                            </h3>
+                            <p className="mt-2 text-sm font-black text-red-600">
+                                {formatCurrency(item.current_price || item.price)}
+                            </p>
+                        </div>
+                    </Link>
+                ))}
+            </div>
+        </section>
+    );
+};
+
 const StorefrontProductDetail = () => {
     const { slugOrId } = useParams();
     const [product, setProduct] = useState(null);
@@ -507,6 +726,7 @@ const StorefrontProductDetail = () => {
     const [selectedAttributes, setSelectedAttributes] = useState({});
     const [currentVariant, setCurrentVariant] = useState(null);
     const [selectedBundleOption, setSelectedBundleOption] = useState('');
+    const [selectedBundleVariants, setSelectedBundleVariants] = useState({});
     const bundleDetailRef = useRef(null);
 
     useEffect(() => {
@@ -515,6 +735,7 @@ const StorefrontProductDetail = () => {
             setQuantity(1);
             setSelectedAttributes({});
             setCurrentVariant(null);
+            setSelectedBundleVariants({});
 
             try {
                 const response = await api.get(`/storefront/products/${slugOrId}`);
@@ -613,6 +834,39 @@ const StorefrontProductDetail = () => {
         });
     }, [defaultBundleOption, product?.id, product?.type, bundleItems.length]);
 
+    useEffect(() => {
+        if (product?.type !== 'bundle') {
+            setSelectedBundleVariants({});
+            return;
+        }
+
+        setSelectedBundleVariants((prev) => {
+            const nextSelections = {};
+
+            bundleOptionGroups.forEach((group) => {
+                group.items.forEach((item, index) => {
+                    const key = getBundleSelectionKey(group.title, item.id, index);
+                    const itemVariants = Array.isArray(item?.variants) ? item.variants : [];
+                    const previousValue = prev[key];
+
+                    if (previousValue && itemVariants.some((variant) => Number(variant.id) === Number(previousValue))) {
+                        nextSelections[key] = previousValue;
+                        return;
+                    }
+
+                    if (item?.selected_variant_id && itemVariants.some((variant) => Number(variant.id) === Number(item.selected_variant_id))) {
+                        nextSelections[key] = item.selected_variant_id;
+                        return;
+                    }
+
+                    nextSelections[key] = itemVariants.length === 1 ? itemVariants[0].id : '';
+                });
+            });
+
+            return nextSelections;
+        });
+    }, [bundleItems, product?.id, product?.type]);
+
     if (loading) {
         return (
             <div className="mx-auto max-w-7xl px-4 py-8">
@@ -642,26 +896,67 @@ const StorefrontProductDetail = () => {
 
     const fallbackVariant = !hasSuperAttributes && hasVariants ? variants[0] : null;
     const displayVariant = currentVariant || fallbackVariant;
-    const mediaItems = buildMediaItems(product, displayVariant || product);
-    const rawCurrentPrice = displayVariant?.current_price ?? displayVariant?.price ?? product.current_price ?? product.price;
-    const rawBasePrice = displayVariant?.price ?? product.price ?? rawCurrentPrice;
+    const activeBundleSelectionRows = activeBundleItems.map((item, index) => {
+        const selectionKey = getBundleSelectionKey(activeBundleGroup?.title || activeBundleOption, item.id, index);
+        const itemVariants = Array.isArray(item?.variants) ? item.variants : [];
+        const selectedVariant = itemVariants.find((variant) => Number(variant.id) === Number(selectedBundleVariants[selectionKey]))
+            || item.selected_variant
+            || (itemVariants.length === 1 ? itemVariants[0] : null);
+        const quantityPerBundle = Math.max(1, Number(item?.quantity || 1));
+        const unitPrice = resolveBundleUnitPrice(item, selectedVariant);
+        const referenceUnitPrice = Number(selectedVariant?.price ?? item?.price);
+
+        return {
+            ...item,
+            selectionKey,
+            itemVariants,
+            selectedVariant,
+            requiresSelection: itemVariants.length > 0 && !selectedVariant,
+            quantityPerBundle,
+            unitPrice,
+            lineTotal: unitPrice * quantityPerBundle,
+            referenceUnitPrice: Number.isFinite(referenceUnitPrice) ? referenceUnitPrice : unitPrice,
+            displayName: selectedVariant?.name || item.name,
+            displaySku: selectedVariant?.sku || item.sku || 'N/A',
+            displayImage: selectedVariant?.main_image || selectedVariant?.primary_image?.url || item.main_image || item.primary_image?.url || FALLBACK_IMAGE,
+        };
+    });
+    const bundleCurrentTotal = activeBundleSelectionRows.reduce((sum, item) => sum + item.lineTotal, 0);
+    const bundleBaseTotal = activeBundleSelectionRows.reduce((sum, item) => sum + (item.referenceUnitPrice * item.quantityPerBundle), 0);
+    const mustChooseBundleVariants = product.type === 'bundle' && activeBundleSelectionRows.some((item) => item.requiresSelection);
+    const displayEntity = product.type === 'bundle' ? product : (displayVariant || product);
+    const mediaItems = buildMediaItems(product, displayEntity);
+    const rawCurrentPrice = product.type === 'bundle'
+        ? (activeBundleSelectionRows.length > 0 ? bundleCurrentTotal : Number(product.current_price ?? product.price ?? 0))
+        : Number(displayVariant?.current_price ?? displayVariant?.price ?? product.current_price ?? product.price ?? 0);
+    const rawBasePrice = product.type === 'bundle'
+        ? (bundleBaseTotal > rawCurrentPrice ? bundleBaseTotal : rawCurrentPrice)
+        : Number(displayVariant?.price ?? product.price ?? rawCurrentPrice);
     const variantPrices = variants
         .map((variant) => Number(variant.current_price ?? variant.price ?? 0))
         .filter((price) => price > 0);
     const minVariantPrice = variantPrices.length > 0 ? Math.min(...variantPrices) : null;
     const maxVariantPrice = variantPrices.length > 0 ? Math.max(...variantPrices) : null;
-    const showPriceRange = !displayVariant && hasVariants && minVariantPrice !== null && maxVariantPrice !== null && minVariantPrice !== maxVariantPrice;
-    const buyProductId = displayVariant?.id || product.id;
-    const displaySku = displayVariant?.sku || product.sku || 'N/A';
+    const showPriceRange = product.type !== 'bundle'
+        && !displayVariant
+        && hasVariants
+        && minVariantPrice !== null
+        && maxVariantPrice !== null
+        && minVariantPrice !== maxVariantPrice;
+    const buyProductId = product.type === 'bundle' ? product.id : (displayVariant?.id || product.id);
+    const displaySku = product.type === 'bundle' ? (product.sku || 'N/A') : (displayVariant?.sku || product.sku || 'N/A');
     const mustChooseVariant = hasSuperAttributes && hasVariants && !currentVariant;
+    const mustCompleteSelection = mustChooseVariant || mustChooseBundleVariants;
     const resolvedStockQuantity = Number(displayVariant?.stock_quantity ?? product.stock_quantity);
     const hasRealStock = Number.isFinite(resolvedStockQuantity);
-    const storefrontStatusLabel = mustChooseVariant
-        ? 'Cần chọn phân loại trước khi đặt'
-        : hasRealStock && resolvedStockQuantity > 0
-            ? `Còn ${resolvedStockQuantity} sản phẩm`
-            : 'Sẵn sàng giao ngay';
-    const storefrontStatusClass = mustChooseVariant
+    const storefrontStatusLabel = mustChooseBundleVariants
+        ? 'Cần chọn đủ biến thể trong bộ trước khi đặt'
+        : mustChooseVariant
+            ? 'Cần chọn phân loại trước khi đặt'
+            : hasRealStock && resolvedStockQuantity > 0
+                ? `Còn ${resolvedStockQuantity} sản phẩm`
+                : 'Sẵn sàng giao ngay';
+    const storefrontStatusClass = mustCompleteSelection
         ? 'text-amber-600'
         : hasRealStock && resolvedStockQuantity > 0
             ? 'text-emerald-600'
@@ -690,9 +985,39 @@ const StorefrontProductDetail = () => {
     const knowledgeItems = normalizeAdditionalInfo(product.additional_info);
 
     const handleSelectAttribute = (attributeId, optionValue) => {
-        setSelectedAttributes((prev) => ({
+        setSelectedAttributes((prev) => {
+            const nextSelections = {
+                ...prev,
+                [attributeId]: prev[attributeId] === optionValue ? '' : optionValue,
+            };
+
+            superAttributes.forEach((attribute) => {
+                if (!nextSelections[attribute.id]) {
+                    return;
+                }
+
+                const stillAvailable = isAttributeOptionAvailable(
+                    attribute.id,
+                    nextSelections[attribute.id],
+                    variants,
+                    superAttributes,
+                    nextSelections,
+                );
+
+                if (!stillAvailable) {
+                    delete nextSelections[attribute.id];
+                }
+            });
+
+            return nextSelections;
+        });
+    };
+
+    const handleSelectBundleVariant = (groupTitle, itemId, index, variantId) => {
+        const selectionKey = getBundleSelectionKey(groupTitle, itemId, index);
+        setSelectedBundleVariants((prev) => ({
             ...prev,
-            [attributeId]: optionValue,
+            [selectionKey]: variantId,
         }));
     };
 
@@ -707,6 +1032,35 @@ const StorefrontProductDetail = () => {
         }
 
         return `/dat-hang?${search.toString()}`;
+    };
+
+    const persistCheckoutSelection = () => {
+        if (typeof window === 'undefined') {
+            return;
+        }
+
+        const payload = {
+            checkoutProductId: buyProductId,
+            quantity,
+            bundleOption: product.type === 'bundle' ? activeBundleOption : '',
+            bundleTotal: product.type === 'bundle' ? rawCurrentPrice : null,
+            bundleItems: product.type === 'bundle'
+                ? activeBundleSelectionRows.map((item) => ({
+                    base_product_id: item.id,
+                    product_id: item.selectedVariant?.id || item.id,
+                    variant_id: item.selectedVariant?.id || null,
+                    product_name: item.displayName,
+                    product_sku: item.displaySku,
+                    quantity: item.quantityPerBundle,
+                    unit_price: item.unitPrice,
+                    line_total: item.lineTotal,
+                    option_title: activeBundleGroup?.title || activeBundleOption || '',
+                }))
+                : [],
+            saved_at: Date.now(),
+        };
+
+        window.sessionStorage.setItem('storefront-checkout-selection', JSON.stringify(payload));
     };
 
     const trackCheckoutIntent = () => {
@@ -725,33 +1079,96 @@ const StorefrontProductDetail = () => {
     };
 
     const handleAddToCart = () => {
-        if (mustChooseVariant) {
+        if (mustCompleteSelection) {
             return;
         }
 
+        persistCheckoutSelection();
         trackCheckoutIntent();
         window.location.href = buildCheckoutUrl();
     };
 
     const handleBuyNow = () => {
-        if (mustChooseVariant) {
+        if (mustCompleteSelection) {
             return;
         }
 
+        persistCheckoutSelection();
         trackCheckoutIntent();
         window.location.href = buildCheckoutUrl();
     };
 
     return (
         <div className="animate-fade-in bg-[#fcfaf7]">
-            <div className="mx-auto max-w-7xl px-0 pb-32 md:px-4 md:py-8 md:pb-10">
+            <div className="mx-auto max-w-7xl px-0 pb-24 md:px-4 md:py-8 md:pb-10">
                 <div className="grid grid-cols-1 gap-6 md:gap-10 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
                     <div className="md:sticky md:top-[96px] md:self-start">
                         <ProductMediaGallery items={mediaItems} title={product.name} />
                     </div>
 
-                    <div className="space-y-4 px-4 md:px-0 md:space-y-5">
-                        <section className="rounded-[30px] border border-[#eadbc5] bg-[#fffaf4] p-5 shadow-[0_18px_38px_-30px_rgba(197,160,101,0.65)]">
+                    <div className="space-y-3.5 px-3 md:px-0 md:space-y-5">
+                        <section className="rounded-[28px] border border-[#eadbc5] bg-[#fffaf4] p-4 shadow-[0_18px_38px_-30px_rgba(197,160,101,0.65)] md:hidden">
+                            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/65">
+                                Giá ưu tiên trên mobile
+                            </p>
+                            <div className="mt-2 flex items-end gap-3">
+                                <span className="text-[28px] font-black leading-none text-red-600">
+                                    {showPriceRange
+                                        ? `${formatCurrency(minVariantPrice)} - ${formatCurrency(maxVariantPrice)}`
+                                        : formatCurrency(rawCurrentPrice)}
+                                </span>
+                                {!showPriceRange && Number(rawBasePrice || 0) > Number(rawCurrentPrice || 0) ? (
+                                    <span className="pb-1 text-sm font-bold text-stone-400 line-through">
+                                        {formatCurrency(rawBasePrice)}
+                                    </span>
+                                ) : null}
+                            </div>
+
+                            <h1 className="mt-3 text-[24px] font-black leading-[1.08] tracking-tight text-stone-900">
+                                {product.name}
+                            </h1>
+
+                            <div className={`mt-3 inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-[12px] font-black shadow-sm ${storefrontStatusClass}`}>
+                                <span className="h-2.5 w-2.5 rounded-full bg-current" />
+                                <span>{storefrontStatusLabel}</span>
+                            </div>
+
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                {product.category ? (
+                                    <Link
+                                        to={`/danh-muc/${product.category.slug}`}
+                                        className="rounded-full bg-primary/6 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-primary"
+                                    >
+                                        {product.category.name}
+                                    </Link>
+                                ) : null}
+                                <span className="rounded-full bg-white px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-stone-600 shadow-sm">
+                                    {productTypeLabel}
+                                </span>
+                                {displayVariant ? (
+                                    <span className="rounded-full bg-amber-50 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-amber-800">
+                                        {getVariantLabel(product.name, displayVariant)}
+                                    </span>
+                                ) : null}
+                            </div>
+
+                            <div className="mt-3 flex flex-wrap items-center gap-3 text-[12px]">
+                                <div className="flex items-center gap-2 text-stone-500">
+                                    <span className="text-[10px] font-black uppercase tracking-[0.16em] text-stone-400">
+                                        SKU
+                                    </span>
+                                    <span className="font-mono font-bold text-stone-800">{displaySku}</span>
+                                </div>
+                                {product.review_count > 0 ? (
+                                    <div className="flex items-center gap-1.5 text-stone-500">
+                                        <Stars rating={product.average_rating} />
+                                        <span className="font-medium">{product.review_count} đánh giá</span>
+                                    </div>
+                                ) : null}
+                            </div>
+                        </section>
+
+                        <section className="hidden rounded-[30px] border border-[#eadbc5] bg-[#fffaf4] p-5 shadow-[0_18px_38px_-30px_rgba(197,160,101,0.65)] md:block">
                             <div className="flex items-start justify-between gap-4">
                                 <div>
                                     <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/65">
@@ -773,7 +1190,7 @@ const StorefrontProductDetail = () => {
 
                                 <div className={`inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-xs font-black shadow-sm ${storefrontStatusClass}`}>
                                     <span className="h-2.5 w-2.5 rounded-full bg-current" />
-                                    <span>{mustChooseVariant ? 'Chọn biến thể' : 'Sẵn sàng mua'}</span>
+                                    <span>{mustCompleteSelection ? 'Hoàn tất lựa chọn' : 'Sẵn sàng mua'}</span>
                                 </div>
                             </div>
 
@@ -788,7 +1205,7 @@ const StorefrontProductDetail = () => {
                             </div>
                         </section>
 
-                        <section className="rounded-[30px] border border-stone-200/80 bg-white p-5 shadow-[0_22px_44px_-34px_rgba(27,54,93,0.45)]">
+                        <section className="hidden rounded-[30px] border border-stone-200/80 bg-white p-5 shadow-[0_22px_44px_-34px_rgba(27,54,93,0.45)] md:block">
                             <div className="flex flex-wrap items-center gap-2">
                                 {product.category ? (
                                     <Link
@@ -850,7 +1267,7 @@ const StorefrontProductDetail = () => {
                                         <button
                                             type="button"
                                             onClick={handleViewBundleDetails}
-                                            className="rounded-full bg-primary/6 px-3 py-2 text-[11px] font-black uppercase tracking-[0.14em] text-primary"
+                                            className="rounded-full bg-primary/6 px-3 py-2 text-[11px] font-black uppercase tracking-[0.14em] text-primary md:hidden"
                                         >
                                             Xem thành phần
                                         </button>
@@ -901,16 +1318,26 @@ const StorefrontProductDetail = () => {
                                             <div className="flex flex-wrap gap-2">
                                                 {getAttributeOptions(attribute, variants).map((option) => {
                                                     const isSelected = selectedAttributes[attribute.id] === option.value;
+                                                    const isDisabled = !isSelected && !isAttributeOptionAvailable(
+                                                        attribute.id,
+                                                        option.value,
+                                                        variants,
+                                                        superAttributes,
+                                                        selectedAttributes,
+                                                    );
 
                                                     return (
                                                         <button
                                                             key={option.id}
                                                             type="button"
+                                                            disabled={isDisabled}
                                                             onClick={() => handleSelectAttribute(attribute.id, option.value)}
                                                             className={`rounded-2xl border px-4 py-2.5 text-sm font-bold transition ${
                                                                 isSelected
                                                                     ? 'border-primary bg-primary text-white shadow-md'
-                                                                    : 'border-stone-200 bg-white text-stone-700 hover:border-primary/35 hover:text-primary'
+                                                                    : isDisabled
+                                                                        ? 'cursor-not-allowed border-stone-200 bg-stone-100 text-stone-300 opacity-70'
+                                                                        : 'border-stone-200 bg-white text-stone-700 hover:border-primary/35 hover:text-primary'
                                                             }`}
                                                         >
                                                             {option.value}
@@ -1007,8 +1434,7 @@ const StorefrontProductDetail = () => {
 
                         {product.type === 'bundle' && activeBundleGroup ? (
                             <section
-                                ref={bundleDetailRef}
-                                className="rounded-[30px] border border-stone-200/80 bg-white p-5 shadow-[0_18px_40px_-34px_rgba(27,54,93,0.42)]"
+                                className="hidden rounded-[30px] border border-stone-200/80 bg-white p-5 shadow-[0_18px_40px_-34px_rgba(27,54,93,0.42)] md:block"
                             >
                                 <SectionHeading
                                     icon="list_alt"
@@ -1049,7 +1475,123 @@ const StorefrontProductDetail = () => {
                             </section>
                         ) : null}
 
-                        <section className="rounded-[30px] border border-stone-200/80 bg-white p-5 shadow-[0_18px_40px_-34px_rgba(27,54,93,0.42)]">
+                        {product.type === 'bundle' && activeBundleGroup ? (
+                            <section
+                                ref={bundleDetailRef}
+                                className="rounded-[30px] border border-stone-200/80 bg-white p-5 shadow-[0_18px_40px_-34px_rgba(27,54,93,0.42)] md:hidden"
+                            >
+                                <SectionHeading
+                                    icon="list_alt"
+                                    eyebrow="Thành phần bộ"
+                                    title={activeBundleGroup.title}
+                                    action={(
+                                        <div className="rounded-full bg-primary/6 px-3 py-2 text-right">
+                                            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/70">
+                                                Tổng giá
+                                            </p>
+                                            <p className="mt-0.5 text-sm font-black text-primary">
+                                                {formatCurrency(rawCurrentPrice)}
+                                            </p>
+                                        </div>
+                                    )}
+                                />
+
+                                <div className="mt-4 grid gap-3">
+                                    {activeBundleSelectionRows.map((item, index) => (
+                                        <div
+                                            key={`${activeBundleGroup.title}-${item.id}-${index}`}
+                                            className="rounded-[24px] border border-stone-200 bg-stone-50 p-3"
+                                        >
+                                            <div className="flex items-start gap-3">
+                                                <img
+                                                    src={item.displayImage}
+                                                    alt={item.displayName}
+                                                    className="h-16 w-16 rounded-2xl object-cover"
+                                                />
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="line-clamp-2 text-sm font-black text-stone-900">
+                                                        {item.displayName}
+                                                    </p>
+                                                    <p className="mt-1 text-xs font-semibold text-stone-500">
+                                                        SKU: {item.displaySku}
+                                                    </p>
+                                                    <p className="mt-2 text-sm font-black text-red-600">
+                                                        {formatCurrency(item.unitPrice)}
+                                                    </p>
+                                                </div>
+                                                <div className="rounded-2xl bg-white px-3 py-2 text-center shadow-sm">
+                                                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-stone-400">
+                                                        SL
+                                                    </p>
+                                                    <p className="mt-1 text-sm font-black text-primary">
+                                                        x{item.quantityPerBundle}
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            {item.itemVariants.length > 0 ? (
+                                                <div className="mt-3 rounded-[20px] bg-white p-3 shadow-sm">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-stone-500">
+                                                            Chọn biến thể
+                                                        </p>
+                                                        <span className={`text-[11px] font-bold ${item.requiresSelection ? 'text-amber-700' : 'text-stone-500'}`}>
+                                                            {item.selectedVariant ? getVariantLabel(item.name, item.selectedVariant) : 'Chưa chọn'}
+                                                        </span>
+                                                    </div>
+
+                                                    <div className="mt-3 flex flex-wrap gap-2">
+                                                        {item.itemVariants.map((variant) => {
+                                                            const isSelected = Number(item.selectedVariant?.id) === Number(variant.id);
+                                                            return (
+                                                                <button
+                                                                    key={variant.id}
+                                                                    type="button"
+                                                                    onClick={() => handleSelectBundleVariant(activeBundleGroup.title, item.id, index, variant.id)}
+                                                                    className={`rounded-2xl border px-3.5 py-2 text-sm font-bold transition ${
+                                                                        isSelected
+                                                                            ? 'border-primary bg-primary text-white shadow-md'
+                                                                            : 'border-stone-200 bg-white text-stone-700 hover:border-primary/35 hover:text-primary'
+                                                                    }`}
+                                                                >
+                                                                    {getVariantLabel(item.name, variant)}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+
+                                                    {item.requiresSelection ? (
+                                                        <p className="mt-2 text-xs font-semibold text-amber-700">
+                                                            Cần chọn biến thể cho sản phẩm con này trước khi mua bộ.
+                                                        </p>
+                                                    ) : null}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <div className="mt-4 flex items-center justify-between rounded-[24px] border border-primary/12 bg-primary/[0.04] px-4 py-3">
+                                    <div>
+                                        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/70">
+                                            Tổng giá bộ
+                                        </p>
+                                        <p className="mt-1 text-xs text-stone-500">
+                                            Cập nhật tức thì theo lựa chọn biến thể từng sản phẩm con.
+                                        </p>
+                                    </div>
+                                    <p className="text-lg font-black text-primary">
+                                        {formatCurrency(rawCurrentPrice)}
+                                    </p>
+                                </div>
+                            </section>
+                        ) : null}
+
+                        <div className="md:hidden">
+                            <TrustHighlights />
+                        </div>
+
+                        <section className="hidden rounded-[30px] border border-stone-200/80 bg-white p-5 shadow-[0_18px_40px_-34px_rgba(27,54,93,0.42)] md:block">
                             <SectionHeading
                                 icon="shopping_bag"
                                 eyebrow="Sẵn sàng đặt hàng"
@@ -1076,7 +1618,7 @@ const StorefrontProductDetail = () => {
                                 <button
                                     type="button"
                                     onClick={handleAddToCart}
-                                    disabled={mustChooseVariant}
+                                    disabled={mustCompleteSelection}
                                     className="flex items-center justify-center gap-2 rounded-[24px] border-2 border-primary px-5 py-4 text-sm font-black uppercase tracking-[0.16em] text-primary transition hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     <span className="material-symbols-outlined text-[20px]">shopping_cart</span>
@@ -1085,7 +1627,7 @@ const StorefrontProductDetail = () => {
                                 <button
                                     type="button"
                                     onClick={handleBuyNow}
-                                    disabled={mustChooseVariant}
+                                    disabled={mustCompleteSelection}
                                     className="flex items-center justify-center gap-2 rounded-[24px] bg-primary px-5 py-4 text-sm font-black uppercase tracking-[0.16em] text-white shadow-lg transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     <span className="material-symbols-outlined text-[20px]">bolt</span>
@@ -1102,13 +1644,83 @@ const StorefrontProductDetail = () => {
                                 Cần chuyên gia gốm sứ tư vấn chọn màu?
                             </button>
 
-                            {mustChooseVariant ? (
+                            {mustCompleteSelection ? (
                                 <p className="mt-3 text-sm font-semibold text-amber-700">
-                                    Vui lòng chọn đầy đủ phân loại trước khi đặt hàng.
+                                    {mustChooseBundleVariants
+                                        ? 'Vui lòng chọn đủ biến thể cho từng sản phẩm con trong bộ trước khi đặt hàng.'
+                                        : 'Vui lòng chọn đầy đủ phân loại trước khi đặt hàng.'}
                                 </p>
                             ) : (
                                 <p className="mt-3 text-sm text-stone-500 md:hidden">
                                     Thanh đặt hàng đang được ghim ở cuối màn hình để thao tác nhanh hơn.
+                                </p>
+                            )}
+                        </section>
+
+                        <section className="rounded-[30px] border border-stone-200/80 bg-white p-5 shadow-[0_18px_40px_-34px_rgba(27,54,93,0.42)] md:hidden">
+                            <SectionHeading
+                                icon="shopping_bag"
+                                eyebrow="Sẵn sàng đặt hàng"
+                                title="Số lượng và thao tác mua nhanh"
+                            />
+
+                            <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
+                                <div className="rounded-[24px] bg-stone-50 p-4">
+                                    <p className="text-xs font-black uppercase tracking-[0.16em] text-stone-500">
+                                        Số lượng
+                                    </p>
+                                    <p className="mt-1 text-sm font-medium text-stone-500">
+                                        Điều chỉnh nhanh trước khi thêm vào giỏ hoặc mua ngay.
+                                    </p>
+                                    <div className="mt-3">
+                                        <QuantityStepper
+                                            quantity={quantity}
+                                            onDecrease={() => setQuantity((prev) => Math.max(1, prev - 1))}
+                                            onIncrease={() => setQuantity((prev) => prev + 1)}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleAddToCart}
+                                        disabled={mustCompleteSelection}
+                                        className="flex items-center justify-center gap-2 rounded-[24px] border-2 border-primary px-5 py-4 text-sm font-black uppercase tracking-[0.16em] text-primary transition hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        <span className="material-symbols-outlined text-[20px]">shopping_cart</span>
+                                        Thêm vào giỏ
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleBuyNow}
+                                        disabled={mustCompleteSelection}
+                                        className="flex items-center justify-center gap-2 rounded-[24px] bg-primary px-5 py-4 text-sm font-black uppercase tracking-[0.16em] text-white shadow-lg transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        <span className="material-symbols-outlined text-[20px]">bolt</span>
+                                        Mua ngay
+                                    </button>
+                                </div>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={() => setShowLeadForm(true)}
+                                className="mt-4 inline-flex items-center gap-2 text-sm font-black text-primary transition hover:text-primary/80"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">support_agent</span>
+                                Cần chuyên gia gốm sứ tư vấn chọn màu?
+                            </button>
+
+                            {mustCompleteSelection ? (
+                                <p className="mt-3 text-sm font-semibold text-amber-700">
+                                    {mustChooseBundleVariants
+                                        ? 'Vui lòng chọn đủ biến thể cho từng sản phẩm con trong bộ trước khi đặt hàng.'
+                                        : 'Vui lòng chọn đầy đủ phân loại trước khi đặt hàng.'}
+                                </p>
+                            ) : (
+                                <p className="mt-3 text-sm text-stone-500">
+                                    Khối mua hàng đã được gom gọn cho mobile để thao tác trong một nhịp.
                                 </p>
                             )}
                         </section>
@@ -1251,8 +1863,12 @@ const StorefrontProductDetail = () => {
                     </div>
                 </div>
 
+                <div className="md:hidden">
+                    <RelatedProductsCarousel items={related} />
+                </div>
+
                 {related.length > 0 ? (
-                    <section className="mt-8 px-4 md:mt-12 md:px-0">
+                    <section className="hidden px-4 md:mt-12 md:block md:px-0">
                         <div className="mb-5 flex items-center justify-between gap-3">
                             <div>
                                 <p className="text-[10px] font-black uppercase tracking-[0.18em] text-stone-500">
@@ -1296,7 +1912,7 @@ const StorefrontProductDetail = () => {
                 ) : null}
             </div>
 
-            <div className="fixed inset-x-0 bottom-0 z-30 border-t border-stone-200 bg-white/95 shadow-[0_-18px_40px_-30px_rgba(27,54,93,0.75)] backdrop-blur md:hidden">
+            <div className="hidden fixed inset-x-0 bottom-0 z-30 border-t border-stone-200 bg-white/95 shadow-[0_-18px_40px_-30px_rgba(27,54,93,0.75)] backdrop-blur md:hidden">
                 <div className="mx-auto max-w-7xl px-4 pb-[calc(env(safe-area-inset-bottom)+0.85rem)] pt-3">
                     <div className="flex items-end justify-between gap-3">
                         <div className="min-w-0">

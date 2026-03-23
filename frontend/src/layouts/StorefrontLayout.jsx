@@ -210,6 +210,50 @@ const StorefrontFooter = ({ siteInfo, footerConfig }) => (
     </footer>
 );
 
+const StorefrontMobileBottomNav = ({ siteInfo }) => {
+    const location = useLocation();
+    const items = [
+        { key: 'home', label: 'Trang chủ', icon: 'home', to: '/' },
+        { key: 'products', label: 'Sản phẩm', icon: 'inventory_2', to: '/san-pham' },
+        { key: 'blog', label: 'Blog', icon: 'menu_book', to: '/blog' },
+    ];
+
+    const isActive = (target) => (
+        target === '/'
+            ? location.pathname === '/'
+            : location.pathname === target || location.pathname.startsWith(`${target}/`)
+    );
+
+    return (
+        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-stone-200 bg-white/95 backdrop-blur md:hidden">
+            <div className="grid grid-cols-4 px-2 pb-[calc(env(safe-area-inset-bottom)+0.35rem)] pt-2">
+                {items.map((item) => (
+                    <Link
+                        key={item.key}
+                        to={item.to}
+                        className={`flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-2xl px-2 text-center transition ${
+                            isActive(item.to) ? 'text-primary' : 'text-stone-500'
+                        }`}
+                    >
+                        <span className={`material-symbols-outlined text-[22px] ${isActive(item.to) ? 'text-primary' : 'text-stone-400'}`}>
+                            {item.icon}
+                        </span>
+                        <span className="text-[10px] font-black uppercase tracking-[0.14em]">{item.label}</span>
+                    </Link>
+                ))}
+
+                <a
+                    href={`tel:${siteInfo?.phone || '0123456789'}`}
+                    className="flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-2xl px-2 text-center text-stone-500 transition"
+                >
+                    <span className="material-symbols-outlined text-[22px] text-stone-400">call</span>
+                    <span className="text-[10px] font-black uppercase tracking-[0.14em]">Gọi ngay</span>
+                </a>
+            </div>
+        </nav>
+    );
+};
+
 export const LeadFormModal = ({ show, onClose, product, source = 'website' }) => {
     const [form, setForm] = useState({ customer_name: '', phone: '', message: '' });
     const [submitting, setSubmitting] = useState(false);
@@ -338,10 +382,11 @@ const StorefrontLayout = () => {
         <div className="min-h-screen bg-white text-stone-900 antialiased selection:bg-primary/20 selection:text-primary">
             <TrackingScripts />
             <StorefrontHeader siteInfo={siteInfo} headerConfig={headerConfig} />
-            <main className={`flex min-h-screen flex-col ${hasTopNotice ? 'pt-[84px] md:pt-[92px]' : 'pt-14 md:pt-16'}`}>
+            <main className={`flex min-h-screen flex-col pb-[78px] ${hasTopNotice ? 'pt-[84px] md:pt-[92px] md:pb-0' : 'pt-14 md:pt-16 md:pb-0'}`}>
                 <Outlet context={{ categories, siteInfo, headerConfig, footerConfig }} />
             </main>
             <StorefrontFooter siteInfo={siteInfo} footerConfig={footerConfig} />
+            <StorefrontMobileBottomNav siteInfo={siteInfo} />
         </div>
     );
 };

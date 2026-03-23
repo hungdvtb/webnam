@@ -13,6 +13,67 @@ use Illuminate\Http\Request;
 
 class StorefrontController extends Controller
 {
+    protected function mapStorefrontImages(Product $product): array
+    {
+        return $product->images->map(fn ($img) => [
+            'id' => $img->id,
+            'url' => $img->image_url,
+            'path' => $img->image_url,
+            'is_primary' => $img->is_primary,
+        ])->values()->all();
+    }
+
+    protected function mapStorefrontAttributes(Product $product): array
+    {
+        return $product->attributeValues->map(fn ($av) => [
+            'id' => $av->attribute_id,
+            'name' => $av->attribute?->name,
+            'code' => $av->attribute?->code,
+            'value' => $av->value,
+            'type' => $av->attribute?->frontend_type,
+        ])->values()->all();
+    }
+
+    protected function mapStorefrontSuperAttributes(Product $product): array
+    {
+        return $product->superAttributes->map(fn ($sa) => [
+            'id' => $sa->id,
+            'name' => $sa->name,
+            'code' => $sa->code,
+            'type' => $sa->frontend_type,
+            'options' => $sa->options->map(fn ($o) => [
+                'id' => $o->id,
+                'value' => $o->value,
+                'swatch' => $o->swatch_value,
+            ])->values()->all(),
+        ])->values()->all();
+    }
+
+    protected function mapStorefrontVariant(Product $variant): array
+    {
+        return [
+            'id' => $variant->id,
+            'name' => $variant->name,
+            'sku' => $variant->sku,
+            'type' => $variant->type,
+            'price' => $variant->price,
+            'current_price' => $variant->current_price,
+            'stock_quantity' => $variant->stock_quantity,
+            'main_image' => $variant->main_image,
+            'primary_image' => $variant->primary_image,
+            'images' => $this->mapStorefrontImages($variant),
+            'attributes' => collect($this->mapStorefrontAttributes($variant))
+                ->map(fn ($attribute) => [
+                    'id' => $attribute['id'],
+                    'name' => $attribute['name'],
+                    'code' => $attribute['code'],
+                    'value' => $attribute['value'],
+                    'type' => $attribute['type'],
+                ])
+                ->values()
+                ->all(),
+        ];
+    }
     /**
      * GET /api/storefront/categories
      * Public: Danh mục dạng cây cho website
@@ -152,8 +213,16 @@ class StorefrontController extends Controller
                 'attributeValues.attribute',
                 'approvedReviews' => fn($q) => $q->latest()->limit(20),
                 'superAttributes.options',
-                'linkedProducts' => fn($q) => $q->where('status', true)->with('images'),
-                'bundleItems' => fn($q) => $q->where('status', true)->with(['images', 'category', 'attributeValues.attribute']),
+                'linkedProducts' => fn($q) => $q->where('status', true)->with(['images', 'attributeValues.attribute']),
+                'bundleItems' => fn($q) => $q->where('status', true)->with([
+                    'images',
+                    'category',
+                    'attributeValues.attribute',
+                    'superAttributes.options',
+                    'variations' => fn($variantQuery) => $variantQuery
+                        ->where('status', true)
+                        ->with(['images', 'attributeValues.attribute']),
+                ]),
                 'groupedItems' => fn($q) => $q->where('status', true)->with(['images', 'category', 'attributeValues.attribute']),
             ]);
 
@@ -196,6 +265,12 @@ class StorefrontController extends Controller
                 ->keyBy('id')
             : collect();
 
+        $variantProducts = $product->type === 'configurable'
+            ? $product->linkedProducts
+                ->filter(fn ($linkedProduct) => $linkedProduct->pivot?->link_type === 'super_link')
+                ->values()
+            : collect();
+
         return response()->json([
             'id' => $product->id,
             'name' => $product->name,
@@ -229,37 +304,12 @@ class StorefrontController extends Controller
             'average_rating' => round($product->average_rating, 1),
             'review_count' => $product->approvedReviews->count(),
             'category' => $product->category ? ['id' => $product->category->id, 'name' => $product->category->name, 'slug' => $product->category->slug] : null,
-            'images' => $product->images->map(fn($img) => [
-                'id' => $img->id,
-                'url' => $img->image_url,
-                'path' => $img->image_url,
-                'is_primary' => $img->is_primary,
-            ]),
-            'attributes' => $product->attributeValues->map(fn($av) => [
-                'id' => $av->attribute_id,
-                'name' => $av->attribute?->name,
-                'code' => $av->attribute?->code,
-                'value' => $av->value,
-                'type' => $av->attribute?->frontend_type,
-            ]),
-            'super_attributes' => $product->superAttributes->map(fn($sa) => [
-                'id' => $sa->id,
-                'name' => $sa->name,
-                'code' => $sa->code,
-                'type' => $sa->frontend_type,
-                'options' => $sa->options->map(fn($o) => ['id' => $o->id, 'value' => $o->value, 'swatch' => $o->swatch_value]),
-            ]),
-            'variants' => $product->linkedProducts->map(fn($v) => [
-                'id' => $v->id,
-                'name' => $v->name,
-                'sku' => $v->sku,
-                'price' => $v->price,
-                'current_price' => $v->current_price,
-                'stock_quantity' => $v->stock_quantity,
-                'main_image' => $v->main_image,
-                'primary_image' => $v->primary_image,
-                'attributes' => $v->attributeValues->map(fn($av) => ['id' => $av->attribute_id, 'value' => $av->value]),
-            ]),
+            'images' => $this->mapStorefrontImages($product),
+            'attributes' => $this->mapStorefrontAttributes($product),
+            'super_attributes' => $this->mapStorefrontSuperAttributes($product),
+            'variants' => $variantProducts
+                ->map(fn ($variant) => $this->mapStorefrontVariant($variant))
+                ->values(),
             'reviews' => $product->approvedReviews->map(fn($r) => [
                 'id' => $r->id,
                 'customer_name' => $r->customer_name,
@@ -279,22 +329,43 @@ class StorefrontController extends Controller
                 'main_image' => $v->main_image,
                 'primary_image' => $v->primary_image,
             ]) : [],
-            'bundle_items' => $product->type === 'bundle' ? $product->bundleItems->map(fn($v) => [
-                'id' => $v->id,
-                'name' => $v->name,
-                'sku' => $v->sku,
-                'price' => $v->price,
-                'current_price' => $v->current_price,
-                'stock_quantity' => $v->stock_quantity,
-                'quantity' => $v->pivot->quantity ?? 1,
-                'is_required' => $v->pivot->is_required ?? false,
-                'option_title' => $v->pivot->option_title,
-                'is_default' => $v->pivot->is_default ?? false,
-                'position' => $v->pivot->position ?? 0,
-                'main_image' => $v->main_image,
-                'primary_image' => $v->primary_image,
-                'category' => $v->category ? ['id' => $v->category->id, 'name' => $v->category->name] : null,
-            ]) : [],
+            'bundle_items' => $product->type === 'bundle'
+                ? $product->bundleItems->map(function ($bundleItem) {
+                    $selectedVariantId = $bundleItem->pivot->variant_id ? (int) $bundleItem->pivot->variant_id : null;
+                    $selectedVariant = $selectedVariantId
+                        ? $bundleItem->variations->firstWhere('id', $selectedVariantId)
+                        : null;
+
+                    return [
+                        'id' => $bundleItem->id,
+                        'name' => $bundleItem->name,
+                        'type' => $bundleItem->type,
+                        'sku' => $bundleItem->sku,
+                        'price' => $bundleItem->price,
+                        'current_price' => $bundleItem->current_price,
+                        'bundle_price' => $bundleItem->pivot->price !== null ? (float) $bundleItem->pivot->price : null,
+                        'stock_quantity' => $bundleItem->stock_quantity,
+                        'quantity' => $bundleItem->pivot->quantity ?? 1,
+                        'is_required' => $bundleItem->pivot->is_required ?? false,
+                        'option_title' => $bundleItem->pivot->option_title,
+                        'is_default' => $bundleItem->pivot->is_default ?? false,
+                        'position' => $bundleItem->pivot->position ?? 0,
+                        'selected_variant_id' => $selectedVariantId,
+                        'selected_variant' => $selectedVariant ? $this->mapStorefrontVariant($selectedVariant) : null,
+                        'main_image' => $selectedVariant?->main_image ?: $bundleItem->main_image,
+                        'primary_image' => $selectedVariant?->primary_image ?: $bundleItem->primary_image,
+                        'images' => $selectedVariant
+                            ? $this->mapStorefrontImages($selectedVariant)
+                            : $this->mapStorefrontImages($bundleItem),
+                        'category' => $bundleItem->category ? ['id' => $bundleItem->category->id, 'name' => $bundleItem->category->name] : null,
+                        'attributes' => $this->mapStorefrontAttributes($bundleItem),
+                        'super_attributes' => $this->mapStorefrontSuperAttributes($bundleItem),
+                        'variants' => $bundleItem->variations
+                            ->map(fn ($variant) => $this->mapStorefrontVariant($variant))
+                            ->values(),
+                    ];
+                })
+                : [],
         ]);
     }
 

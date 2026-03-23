@@ -13,6 +13,7 @@ const StorefrontCheckout = () => {
     const [product, setProduct] = useState(null);
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
+    const [pendingSelection, setPendingSelection] = useState(null);
 
     const [form, setForm] = useState({
         customer_name: '',
@@ -26,18 +27,44 @@ const StorefrontCheckout = () => {
     });
 
     useEffect(() => {
+        let restoredSelection = null;
+
+        if (typeof window !== 'undefined') {
+            try {
+                const rawSelection = window.sessionStorage.getItem('storefront-checkout-selection');
+                const parsedSelection = rawSelection ? JSON.parse(rawSelection) : null;
+                restoredSelection = parsedSelection && Number(parsedSelection.checkoutProductId) === Number(productId)
+                    ? parsedSelection
+                    : null;
+            } catch (error) {
+                restoredSelection = null;
+            }
+        }
+
+        setPendingSelection(restoredSelection);
+
         if (productId) {
-            api.get(`/storefront/products/${productId}`).then(res => {
-                setProduct(res.data);
-                trackInitiateCheckout([{ id: res.data.id, quantity: qty }], res.data.current_price * qty);
+            api.get(`/storefront/products/${productId}`).then((res) => {
+                const restoredTotal = Number(restoredSelection?.bundleTotal || 0);
+                const productData = restoredTotal > 0
+                    ? { ...res.data, current_price: restoredTotal }
+                    : res.data;
+                setProduct(productData);
+                const checkoutTotal = restoredTotal > 0 ? restoredTotal * qty : (res.data.current_price * qty);
+                trackInitiateCheckout([{ id: res.data.id, quantity: qty }], checkoutTotal);
                 setLoading(false);
             }).catch(() => setLoading(false));
         } else {
             setLoading(false);
         }
-    }, [productId]);
+    }, [productId, qty]);
 
     const updateField = (key, value) => setForm(f => ({ ...f, [key]: value }));
+    const bundleSummaryItems = Array.isArray(pendingSelection?.bundleItems) ? pendingSelection.bundleItems : [];
+    const resolvedBundleOption = pendingSelection?.bundleOption || bundleOption;
+    const unitPrice = bundleSummaryItems.length > 0
+        ? Number(pendingSelection?.bundleTotal || bundleSummaryItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0))
+        : Number(product?.current_price || 0);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -59,11 +86,12 @@ const StorefrontCheckout = () => {
                 items: product ? [{
                     product_id: product.id,
                     quantity: form.quantity,
-                    options: bundleOption ? { bundle_option_title: bundleOption } : undefined,
+                    options: resolvedBundleOption ? { bundle_option_title: resolvedBundleOption } : undefined,
+                    bundle_items: bundleSummaryItems.length > 0 ? bundleSummaryItems : undefined,
                 }] : [],
             };
             const res = await api.post('/storefront/order', payload);
-            trackPurchase(res.data.order_number, product ? product.current_price * form.quantity : 0, payload.items);
+            trackPurchase(res.data.order_number, totalPrice, payload.items);
             navigate(`/cam-on?order=${encodeURIComponent(res.data.order_number)}`, {
                 replace: true,
                 state: {
@@ -75,9 +103,9 @@ const StorefrontCheckout = () => {
                     email: form.email,
                     shippingAddress: [form.address, form.ward, form.district].filter(Boolean).join(', '),
                     paymentMethod: 'cod',
-                    totalAmount: product ? product.current_price * form.quantity : 0,
+                    totalAmount: totalPrice,
                     totalItems: form.quantity,
-                    bundleOption,
+                    bundleOption: resolvedBundleOption,
                     continuePath: '/san-pham',
                     continueLabel: 'Tiếp tục mua sắm',
                     secondaryPath: '/old/dashboard',
@@ -87,9 +115,9 @@ const StorefrontCheckout = () => {
                         name: product.name,
                         sku: product.sku,
                         quantity: form.quantity,
-                        price: product.current_price,
+                        price: unitPrice,
                         image: product.images?.[0]?.url || product.main_image || '',
-                        meta: bundleOption || product.category?.name || '',
+                        meta: resolvedBundleOption || product.category?.name || '',
                     }] : [],
                 },
             });
@@ -99,7 +127,7 @@ const StorefrontCheckout = () => {
         setSubmitting(false);
     };
 
-    const totalPrice = product ? product.current_price * form.quantity : 0;
+    const totalPrice = unitPrice * form.quantity;
 
     return (
         <div className="animate-fade-in">
@@ -206,7 +234,7 @@ const StorefrontCheckout = () => {
                                         <div className="flex-1 min-w-0">
                                             <h4 className="text-sm font-bold text-stone-800 line-clamp-2">{product.name}</h4>
                                             <p className="text-xs text-stone-500 mt-1">{product.sku}</p>
-                                            {bundleOption ? <p className="mt-1 text-xs font-bold text-primary">Tùy chọn bộ: {bundleOption}</p> : null}
+                                            {resolvedBundleOption ? <p className="mt-1 text-xs font-bold text-primary">Tùy chọn bộ: {resolvedBundleOption}</p> : null}
                                         </div>
                                     </div>
 
@@ -223,10 +251,31 @@ const StorefrontCheckout = () => {
                                         </div>
                                     </div>
 
+                                    {bundleSummaryItems.length > 0 ? (
+                                        <div className="rounded-xl bg-stone-50 p-3">
+                                            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-stone-500">
+                                                Thành phần bộ
+                                            </p>
+                                            <div className="mt-2 space-y-2">
+                                                {bundleSummaryItems.map((item, index) => (
+                                                    <div key={`${item.product_id || item.base_product_id || index}-${index}`} className="flex items-start justify-between gap-3 text-xs text-stone-600">
+                                                        <div className="min-w-0">
+                                                            <p className="font-bold text-stone-800">{item.product_name}</p>
+                                                            <p className="mt-0.5 text-[11px] text-stone-500">{item.product_sku || 'N/A'} x{item.quantity || 1}</p>
+                                                        </div>
+                                                        <span className="shrink-0 font-black text-primary">
+                                                            {Number(item.line_total || 0).toLocaleString()}đ
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ) : null}
+
                                     <div className="border-t border-stone-100 pt-4 space-y-2">
                                         <div className="flex justify-between text-sm">
                                             <span className="text-stone-500">Đơn giá</span>
-                                            <span className="font-bold text-stone-800">{Number(product.current_price).toLocaleString()}đ</span>
+                                            <span className="font-bold text-stone-800">{Number(unitPrice).toLocaleString()}đ</span>
                                         </div>
                                         <div className="flex justify-between text-sm">
                                             <span className="text-stone-500">Vận chuyển</span>

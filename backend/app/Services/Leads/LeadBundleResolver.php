@@ -20,6 +20,34 @@ class LeadBundleResolver
             return $item;
         }
 
+        $richBundleChildren = $this->normalizeRichBundleChildren(Arr::get($item, 'bundle_items', []));
+        if ($richBundleChildren !== []) {
+            $quantity = max(1, (int) Arr::get($item, 'quantity', 1));
+            $options = Arr::get($item, 'options', []);
+
+            if (!is_array($options)) {
+                $options = [];
+            }
+
+            $optionTitle = $this->extractRequestedOptionTitle($options)
+                ?: ($richBundleChildren[0]['option_title'] ?? null);
+            $subtotal = collect($richBundleChildren)->sum('line_total');
+            $displayName = $this->appendOptionTitle($product->name, $optionTitle);
+
+            return [
+                ...$item,
+                'product_name' => $displayName,
+                'unit_price' => (float) $subtotal,
+                'line_total' => (float) $subtotal * $quantity,
+                'options' => array_filter([
+                    ...$options,
+                    'bundle_option_title' => $optionTitle,
+                    'bundle_parent_name' => $product->name,
+                ], fn ($value) => !is_null($value) && $value !== ''),
+                'bundle_items' => $richBundleChildren,
+            ];
+        }
+
         $resolved = $this->resolveBundleConfiguration(
             $product,
             Arr::get($item, 'bundle_items', []),

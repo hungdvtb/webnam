@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\Category;
 use App\Models\Banner;
+use App\Models\Post;
 use App\Models\ProductReview;
 use App\Services\Leads\LeadCaptureService;
 use Illuminate\Http\Request;
@@ -162,6 +163,39 @@ class StorefrontController extends Controller
             $product = $query->where('id', $slugOrId)->firstOrFail();
         }
 
+        $rawAdditionalInfo = $product->additional_info;
+        if (is_string($rawAdditionalInfo)) {
+            $decodedAdditionalInfo = json_decode($rawAdditionalInfo, true);
+            $rawAdditionalInfo = json_last_error() === JSON_ERROR_NONE ? $decodedAdditionalInfo : [];
+        }
+
+        $additionalInfoItems = collect(is_array($rawAdditionalInfo) ? $rawAdditionalInfo : [])
+            ->map(function ($item) {
+                if (is_object($item)) {
+                    $item = (array) $item;
+                }
+
+                return is_array($item) ? $item : null;
+            })
+            ->filter()
+            ->values();
+
+        $linkedPostIds = $additionalInfoItems
+            ->pluck('post_id')
+            ->filter(fn ($postId) => filled($postId))
+            ->map(fn ($postId) => (int) $postId)
+            ->unique()
+            ->values();
+
+        $linkedPosts = $linkedPostIds->isNotEmpty()
+            ? Post::query()
+                ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+                ->published()
+                ->whereIn('id', $linkedPostIds)
+                ->get(['id', 'title', 'slug'])
+                ->keyBy('id')
+            : collect();
+
         return response()->json([
             'id' => $product->id,
             'name' => $product->name,
@@ -173,8 +207,20 @@ class StorefrontController extends Controller
             'special_price' => $product->special_price,
             'special_price_from' => $product->special_price_from,
             'special_price_to' => $product->special_price_to,
+            'video_url' => $product->video_url,
             'description' => $product->description,
             'specifications' => $product->specifications,
+            'additional_info' => $additionalInfoItems->map(function ($item) use ($linkedPosts) {
+                $postId = filled($item['post_id'] ?? null) ? (int) $item['post_id'] : null;
+                $linkedPost = $postId ? $linkedPosts->get($postId) : null;
+
+                return [
+                    'title' => trim((string) ($item['title'] ?? '')),
+                    'post_id' => $postId,
+                    'post_title' => $linkedPost?->title ?? trim((string) ($item['post_title'] ?? '')),
+                    'post_slug' => $linkedPost?->slug,
+                ];
+            })->filter(fn ($item) => filled($item['title']) || filled($item['post_title']) || filled($item['post_id']))->values(),
             'weight' => $product->weight,
             'stock_quantity' => $product->stock_quantity,
             'is_featured' => $product->is_featured,

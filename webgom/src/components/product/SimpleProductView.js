@@ -49,14 +49,21 @@ export default function SimpleProductView({
               <div className={styles.titleSection}>
                 <div className={styles.simpleTitleRow}>
                   <h1 className={styles.title}>{product.name}</h1>
-                  <span className={`${styles.statusText} ${styles.simpleAvailabilityBadge}`}>
-                    Sẵn sàng giao ngay
-                  </span>
                 </div>
               </div>
 
               <div className={styles.priceContainer}>
-                <div className={styles.currentPrice}>{formatPrice(displayPrice)}</div>
+                <div className={styles.priceRow}>
+                  <div className={styles.currentPrice}>{formatPrice(displayPrice)}</div>
+                  <button
+                    type="button"
+                    className={styles.quickCartButton}
+                    onClick={handleAddToCart}
+                    aria-label="Thêm sản phẩm vào giỏ hàng"
+                  >
+                    <span className="material-symbols-outlined" aria-hidden="true">shopping_cart</span>
+                  </button>
+                </div>
                 <p className={styles.priceMeta}>Đã bao gồm VAT và phí bảo hiểm vận chuyển</p>
               </div>
             </section>

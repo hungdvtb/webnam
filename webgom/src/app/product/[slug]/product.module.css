@@ -221,14 +221,7 @@
 }
 
 .simpleTitleRow {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 0.75rem;
-}
-
-.simpleAvailabilityBadge {
-  flex-shrink: 0;
+  display: block;
 }
 
 .simpleEyebrow {
@@ -635,6 +628,17 @@
   border-left: 4px solid var(--accent);
   border-radius: 0 8px 8px 0;
   box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.05);
+}
+
+.priceRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.quickCartButton {
+  display: none;
 }
 
 .currentPrice {
@@ -1294,6 +1298,10 @@
   margin-top: 5rem;
 }
 
+.relatedSectionEmpty {
+  display: none;
+}
+
 .relatedHeader {
   display: flex;
   justify-content: space-between;
@@ -1321,6 +1329,14 @@
   gap: 0.25rem;
 }
 
+.relatedCarousel {
+  position: relative;
+}
+
+.relatedArrow {
+  display: none;
+}
+
 .relatedGrid {
   display: grid;
   grid-template-columns: 1fr;
@@ -1345,6 +1361,9 @@
   border: 1px solid rgba(27, 54, 93, 0.05);
   overflow: hidden;
   transition: all 0.3s;
+  text-decoration: none;
+  display: flex;
+  flex-direction: column;
 }
 
 .relatedCard:hover {
@@ -1367,6 +1386,22 @@
   transition: transform 0.5s;
 }
 
+.relatedImagePlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background:
+    linear-gradient(180deg, rgba(246, 243, 237, 0.96) 0%, rgba(255, 255, 255, 0.96) 100%);
+  color: #c9ced7;
+}
+
+.relatedImagePlaceholder .material-symbols-outlined {
+  font-size: 1.75rem;
+  line-height: 1;
+}
+
 .relatedCard:hover .relImage img {
   transform: scale(1.1);
 }
@@ -1380,6 +1415,10 @@
   color: #1B365D;
   font-size: 0.875rem;
   margin-bottom: 0.5rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .relPriceRow {
@@ -1391,6 +1430,60 @@
 .relPrice {
   font-weight: 700;
   color: #1B365D;
+}
+
+.relRating {
+  display: none;
+}
+
+.relatedSkeletonCard {
+  pointer-events: none;
+}
+
+.relatedSkeletonImage,
+.relatedSkeletonLine,
+.relatedSkeletonRating {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(90deg, rgba(232, 235, 240, 0.9) 0%, rgba(245, 247, 250, 1) 45%, rgba(232, 235, 240, 0.9) 100%);
+  background-size: 200% 100%;
+  animation: relatedSkeletonPulse 1.3s ease-in-out infinite;
+}
+
+.relatedSkeletonImage {
+  border-bottom: 1px solid rgba(27, 54, 93, 0.04);
+}
+
+.relatedSkeletonLine {
+  height: 0.78rem;
+  border-radius: 999px;
+}
+
+.relatedSkeletonLineShort {
+  width: 74%;
+  margin-top: 0.45rem;
+}
+
+.relatedSkeletonPrice {
+  width: 48%;
+  height: 0.95rem;
+  margin-top: 0.7rem;
+}
+
+.relatedSkeletonRating {
+  width: 42%;
+  height: 0.72rem;
+  margin-top: 0.7rem;
+  border-radius: 999px;
+}
+
+@keyframes relatedSkeletonPulse {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
 }
 
 .relOldPrice {
@@ -2274,43 +2367,148 @@
     border-radius: 1rem;
   }
 
+  .relatedSectionEmpty {
+    display: block;
+  }
+
   .relatedHeader {
     flex-direction: column;
     align-items: flex-start;
-    gap: 0.65rem;
-    margin-bottom: 1rem;
+    gap: 0.45rem;
+    margin-bottom: 0.85rem;
   }
 
   .relatedTitle {
-    font-size: 1.35rem;
+    font-size: 1.28rem;
   }
 
   .relatedSub {
-    font-size: 0.95rem;
-    line-height: 1.55;
+    font-size: 0.8rem;
+    line-height: 1.45;
   }
 
   .viewAll {
-    font-size: 0.95rem;
+    font-size: 0.82rem;
+    gap: 0.15rem;
   }
 
   .relatedGrid {
-    gap: 0.9rem;
+    display: grid;
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, calc((100% - 0.72rem) / 2));
+    gap: 0.72rem;
+    overflow-x: auto;
+    padding: 0.05rem 0.05rem 0.3rem;
+    scroll-snap-type: x proximity;
+    scroll-padding-inline: 0.05rem;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    touch-action: pan-x;
   }
 
-  .relatedCard {
-    width: 100%;
-    border-radius: 1rem;
+  .relatedGrid::-webkit-scrollbar {
+    display: none;
+  }
+
+  .relatedArrow {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    top: 35%;
+    z-index: 2;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.96);
+    color: #1B365D;
+    box-shadow: 0 10px 24px rgba(27, 54, 93, 0.16);
+  }
+
+  .relatedArrow .material-symbols-outlined {
+    font-size: 1.2rem;
+    line-height: 1;
+  }
+
+  .relatedArrowLeft {
+    left: 0.1rem;
+  }
+
+  .relatedArrowRight {
+    right: 0.1rem;
+  }
+
+  .relatedArrowDisabled {
+    opacity: 0.35;
     box-shadow: none;
   }
 
+  .relatedCard {
+    width: auto;
+    min-width: 0;
+    border-radius: 1rem;
+    scroll-snap-align: start;
+    border-color: rgba(27, 54, 93, 0.08);
+    box-shadow: 0 10px 24px rgba(27, 54, 93, 0.07);
+  }
+
+  .relatedGridLoading .relatedCard {
+    min-height: 14.4rem;
+  }
+
+  .relImage {
+    aspect-ratio: 1 / 0.9;
+  }
+
   .relInfo {
-    padding: 0.9rem 0.95rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.68rem 0.72rem 0.78rem;
   }
 
   .relTitle {
-    font-size: 0.95rem;
-    line-height: 1.4;
+    font-size: 0.8rem;
+    line-height: 1.35;
+    margin-bottom: 0;
+    min-height: 2.15rem;
+  }
+
+  .relPriceRow {
+    gap: 0.35rem;
+  }
+
+  .relPrice {
+    font-size: 0.96rem;
+    line-height: 1.1;
+  }
+
+  .relRating {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: #d59a2f;
+  }
+
+  .relRatingStars {
+    display: flex;
+    align-items: center;
+    gap: 0.02rem;
+  }
+
+  .relRatingStars .material-symbols-outlined {
+    font-size: 0.72rem;
+    line-height: 1;
+    font-variation-settings: 'FILL' 1;
+  }
+
+  .relRatingCount {
+    font-size: 0.68rem;
+    color: rgba(27, 54, 93, 0.5);
   }
 
   .simpleView .title,
@@ -2325,13 +2523,13 @@
   }
 
   .simpleView .mainGrid {
-    gap: 1.25rem;
+    gap: 0.8rem;
   }
 
   .simpleView .galleryContainer {
     gap: 0;
     padding: 0;
-    border-radius: 1.5rem;
+    border-radius: 1.3rem;
     overflow: hidden;
     background:
       radial-gradient(circle at top right, rgba(197, 160, 101, 0.18), transparent 38%),
@@ -2342,7 +2540,7 @@
 
   .simpleView .mainImage {
     flex: none;
-    aspect-ratio: 1 / 1.08;
+    aspect-ratio: 1 / 1.06;
     min-height: auto;
     border-radius: 0;
     border: none;
@@ -2362,10 +2560,12 @@
   }
 
   .simpleView .thumbnails {
-    display: flex;
-    gap: 0.625rem;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, calc((100% - (7 * 0.22rem)) / 8));
+    gap: 0.22rem;
     overflow-x: auto;
-    padding: 0.875rem 0.875rem 0.9rem;
+    padding: 0.4rem 0.35rem 0.45rem;
     scrollbar-width: none;
   }
 
@@ -2374,32 +2574,51 @@
   }
 
   .simpleView .thumbBtn {
-    flex: 0 0 4.5rem;
-    width: 4.5rem;
+    flex: none;
+    width: 100%;
     max-height: none;
-    border-radius: 0.95rem;
+    border-radius: 0.58rem;
     border-color: rgba(27, 54, 93, 0.08);
     background: rgba(255, 255, 255, 0.94);
-    box-shadow: 0 10px 18px rgba(27, 54, 93, 0.08);
+    box-shadow: 0 4px 10px rgba(27, 54, 93, 0.07);
   }
 
   .simpleView .thumbActive {
-    transform: translateY(-2px);
-    box-shadow: 0 14px 26px rgba(197, 160, 101, 0.18);
+    transform: translateY(-1px);
+    box-shadow: 0 8px 18px rgba(197, 160, 101, 0.16);
+  }
+
+  .simpleView .videoThumbContent {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    gap: 0.08rem;
+    padding: 0.15rem;
+    font-size: 0.34rem;
+    line-height: 1.05;
+    letter-spacing: 0.01em;
+    text-transform: uppercase;
+  }
+
+  .simpleView .videoThumbContent .material-symbols-outlined {
+    font-size: 0.8rem;
   }
 
   .simpleInfoWrapper {
-    gap: 1rem;
+    gap: 0.8rem;
   }
 
   .simpleHeroCard {
-    padding: 1rem;
-    border-radius: 1.5rem;
+    padding: 0.8rem;
+    border-radius: 1.3rem;
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(250, 246, 239, 0.96) 100%);
     border: 1px solid rgba(27, 54, 93, 0.08);
     box-shadow: 0 18px 36px rgba(27, 54, 93, 0.08);
-    gap: 0.9rem;
+    gap: 0.65rem;
   }
 
   .simpleView .titleSection {
@@ -2407,18 +2626,22 @@
   }
 
   .simpleView .simpleTitleRow {
-    gap: 0.625rem;
+    display: block;
   }
 
   .simpleView .priceContainer {
     order: 1;
-    padding: 1rem;
+    padding: 0.8rem 0.9rem;
     border-left: none;
-    border-top: 4px solid var(--accent);
-    border-radius: 1.15rem;
+    border-top: 3px solid var(--accent);
+    border-radius: 1rem;
     background:
       linear-gradient(135deg, rgba(197, 160, 101, 0.14), rgba(255, 255, 255, 0.98) 65%);
     box-shadow: none;
+  }
+
+  .simpleView .priceRow {
+    gap: 0.65rem;
   }
 
   .simpleView .titleSection {
@@ -2451,97 +2674,139 @@
   }
 
   .simpleView .currentPrice {
-    font-size: 1.85rem;
-    line-height: 1.05;
-  }
-
-  .simpleView .title {
-    font-size: 1.72rem;
-    line-height: 1.12;
-    margin-bottom: 0;
-  }
-
-  .simpleView .simpleAvailabilityBadge {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.48rem 0.78rem;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.94);
-    border: 1px solid rgba(27, 54, 93, 0.08);
-    color: #1B365D !important;
-    font-size: 0.8rem;
+    font-size: 1.55rem;
     line-height: 1;
   }
 
-  .simpleView .simpleAvailabilityBadge::before {
-    content: '';
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 50%;
-    background: #10b981;
-    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.12);
-    margin-right: 0.5rem;
-    flex-shrink: 0;
+  .simpleView .quickCartButton {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 2.65rem;
+    height: 2.65rem;
+    padding: 0;
+    border: none;
+    border-radius: 0.9rem;
+    background: #1B365D;
+    color: #fff;
+    box-shadow: 0 10px 22px rgba(27, 54, 93, 0.2);
+  }
+
+  .simpleView .quickCartButton .material-symbols-outlined {
+    font-size: 1.2rem;
+    line-height: 1;
+  }
+
+  .simpleView .title {
+    min-width: 0;
+    font-size: 1.3rem;
+    line-height: 1.08;
+    margin-bottom: 0;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .simpleView .priceMeta {
+    margin-top: 0.25rem;
+    font-size: 0.7rem;
+    line-height: 1.28;
   }
 
   .simpleView .actionSectionMB {
-    padding: 0.9rem;
+    padding: 0.75rem;
     border: 1px solid rgba(27, 54, 93, 0.08);
-    border-radius: 1.25rem;
-    background: rgba(255, 255, 255, 0.96);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.65);
+    border-radius: 1.1rem;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(249, 245, 238, 0.94) 100%);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.7),
+      0 10px 24px rgba(27, 54, 93, 0.06);
+    gap: 0.55rem;
   }
 
   .simpleView .quantitySection {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0.75rem;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
     margin-top: 0;
   }
 
   .simpleView .quantityLabel {
-    font-size: 0.74rem;
-    letter-spacing: 0.12em;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
     color: rgba(27, 54, 93, 0.66);
+    white-space: nowrap;
   }
 
   .simpleView .quantityControl {
-    padding: 0.2rem;
-    border-radius: 1rem;
+    flex: 0 0 9.75rem;
+    width: 9.75rem;
+    margin-left: auto;
+    padding: 0.15rem;
+    border-radius: 999px;
+    border-color: rgba(27, 54, 93, 0.12);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(247, 248, 250, 0.98) 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
   }
 
   .simpleView .qBtn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 2.75rem;
-    height: 2.75rem;
+    width: 2.35rem;
+    height: 2.35rem;
     padding: 0;
-    border-radius: 0.85rem;
+    border-radius: 999px;
+    background: rgba(27, 54, 93, 0.05);
+  }
+
+  .simpleView .qBtn .material-symbols-outlined {
+    font-size: 1rem;
   }
 
   .simpleView .qInput {
     width: auto;
     flex: 1;
     background: transparent;
-    font-size: 1rem;
+    font-size: 0.98rem;
+    font-weight: 800;
   }
 
   .simpleView .buyGrid {
-    grid-template-columns: 1fr;
-    gap: 0.75rem;
+    grid-template-columns: minmax(0, 1.16fr) minmax(0, 0.94fr);
+    gap: 0.55rem;
   }
 
   .simpleView .btnPrimary,
   .simpleView .btnOutline {
-    min-height: 3.5rem;
-    border-radius: 1rem;
-    font-size: 0.95rem;
+    min-height: 3rem;
+    padding: 0.72rem 0.7rem;
+    border-radius: 0.92rem;
+    font-size: 0.82rem;
+    gap: 0.35rem;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+
+  .simpleView .btnPrimary {
+    box-shadow: 0 10px 20px rgba(27, 54, 93, 0.16);
+  }
+
+  .simpleView .btnPrimary .material-symbols-outlined,
+  .simpleView .btnOutline .material-symbols-outlined {
+    font-size: 1rem;
   }
 
   .simpleView .btnOutline {
     border-width: 1px;
     background: rgba(197, 160, 101, 0.08);
+    color: #b27a2b;
   }
 
   .simpleView .specCard {

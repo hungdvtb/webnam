@@ -4,6 +4,7 @@ import { getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
 import config from '@/lib/config';
 import styles from './product.module.css';
 import ProductDetailContent from '@/components/ProductDetailContent';
+import RelatedProductsSection from '@/components/product/RelatedProductsSection';
 
 export default async function ProductDetailPage({ params }) {
   const resolvedParams = await params;
@@ -33,10 +34,6 @@ export default async function ProductDetailPage({ params }) {
     console.error("Failed to fetch related products:", error);
     relatedProducts = [];
   }
-
-  const formatPrice = (price) => {
-    return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
-  };
 
   // Determine main image for the description section
   const images = product.images || [];
@@ -99,8 +96,9 @@ export default async function ProductDetailPage({ params }) {
         </div>
 
         {/* Related Products */}
-        {relatedProducts.length > 0 && (
-          <div className={styles.relatedSection}>
+        <RelatedProductsSection relatedProducts={relatedProducts} />
+        {false && (
+        <div className={`${styles.relatedSection} ${!hasRelatedProducts ? styles.relatedSectionEmpty : ''}`}>
             <div className={styles.relatedHeader}>
               <div>
                 <h3 className={styles.relatedTitle}>Sản phẩm tương tự</h3>
@@ -110,18 +108,20 @@ export default async function ProductDetailPage({ params }) {
                 Xem tất cả <span className="material-symbols-outlined">arrow_forward</span>
               </Link>
             </div>
-            <div className={styles.relatedGrid}>
-              {relatedProducts.map((rel) => {
-                const displayImage = rel.primary_image;
+            <div className={`${styles.relatedGrid} ${!hasRelatedProducts ? styles.relatedGridLoading : ''}`}>
+              {hasRelatedProducts ? relatedProducts.map((rel) => {
+                const imageSrc = getRelatedImageSrc(rel);
+                const { ratingValue, ratingCount } = getRelatedRatingMeta(rel);
+
                 return (
                   <Link key={rel.id} href={`/product/${rel.slug || rel.id}`} className={styles.relatedCard}>
                     <div className={styles.relImage}>
-                    {displayImage && (displayImage.url || displayImage.path) ? (
-                        <Image 
-                          src={displayImage.url && displayImage.url.startsWith('http') ? displayImage.url : `${config.storageUrl}/${displayImage.path}`}
+                      {imageSrc ? (
+                        <Image
+                          src={imageSrc}
                           alt={rel.name}
                           fill
-                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 25vw"
+                          sizes="(max-width: 768px) 42vw, (max-width: 1200px) 50vw, 25vw"
                           style={{ objectFit: 'cover' }}
                         />
                       ) : (
@@ -135,10 +135,32 @@ export default async function ProductDetailPage({ params }) {
                       <div className={styles.relPriceRow}>
                         <span className={styles.relPrice}>{formatPrice(rel.price)}</span>
                       </div>
+                      {(ratingValue > 0 || ratingCount > 0) && (
+                        <div className={styles.relRating}>
+                          <div className={styles.relRatingStars}>
+                            {renderRelatedStars(ratingValue)}
+                          </div>
+                          {ratingCount > 0 && <span className={styles.relRatingCount}>({ratingCount})</span>}
+                        </div>
+                      )}
                     </div>
                   </Link>
                 );
-              })}
+              }) : relatedSkeletons.map((skeletonIndex) => (
+                <div
+                  key={`related-skeleton-${skeletonIndex}`}
+                  className={`${styles.relatedCard} ${styles.relatedSkeletonCard}`}
+                  aria-hidden="true"
+                >
+                  <div className={`${styles.relImage} ${styles.relatedSkeletonImage}`} />
+                  <div className={styles.relInfo}>
+                    <div className={styles.relatedSkeletonLine} />
+                    <div className={`${styles.relatedSkeletonLine} ${styles.relatedSkeletonLineShort}`} />
+                    <div className={styles.relatedSkeletonRating} />
+                    <div className={`${styles.relatedSkeletonLine} ${styles.relatedSkeletonPrice}`} />
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}

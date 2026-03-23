@@ -332,6 +332,296 @@ class ProductController extends Controller
         });
     }
 
+    protected function usesPostgresSearchDriver(): bool
+    {
+        return DB::connection()->getDriverName() === 'pgsql';
+    }
+
+    protected function loweredSearchExpression(string $column): string
+    {
+        $column = "COALESCE({$column}, '')";
+
+        if ($this->usesPostgresSearchDriver()) {
+            return "LOWER(immutable_unaccent({$column}))";
+        }
+
+        return "LOWER({$column})";
+    }
+
+    protected function compactSearchExpression(string $column): string
+    {
+        $column = "COALESCE({$column}, '')";
+
+        if ($this->usesPostgresSearchDriver()) {
+            return "LOWER(REGEXP_REPLACE(immutable_unaccent({$column}), '[^a-zA-Z0-9]', '', 'g'))";
+        }
+
+        $expression = $column;
+        foreach (['-', '_', ' ', '/', '.', '#'] as $character) {
+            $expression = "REPLACE({$expression}, '{$character}', '')";
+        }
+
+        return "LOWER({$expression})";
+    }
+
+    protected function normalizedWordsExpression(string $column): string
+    {
+        $column = "COALESCE({$column}, '')";
+
+        if ($this->usesPostgresSearchDriver()) {
+            return "LOWER(REGEXP_REPLACE(immutable_unaccent({$column}), '[^a-zA-Z0-9]+', ' ', 'g'))";
+        }
+
+        return "LOWER({$column})";
+    }
+
+    protected function escapeLike(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
+    }
+
+    protected function normalizeCodeSearchText(string $value): string
+    {
+        return (string) Str::of($value)
+            ->lower()
+            ->ascii()
+            ->replaceMatches('/\s+/', ' ')
+            ->trim();
+    }
+
+    protected function normalizeNameSearchText(string $value): string
+    {
+        return (string) Str::of($value)
+            ->lower()
+            ->ascii()
+            ->replaceMatches('/[^a-z0-9]+/', ' ')
+            ->squish();
+    }
+
+    protected function compactSearchText(string $value): string
+    {
+        return preg_replace('/[^a-z0-9]+/', '', $this->normalizeNameSearchText($value)) ?? '';
+    }
+
+    protected function looksLikeProductCodeSearch(string $rawSearch): bool
+    {
+        $trimmed = trim($rawSearch);
+        if ($trimmed === '') {
+            return false;
+        }
+
+        $compactSearch = $this->compactSearchText($trimmed);
+        if ($compactSearch === '') {
+            return false;
+        }
+
+        $hasDigit = preg_match('/\d/u', $trimmed) === 1;
+        $hasSeparator = preg_match('/[-_.\/\\\\]/u', $trimmed) === 1;
+        $hasWhitespace = preg_match('/\s/u', $trimmed) === 1;
+        $allowedCharactersOnly = preg_match('/^[\pL\pN\s\-_.\/\\\\]+$/u', $trimmed) === 1;
+
+        if (!$allowedCharactersOnly) {
+            return false;
+        }
+
+        if (!$hasWhitespace && ($hasDigit || $hasSeparator)) {
+            return true;
+        }
+
+        return ctype_digit($compactSearch) && strlen($compactSearch) >= 3;
+    }
+
+    protected function applyProductSearch(Builder $query, string $rawSearch): array
+    {
+        $trimmedSearch = trim($rawSearch);
+        if ($trimmedSearch === '') {
+            return [null, []];
+        }
+
+        if ($this->looksLikeProductCodeSearch($trimmedSearch)) {
+            return $this->applyProductCodeSearch($query, $trimmedSearch);
+        }
+
+        return $this->applyProductNameSearch($query, $trimmedSearch);
+    }
+
+    protected function applyProductCodeSearch(Builder $query, string $rawSearch): array
+    {
+        $normalizedCode = $this->normalizeCodeSearchText($rawSearch);
+        $compactCode = $this->compactSearchText($rawSearch);
+
+        if ($normalizedCode === '' && $compactCode === '') {
+            return [null, []];
+        }
+
+        $skuExpr = $this->loweredSearchExpression('products.sku');
+        $compactSkuExpr = $this->compactSearchExpression('products.sku');
+        $exactCodeSearch = function (Builder $searchQuery) use ($skuExpr, $compactSkuExpr, $normalizedCode, $compactCode) {
+            $searchQuery
+                ->where(function (Builder $directQuery) use ($skuExpr, $compactSkuExpr, $normalizedCode, $compactCode) {
+                    $directQuery->whereRaw("{$skuExpr} = ?", [$normalizedCode]);
+
+                    if ($compactCode !== '') {
+                        $directQuery->orWhereRaw("{$compactSkuExpr} = ?", [$compactCode]);
+                    }
+                })
+                ->orWhereHas('variations', function (Builder $variationQuery) use ($normalizedCode, $compactCode) {
+                    $variationSkuExpr = $this->loweredSearchExpression('products.sku');
+                    $variationCompactSkuExpr = $this->compactSearchExpression('products.sku');
+
+                    $variationQuery->where(function (Builder $directVariationQuery) use ($variationSkuExpr, $variationCompactSkuExpr, $normalizedCode, $compactCode) {
+                        $directVariationQuery->whereRaw("{$variationSkuExpr} = ?", [$normalizedCode]);
+
+                        if ($compactCode !== '') {
+                            $directVariationQuery->orWhereRaw("{$variationCompactSkuExpr} = ?", [$compactCode]);
+                        }
+                    });
+                });
+        };
+
+        $hasExactCodeMatch = (clone $query)->where($exactCodeSearch)->exists();
+
+        if ($hasExactCodeMatch) {
+            $searchRankingParts = [
+                "CASE WHEN {$skuExpr} = ? THEN 5000 ELSE 0 END",
+            ];
+            $searchRankingBindings = [$normalizedCode];
+
+            if ($compactCode !== '') {
+                $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} = ? THEN 4900 ELSE 0 END";
+                $searchRankingBindings[] = $compactCode;
+            }
+
+            $searchRankingSql = '(' . implode(' + ', $searchRankingParts) . ')';
+            $query->selectRaw("{$searchRankingSql} AS search_score", $searchRankingBindings);
+            $query->where($exactCodeSearch);
+
+            return [$searchRankingSql, $searchRankingBindings];
+        }
+
+        $codePrefixLike = $this->escapeLike($normalizedCode) . '%';
+        $codeContainsLike = '%' . $this->escapeLike($normalizedCode) . '%';
+        $compactCodePrefixLike = $compactCode !== '' ? $this->escapeLike($compactCode) . '%' : null;
+        $compactCodeContainsLike = $compactCode !== '' ? '%' . $this->escapeLike($compactCode) . '%' : null;
+
+        $searchRankingParts = [
+            "CASE WHEN {$skuExpr} LIKE ? ESCAPE '\\' THEN 2400 ELSE 0 END",
+            "CASE WHEN {$skuExpr} LIKE ? ESCAPE '\\' THEN 1800 ELSE 0 END",
+        ];
+        $searchRankingBindings = [
+            $codePrefixLike,
+            $codeContainsLike,
+        ];
+
+        if ($compactCodePrefixLike !== null) {
+            $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} LIKE ? ESCAPE '\\' THEN 2300 ELSE 0 END";
+            $searchRankingBindings[] = $compactCodePrefixLike;
+        }
+
+        if ($compactCodeContainsLike !== null) {
+            $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} LIKE ? ESCAPE '\\' THEN 1700 ELSE 0 END";
+            $searchRankingBindings[] = $compactCodeContainsLike;
+        }
+
+        $searchRankingSql = '(' . implode(' + ', $searchRankingParts) . ')';
+        $query->selectRaw("{$searchRankingSql} AS search_score", $searchRankingBindings);
+        $query->where(function (Builder $searchQuery) use ($skuExpr, $compactSkuExpr, $codeContainsLike, $compactCodeContainsLike) {
+            $searchQuery
+                ->where(function (Builder $directQuery) use ($skuExpr, $compactSkuExpr, $codeContainsLike, $compactCodeContainsLike) {
+                    $directQuery->whereRaw("{$skuExpr} LIKE ? ESCAPE '\\'", [$codeContainsLike]);
+
+                    if ($compactCodeContainsLike !== null) {
+                        $directQuery->orWhereRaw("{$compactSkuExpr} LIKE ? ESCAPE '\\'", [$compactCodeContainsLike]);
+                    }
+                })
+                ->orWhereHas('variations', function (Builder $variationQuery) use ($codeContainsLike, $compactCodeContainsLike) {
+                    $variationSkuExpr = $this->loweredSearchExpression('products.sku');
+                    $variationCompactSkuExpr = $this->compactSearchExpression('products.sku');
+
+                    $variationQuery->where(function (Builder $directVariationQuery) use ($variationSkuExpr, $variationCompactSkuExpr, $codeContainsLike, $compactCodeContainsLike) {
+                        $directVariationQuery->whereRaw("{$variationSkuExpr} LIKE ? ESCAPE '\\'", [$codeContainsLike]);
+
+                        if ($compactCodeContainsLike !== null) {
+                            $directVariationQuery->orWhereRaw("{$variationCompactSkuExpr} LIKE ? ESCAPE '\\'", [$compactCodeContainsLike]);
+                        }
+                    });
+                });
+        });
+
+        return [$searchRankingSql, $searchRankingBindings];
+    }
+
+    protected function applyProductNameSearch(Builder $query, string $rawSearch): array
+    {
+        $normalizedName = $this->normalizeNameSearchText($rawSearch);
+        if ($normalizedName === '') {
+            return [null, []];
+        }
+
+        $nameExpr = $this->normalizedWordsExpression('products.name');
+        $nameExact = $normalizedName;
+        $namePrefixLike = $this->escapeLike($normalizedName) . '%';
+        $nameContainsLike = '%' . $this->escapeLike($normalizedName) . '%';
+        $nameTokens = collect(preg_split('/\s+/', $normalizedName, -1, PREG_SPLIT_NO_EMPTY))
+            ->filter(fn ($token) => mb_strlen($token) >= 2)
+            ->unique()
+            ->take(6)
+            ->values()
+            ->all();
+
+        $tokenMatchParts = [];
+        $tokenMatchBindings = [];
+
+        foreach ($nameTokens as $token) {
+            $tokenLike = '%' . $this->escapeLike($token) . '%';
+            $tokenMatchParts[] = "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END";
+            $tokenMatchBindings[] = $tokenLike;
+        }
+
+        $tokenMatchSql = !empty($tokenMatchParts) ? '(' . implode(' + ', $tokenMatchParts) . ')' : '0';
+        $containsNumericToken = collect($nameTokens)->contains(fn ($token) => preg_match('/\d/', $token) === 1);
+        $minimumRelevantMatches = $containsNumericToken
+            ? count($nameTokens)
+            : (count($nameTokens) <= 1 ? 1 : max(2, count($nameTokens) - 1));
+        $searchRankingParts = [
+            "CASE WHEN {$nameExpr} = ? THEN 2600 ELSE 0 END",
+            "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 2100 ELSE 0 END",
+            "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 1700 ELSE 0 END",
+        ];
+        $searchRankingBindings = [
+            $nameExact,
+            $namePrefixLike,
+            $nameContainsLike,
+        ];
+
+        if ($tokenMatchSql !== '0') {
+            $searchRankingParts[] = "({$tokenMatchSql} * 140)";
+            $searchRankingBindings = array_merge($searchRankingBindings, $tokenMatchBindings);
+        }
+
+        $searchRankingSql = '(' . implode(' + ', $searchRankingParts) . ')';
+        $query->selectRaw("{$searchRankingSql} AS search_score", $searchRankingBindings);
+        $query->where(function (Builder $searchQuery) use ($nameExpr, $nameContainsLike, $tokenMatchSql, $tokenMatchBindings, $minimumRelevantMatches) {
+            $searchQuery->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
+
+            if ($tokenMatchSql !== '0') {
+                $searchQuery->orWhereRaw("{$tokenMatchSql} >= ?", array_merge($tokenMatchBindings, [$minimumRelevantMatches]));
+            }
+
+            $searchQuery->orWhereHas('variations', function (Builder $variationQuery) use ($nameContainsLike, $tokenMatchSql, $tokenMatchBindings, $minimumRelevantMatches) {
+                $variationNameExpr = $this->normalizedWordsExpression('products.name');
+                $variationQuery->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
+
+                if ($tokenMatchSql !== '0') {
+                    $variationTokenMatchSql = str_replace($this->normalizedWordsExpression('products.name'), $variationNameExpr, $tokenMatchSql);
+                    $variationQuery->orWhereRaw("{$variationTokenMatchSql} >= ?", array_merge($tokenMatchBindings, [$minimumRelevantMatches]));
+                }
+            });
+        });
+
+        return [$searchRankingSql, $searchRankingBindings];
+    }
+
     /**
      * Display a listing of the resource.
      */
@@ -471,7 +761,7 @@ class ProductController extends Controller
             }
         }
 
-        if ($request->filled('search')) {
+        if (false && $request->filled('search')) {
             $rawSearch = trim($request->search);
             $normalizedSearch = Str::of($rawSearch)
                 ->lower()
@@ -651,6 +941,13 @@ class ProductController extends Controller
         }
         // Mặc định luôn ẩn sản phẩm con (biến thể) ở danh sách chính
         // Sản phẩm con chỉ hiển thị khi bấm mở rộng sản phẩm cha ở frontend
+        if ($request->filled('search')) {
+            [$searchRankingSql, $searchRankingBindings] = $this->applyProductSearch(
+                $query,
+                (string) $request->input('search')
+            );
+        }
+
         if (!$request->filled('type')) {
             $query->whereDoesntHave('parentConfigurable');
         }

@@ -62,6 +62,7 @@ export default function Header({
   const [searchQuery, setSearchQuery] = useState("");
   const { cartCount } = useCart();
   const router = useRouter();
+  const cartBadgeLabel = cartCount > 99 ? "99+" : cartCount;
 
   const resolvedBrandTitle = normalizeBrandTitle(brandText);
   const resolvedLogoUrl = String(logoUrl || "").trim() || "/logo-dai-thanh.png";
@@ -143,11 +144,22 @@ export default function Header({
           </div>
 
           <Link href="/cart" className="cart-action">
-            <span
-              key={`cart-icon-${cartCount}`}
-              className={`material-symbols-outlined cart-icon ${cartCount > 0 ? "cart-icon-bounce" : ""}`}
-            >
-              shopping_cart
+            <span className="cart-icon-wrap">
+              <span
+                key={`cart-icon-${cartCount}`}
+                className={`material-symbols-outlined cart-icon ${cartCount > 0 ? "cart-icon-bounce" : ""}`}
+              >
+                shopping_cart
+              </span>
+              {cartCount > 0 && (
+                <span
+                  key={`cart-badge-${cartCount}`}
+                  className={`cart-badge ${cartCount > 99 ? "cart-badge-wide" : ""}`}
+                  suppressHydrationWarning
+                >
+                  {cartBadgeLabel}
+                </span>
+              )}
             </span>
             <div className="cart-text">
               <span className="cart-title">{"Gi\u1ecf h\u00e0ng"}</span>
@@ -312,6 +324,41 @@ export default function Header({
           margin-right: 0;
         }
 
+        .cart-icon-wrap {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+        }
+
+        .cart-badge {
+          position: absolute;
+          top: -6px;
+          right: -10px;
+          min-width: 18px;
+          height: 18px;
+          padding: 0 5px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 999px;
+          border: 2px solid rgba(255, 255, 255, 0.96);
+          background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+          color: #fff;
+          font-size: 10px;
+          font-weight: 800;
+          line-height: 1;
+          letter-spacing: -0.02em;
+          box-shadow: 0 6px 14px rgba(220, 38, 38, 0.24);
+          animation: badgePop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .cart-badge-wide {
+          min-width: 24px;
+          padding: 0 6px;
+        }
+
         .cart-text {
           display: flex;
           flex-direction: column;
@@ -356,6 +403,23 @@ export default function Header({
 
           100% {
             transform: scale(1);
+          }
+        }
+
+        @keyframes badgePop {
+          0% {
+            transform: scale(0.72);
+            opacity: 0.72;
+          }
+
+          72% {
+            transform: scale(1.12);
+            opacity: 1;
+          }
+
+          100% {
+            transform: scale(1);
+            opacity: 1;
           }
         }
 
@@ -486,6 +550,20 @@ export default function Header({
           .cart-icon {
             font-size: 29px;
           }
+
+          .cart-badge {
+            top: -5px;
+            right: -8px;
+            min-width: 17px;
+            height: 17px;
+            padding: 0 4px;
+            font-size: 9px;
+          }
+
+          .cart-badge-wide {
+            min-width: 22px;
+            padding: 0 5px;
+          }
         }
 
         @media (max-width: 420px) {
@@ -521,6 +599,10 @@ export default function Header({
 
           .cart-icon {
             font-size: 27px;
+          }
+
+          .cart-badge {
+            right: -7px;
           }
         }
       `}</style>

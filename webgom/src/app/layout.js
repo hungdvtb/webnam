@@ -2,7 +2,7 @@ import "./globals.css";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import FloatingContactButtons from "@/components/FloatingContactButtons";
-import { getActiveMenu, getWebSiteSettings } from "@/lib/api";
+import { getActiveMenu, getWebCategories, getWebSiteSettings } from "@/lib/api";
 import { CartProvider } from "@/context/CartContext";
 import TrackingScripts from "@/components/common/TrackingScripts";
 import LeadAttributionTracker from "@/components/common/LeadAttributionTracker";
@@ -125,6 +125,7 @@ export const metadata = {
 export default async function RootLayout({ children }) {
   let menuData = null;
   let settings = null;
+  let productCategories = [];
 
   try {
     const [menuRes, settingsRes] = await Promise.all([
@@ -135,6 +136,13 @@ export default async function RootLayout({ children }) {
     settings = settingsRes;
   } catch (error) {
     console.error("Failed to fetch layout data:", error);
+  }
+
+  try {
+    const categoriesRes = await getWebCategories();
+    productCategories = Array.isArray(categoriesRes) ? categoriesRes : [];
+  } catch (error) {
+    console.error("Failed to fetch header categories:", error);
   }
 
   const headerMenuItems = normalizeHeaderMenuItems(parseMenuArray(settings?.header_menu_items));
@@ -171,15 +179,18 @@ export default async function RootLayout({ children }) {
       </head>
       <body>
         <LeadAttributionTracker />
-        <div className="top-promotion-bar">{topNoticeText}</div>
         <CartProvider>
-          <Header
-            menuItems={menuItems}
-            brandText={brandText}
-            logoUrl={logoUrl}
-            searchPlaceholder={searchPlaceholder}
-          />
-          {children}
+          <div className="mobile-sticky-header-shell">
+            <div className="top-promotion-bar">{topNoticeText}</div>
+            <Header
+              menuItems={menuItems}
+              brandText={brandText}
+              logoUrl={logoUrl}
+              searchPlaceholder={searchPlaceholder}
+              productCategories={productCategories}
+            />
+          </div>
+          <div className="site-content-shell">{children}</div>
           <FloatingContactButtons settings={settings} />
           <Footer config={footerConfig} />
         </CartProvider>
@@ -194,6 +205,47 @@ export default async function RootLayout({ children }) {
             font-size: 0.875rem;
             font-weight: 500;
             letter-spacing: 0.05em;
+          }
+        `,
+          }}
+        />
+        <style
+          dangerouslySetInnerHTML={{
+            __html: `
+          .mobile-sticky-header-shell {
+            position: relative;
+            z-index: 1000;
+          }
+
+          .site-content-shell {
+            min-height: 0;
+          }
+
+          @media (max-width: 768px) {
+            .mobile-sticky-header-shell {
+              position: fixed;
+              top: 0;
+              left: 0;
+              right: 0;
+              z-index: 1100;
+              width: 100%;
+            }
+
+            .site-content-shell {
+              padding-top: 110px;
+            }
+          }
+
+          @media (max-width: 640px) {
+            .site-content-shell {
+              padding-top: 104px;
+            }
+          }
+
+          @media (max-width: 420px) {
+            .site-content-shell {
+              padding-top: 98px;
+            }
           }
         `,
           }}

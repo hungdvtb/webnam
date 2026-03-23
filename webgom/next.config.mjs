@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  devIndicators: false,
   async redirects() {
     return [
       // Header settings aliases (admin currently uses these paths)

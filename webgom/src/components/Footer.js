@@ -74,7 +74,7 @@ export default function Footer({ config = {} }) {
           </div>
 
           {groups.map((group) => (
-            <div className="footer-col" key={group.id}>
+            <div className="footer-col footer-nav-col" key={group.id}>
               <h3>{group.title}</h3>
               <ul>
                 {(group.items || []).map((item) => (
@@ -110,6 +110,10 @@ export default function Footer({ config = {} }) {
           background-color: var(--primary);
           color: white;
           padding: 4rem 0 2rem;
+        }
+
+        .footer-content {
+          position: relative;
         }
 
         .footer-grid {
@@ -188,6 +192,7 @@ export default function Footer({ config = {} }) {
           font-size: 0.875rem;
           opacity: 0.85;
           transition: opacity 0.2s ease;
+          min-width: 0;
         }
 
         .footer-contact-item:hover {
@@ -216,8 +221,11 @@ export default function Footer({ config = {} }) {
         }
 
         .footer-col ul li :global(a) {
+          display: inline-block;
           font-size: 0.875rem;
           opacity: 0.8;
+          line-height: 1.55;
+          word-break: break-word;
           transition: opacity 0.2s;
         }
 
@@ -276,6 +284,210 @@ export default function Footer({ config = {} }) {
           display: flex;
           gap: 1.5rem;
           flex-wrap: wrap;
+        }
+
+        @media (max-width: 767px) {
+          .site-footer {
+            padding: 3rem 0 2rem;
+          }
+
+          .footer-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+          }
+
+          .about-col,
+          .newsletter-col {
+            grid-column: 1 / -1;
+          }
+
+          .footer-col {
+            min-width: 0;
+            padding: 1rem;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(12px);
+          }
+
+          .footer-logo {
+            margin-bottom: 1rem;
+          }
+
+          .footer-logo h2 {
+            font-size: 1.08rem;
+            line-height: 1.25;
+          }
+
+          .footer-desc {
+            margin-bottom: 1rem;
+            font-size: 0.92rem;
+            line-height: 1.65;
+          }
+
+          .footer-contact {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.75rem;
+          }
+
+          .footer-contact-item {
+            min-height: 48px;
+            padding: 0.75rem 0.85rem;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.06);
+            font-size: 0.86rem;
+            line-height: 1.45;
+          }
+
+          .footer-contact-item :global(.material-symbols-outlined) {
+            font-size: 18px !important;
+            flex-shrink: 0;
+          }
+
+          .footer-address {
+            grid-column: 1 / -1;
+          }
+
+          .footer-col h3 {
+            margin-bottom: 0.9rem;
+            font-size: 0.92rem;
+            letter-spacing: 0.08em;
+          }
+
+          .footer-col ul {
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+          }
+
+          .footer-col ul li {
+            margin-bottom: 0;
+          }
+
+          .footer-col ul li :global(a) {
+            display: block;
+            padding: 0.1rem 0;
+            font-size: 0.9rem;
+            opacity: 0.88;
+          }
+
+          .footer-nav-col {
+            align-self: stretch;
+          }
+
+          .footer-nav-col ul {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.65rem;
+          }
+
+          .footer-nav-col ul li :global(a) {
+            display: flex;
+            align-items: flex-start;
+            min-height: 54px;
+            padding: 0.75rem 0.8rem;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.04);
+            line-height: 1.4;
+          }
+
+          .newsletter-col p {
+            margin-bottom: 0.9rem;
+            font-size: 0.9rem;
+            line-height: 1.65;
+          }
+
+          .newsletter-form {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 0.65rem;
+            align-items: stretch;
+          }
+
+          .newsletter-form input {
+            min-width: 0;
+            font-size: 0.9rem;
+          }
+
+          .newsletter-form button {
+            min-width: 88px;
+          }
+
+          .footer-bottom {
+            justify-content: center;
+            text-align: center;
+            gap: 0.85rem;
+            padding-top: 1.5rem;
+            font-size: 0.58rem;
+            line-height: 1.7;
+          }
+
+          .footer-bottom p {
+            width: 100%;
+          }
+
+          .footer-legal {
+            justify-content: center;
+            gap: 1rem;
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 479px) {
+          .site-footer {
+            padding: 2.75rem 0 1.75rem;
+          }
+
+          .footer-grid {
+            grid-template-columns: 1fr;
+            gap: 0.9rem;
+          }
+
+          .footer-col {
+            padding: 0.95rem;
+            border-radius: 14px;
+          }
+
+          .footer-logo {
+            align-items: center;
+            gap: 0.7rem;
+          }
+
+          .footer-nav-col ul {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.55rem;
+          }
+
+          .footer-nav-col ul li :global(a) {
+            min-height: 50px;
+            padding: 0.72rem 0.75rem;
+            font-size: 0.84rem;
+          }
+
+          .footer-contact {
+            grid-template-columns: 1fr;
+          }
+
+          .footer-contact-item,
+          .footer-address {
+            grid-column: auto;
+          }
+
+          .newsletter-form {
+            grid-template-columns: 1fr;
+          }
+
+          .newsletter-form button {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 359px) {
+          .footer-nav-col ul {
+            grid-template-columns: 1fr;
+          }
         }
       `}</style>
     </footer>

@@ -1,3 +1,6 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
 import floatingContactConfig from "@/lib/floatingContactConfig";
 import styles from "./FloatingContactButtons.module.css";
 
@@ -127,28 +130,118 @@ const buildContactLinks = (settings) => {
   ].filter((button) => Boolean(button.href));
 };
 
+function ContactMenuGlyph({ isOpen }) {
+  if (isOpen) {
+    return (
+      <svg viewBox="0 0 24 24" className={styles.icon} fill="none" aria-hidden="true">
+        <path
+          d="M7 7L17 17M17 7L7 17"
+          stroke="currentColor"
+          strokeWidth="2.1"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" className={styles.icon} fill="none" aria-hidden="true">
+      <path
+        d="M7.25 5.5h9.5A3.25 3.25 0 0 1 20 8.75v5.1a3.25 3.25 0 0 1-3.25 3.25h-3.6L9.1 20v-2.9H7.25A3.25 3.25 0 0 1 4 13.85v-5.1A3.25 3.25 0 0 1 7.25 5.5Z"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="9" cy="11.3" r="1" fill="currentColor" />
+      <circle cx="12" cy="11.3" r="1" fill="currentColor" />
+      <circle cx="15" cy="11.3" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+
 export default function FloatingContactButtons({ settings }) {
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const containerRef = useRef(null);
   const buttons = buildContactLinks(settings);
+
+  useEffect(() => {
+    if (!isMobileMenuOpen) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event) => {
+      if (!containerRef.current?.contains(event.target)) {
+        setIsMobileMenuOpen(false);
+      }
+    };
+
+    const handleEscape = (event) => {
+      if (event.key === "Escape") {
+        setIsMobileMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [isMobileMenuOpen]);
 
   if (buttons.length === 0) {
     return null;
   }
 
   return (
-    <div className={styles.floatingContacts}>
-      {buttons.map((button) => (
-        <a
-          key={button.key}
-          href={button.href}
-          aria-label={button.label}
-          title={button.label}
-          className={`${styles.button} ${button.variant}`}
-          target={button.isPhone ? undefined : "_blank"}
-          rel={button.isPhone ? undefined : "noopener noreferrer"}
+    <>
+      <div className={styles.desktopFloatingContacts}>
+        {buttons.map((button) => (
+          <a
+            key={button.key}
+            href={button.href}
+            aria-label={button.label}
+            title={button.label}
+            className={`${styles.button} ${button.variant}`}
+            target={button.isPhone ? undefined : "_blank"}
+            rel={button.isPhone ? undefined : "noopener noreferrer"}
+          >
+            {button.icon}
+          </a>
+        ))}
+      </div>
+
+      <div className={styles.mobileFloatingContacts} ref={containerRef}>
+        <div className={`${styles.mobileMenu} ${isMobileMenuOpen ? styles.mobileMenuOpen : ""}`}>
+          {buttons.map((button) => (
+            <a
+              key={`mobile-${button.key}`}
+              href={button.href}
+              aria-label={button.label}
+              title={button.label}
+              className={`${styles.button} ${button.variant} ${styles.mobileMenuButton}`}
+              target={button.isPhone ? undefined : "_blank"}
+              rel={button.isPhone ? undefined : "noopener noreferrer"}
+              onClick={() => setIsMobileMenuOpen(false)}
+            >
+              {button.icon}
+            </a>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          className={`${styles.button} ${styles.mobileToggle} ${isMobileMenuOpen ? styles.mobileToggleOpen : ""}`}
+          aria-label={isMobileMenuOpen ? "Dong lien he" : "Mo lien he"}
+          aria-expanded={isMobileMenuOpen}
+          onClick={() => setIsMobileMenuOpen((prev) => !prev)}
         >
-          {button.icon}
-        </a>
-      ))}
-    </div>
+          <ContactMenuGlyph isOpen={isMobileMenuOpen} />
+        </button>
+      </div>
+    </>
   );
 }

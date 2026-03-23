@@ -1,6 +1,7 @@
 import "./globals.css";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import FloatingContactButtons from "@/components/FloatingContactButtons";
 import { getActiveMenu, getWebSiteSettings } from "@/lib/api";
 import { CartProvider } from "@/context/CartContext";
 import TrackingScripts from "@/components/common/TrackingScripts";
@@ -179,6 +180,7 @@ export default async function RootLayout({ children }) {
             searchPlaceholder={searchPlaceholder}
           />
           {children}
+          <FloatingContactButtons settings={settings} />
           <Footer config={footerConfig} />
         </CartProvider>
         <style

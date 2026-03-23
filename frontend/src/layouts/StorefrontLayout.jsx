@@ -6,25 +6,6 @@ import { buildHeaderConfig } from '../utils/headerSettings';
 import { buildFooterConfig } from '../utils/footerSettings';
 import { rememberLeadAttribution } from '../utils/leadAttribution';
 
-const StickyActionBar = ({ phone, messengerUrl }) => (
-    <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-stone-200 bg-white/95 shadow-[0_-4px_20px_rgba(0,0,0,0.08)] backdrop-blur-xl md:hidden">
-        <div className="flex h-14 items-stretch">
-            <a href={`tel:${phone || '0123456789'}`} className="flex flex-1 items-center justify-center gap-2 bg-red-600 text-sm font-bold text-white transition-all active:brightness-90">
-                <span className="material-symbols-outlined text-lg">call</span>
-                Gọi ngay
-            </a>
-            <a href={messengerUrl || 'https://m.me/'} target="_blank" rel="noopener noreferrer" className="flex flex-1 items-center justify-center gap-2 bg-blue-600 text-sm font-bold text-white transition-all active:brightness-90">
-                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.145 2 11.243c0 2.907 1.434 5.503 3.683 7.197V22l3.38-1.856c.903.25 1.86.383 2.937.383 5.523 0 10-4.145 10-9.243C22 6.145 17.523 2 12 2zm1.039 12.458l-2.545-2.715L5.5 14.458l5.474-5.81 2.608 2.715L18.5 8.148l-5.461 6.31z"/></svg>
-                Chat ngay
-            </a>
-            <Link to="/dat-hang" className="flex flex-1 items-center justify-center gap-2 bg-amber-600 text-sm font-bold text-white transition-all active:brightness-90">
-                <span className="material-symbols-outlined text-lg">shopping_bag</span>
-                Đặt hàng
-            </Link>
-        </div>
-    </div>
-);
-
 const StorefrontHeader = ({ headerConfig, siteInfo }) => {
     const [menuOpen, setMenuOpen] = useState(false);
     const [searchOpen, setSearchOpen] = useState(false);
@@ -361,15 +342,6 @@ const StorefrontLayout = () => {
                 <Outlet context={{ categories, siteInfo, headerConfig, footerConfig }} />
             </main>
             <StorefrontFooter siteInfo={siteInfo} footerConfig={footerConfig} />
-            <StickyActionBar phone={siteInfo?.phone} messengerUrl={siteInfo?.messengerUrl} />
-            <div className="fixed bottom-6 right-6 z-50 hidden flex-col gap-3 md:flex">
-                <a href={`tel:${siteInfo?.phone || '0123456789'}`} className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white shadow-xl shadow-red-600/30 transition-transform hover:scale-110" title="Gọi ngay">
-                    <span className="material-symbols-outlined text-2xl">call</span>
-                </a>
-                <a href={siteInfo?.messengerUrl || 'https://m.me/'} target="_blank" rel="noopener noreferrer" className="flex h-14 w-14 items-center justify-center rounded-full bg-blue-600 text-white shadow-xl shadow-blue-600/30 transition-transform hover:scale-110" title="Chat Messenger">
-                    <svg className="h-7 w-7" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.145 2 11.243c0 2.907 1.434 5.503 3.683 7.197V22l3.38-1.856c.903.25 1.86.383 2.937.383 5.523 0 10-4.145 10-9.243C22 6.145 17.523 2 12 2zm1.039 12.458l-2.545-2.715L5.5 14.458l5.474-5.81 2.608 2.715L18.5 8.148l-5.461 6.31z"/></svg>
-                </a>
-            </div>
         </div>
     );
 };

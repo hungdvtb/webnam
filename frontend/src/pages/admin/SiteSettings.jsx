@@ -1027,6 +1027,9 @@ const SiteSettings = () => {
                                         <label className={labelClasses}>Email liên hệ</label>
                                         <input type="email" name="contact_email" value={settings.contact_email} onChange={handleChange} className={inputClasses} placeholder="contact@domain.com" />
                                     </div>
+                                    <div className="col-span-2 rounded-sm border border-sky-100 bg-sky-50/80 px-4 py-3 text-[11px] font-medium leading-5 text-sky-700">
+                                        Floating contact buttons on the website use <strong className="font-black">Hotline ho tro</strong>, <strong className="font-black">Zalo URL</strong>, and <strong className="font-black">Messenger URL</strong> here first. If these fields are empty, the system falls back to <strong className="font-black">src/config/floatingContact.js</strong>.
+                                    </div>
                                 </div>
                             </SectionCard>
 

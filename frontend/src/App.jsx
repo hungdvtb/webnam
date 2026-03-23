@@ -46,6 +46,7 @@ import ShippingSettingsPage from './pages/admin/ShippingSettingsPage';
 import UserList from './pages/admin/UserList';
 import OrderStatusSettings from './pages/admin/OrderStatusSettings';
 import LeadList from './pages/admin/LeadList';
+import FloatingContactButtons from './components/FloatingContactButtons';
 
 import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
@@ -162,6 +163,7 @@ function App() {
                 <Route path="orders/:id" element={<OrderDetail />} />
               </Route>
             </Routes>
+            <FloatingContactButtons />
           </BrowserRouter>
         </CartProvider>
       </AuthProvider>

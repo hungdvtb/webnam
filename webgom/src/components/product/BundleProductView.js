@@ -15,6 +15,30 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Breadcrumb from './common/Breadcrumb';
 
+const MOBILE_STICKY_CLUSTER_GAP = 8;
+
+const getMobileStickyHeaderHeight = () => {
+  if (typeof document === 'undefined') {
+    return 0;
+  }
+
+  const mobileHeaderShell = document.querySelector('.mobile-sticky-header-shell');
+
+  if (mobileHeaderShell) {
+    const shellRect = mobileHeaderShell.getBoundingClientRect();
+    const shellHeight = Math.round(shellRect.height || mobileHeaderShell.offsetHeight || 0);
+
+    if (shellHeight > 0) {
+      return shellHeight;
+    }
+  }
+
+  const promoBar = document.querySelector('.top-promotion-bar');
+  return Math.round(promoBar?.getBoundingClientRect().height || 32);
+};
+
+const getMobileStickyPinnedTop = () => getMobileStickyHeaderHeight() + MOBILE_STICKY_CLUSTER_GAP;
+
 const BUNDLE_ITEM_CHANGE_LABEL = 'Đổi kích thước';
 const BUNDLE_ITEM_CHANGE_TITLE = 'Đổi kích thước cho sản phẩm trong bộ';
 
@@ -212,6 +236,7 @@ export default function BundleProductView({
   const [isMobileBundleViewport, setIsMobileBundleViewport] = useState(false);
   // Active tab in the detail section (separate from upper config selector)
   const [activeTab, setActiveTab] = useState(null);
+  const [isMobileConfigMenuOpen, setIsMobileConfigMenuOpen] = useState(false);
   const [isMobileStickyClusterActive, setIsMobileStickyClusterActive] = useState(false);
   const [mobileStickyClusterLayout, setMobileStickyClusterLayout] = useState({ top: 0, left: 0, width: 0, height: 0 });
   const bundleListRef = useRef(null);
@@ -269,39 +294,6 @@ export default function BundleProductView({
     return Array.from(new Set(titles));
   }, [bundleItems]);
 
-  const bundleConfigLayout = useMemo(() => {
-    const total = configurations.length;
-
-    if (total === 0) {
-      return { columns: 0, rows: [] };
-    }
-
-    if (total <= 4) {
-      return { columns: total, rows: [configurations] };
-    }
-
-    if (total <= 6) {
-      return {
-        columns: 3,
-        rows: [configurations.slice(0, 3), configurations.slice(3)],
-      };
-    }
-
-    if (total <= 8) {
-      return {
-        columns: 4,
-        rows: [configurations.slice(0, 4), configurations.slice(4)],
-      };
-    }
-
-    const rows = [];
-    for (let index = 0; index < total; index += 4) {
-      rows.push(configurations.slice(index, index + 4));
-    }
-
-    return { columns: 4, rows };
-  }, [configurations]);
-
   // Initialise activeTab to first config
   useEffect(() => {
     if (configurations.length > 0 && !activeTab) {
@@ -327,17 +319,42 @@ export default function BundleProductView({
   }, []);
 
   useEffect(() => {
-    if (typeof document === 'undefined') return undefined;
+    if (!isMobileBundleViewport) {
+      setIsMobileConfigMenuOpen(false);
+    }
+  }, [isMobileBundleViewport]);
 
-    document.body.classList.toggle(
-      'bundle-mobile-summary-sticky-active',
-      isMobileBundleViewport && isMobileStickyClusterActive
-    );
+  useEffect(() => {
+    setIsMobileConfigMenuOpen(false);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!isMobileConfigMenuOpen || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const handlePointerDown = (event) => {
+      if (!event.target.closest('[data-bundle-mobile-config-selector="true"]')) {
+        setIsMobileConfigMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setIsMobileConfigMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
 
     return () => {
-      document.body.classList.remove('bundle-mobile-summary-sticky-active');
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isMobileBundleViewport, isMobileStickyClusterActive]);
+  }, [isMobileConfigMenuOpen]);
 
   // Items of the active tab (including removed ones for placeholder)
   const tabItems = useMemo(() => {
@@ -397,12 +414,10 @@ export default function BundleProductView({
     let frameId = 0;
 
     const updateStickyState = () => {
-      const promoBar = document.querySelector('.top-promotion-bar');
       const stickyClusterShell = mobileStickyClusterShellRef.current;
       const stickyCluster = mobileStickyClusterRef.current;
       const bundleList = bundleListRef.current;
-
-      const promoHeight = Math.round(promoBar?.getBoundingClientRect().height || 32);
+      const stickyPinnedTop = getMobileStickyPinnedTop();
 
       if (!stickyClusterShell || !stickyCluster || !bundleList) {
         setIsMobileStickyClusterActive(false);
@@ -413,7 +428,6 @@ export default function BundleProductView({
       const stickyClusterShellRect = stickyClusterShell.getBoundingClientRect();
       const bundleListRect = bundleList.getBoundingClientRect();
       const stickyClusterHeight = stickyCluster.offsetHeight;
-      const stickyPinnedTop = promoHeight + 8;
       const canRemainPinned = bundleListRect.bottom > stickyPinnedTop + stickyClusterHeight + 18;
       const nextStickyState = stickyClusterShellRect.top <= stickyPinnedTop + 1 && canRemainPinned;
 
@@ -481,6 +495,18 @@ export default function BundleProductView({
     }
     return null;
   }, [bundleItems, configurations]);
+
+  const isConfigEligibleForDiscount = (configName) => {
+    const cfgItems = bundleItems.filter((item) => (item.option_title || item.pivot?.option_title) === configName);
+    const origSrc = product.bundle_items || product.grouped_items || [];
+    const origCfg = origSrc.filter((item) => (item.option_title || item.pivot?.option_title) === configName);
+
+    return cfgItems.length > 0 && cfgItems.every((item) => {
+      if (item.removed) return false;
+      const originalItem = origCfg.find((candidate) => candidate.id === item.id);
+      return (item.qty || 1) >= (originalItem?.pivot?.quantity || 1);
+    });
+  };
 
   const openSelectionModal = (slot) => {
     setActiveSlot(slot);
@@ -561,12 +587,41 @@ export default function BundleProductView({
     setHoveredBundleConfig('');
   };
 
+  const scrollToBundleDetailControls = ({ behavior = 'smooth' } = {}) => {
+    const detailSection = bundleListRef.current;
+    const stickyClusterShell = mobileStickyClusterShellRef.current;
+
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (!isMobileBundleViewport || !stickyClusterShell) {
+      detailSection?.scrollIntoView({ behavior, block: 'start' });
+      return;
+    }
+
+    const stickyPinnedTop = getMobileStickyPinnedTop();
+    const shellTop = window.scrollY + stickyClusterShell.getBoundingClientRect().top;
+    const targetTop = Math.max(0, Math.round(shellTop - stickyPinnedTop));
+
+    window.scrollTo({ top: targetTop, behavior });
+  };
+
   const handleViewBundleDetails = () => {
     if (activeBundlePopover) {
       handleTabChange(activeBundlePopover);
     }
     closeBundleActions();
-    document.getElementById('bundle-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        scrollToBundleDetailControls({ behavior: 'smooth' });
+      });
+    });
   };
 
   const handlePopupAddToCart = (event) => {
@@ -597,46 +652,86 @@ export default function BundleProductView({
       : undefined;
 
   const renderBundleConfigGrid = () => {
-    if (bundleConfigLayout.rows.length === 0) {
+    if (configurations.length === 0) {
       return null;
     }
 
-    return (
-      <div className={builderStyles.tabBar}>
-        {bundleConfigLayout.rows.map((row, rowIndex) => (
-          <div
-            key={`bundle-config-row-${rowIndex}`}
-            className={builderStyles.tabBarRow}
-            style={{ '--bundle-tab-columns': bundleConfigLayout.columns }}
-          >
-            {row.map((config) => (
-              <button
-                key={config}
-                className={`${builderStyles.tabBtn} ${activeTab === config ? builderStyles.tabBtnActive : ''}`}
-                onClick={() => handleTabChange(config)}
-              >
-                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
-                  {activeTab === config ? 'radio_button_checked' : 'radio_button_unchecked'}
-                </span>
-                {config}
-                {(() => {
-                  const cfgItems = bundleItems.filter((item) => (item.option_title || item.pivot?.option_title) === config);
-                  const origSrc = product.bundle_items || product.grouped_items || [];
-                  const origCfg = origSrc.filter((item) => (item.option_title || item.pivot?.option_title) === config);
-                  const full = cfgItems.every((item) => {
-                    if (item.removed) return false;
-                    const originalItem = origCfg.find((candidate) => candidate.id === item.id);
-                    return (item.qty || 1) >= (originalItem?.pivot?.quantity || 1);
-                  });
+    const selectedConfig = activeTab || configurations[0];
+    const selectedConfigHasDiscount = isConfigEligibleForDiscount(selectedConfig);
+    const mobileConfigHint = `${configurations.length} c\u1EA5u h\u00ECnh`;
 
-                  return cfgItems.length > 0 && full ? (
+    return (
+      <div
+        className={builderStyles.mobileConfigRailCard}
+        data-bundle-mobile-config-selector="true"
+      >
+        <div className={builderStyles.mobileConfigRailHeader}>
+          <span className={builderStyles.mobileConfigRailTitle}>{'Ch\u1ECDn c\u1EA5u h\u00ECnh b\u1ED9'}</span>
+          <span className={builderStyles.mobileConfigRailMeta}>{mobileConfigHint}</span>
+        </div>
+
+        <div className={builderStyles.mobileConfigDropdown}>
+          <button
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded={isMobileConfigMenuOpen}
+            className={`${builderStyles.mobileConfigDropdownTrigger} ${isMobileConfigMenuOpen ? builderStyles.mobileConfigDropdownTriggerOpen : ''}`}
+            onClick={() => setIsMobileConfigMenuOpen((currentValue) => !currentValue)}
+          >
+            <span className={builderStyles.mobileConfigDropdownValueWrap}>
+              <span className={builderStyles.mobileConfigDropdownEyebrow}>{'\u0110ang ch\u1ECDn'}</span>
+              <span className={builderStyles.mobileConfigDropdownValue}>{selectedConfig}</span>
+            </span>
+
+            <span className={builderStyles.mobileConfigDropdownActions}>
+              {selectedConfigHasDiscount ? (
+                <span className={builderStyles.mobileConfigDropdownBadge}>{'\u0110\u1EE7 b\u1ED9'}</span>
+              ) : null}
+              <span className={`material-symbols-outlined ${builderStyles.mobileConfigDropdownArrow}`}>
+                {isMobileConfigMenuOpen ? 'expand_less' : 'expand_more'}
+              </span>
+            </span>
+          </button>
+
+          {isMobileConfigMenuOpen ? (
+            <div className={builderStyles.mobileConfigDropdownMenu} role="listbox" aria-label="Danh s\u00E1ch c\u1EA5u h\u00ECnh b\u1ED9">
+              {configurations.map((config) => {
+                const isSelected = activeTab === config;
+                const isDiscountReady = isConfigEligibleForDiscount(config);
+
+                return (
+                  <button
+                    key={config}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    className={`${builderStyles.mobileConfigDropdownOption} ${isSelected ? builderStyles.mobileConfigDropdownOptionActive : ''}`}
+                    onClick={() => {
+                      handleTabChange(config);
+                      setIsMobileConfigMenuOpen(false);
+                    }}
+                  >
+                    <span className={builderStyles.mobileConfigDropdownOptionMain}>
+                      <span className={builderStyles.mobileConfigDropdownOptionTitle}>{config}</span>
+                      {isSelected ? (
+                        <span className={builderStyles.mobileConfigDropdownOptionHint}>{'\u0110ang ch\u1ECDn'}</span>
+                      ) : null}
+                    </span>
+
+                    <span className={builderStyles.mobileConfigDropdownOptionMeta}>
+                      {isDiscountReady ? (
                     <span className={builderStyles.tabFullDot} title="Đủ điều kiện giảm giá"></span>
-                  ) : null;
-                })()}
-              </button>
-            ))}
-          </div>
-        ))}
+                      ) : null}
+                      <span className="material-symbols-outlined">
+                        {isSelected ? 'check_circle' : 'chevron_right'}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
       </div>
     );
   };
@@ -913,7 +1008,7 @@ export default function BundleProductView({
                 </h4>
                 <div className="mt-3">
                   <button
-                    onClick={() => document.getElementById('bundle-list')?.scrollIntoView({ behavior: 'smooth' })}
+                    onClick={() => scrollToBundleDetailControls({ behavior: 'smooth' })}
                     className={styles.customizeBundleBtn}
                   >
                     <span className="material-symbols-outlined">tune</span>

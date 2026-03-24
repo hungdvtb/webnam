@@ -3,8 +3,11 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\Attribute;
+use App\Models\AttributeOption;
 use App\Models\Category;
 use App\Models\Product;
+use App\Models\ProductAttributeValue;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
@@ -204,6 +207,85 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.sku', 'DEMO-GOM-0060-ALT');
     }
 
+    public function test_attribute_filter_can_be_combined_with_search(): void
+    {
+        $account = $this->authenticate();
+        $glazeAttribute = $this->createProductAttribute($account, 'Loai men', [
+            'Men lam',
+            'Men ran',
+            'Men trang',
+        ]);
+
+        $matching = $this->createProduct($account, [
+            'name' => 'Bat huong men lam size 18',
+            'sku' => 'BAT-HUONG-LAM-018',
+        ]);
+        $this->attachProductAttributeValue($matching, $glazeAttribute, 'Men lam');
+
+        $other = $this->createProduct($account, [
+            'name' => 'Bat huong men ran size 18',
+            'sku' => 'BAT-HUONG-RAN-018',
+        ]);
+        $this->attachProductAttributeValue($other, $glazeAttribute, 'Men ran');
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'search' => 'bat huong',
+                'per_page' => 20,
+                'attributes' => [
+                    $glazeAttribute->id => 'Men lam',
+                ],
+            ]));
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $matching->id)
+            ->assertJsonPath('data.0.sku', 'BAT-HUONG-LAM-018');
+    }
+
+    public function test_attribute_filter_matches_multiselect_json_values(): void
+    {
+        $account = $this->authenticate();
+        $glazeAttribute = $this->createProductAttribute($account, 'Loai men', [
+            'Men lam',
+            'Men ran',
+            'Men trang',
+        ], [
+            'frontend_type' => 'multiselect',
+        ]);
+
+        $matching = $this->createProduct($account, [
+            'name' => 'Bo do tho nhieu loai men',
+            'sku' => 'BUNDLE-MEN-LAM-RAN',
+            'type' => 'bundle',
+        ]);
+        $this->attachProductAttributeValue($matching, $glazeAttribute, ['Men lam', 'Men ran']);
+
+        $other = $this->createProduct($account, [
+            'name' => 'Bo do tho men trang',
+            'sku' => 'BUNDLE-MEN-TRANG',
+            'type' => 'bundle',
+        ]);
+        $this->attachProductAttributeValue($other, $glazeAttribute, ['Men trang']);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'per_page' => 20,
+                'attributes' => [
+                    $glazeAttribute->id => 'Men lam',
+                ],
+            ]));
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $matching->id)
+            ->assertJsonPath('data.0.sku', 'BUNDLE-MEN-LAM-RAN');
+    }
+
     private function authenticate(): Account
     {
         $account = Account::query()->create([
@@ -241,6 +323,39 @@ class ProductSearchBehaviorTest extends TestCase
             'name' => $name,
             'slug' => Str::slug($name) . '-' . Str::lower(Str::random(4)),
             'status' => 1,
+        ]);
+    }
+
+    private function createProductAttribute(Account $account, string $name, array $options = [], array $overrides = []): Attribute
+    {
+        $attribute = Attribute::query()->create(array_merge([
+            'account_id' => $account->id,
+            'name' => $name,
+            'code' => Str::slug($name) . '-' . Str::lower(Str::random(5)),
+            'entity_type' => 'product',
+            'frontend_type' => 'select',
+            'is_filterable' => true,
+            'is_filterable_backend' => true,
+            'status' => true,
+        ], $overrides));
+
+        foreach (array_values($options) as $index => $option) {
+            AttributeOption::query()->create([
+                'attribute_id' => $attribute->id,
+                'value' => $option,
+                'order' => $index,
+            ]);
+        }
+
+        return $attribute->fresh('options');
+    }
+
+    private function attachProductAttributeValue(Product $product, Attribute $attribute, string|array $value): ProductAttributeValue
+    {
+        return ProductAttributeValue::query()->create([
+            'product_id' => $product->id,
+            'attribute_id' => $attribute->id,
+            'value' => is_array($value) ? json_encode(array_values($value)) : $value,
         ]);
     }
 

@@ -707,6 +707,63 @@ class ProductController extends Controller
         return [$searchRankingSql, $searchRankingBindings];
     }
 
+    protected function applyAttributeValueConstraint(Builder $query, int $attributeId, array $valueArray): void
+    {
+        $query
+            ->where('attribute_id', $attributeId)
+            ->where(function (Builder $valueQuery) use ($valueArray) {
+                foreach ($valueArray as $value) {
+                    $escapedValue = $this->escapeLike($value);
+
+                    $valueQuery
+                        ->orWhere('value', $value)
+                        ->orWhereRaw("value LIKE ? ESCAPE '\\'", ['%"' . $escapedValue . '"%']);
+                }
+            });
+    }
+
+    protected function applyProductAttributeFilters(Builder $query, $inputAttributes): void
+    {
+        if (!is_array($inputAttributes) || empty($inputAttributes)) {
+            return;
+        }
+
+        foreach ($inputAttributes as $attrId => $values) {
+            if (!is_numeric($attrId)) {
+                continue;
+            }
+
+            $valueArray = collect(is_array($values) ? $values : explode(',', (string) $values))
+                ->map(function ($value) {
+                    if (!is_scalar($value)) {
+                        return null;
+                    }
+
+                    return trim((string) $value);
+                })
+                ->filter(fn ($value) => $value !== null && $value !== '')
+                ->unique()
+                ->values()
+                ->all();
+
+            if (empty($valueArray)) {
+                continue;
+            }
+
+            $attributeId = (int) $attrId;
+
+            $query->where(function (Builder $attributeQuery) use ($attributeId, $valueArray) {
+                $attributeQuery
+                    ->whereHas('attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
+                        $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
+                    })
+                    ->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
+                        $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
+                    });
+            });
+        }
+    }
+
     /**
      * Display a listing of the resource.
      */
@@ -731,6 +788,7 @@ class ProductController extends Controller
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
             'variations:id,sku,name,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id',
+            'variations.attributeValues:id,product_id,attribute_id,value',
             'variations.unit:id,name',
             'variations.images:id,product_id,image_url,is_primary',
             'groupedItems:id,sku,name,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id',
@@ -1005,25 +1063,7 @@ class ProductController extends Controller
         }
 
         // Filter by EAV Attributes
-        $inputAttributes = $request->input('attributes');
-        if (!empty($inputAttributes) && is_array($inputAttributes)) {
-            foreach ($inputAttributes as $attrId => $values) {
-                if (empty($values))
-                    continue;
-                $valueArray = is_array($values) ? $values : explode(',', $values);
-
-                $query->whereHas('attributeValues', function ($q) use ($attrId, $valueArray) {
-                    $q->where('attribute_id', $attrId)
-                        ->where(function ($sub) use ($valueArray) {
-                        foreach ($valueArray as $val) {
-                            $sub->orWhere('value', $val)
-                                ->orWhere('value', 'LIKE', '%"' . $val . '"%');
-                        }
-                    }
-                    );
-                });
-            }
-        }
+        $this->applyProductAttributeFilters($query, $request->input('attributes'));
         // Mặc định luôn ẩn sản phẩm con (biến thể) ở danh sách chính
         // Sản phẩm con chỉ hiển thị khi bấm mở rộng sản phẩm cha ở frontend
         if ($request->filled('search')) {

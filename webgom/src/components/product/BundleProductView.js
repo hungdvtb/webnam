@@ -79,6 +79,39 @@ function BundleActionPopup({
   );
 }
 
+function BundleActionCard({
+  configName,
+  onViewDetails,
+  onAddToCart,
+  onBuyNow,
+  compact = false
+}) {
+  if (!configName) {
+    return null;
+  }
+
+  return (
+    <div className={`${styles.bundleActionContent} ${compact ? styles.bundleActionContentCompact : ''}`}>
+      <p className={styles.bundleActionEyebrow}>Chá»n cáº¥u hÃ¬nh bá»™</p>
+      <h3 className={styles.bundleActionTitle}>{configName}</h3>
+      <button type="button" onClick={onViewDetails} className={styles.bundleActionTop}>
+        <span className="material-symbols-outlined">tune</span>
+        Xem chi tiáº¿t vÃ  tÃ¹y chá»‰nh thÃ nh pháº§n bá»™
+      </button>
+      <div className={styles.bundleActionGrid}>
+        <button type="button" onClick={onAddToCart} className={styles.bundleActionPrimary}>
+          <span className="material-symbols-outlined">add_shopping_cart</span>
+          ThÃªm vÃ o giá»
+        </button>
+        <button type="button" onClick={onBuyNow} className={styles.bundleActionSecondary}>
+          <span className="material-symbols-outlined">shopping_bag</span>
+          Mua ngay
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function InlineBundleActionPopover({ configName, onViewDetails, onAddToCart, onBuyNow }) {
   if (!configName) {
     return null;
@@ -101,6 +134,39 @@ function InlineBundleActionPopover({ configName, onViewDetails, onAddToCart, onB
           <button type="button" onClick={onBuyNow} className={styles.bundleActionSecondary}>
             <span className="material-symbols-outlined">shopping_bag</span>
             Mua ngay
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MobileBundleActionPopover({ configName, onViewDetails, onAddToCart, onBuyNow }) {
+  if (!configName) {
+    return null;
+  }
+
+  return (
+    <div
+      className={styles.bundleActionMobileDock}
+      data-bundle-config-wrapper="true"
+      data-config-name={configName}
+    >
+      <div className={`${styles.bundleActionContent} ${styles.bundleActionContentCompact}`}>
+        <p className={styles.bundleActionEyebrow}>{'Ch\u1ECDn c\u1EA5u h\u00ECnh b\u1ED9'}</p>
+        <h3 className={styles.bundleActionTitle}>{configName}</h3>
+        <button type="button" onClick={onViewDetails} className={styles.bundleActionTop}>
+          <span className="material-symbols-outlined">tune</span>
+          {'Xem chi ti\u1EBFt v\u00E0 t\u00F9y ch\u1EC9nh th\u00E0nh ph\u1EA7n b\u1ED9'}
+        </button>
+        <div className={styles.bundleActionGrid}>
+          <button type="button" onClick={onAddToCart} className={styles.bundleActionPrimary}>
+            <span className="material-symbols-outlined">add_shopping_cart</span>
+            {'Th\u00EAm v\u00E0o gi\u1ECF'}
+          </button>
+          <button type="button" onClick={onBuyNow} className={styles.bundleActionSecondary}>
+            <span className="material-symbols-outlined">shopping_bag</span>
+            {'Mua ngay'}
           </button>
         </div>
       </div>
@@ -299,7 +365,7 @@ export default function BundleProductView({
   const activeBundlePopover = bundleActionConfig || (!isMobileBundleViewport ? hoveredBundleConfig : '');
 
   useEffect(() => {
-    if (!bundleActionConfig || isMobileBundleViewport) return undefined;
+    if (!bundleActionConfig) return undefined;
 
     const handlePointerDown = (event) => {
       const wrapper = event.target.closest('[data-bundle-config-wrapper="true"]');
@@ -325,7 +391,7 @@ export default function BundleProductView({
       document.removeEventListener('touchstart', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [bundleActionConfig, isMobileBundleViewport]);
+  }, [bundleActionConfig]);
 
   const handleBundleMouseEnter = (configName) => {
     if (!isMobileBundleViewport && !bundleActionConfig) {
@@ -508,10 +574,9 @@ export default function BundleProductView({
                 </div>
               )}
 
-              {isMobileBundleViewport && bundleActionConfig ? (
-                <BundleActionPopup
-                  configName={bundleActionConfig}
-                  onClose={closeBundleActions}
+              {isMobileBundleViewport && activeBundlePopover ? (
+                <MobileBundleActionPopover
+                  configName={activeBundlePopover}
                   onViewDetails={handleViewBundleDetails}
                   onAddToCart={handlePopupAddToCart}
                   onBuyNow={handlePopupBuyNow}

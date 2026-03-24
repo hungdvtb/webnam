@@ -599,6 +599,16 @@
   backdrop-filter: blur(10px);
 }
 
+.bundleActionMobileDock {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.42rem;
+}
+
+.bundleActionContentCompact {
+  width: min(248px, calc(100vw - 84px));
+}
+
 .bundleActionContent::after {
   content: '';
   position: absolute;
@@ -799,6 +809,73 @@
 
   .variantActionPopover .bundleActionPrimary .material-symbols-outlined,
   .variantActionPopover .bundleActionSecondary .material-symbols-outlined {
+    font-size: 15px;
+  }
+
+  .bundleActionMobileDock {
+    margin-top: 0.38rem;
+  }
+
+  .bundleActionContentCompact {
+    padding: 0.48rem;
+    border-radius: 14px;
+    box-shadow: 0 10px 22px rgba(27, 54, 93, 0.12);
+  }
+
+  .bundleActionContentCompact::after {
+    display: none;
+  }
+
+  .bundleActionContentCompact .bundleActionEyebrow {
+    margin-bottom: 0.08rem;
+    font-size: 0.46rem;
+    letter-spacing: 0.12em;
+  }
+
+  .bundleActionContentCompact .bundleActionTitle {
+    margin-bottom: 0.4rem;
+    font-size: 0.82rem;
+    line-height: 1.1;
+  }
+
+  .bundleActionContentCompact .bundleActionTop {
+    min-height: 2.15rem;
+    padding: 0.46rem 0.5rem;
+    border-radius: 10px;
+    gap: 0.26rem;
+    font-size: 0.62rem;
+    line-height: 1.15;
+    white-space: normal;
+  }
+
+  .bundleActionContentCompact .bundleActionGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.35rem;
+    margin-top: 0.35rem;
+  }
+
+  .bundleActionContentCompact .bundleActionPrimary,
+  .bundleActionContentCompact .bundleActionSecondary {
+    min-height: 2.15rem;
+    padding: 0.46rem 0.5rem;
+    border-radius: 10px;
+    gap: 0.26rem;
+    font-size: 0.68rem;
+    line-height: 1.05;
+    box-shadow: none;
+  }
+
+  .bundleActionContentCompact .bundleActionPrimary {
+    box-shadow: 0 6px 12px rgba(27, 54, 93, 0.12);
+  }
+
+  .bundleActionContentCompact .bundleActionSecondary {
+    border-width: 1px;
+  }
+
+  .bundleActionContentCompact .bundleActionTop .material-symbols-outlined,
+  .bundleActionContentCompact .bundleActionPrimary .material-symbols-outlined,
+  .bundleActionContentCompact .bundleActionSecondary .material-symbols-outlined {
     font-size: 15px;
   }
 }

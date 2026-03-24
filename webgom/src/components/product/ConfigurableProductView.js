@@ -167,7 +167,6 @@ export default function ConfigurableProductView({
         <div className={styles.infoColumn}>
           <div className={styles.infoWrapper}>
             <div className={styles.titleSection}>
-
               <h1 className={styles.title}>{product.name}</h1>
               {currentProduct?.sku ? (
                 <p className={styles.configurableMobileSku}>

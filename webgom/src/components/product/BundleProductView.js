@@ -12,6 +12,7 @@ import SpecificationList from './common/SpecificationList';
 import ActionLinks from './common/ActionLinks';
 import ComponentSelectionModal from './common/ComponentSelectionModal';
 import { useState, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import Breadcrumb from './common/Breadcrumb';
 
 function BundleActionPopup({
@@ -136,6 +137,7 @@ export default function BundleProductView({
   const [activeSlot, setActiveSlot] = useState(null);
   const [bundleActionConfig, setBundleActionConfig] = useState('');
   const [hoveredBundleConfig, setHoveredBundleConfig] = useState('');
+  const [isMobileBundleViewport, setIsMobileBundleViewport] = useState(false);
   // Active tab in the detail section (separate from upper config selector)
   const [activeTab, setActiveTab] = useState(null);
 
@@ -171,6 +173,17 @@ export default function BundleProductView({
     return cleanedImages.length > 0 ? cleanedImages : sourceImages;
   }, [getImageUrl, images]);
 
+  const getCompactConfigLabel = (configName) => {
+    const normalized = String(configName || '').replace(/\s+/g, ' ').trim();
+    const shortened = normalized
+      .replace(/^b(?:a|à)n\s*th(?:o|ờ)\s*/i, '')
+      .replace(/^k(?:i|í)ch\s*th(?:u|ư)ớc\s*/i, '')
+      .replace(/^size\s*/i, '')
+      .trim();
+
+    return shortened || normalized;
+  };
+
   // Extract unique configurations (tabs)
   const configurations = useMemo(() => {
     const titles = bundleItems
@@ -185,6 +198,23 @@ export default function BundleProductView({
       setActiveTab(configurations[0]);
     }
   }, [configurations, activeTab]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const mediaQuery = window.matchMedia('(max-width: 768px)');
+    const syncViewport = () => setIsMobileBundleViewport(mediaQuery.matches);
+
+    syncViewport();
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', syncViewport);
+      return () => mediaQuery.removeEventListener('change', syncViewport);
+    }
+
+    mediaQuery.addListener(syncViewport);
+    return () => mediaQuery.removeListener(syncViewport);
+  }, []);
 
   // Items of the active tab (including removed ones for placeholder)
   const tabItems = useMemo(() => {
@@ -266,10 +296,10 @@ export default function BundleProductView({
     if (switchBundleConfiguration) switchBundleConfiguration(tabName);
   };
 
-  const activeBundlePopover = bundleActionConfig || hoveredBundleConfig;
+  const activeBundlePopover = bundleActionConfig || (!isMobileBundleViewport ? hoveredBundleConfig : '');
 
   useEffect(() => {
-    if (!bundleActionConfig) return undefined;
+    if (!bundleActionConfig || isMobileBundleViewport) return undefined;
 
     const handlePointerDown = (event) => {
       const wrapper = event.target.closest('[data-bundle-config-wrapper="true"]');
@@ -295,22 +325,29 @@ export default function BundleProductView({
       document.removeEventListener('touchstart', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [bundleActionConfig]);
+  }, [bundleActionConfig, isMobileBundleViewport]);
 
   const handleBundleMouseEnter = (configName) => {
-    if (!bundleActionConfig) {
+    if (!isMobileBundleViewport && !bundleActionConfig) {
       setHoveredBundleConfig(configName);
     }
   };
 
   const handleBundleMouseLeave = (configName) => {
-    if (!bundleActionConfig && hoveredBundleConfig === configName) {
+    if (!isMobileBundleViewport && !bundleActionConfig && hoveredBundleConfig === configName) {
       setHoveredBundleConfig('');
     }
   };
 
   const handleOpenBundleActions = (configName) => {
     handleTabChange(configName);
+
+    if (isMobileBundleViewport) {
+      setHoveredBundleConfig('');
+      setBundleActionConfig((currentConfig) => currentConfig === configName ? '' : configName);
+      return;
+    }
+
     setHoveredBundleConfig(configName);
     setBundleActionConfig((currentConfig) => currentConfig === configName ? '' : configName);
   };
@@ -341,7 +378,7 @@ export default function BundleProductView({
   };
 
   return (
-    <>
+    <div className={styles.bundleView}>
       <div className={styles.bundleBreadcrumb}>
         <Breadcrumb product={product} />
       </div>
@@ -380,7 +417,7 @@ export default function BundleProductView({
                 <h1 className={styles.title}>{product.name}</h1>
                 <div className={styles.meta}>
                   <span className={styles.sku}>Mã bộ: <span className={styles.skuValue}>{product.sku || `COMBO-${product.id}`}</span></span>
-                  <span className={`${styles.statusDot} ${styles.bundleStatusDot}`} style={{ backgroundColor: '#10b981' }}></span>
+                  <span className={styles.statusDot} style={{ backgroundColor: '#10b981' }}></span>
                   <span className={styles.statusText} style={{ color: '#059669' }}>Sẵn sàng giao ngay</span>
                 </div>
               </div>
@@ -434,6 +471,7 @@ export default function BundleProductView({
                   <div className={styles.configOptionsGrid}>
                     {configurations.map(config => {
                       const isActive = activeConfig === config || activeBundlePopover === config;
+                      const compactLabel = getCompactConfigLabel(config);
 
                       return (
                         <div
@@ -449,10 +487,13 @@ export default function BundleProductView({
                             onClick={() => handleOpenBundleActions(config)}
                             className={`${styles.configOptionBtn} ${isActive ? styles.configOptionBtnActive : ''}`}
                             aria-expanded={activeBundlePopover === config}
+                            aria-pressed={isActive}
+                            title={config}
                           >
-                            {config}
+                            <span className={styles.configOptionLabelDesktop}>{config}</span>
+                            <span className={styles.configOptionLabelMobile}>{compactLabel}</span>
                           </button>
-                          {activeBundlePopover === config ? (
+                          {!isMobileBundleViewport && activeBundlePopover === config ? (
                             <InlineBundleActionPopover
                               configName={config}
                               onViewDetails={handleViewBundleDetails}
@@ -466,6 +507,16 @@ export default function BundleProductView({
                   </div>
                 </div>
               )}
+
+              {isMobileBundleViewport && bundleActionConfig ? (
+                <BundleActionPopup
+                  configName={bundleActionConfig}
+                  onClose={closeBundleActions}
+                  onViewDetails={handleViewBundleDetails}
+                  onAddToCart={handlePopupAddToCart}
+                  onBuyNow={handlePopupBuyNow}
+                />
+              ) : null}
 
               {/* Price */}
               <div className={styles.priceContainer}>
@@ -795,6 +846,6 @@ export default function BundleProductView({
           formatPrice={formatPrice}
         />
       </div>
-    </>
+    </div>
   );
 }

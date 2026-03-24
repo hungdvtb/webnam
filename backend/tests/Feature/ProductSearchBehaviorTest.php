@@ -93,6 +93,88 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.id', $matching->id);
     }
 
+    public function test_long_specific_name_search_prefers_phrase_match_over_shared_token_matches(): void
+    {
+        $account = $this->authenticate();
+
+        $matching = $this->createProduct($account, [
+            'name' => 'Bo do tho men lam Bat Trang Demo Bundle',
+            'sku' => 'BUNDLE-MEN-LAM-001',
+            'type' => 'bundle',
+        ]);
+
+        $this->createProduct($account, [
+            'name' => 'Bo do tho men trang Bat Trang Demo Bundle',
+            'sku' => 'BUNDLE-MEN-TRANG-001',
+            'type' => 'bundle',
+        ]);
+
+        $this->createProduct($account, [
+            'name' => 'Bo do tho men xanh Bat Trang Demo Bundle',
+            'sku' => 'BUNDLE-MEN-XANH-001',
+            'type' => 'bundle',
+        ]);
+
+        $this->createProduct($account, [
+            'name' => 'Bo do tho men ran co Bat Trang Demo Bundle',
+            'sku' => 'BUNDLE-MEN-RAN-001',
+            'type' => 'bundle',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?search=' . urlencode('Bo do tho men lam Bat Trang Demo Bundle') . '&per_page=20');
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $matching->id)
+            ->assertJsonPath('data.0.sku', 'BUNDLE-MEN-LAM-001');
+    }
+
+    public function test_color_queries_require_matching_adjacent_phrase_not_just_shared_tokens(): void
+    {
+        $account = $this->authenticate();
+
+        $lam = $this->createProduct($account, [
+            'name' => 'Bo do tho men lam Bat Trang Demo Bundle',
+            'sku' => 'BUNDLE-MEN-LAM-DBY',
+            'type' => 'bundle',
+        ]);
+
+        $trang = $this->createProduct($account, [
+            'name' => 'Bo do tho men trang Bat Trang Demo Bundle',
+            'sku' => 'BUNDLE-MEN-TRANG-YDD',
+            'type' => 'bundle',
+        ]);
+
+        $this->createProduct($account, [
+            'name' => 'Bo do tho men xanh Bat Trang Demo Bundle',
+            'sku' => 'BUNDLE-MEN-XANH-L9U',
+            'type' => 'bundle',
+        ]);
+
+        $lamResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?search=' . urlencode('men lam bundle') . '&per_page=20');
+
+        $lamResponse
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $lam->id)
+            ->assertJsonPath('data.0.sku', 'BUNDLE-MEN-LAM-DBY');
+
+        $trangResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?search=' . urlencode('men trang bundle') . '&per_page=20');
+
+        $trangResponse
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $trang->id)
+            ->assertJsonPath('data.0.sku', 'BUNDLE-MEN-TRANG-YDD');
+    }
+
     public function test_full_sku_search_respects_active_category_filters_before_falling_back(): void
     {
         $account = $this->authenticate();

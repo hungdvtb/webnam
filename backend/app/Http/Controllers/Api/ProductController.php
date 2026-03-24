@@ -551,6 +551,58 @@ class ProductController extends Controller
         return [$searchRankingSql, $searchRankingBindings];
     }
 
+    protected function applyProductNamePhraseConstraint(Builder $query, string $nameContainsLike): void
+    {
+        $nameExpr = $this->normalizedWordsExpression('products.name');
+
+        $query
+            ->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike])
+            ->orWhereHas('variations', function (Builder $variationQuery) use ($nameContainsLike) {
+                $variationNameExpr = $this->normalizedWordsExpression('products.name');
+                $variationQuery->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
+            });
+    }
+
+    protected function applyProductNameTokenConstraint(Builder $query, array $tokenLikes): void
+    {
+        $nameExpr = $this->normalizedWordsExpression('products.name');
+
+        $query
+            ->where(function (Builder $directQuery) use ($nameExpr, $tokenLikes) {
+                foreach ($tokenLikes as $tokenLike) {
+                    $directQuery->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+                }
+            })
+            ->orWhereHas('variations', function (Builder $variationQuery) use ($tokenLikes) {
+                $variationNameExpr = $this->normalizedWordsExpression('products.name');
+
+                foreach ($tokenLikes as $tokenLike) {
+                    $variationQuery->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+                }
+            });
+    }
+
+    protected function applyProductNameAdjacentPhraseConstraint(Builder $query, array $adjacentPhraseLikes): void
+    {
+        $nameExpr = $this->normalizedWordsExpression('products.name');
+
+        $query
+            ->where(function (Builder $directQuery) use ($nameExpr, $adjacentPhraseLikes) {
+                foreach ($adjacentPhraseLikes as $phraseLike) {
+                    $directQuery->orWhereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$phraseLike]);
+                }
+            })
+            ->orWhereHas('variations', function (Builder $variationQuery) use ($adjacentPhraseLikes) {
+                $variationNameExpr = $this->normalizedWordsExpression('products.name');
+
+                $variationQuery->where(function (Builder $directVariationQuery) use ($variationNameExpr, $adjacentPhraseLikes) {
+                    foreach ($adjacentPhraseLikes as $phraseLike) {
+                        $directVariationQuery->orWhereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$phraseLike]);
+                    }
+                });
+            });
+    }
+
     protected function applyProductNameSearch(Builder $query, string $rawSearch): array
     {
         $normalizedName = $this->normalizeNameSearchText($rawSearch);
@@ -565,28 +617,62 @@ class ProductController extends Controller
         $nameTokens = collect(preg_split('/\s+/', $normalizedName, -1, PREG_SPLIT_NO_EMPTY))
             ->filter(fn ($token) => mb_strlen($token) >= 2)
             ->unique()
-            ->take(6)
+            ->take(12)
+            ->values()
+            ->all();
+        $tokenLikes = array_map(
+            fn ($token) => '%' . $this->escapeLike($token) . '%',
+            $nameTokens
+        );
+        $adjacentPhraseLikes = collect($nameTokens)
+            ->sliding(2)
+            ->map(function ($tokens) {
+                $phrase = collect($tokens)->implode(' ');
+
+                return '%' . $this->escapeLike($phrase) . '%';
+            })
+            ->unique()
             ->values()
             ->all();
 
-        $tokenMatchParts = [];
-        $tokenMatchBindings = [];
-
-        foreach ($nameTokens as $token) {
-            $tokenLike = '%' . $this->escapeLike($token) . '%';
-            $tokenMatchParts[] = "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END";
-            $tokenMatchBindings[] = $tokenLike;
-        }
-
-        $tokenMatchSql = !empty($tokenMatchParts) ? '(' . implode(' + ', $tokenMatchParts) . ')' : '0';
-        $containsNumericToken = collect($nameTokens)->contains(fn ($token) => preg_match('/\d/', $token) === 1);
-        $minimumRelevantMatches = $containsNumericToken
-            ? count($nameTokens)
-            : (count($nameTokens) <= 1 ? 1 : max(2, count($nameTokens) - 1));
-        $searchRankingParts = [
+        $phraseRankingParts = [
             "CASE WHEN {$nameExpr} = ? THEN 2600 ELSE 0 END",
             "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 2100 ELSE 0 END",
             "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 1700 ELSE 0 END",
+        ];
+        $phraseRankingBindings = [
+            $nameExact,
+            $namePrefixLike,
+            $nameContainsLike,
+        ];
+        $phraseRankingSql = '(' . implode(' + ', $phraseRankingParts) . ')';
+
+        $hasPhraseMatch = (clone $query)
+            ->where(function (Builder $searchQuery) use ($nameContainsLike) {
+                $this->applyProductNamePhraseConstraint($searchQuery, $nameContainsLike);
+            })
+            ->exists();
+
+        if ($hasPhraseMatch || empty($tokenLikes)) {
+            $query->selectRaw("{$phraseRankingSql} AS search_score", $phraseRankingBindings);
+            $query->where(function (Builder $searchQuery) use ($nameContainsLike) {
+                $this->applyProductNamePhraseConstraint($searchQuery, $nameContainsLike);
+            });
+
+            return [$phraseRankingSql, $phraseRankingBindings];
+        }
+
+        $hasAdjacentPhraseMatch = !empty($adjacentPhraseLikes)
+            && (clone $query)
+                ->where(function (Builder $searchQuery) use ($adjacentPhraseLikes) {
+                    $this->applyProductNameAdjacentPhraseConstraint($searchQuery, $adjacentPhraseLikes);
+                })
+                ->exists();
+
+        $searchRankingParts = [
+            "CASE WHEN {$nameExpr} = ? THEN 1800 ELSE 0 END",
+            "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 1500 ELSE 0 END",
+            "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 1200 ELSE 0 END",
         ];
         $searchRankingBindings = [
             $nameExact,
@@ -594,30 +680,29 @@ class ProductController extends Controller
             $nameContainsLike,
         ];
 
-        if ($tokenMatchSql !== '0') {
-            $searchRankingParts[] = "({$tokenMatchSql} * 140)";
-            $searchRankingBindings = array_merge($searchRankingBindings, $tokenMatchBindings);
+        foreach ($tokenLikes as $tokenLike) {
+            $searchRankingParts[] = "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 120 ELSE 0 END";
+            $searchRankingBindings[] = $tokenLike;
+        }
+
+        if ($hasAdjacentPhraseMatch) {
+            foreach ($adjacentPhraseLikes as $phraseLike) {
+                $searchRankingParts[] = "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 260 ELSE 0 END";
+                $searchRankingBindings[] = $phraseLike;
+            }
         }
 
         $searchRankingSql = '(' . implode(' + ', $searchRankingParts) . ')';
         $query->selectRaw("{$searchRankingSql} AS search_score", $searchRankingBindings);
-        $query->where(function (Builder $searchQuery) use ($nameExpr, $nameContainsLike, $tokenMatchSql, $tokenMatchBindings, $minimumRelevantMatches) {
-            $searchQuery->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
-
-            if ($tokenMatchSql !== '0') {
-                $searchQuery->orWhereRaw("{$tokenMatchSql} >= ?", array_merge($tokenMatchBindings, [$minimumRelevantMatches]));
-            }
-
-            $searchQuery->orWhereHas('variations', function (Builder $variationQuery) use ($nameContainsLike, $tokenMatchSql, $tokenMatchBindings, $minimumRelevantMatches) {
-                $variationNameExpr = $this->normalizedWordsExpression('products.name');
-                $variationQuery->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
-
-                if ($tokenMatchSql !== '0') {
-                    $variationTokenMatchSql = str_replace($this->normalizedWordsExpression('products.name'), $variationNameExpr, $tokenMatchSql);
-                    $variationQuery->orWhereRaw("{$variationTokenMatchSql} >= ?", array_merge($tokenMatchBindings, [$minimumRelevantMatches]));
-                }
-            });
+        $query->where(function (Builder $searchQuery) use ($tokenLikes) {
+            $this->applyProductNameTokenConstraint($searchQuery, $tokenLikes);
         });
+
+        if ($hasAdjacentPhraseMatch) {
+            $query->where(function (Builder $searchQuery) use ($adjacentPhraseLikes) {
+                $this->applyProductNameAdjacentPhraseConstraint($searchQuery, $adjacentPhraseLikes);
+            });
+        }
 
         return [$searchRankingSql, $searchRankingBindings];
     }

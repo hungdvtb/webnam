@@ -527,6 +527,7 @@ const OrderForm = () => {
     const [productQuickFilterAttributes, setProductQuickFilterAttributes] = useState([]);
     const [productQuickFilterAttributeId, setProductQuickFilterAttributeId] = useState(() => getStoredProductQuickFilterAttributeId());
     const [productQuickFilterValues, setProductQuickFilterValues] = useState([]);
+    const [showProductQuickFilterPanel, setShowProductQuickFilterPanel] = useState(false);
     const [showColumnConfig, setShowColumnConfig] = useState(false);
     const [isCapturing, setIsCapturing] = useState(false);
     const [quoteSettings, setQuoteSettings] = useState(defaultQuoteSettings);
@@ -551,6 +552,7 @@ const OrderForm = () => {
         return `${activeProductQuickFilterAttribute.name}: ${normalizedProductQuickFilterValues[0]}`;
     }, [activeProductQuickFilterAttribute, normalizedProductQuickFilterValues]);
     const hasActiveProductQuickFilter = normalizedProductQuickFilterValues.length > 0;
+    const shouldShowProductQuickFilterPanel = showSearchDropdown && showProductQuickFilterPanel && productQuickFilterAttributes.length > 0;
 
     const navigateBackToLead = useCallback(() => {
         if (returnTo && returnTo.startsWith('/admin/')) {
@@ -844,6 +846,12 @@ const OrderForm = () => {
         navigateBackToLead();
     }, [navigateBackToLead]);
 
+    const closeProductSearchDropdown = useCallback(() => {
+        setShowSearchDropdown(false);
+        setShowSearchHistory(false);
+        setShowProductQuickFilterPanel(false);
+    }, []);
+
     useEffect(() => {
         const handleKeyDown = (e) => {
             if (e.key === 'Escape') {
@@ -865,8 +873,7 @@ const OrderForm = () => {
                     return;
                 }
                 if (showSearchDropdown) {
-                    setShowSearchDropdown(false);
-                    setShowSearchHistory(false);
+                    closeProductSearchDropdown();
                     return;
                 }
                 if (showQuoteTemplatePicker) {
@@ -878,7 +885,7 @@ const OrderForm = () => {
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [showColumnConfig, showSearchDropdown, showQuoteTemplatePicker, handleCancel]);
+    }, [closeProductSearchDropdown, showColumnConfig, showSearchDropdown, showQuoteTemplatePicker, handleCancel]);
 
     const saveColumnSettings = () => {
         localStorage.setItem('order_form_column_order', JSON.stringify(columnOrder));
@@ -953,12 +960,14 @@ const OrderForm = () => {
     const handleProductQuickFilterAttributeChange = useCallback((nextAttributeId) => {
         setProductQuickFilterAttributeId(nextAttributeId);
         setProductQuickFilterValues([]);
+        setShowProductQuickFilterPanel(true);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
     }, []);
 
     const openProductQuickFilterPanel = useCallback((event) => {
         event?.stopPropagation?.();
+        setShowProductQuickFilterPanel(true);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
     }, []);
@@ -967,15 +976,16 @@ const OrderForm = () => {
         const normalizedValue = normalizeQuickFilterOptionValue(value);
         if (!normalizedValue) return;
 
-        setProductQuickFilterValues((prev) => (
-            prev[0] === normalizedValue ? [] : [normalizedValue]
-        ));
+        const nextValues = normalizedProductQuickFilterValues[0] === normalizedValue ? [] : [normalizedValue];
+        setProductQuickFilterValues(nextValues);
+        setShowProductQuickFilterPanel(nextValues.length === 0);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
-    }, []);
+    }, [normalizedProductQuickFilterValues]);
 
     const clearProductQuickFilterValues = useCallback(() => {
         setProductQuickFilterValues([]);
+        setShowProductQuickFilterPanel(false);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
     }, []);
@@ -1859,7 +1869,7 @@ const OrderForm = () => {
                 <div className="flex flex-col gap-[10px] max-w-full min-w-0">
                     <div className="bg-white border border-primary/10 p-4 shadow-sm rounded-sm">
                         {/* Title & Product Selector Tags */}
-                        <div className="flex flex-col xl:flex-row xl:items-center gap-[10px] border-b border-primary/10 pb-4">
+                        <div className="flex flex-col xl:flex-row xl:items-start gap-[10px] border-b border-primary/10 pb-4">
                             <div className="relative group">
                                 <span className="material-symbols-outlined text-primary/30 p-3 bg-primary/5 rounded-full">shopping_bag</span>
                                 <button
@@ -1872,9 +1882,10 @@ const OrderForm = () => {
                                     <span className="material-symbols-outlined text-[14px]">{isCapturing ? 'progress_activity' : 'photo_camera'}</span>
                                 </button>
                             </div>
-                            <div className="flex-1 flex flex-col xl:flex-row gap-[10px] xl:items-center relative z-[100] min-w-0">
+                            <div className="relative z-[100] flex-1 min-w-0">
+                                <div className="grid grid-cols-1 gap-[10px] lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start">
                                 {/* Flexible Search Input */}
-                                <div className="relative min-w-[320px] flex-1">
+                                <div className="relative w-full min-w-0">
                                     <div className="flex items-center bg-primary/5 border border-primary/10 rounded-sm px-3 h-10 focus-within:border-primary/30 focus-within:bg-white transition-all shadow-sm">
                                         <span className="material-symbols-outlined text-[16px] text-primary/40 mr-2">search</span>
                                         <input
@@ -1910,6 +1921,7 @@ const OrderForm = () => {
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 setShowSearchDropdown(true);
+                                                setShowProductQuickFilterPanel(false);
                                                 setShowSearchHistory((prev) => !prev);
                                             }}
                                             className="text-primary/30 hover:text-primary ml-3 border-l border-primary/10 pl-3 transition-all"
@@ -1924,6 +1936,7 @@ const OrderForm = () => {
                                                 if (searchTerm.trim()) pushSearchHistory(searchTerm);
                                                 fetchProducts(searchTerm.trim());
                                                 setShowSearchDropdown(true);
+                                                setShowProductQuickFilterPanel(false);
                                                 setShowSearchHistory(false);
                                             }}
                                             className="text-primary/30 hover:text-primary ml-3 border-l border-primary/10 pl-3 transition-all"
@@ -1954,13 +1967,21 @@ const OrderForm = () => {
                                                 type="button"
                                                 onClick={openProductQuickFilterPanel}
                                                 className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/15 bg-primary/[0.03] px-2.5 py-1.5 shadow-sm transition-all hover:border-primary/30 hover:bg-white"
-                                                title={'Đổi thuộc tính lọc nhanh'}
+                                                title={'Mở lại bộ lọc nhanh'}
                                             >
                                                 <span className="material-symbols-outlined shrink-0 text-[12px] text-primary/35">tune</span>
                                                 <span className="min-w-0 truncate text-[11px] font-semibold leading-none text-primary/70">
                                                     {activeProductQuickFilterSummary}
                                                 </span>
-                                                <span className="material-symbols-outlined shrink-0 text-[12px] text-primary/30">swap_horiz</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={openProductQuickFilterPanel}
+                                                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/10 bg-white px-2.5 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
+                                                title={'Đổi thuộc tính lọc nhanh'}
+                                            >
+                                                <span className="material-symbols-outlined text-[12px]">swap_horiz</span>
+                                                {'Đổi thuộc tính'}
                                             </button>
                                             <button
                                                 type="button"
@@ -1975,7 +1996,7 @@ const OrderForm = () => {
 
                                     {showSearchDropdown && (
                                         <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl rounded-sm z-[100] max-h-[400px] overflow-auto custom-scrollbar">
-                                            {productQuickFilterAttributes.length > 0 && (
+                                            {shouldShowProductQuickFilterPanel && (
                                                 <div className="border-b border-primary/10 bg-primary/[0.02] px-3 py-3">
                                                     <div className="flex flex-col gap-2">
                                                         <div className="flex flex-wrap items-center gap-2">
@@ -2084,16 +2105,13 @@ const OrderForm = () => {
                                     {showSearchDropdown && (
                                         <div
                                             className="fixed inset-0 z-[90]"
-                                            onClick={() => {
-                                                setShowSearchDropdown(false);
-                                                setShowSearchHistory(false);
-                                            }}
+                                            onClick={closeProductSearchDropdown}
                                         />
                                     )}
                                 </div>
 
                                 {/* Scrollable Product Chips - Strictly Single Row */}
-                                <div className="flex-[3] flex flex-nowrap gap-2 items-center overflow-x-auto overflow-y-hidden custom-scrollbar pb-1 border border-primary/10 bg-primary/5 rounded-sm px-2 h-[42px] min-w-0">
+                                <div className="flex w-full min-w-0 flex-nowrap items-center gap-2 overflow-x-auto overflow-y-hidden custom-scrollbar rounded-sm border border-primary/10 bg-primary/5 px-2 pb-1 h-[42px]">
                                     {formData.items.map((item, index) => (
                                         <div key={item.product_id} className="bg-orange-50 hover:bg-orange-100/50 px-3 py-1.5 rounded-sm border border-orange-200 flex items-center gap-2 transition-all group/chip relative shadow-sm shrink-0">
                                             <div className="flex items-center gap-2 overflow-hidden">
@@ -2113,6 +2131,7 @@ const OrderForm = () => {
                                     ))}
                                     {/* Small spacer to ensure last item is visible */}
                                     <div className="w-4 shrink-0 h-full"></div>
+                                </div>
                                 </div>
                             </div>
                         </div>

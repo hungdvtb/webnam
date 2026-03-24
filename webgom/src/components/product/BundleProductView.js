@@ -15,6 +15,9 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Breadcrumb from './common/Breadcrumb';
 
+const BUNDLE_ITEM_CHANGE_LABEL = 'Đổi kích thước';
+const BUNDLE_ITEM_CHANGE_TITLE = 'Đổi kích thước cho sản phẩm trong bộ';
+
 function BundleActionPopup({
   configName,
   onClose,
@@ -395,26 +398,24 @@ export default function BundleProductView({
 
     const updateStickyState = () => {
       const promoBar = document.querySelector('.top-promotion-bar');
-      const siteHeader = document.querySelector('.site-header');
       const stickyClusterShell = mobileStickyClusterShellRef.current;
       const stickyCluster = mobileStickyClusterRef.current;
       const bundleList = bundleListRef.current;
 
       const promoHeight = Math.round(promoBar?.getBoundingClientRect().height || 32);
-      const headerHeight = Math.round(siteHeader?.getBoundingClientRect().height || 72);
 
       if (!stickyClusterShell || !stickyCluster || !bundleList) {
         setIsMobileStickyClusterActive(false);
+        setMobileStickyClusterLayout({ top: 0, left: 0, width: 0, height: 0 });
         return;
       }
 
       const stickyClusterShellRect = stickyClusterShell.getBoundingClientRect();
       const bundleListRect = bundleList.getBoundingClientRect();
       const stickyClusterHeight = stickyCluster.offsetHeight;
-      const stickyTriggerTop = promoHeight + headerHeight + 8;
       const stickyPinnedTop = promoHeight + 8;
       const canRemainPinned = bundleListRect.bottom > stickyPinnedTop + stickyClusterHeight + 18;
-      const nextStickyState = stickyClusterShellRect.top <= stickyTriggerTop && canRemainPinned;
+      const nextStickyState = stickyClusterShellRect.top <= stickyPinnedTop + 1 && canRemainPinned;
 
       setMobileStickyClusterLayout((currentValue) => {
         const nextValue = {
@@ -582,7 +583,7 @@ export default function BundleProductView({
 
   const mobileStickyClusterShellStyle =
     isMobileBundleViewport && isMobileStickyClusterActive && mobileStickyClusterLayout.height > 0
-      ? { minHeight: `${mobileStickyClusterLayout.height}px` }
+      ? { height: `${mobileStickyClusterLayout.height}px` }
       : undefined;
 
   const mobileStickyClusterStyle =
@@ -639,6 +640,53 @@ export default function BundleProductView({
       </div>
     );
   };
+
+  const renderStickyBundleDetailControls = () => (
+    <>
+      {renderBundleConfigGrid()}
+
+      {tabItems.length > 0 && (
+        <div className={builderStyles.topActionBar}>
+          {isFullCombo ? (
+            <div className={builderStyles.discountBannerInline}>
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>local_offer</span>
+              <span>
+                {'\u0042\u1ea1n \u0111ang mua tr\u1ecdn b\u1ed9 \u2014 \u01afu \u0111\u00e3i gi\u1ea3m '}
+                <strong>{(DISCOUNT_RATE * 100).toFixed(0)}%</strong>
+                !
+              </span>
+            </div>
+          ) : (
+            <div className={builderStyles.discountHintInline}>
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>info</span>
+              <span>
+                {'Mua \u0111\u1ee7 '}
+                <strong>{tabItems.length} {'m\u00f3n'}</strong>
+                {' nh\u1eadn \u01b0u \u0111\u00e3i gi\u1ea3m '}
+                {(DISCOUNT_RATE * 100).toFixed(0)}%
+              </span>
+            </div>
+          )}
+
+          <div className={builderStyles.quickSummaryTopInline}>
+            <div className={builderStyles.quickSummaryPrice}>
+              <span className={builderStyles.quickSummaryLabel}>{'Thanh to\u00e1n:'}</span>
+              <span className={builderStyles.quickSummaryValue}>{formatPrice(tabFinalPrice)}</span>
+            </div>
+            {handleBuyTabConfig && tabItems.some((item) => !item.removed) && (
+              <button
+                className={builderStyles.buyTabBtnSmall}
+                onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>shopping_cart_checkout</span>
+                {'Mua ngay'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
 
   const renderBundleDetailControls = () => (
     <>
@@ -699,53 +747,6 @@ export default function BundleProductView({
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 18 }}>shopping_cart_checkout</span>
                 Mua ngay
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-    </>
-  );
-
-  const renderStickyBundleDetailControls = () => (
-    <>
-      {renderBundleConfigGrid()}
-
-      {tabItems.length > 0 && (
-        <div className={builderStyles.topActionBar}>
-          {isFullCombo ? (
-            <div className={builderStyles.discountBannerInline}>
-              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>local_offer</span>
-              <span>
-                {'\u0042\u1ea1n \u0111ang mua tr\u1ecdn b\u1ed9 \u2014 \u01afu \u0111\u00e3i gi\u1ea3m '}
-                <strong>{(DISCOUNT_RATE * 100).toFixed(0)}%</strong>
-                !
-              </span>
-            </div>
-          ) : (
-            <div className={builderStyles.discountHintInline}>
-              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>info</span>
-              <span>
-                {'Mua \u0111\u1ee7 '}
-                <strong>{tabItems.length} {'m\u00f3n'}</strong>
-                {' nh\u1eadn \u01b0u \u0111\u00e3i gi\u1ea3m '}
-                {(DISCOUNT_RATE * 100).toFixed(0)}%
-              </span>
-            </div>
-          )}
-
-          <div className={builderStyles.quickSummaryTopInline}>
-            <div className={builderStyles.quickSummaryPrice}>
-              <span className={builderStyles.quickSummaryLabel}>{'Thanh to\u00e1n:'}</span>
-              <span className={builderStyles.quickSummaryValue}>{formatPrice(tabFinalPrice)}</span>
-            </div>
-            {handleBuyTabConfig && tabItems.some((item) => !item.removed) && (
-              <button
-                className={builderStyles.buyTabBtnSmall}
-                onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
-              >
-                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>shopping_cart_checkout</span>
-                {'Mua ngay'}
               </button>
             )}
           </div>
@@ -1132,10 +1133,10 @@ export default function BundleProductView({
                                 <button
                                   className={builderStyles.inlineChangeBtn}
                                   onClick={() => openSelectionModal(item)}
-                                  title={'Thay s\u1EA3n ph\u1EA9m kh\u00E1c'}
+                                  title={BUNDLE_ITEM_CHANGE_TITLE}
                                 >
                                   <span className="material-symbols-outlined" style={{ fontSize: 14 }}>swap_horiz</span>
-                                  {'\u0110\u1ED5i'}
+                                  {BUNDLE_ITEM_CHANGE_LABEL}
                                 </button>
                               </div>
                               {item.sku && <span className={builderStyles.variantHint}>SKU: {item.sku}</span>}
@@ -1216,10 +1217,10 @@ export default function BundleProductView({
                             <button
                               className={builderStyles.inlineChangeBtn}
                               onClick={() => openSelectionModal(item)}
-                              title="Thay sản phẩm khác"
+                              title={BUNDLE_ITEM_CHANGE_TITLE}
                             >
                               <span className="material-symbols-outlined" style={{ fontSize: 14 }}>swap_horiz</span>
-                              Đổi
+                              {BUNDLE_ITEM_CHANGE_LABEL}
                             </button>
                           </div>
                           {item.sku && <span className={builderStyles.variantHint}>SKU: {item.sku}</span>}

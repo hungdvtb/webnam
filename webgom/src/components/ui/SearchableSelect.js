@@ -2,17 +2,71 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 
-export default function SearchableSelect({ name, placeholder, value, options, onChange, disabled, required, className }) {
+export default function SearchableSelect({
+  name,
+  placeholder,
+  value,
+  options,
+  onChange,
+  disabled,
+  required,
+  className,
+  preserveMobileScroll = false,
+}) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 });
   const [mounted, setMounted] = useState(false);
   const wrapperRef = useRef(null);
   const dropdownRef = useRef(null);
+  const savedScrollTopRef = useRef(0);
+  const restoreTimeoutRef = useRef(null);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  const isMobileViewport = useCallback(
+    () =>
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(max-width: 767px)').matches,
+    []
+  );
+
+  const shouldPreserveScroll = useCallback(
+    () => preserveMobileScroll && isMobileViewport(),
+    [isMobileViewport, preserveMobileScroll]
+  );
+
+  const rememberScrollPosition = useCallback(() => {
+    if (typeof window === 'undefined' || !shouldPreserveScroll()) {
+      return;
+    }
+
+    savedScrollTopRef.current = window.scrollY || window.pageYOffset || 0;
+  }, [shouldPreserveScroll]);
+
+  const restoreScrollPosition = useCallback(() => {
+    if (typeof window === 'undefined' || !shouldPreserveScroll()) {
+      return;
+    }
+
+    const targetTop = savedScrollTopRef.current || 0;
+    const restore = () => {
+      window.scrollTo({ top: targetTop, left: window.scrollX || 0, behavior: 'auto' });
+    };
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(restore);
+    });
+
+    if (restoreTimeoutRef.current) {
+      window.clearTimeout(restoreTimeoutRef.current);
+    }
+
+    restoreTimeoutRef.current = window.setTimeout(restore, 180);
+  }, [shouldPreserveScroll]);
 
   const updatePosition = useCallback(() => {
     if (wrapperRef.current) {
@@ -45,14 +99,21 @@ export default function SearchableSelect({ name, placeholder, value, options, on
       // Check if click is outside both the trigger wrapper and the portal dropdown
       if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
         if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+          rememberScrollPosition();
           setIsOpen(false);
           setSearch('');
+          restoreScrollPosition();
         }
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      if (restoreTimeoutRef.current && typeof window !== 'undefined') {
+        window.clearTimeout(restoreTimeoutRef.current);
+      }
+    };
+  }, [rememberScrollPosition, restoreScrollPosition]);
 
   // Sort options alphabetically A-Z ignoring common prefixes
   const sortedOptions = useMemo(() => {
@@ -85,12 +146,14 @@ export default function SearchableSelect({ name, placeholder, value, options, on
   }, [value, options]);
 
   const handleSelect = (val) => {
+    rememberScrollPosition();
     setIsOpen(false);
     setSearch('');
     // Mock event object for existing onChange handlers
     if (onChange) {
       onChange({ target: { name, value: val } });
     }
+    restoreScrollPosition();
   };
 
   const portalContent = (
@@ -135,6 +198,7 @@ export default function SearchableSelect({ name, placeholder, value, options, on
           filteredOptions.map((opt) => (
             <li
               key={opt.value}
+              onMouseDown={(event) => event.preventDefault()}
               onClick={() => handleSelect(opt.value)}
               style={{
                 padding: '12px 14px', fontSize: '14px', cursor: 'pointer',
@@ -174,6 +238,9 @@ export default function SearchableSelect({ name, placeholder, value, options, on
         onClick={(e) => {
           if (!disabled) {
             e.preventDefault();
+            if (!isOpen) {
+              rememberScrollPosition();
+            }
             setIsOpen(!isOpen);
           }
         }}

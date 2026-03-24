@@ -3,20 +3,22 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import config from '@/lib/config';
+import { resolveImageObjectUrl } from '@/lib/media';
 import styles from '../../app/product/[slug]/product.module.css';
 
 function getRelatedImageSrc(relatedProduct) {
-  const displayImage = relatedProduct?.primary_image;
+  const candidates = [
+    relatedProduct?.primary_image,
+    relatedProduct?.images?.[0],
+    relatedProduct?.main_image ? { path: relatedProduct.main_image } : null,
+  ];
 
-  if (!displayImage) return null;
-  if (displayImage.url && displayImage.url.startsWith('http')) return displayImage.url;
-  if (displayImage.image_url && displayImage.image_url.startsWith('http')) return displayImage.image_url;
-  if (displayImage.path && displayImage.path !== 'undefined' && displayImage.path !== 'null') {
-    const cleanPath = displayImage.path.startsWith('/') ? displayImage.path.slice(1) : displayImage.path;
-    return `${config.storageUrl}/${cleanPath}`;
+  for (const candidate of candidates) {
+    const resolved = resolveImageObjectUrl(candidate, '');
+    if (resolved) {
+      return resolved;
+    }
   }
-  if (displayImage.url) return displayImage.url;
 
   return null;
 }

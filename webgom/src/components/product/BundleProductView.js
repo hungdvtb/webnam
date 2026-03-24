@@ -14,6 +14,7 @@ import ComponentSelectionModal from './common/ComponentSelectionModal';
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Breadcrumb from './common/Breadcrumb';
+import { resolveImageObjectUrl } from '@/lib/media';
 
 const MOBILE_STICKY_CLUSTER_GAP = 8;
 
@@ -261,6 +262,26 @@ export default function BundleProductView({
   const bundleListRef = useRef(null);
   const mobileStickyClusterShellRef = useRef(null);
   const mobileStickyClusterRef = useRef(null);
+
+  const getBundleImageSrc = (item) => {
+    const candidates = [
+      item?.selected_variant?.primary_image,
+      item?.selected_variant?.images?.[0],
+      item?.primary_image,
+      item?.images?.[0],
+      item?.selected_variant?.main_image ? { path: item.selected_variant.main_image } : null,
+      item?.main_image ? { path: item.main_image } : null,
+    ];
+
+    for (const candidate of candidates) {
+      const resolved = resolveImageObjectUrl(candidate, '');
+      if (resolved) {
+        return resolved;
+      }
+    }
+
+    return getImageUrl(item?.primary_image || item?.images?.[0] || { path: item?.main_image });
+  };
 
   const bundleMobileGalleryImages = useMemo(() => {
     const sourceImages = Array.isArray(images) ? images : [];
@@ -1210,15 +1231,15 @@ export default function BundleProductView({
                       {uniqueOptions.map(bundle => {
                         const isSelected = bundle.id === product.id;
                         const txt = bundle.pivot?.option_title || bundle.option_title || bundle.bundle_title || bundle.name;
-                        const displayImg = bundle.primary_image || bundle.images?.[0] || (bundle.main_image ? { path: bundle.main_image } : null);
+                        const displayImgSrc = getBundleImageSrc(bundle);
                         return (
                           <Link href={`/product/${bundle.slug}`} key={bundle.id}
                             className={`${styles.relatedOptionBtn} ${isSelected ? styles.relatedOptionBtnActive : ''}`}
                             title={bundle.name}
                           >
                             <div className={styles.relatedOptionImgWrap}>
-                              {displayImg
-                                ? <Image src={getImageUrl(displayImg)} alt={txt} fill sizes="30px" unoptimized style={{ objectFit: 'cover' }} />
+                              {displayImgSrc
+                                ? <Image src={displayImgSrc} alt={txt} fill sizes="30px" unoptimized style={{ objectFit: 'cover' }} />
                                 : <span className={`material-symbols-outlined ${styles.relatedOptionFallback}`}>image</span>
                               }
                             </div>
@@ -1525,7 +1546,7 @@ export default function BundleProductView({
                           <div className={builderStyles.colImg}>
                             <div className={builderStyles.tableImgWrap}>
                               <Image
-                                src={getImageUrl(item.images?.[0] || item.primary_image || { path: item.main_image })}
+                                src={getBundleImageSrc(item)}
                                 alt={item.name}
                                 fill
                                 style={{ objectFit: 'cover' }}
@@ -1609,7 +1630,7 @@ export default function BundleProductView({
                         <div className={builderStyles.colImg}>
                           <div className={builderStyles.tableImgWrap}>
                             <Image
-                              src={getImageUrl(item.images?.[0] || item.primary_image || { path: item.main_image })}
+                              src={getBundleImageSrc(item)}
                               alt={item.name}
                               fill
                               style={{ objectFit: 'cover' }}

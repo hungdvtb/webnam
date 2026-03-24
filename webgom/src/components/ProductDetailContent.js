@@ -4,11 +4,13 @@ import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/context/CartContext';
 import { flyToCart } from '@/utils/flyToCart';
-import config from '@/lib/config';
+import { resolveImageObjectUrl } from '@/lib/media';
 import SimpleProductView from './product/SimpleProductView';
 import ConfigurableProductView from './product/ConfigurableProductView';
 import GroupedProductView from './product/GroupedProductView';
 import BundleProductView from './product/BundleProductView';
+
+const FALLBACK_PRODUCT_IMAGE = 'https://placehold.co/800';
 
 export default function ProductDetailContent({ product }) {
   const [selectedOptions, setSelectedOptions] = useState({});
@@ -246,28 +248,26 @@ export default function ProductDetailContent({ product }) {
   }, [product, currentProduct, selectedGroupItems, bundleItems]);
 
   const images = useMemo(() => {
-    return (currentProduct.images && currentProduct.images.length > 0) 
-      ? currentProduct.images 
+    const sourceImages = (currentProduct.images && currentProduct.images.length > 0)
+      ? currentProduct.images
       : (product.images || []);
+
+    const validImages = sourceImages.filter((image, index, collection) => {
+      const resolvedUrl = resolveImageObjectUrl(image, '');
+
+      if (!resolvedUrl) {
+        return false;
+      }
+
+      return collection.findIndex((candidate) => (
+        resolveImageObjectUrl(candidate, '') === resolvedUrl
+      )) === index;
+    });
+
+    return validImages.length > 0 ? validImages : sourceImages;
   }, [currentProduct, product.images]);
 
-  const getImageUrl = (img) => {
-    const fallback = 'https://placehold.co/800';
-    if (!img) return fallback;
-    // Full URL stored directly in image_url field (most common from DB)
-    if (img.image_url && img.image_url.startsWith('http')) return img.image_url;
-    // Legacy: img.url field
-    if (img.url && img.url.startsWith('http')) return img.url;
-    // Path-based (relative path – prepend storageUrl)
-    if (img.path && typeof img.path === 'string') {
-      const cleanPath = img.path.trim().replace(/^[\/\\]+/, '');
-      if (cleanPath && cleanPath !== 'undefined' && cleanPath !== 'null' && cleanPath !== '') {
-        return `${config.storageUrl}/${cleanPath}`;
-      }
-    }
-    if (img.url && img.url.trim() !== '') return img.url;
-    return fallback;
-  };
+  const getImageUrl = (img) => resolveImageObjectUrl(img, FALLBACK_PRODUCT_IMAGE);
 
   const formatPrice = (price) => {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);

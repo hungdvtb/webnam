@@ -5,6 +5,13 @@ import TrackingScripts, { trackLead } from '../components/TrackingScripts';
 import { buildHeaderConfig } from '../utils/headerSettings';
 import { buildFooterConfig } from '../utils/footerSettings';
 import { rememberLeadAttribution } from '../utils/leadAttribution';
+import { getPrimaryStoreLocation, normalizeStoreLocations } from '../utils/storeLocations';
+
+const isActivePath = (pathname, target) => (
+    target === '/'
+        ? pathname === '/'
+        : pathname === target || pathname.startsWith(`${target}/`)
+);
 
 const StorefrontHeader = ({ headerConfig, siteInfo }) => {
     const [menuOpen, setMenuOpen] = useState(false);
@@ -39,25 +46,29 @@ const StorefrontHeader = ({ headerConfig, siteInfo }) => {
         <>
             <header className={`fixed left-0 right-0 top-0 z-40 transition-all duration-300 ${scrolled ? 'bg-white/95 shadow-md backdrop-blur-xl' : 'bg-white/80 backdrop-blur-sm'}`}>
                 {noticeText ? (
-                    <div className="h-7 bg-primary px-4 text-center text-[10px] font-black uppercase tracking-[0.16em] text-white flex items-center justify-center">
+                    <div className="flex h-7 items-center justify-center bg-primary px-4 text-center text-[10px] font-black uppercase tracking-[0.16em] text-white">
                         {noticeText}
                     </div>
                 ) : null}
 
-                <div className={`mx-auto flex max-w-7xl items-center justify-between px-4 ${noticeText ? 'h-[56px] md:h-[64px]' : 'h-14 md:h-16'}`}>
-                    <button onClick={() => setMenuOpen((prev) => !prev)} className="p-2 -ml-2 text-stone-700 md:hidden">
+                <div className="mx-auto flex h-[60px] max-w-7xl items-center justify-between gap-3 px-3 md:h-[68px] md:px-4">
+                    <button
+                        type="button"
+                        onClick={() => setMenuOpen((previous) => !previous)}
+                        className="flex h-11 w-11 items-center justify-center rounded-2xl bg-stone-50 text-stone-700 transition hover:bg-stone-100 md:hidden"
+                    >
                         <span className="material-symbols-outlined text-2xl">{menuOpen ? 'close' : 'menu'}</span>
                     </button>
 
-                    <Link to="/" className="flex items-center gap-2">
-                        <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg bg-primary md:h-9 md:w-9">
+                    <Link to="/" className="flex min-w-0 flex-1 items-center gap-2.5 md:flex-none">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary md:h-11 md:w-11">
                             <img src={logoUrl} alt={headerConfig?.brandText || siteInfo?.name || 'Cửa hàng'} className="h-full w-full object-contain bg-white" />
                         </div>
-                        <div className="hidden sm:block">
-                            <h1 className="text-sm font-black uppercase leading-none tracking-tight text-stone-900 md:text-base">
+                        <div className="min-w-0">
+                            <h1 className="truncate text-[13px] font-black uppercase leading-none tracking-tight text-stone-900 md:text-base">
                                 {headerConfig?.brandText || siteInfo?.name || 'Cửa hàng'}
                             </h1>
-                            <p className="text-[8px] font-bold uppercase tracking-[0.2em] text-stone-500 md:text-[9px]">
+                            <p className="truncate text-[8px] font-bold uppercase tracking-[0.2em] text-stone-500 md:text-[9px]">
                                 Gốm sứ Việt
                             </p>
                         </div>
@@ -65,17 +76,29 @@ const StorefrontHeader = ({ headerConfig, siteInfo }) => {
 
                     <nav className="hidden items-center gap-1 md:flex">
                         {navMenus.map((menu) => (
-                            <Link key={menu.id || menu.link} to={menu.link || '/'} className="rounded-lg px-3 py-2 text-sm font-bold text-stone-700 transition-colors hover:bg-primary/5 hover:text-primary">
+                            <Link
+                                key={menu.id || menu.link}
+                                to={menu.link || '/'}
+                                className={`rounded-xl px-3 py-2 text-sm font-bold transition-colors ${
+                                    isActivePath(location.pathname, menu.link || '/')
+                                        ? 'bg-primary text-white shadow-sm'
+                                        : 'text-stone-700 hover:bg-primary/5 hover:text-primary'
+                                }`}
+                            >
                                 {menu.label}
                             </Link>
                         ))}
                     </nav>
 
                     <div className="flex items-center gap-1">
-                        <button onClick={() => setSearchOpen((prev) => !prev)} className="p-2 text-stone-600 transition-colors hover:text-primary">
+                        <button
+                            type="button"
+                            onClick={() => setSearchOpen((previous) => !previous)}
+                            className="flex h-11 w-11 items-center justify-center rounded-2xl bg-stone-50 text-stone-600 transition hover:bg-stone-100 hover:text-primary"
+                        >
                             <span className="material-symbols-outlined text-xl">{searchOpen ? 'close' : 'search'}</span>
                         </button>
-                        <a href={`tel:${siteInfo?.phone || '0123456789'}`} className="ml-2 hidden items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-xs font-black uppercase tracking-wider text-white transition-all hover:brightness-90 md:flex">
+                        <a href={`tel:${siteInfo?.phone || '0123456789'}`} className="ml-2 hidden min-h-[44px] items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-xs font-black uppercase tracking-wider text-white transition-all hover:brightness-90 md:flex">
                             <span className="material-symbols-outlined text-sm">call</span>
                             Hotline
                         </a>
@@ -85,21 +108,23 @@ const StorefrontHeader = ({ headerConfig, siteInfo }) => {
                 {searchOpen ? (
                     <div className="border-t border-stone-100 bg-white px-4 py-3">
                         <form
-                            onSubmit={(e) => {
-                                e.preventDefault();
-                                if (searchQuery.trim()) window.location.href = `/san-pham?search=${encodeURIComponent(searchQuery)}`;
+                            onSubmit={(event) => {
+                                event.preventDefault();
+                                if (searchQuery.trim()) {
+                                    window.location.href = `/san-pham?search=${encodeURIComponent(searchQuery.trim())}`;
+                                }
                             }}
                             className="mx-auto flex max-w-2xl gap-2"
                         >
                             <input
                                 type="text"
                                 value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
+                                onChange={(event) => setSearchQuery(event.target.value)}
                                 placeholder={headerConfig?.searchPlaceholder || 'Bạn cần tìm kiếm sản phẩm gì?'}
                                 autoFocus
-                                className="flex-1 rounded-xl border border-stone-200 bg-stone-50 px-4 py-2.5 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+                                className="flex-1 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
                             />
-                            <button type="submit" className="rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-white transition-all hover:brightness-90">
+                            <button type="submit" className="rounded-2xl bg-primary px-5 py-3 text-sm font-bold text-white transition-all hover:brightness-90">
                                 Tìm
                             </button>
                         </form>
@@ -110,19 +135,23 @@ const StorefrontHeader = ({ headerConfig, siteInfo }) => {
             {menuOpen ? (
                 <div className="fixed inset-0 z-[45] md:hidden">
                     <div className="absolute inset-0 bg-black/50" onClick={() => setMenuOpen(false)} />
-                    <div className={`absolute left-0 right-0 max-h-[70vh] overflow-auto border-t border-stone-100 bg-white shadow-2xl ${noticeText ? 'top-[84px]' : 'top-14'}`}>
+                    <div className={`absolute left-0 right-0 max-h-[72vh] overflow-auto border-t border-stone-100 bg-white shadow-2xl ${noticeText ? 'top-[88px]' : 'top-[60px]'}`}>
                         <div className="space-y-1 p-4">
                             {navMenus.map((menu) => (
                                 <Link
                                     key={menu.id || menu.link}
                                     to={menu.link || '/'}
-                                    className="block rounded-xl px-4 py-3 text-base font-bold text-stone-800 transition-colors hover:bg-primary/5"
+                                    className={`block rounded-2xl px-4 py-3.5 text-base font-bold transition-colors ${
+                                        isActivePath(location.pathname, menu.link || '/')
+                                            ? 'bg-primary text-white'
+                                            : 'text-stone-800 hover:bg-primary/5'
+                                    }`}
                                 >
                                     {menu.label}
                                 </Link>
                             ))}
                             <div className="border-t border-stone-100 pt-3">
-                                <a href={`tel:${siteInfo?.phone || '0123456789'}`} className="flex items-center gap-3 rounded-xl bg-red-50 px-4 py-3 font-bold text-red-700">
+                                <a href={`tel:${siteInfo?.phone || '0123456789'}`} className="flex min-h-[54px] items-center gap-3 rounded-2xl bg-red-50 px-4 py-3 font-bold text-red-700">
                                     <span className="material-symbols-outlined">call</span>
                                     Gọi tư vấn: {siteInfo?.phone || '0123 456 789'}
                                 </a>
@@ -215,39 +244,40 @@ const StorefrontMobileBottomNav = ({ siteInfo }) => {
     const items = [
         { key: 'home', label: 'Trang chủ', icon: 'home', to: '/' },
         { key: 'products', label: 'Sản phẩm', icon: 'inventory_2', to: '/san-pham' },
+        { key: 'stores', label: 'Cửa hàng', icon: 'storefront', to: '/stores' },
         { key: 'blog', label: 'Blog', icon: 'menu_book', to: '/blog' },
     ];
 
-    const isActive = (target) => (
-        target === '/'
-            ? location.pathname === '/'
-            : location.pathname === target || location.pathname.startsWith(`${target}/`)
-    );
-
     return (
         <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-stone-200 bg-white/95 backdrop-blur md:hidden">
-            <div className="grid grid-cols-4 px-2 pb-[calc(env(safe-area-inset-bottom)+0.35rem)] pt-2">
-                {items.map((item) => (
-                    <Link
-                        key={item.key}
-                        to={item.to}
-                        className={`flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-2xl px-2 text-center transition ${
-                            isActive(item.to) ? 'text-primary' : 'text-stone-500'
-                        }`}
-                    >
-                        <span className={`material-symbols-outlined text-[22px] ${isActive(item.to) ? 'text-primary' : 'text-stone-400'}`}>
-                            {item.icon}
-                        </span>
-                        <span className="text-[10px] font-black uppercase tracking-[0.14em]">{item.label}</span>
-                    </Link>
-                ))}
+            <div className="grid grid-cols-5 px-1.5 pb-[calc(env(safe-area-inset-bottom)+0.4rem)] pt-2">
+                {items.map((item) => {
+                    const active = isActivePath(location.pathname, item.to);
+
+                    return (
+                        <Link
+                            key={item.key}
+                            to={item.to}
+                            className={`flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-2xl px-2 text-center transition ${
+                                active ? 'text-primary' : 'text-stone-500'
+                            }`}
+                        >
+                            <span className={`material-symbols-outlined text-[22px] ${active ? 'text-primary' : 'text-stone-400'}`}>
+                                {item.icon}
+                            </span>
+                            <span className="text-[9px] font-black uppercase leading-tight tracking-[0.12em]">
+                                {item.label}
+                            </span>
+                        </Link>
+                    );
+                })}
 
                 <a
                     href={`tel:${siteInfo?.phone || '0123456789'}`}
                     className="flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-2xl px-2 text-center text-stone-500 transition"
                 >
                     <span className="material-symbols-outlined text-[22px] text-stone-400">call</span>
-                    <span className="text-[10px] font-black uppercase tracking-[0.14em]">Gọi ngay</span>
+                    <span className="text-[9px] font-black uppercase leading-tight tracking-[0.12em]">Gọi ngay</span>
                 </a>
             </div>
         </nav>
@@ -259,10 +289,14 @@ export const LeadFormModal = ({ show, onClose, product, source = 'website' }) =>
     const [submitting, setSubmitting] = useState(false);
     const [success, setSuccess] = useState(false);
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        if (!form.customer_name.trim() || !form.phone.trim()) return;
+    const handleSubmit = async (event) => {
+        event.preventDefault();
+        if (!form.customer_name.trim() || !form.phone.trim()) {
+            return;
+        }
+
         setSubmitting(true);
+
         try {
             const attribution = rememberLeadAttribution({ source_label: source });
             await api.post('/storefront/lead', {
@@ -289,21 +323,24 @@ export const LeadFormModal = ({ show, onClose, product, source = 'website' }) =>
         } catch {
             alert('Có lỗi xảy ra, vui lòng thử lại');
         }
+
         setSubmitting(false);
     };
 
-    if (!show) return null;
+    if (!show) {
+        return null;
+    }
 
     return (
         <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 p-0 backdrop-blur-sm md:items-center md:p-4" onClick={onClose}>
-            <div className="w-full rounded-t-3xl bg-white shadow-2xl md:max-w-md md:rounded-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="w-full rounded-t-3xl bg-white shadow-2xl md:max-w-md md:rounded-2xl" onClick={(event) => event.stopPropagation()}>
                 <div className="p-6 md:p-8">
                     <div className="mb-6 flex items-center justify-between">
                         <div>
                             <h3 className="text-lg font-black uppercase text-stone-900">Yêu cầu tư vấn</h3>
                             <p className="mt-1 text-xs font-medium text-stone-500">Chúng tôi sẽ liên hệ trong 15 phút</p>
                         </div>
-                        <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-100 text-stone-500">
+                        <button type="button" onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-100 text-stone-500">
                             <span className="material-symbols-outlined text-lg">close</span>
                         </button>
                     </div>
@@ -328,11 +365,31 @@ export const LeadFormModal = ({ show, onClose, product, source = 'website' }) =>
                         </div>
                     ) : (
                         <form onSubmit={handleSubmit} className="space-y-4">
-                            <input type="text" required value={form.customer_name} onChange={(e) => setForm((prev) => ({ ...prev, customer_name: e.target.value }))} placeholder="Nhập họ tên..." className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
-                            <input type="tel" required value={form.phone} onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))} placeholder="0xxx xxx xxx" className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
-                            <textarea rows={2} value={form.message} onChange={(e) => setForm((prev) => ({ ...prev, message: e.target.value }))} placeholder="VD: Tôi muốn tư vấn về bộ đồ thờ..." className="w-full resize-none rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
+                            <input
+                                type="text"
+                                required
+                                value={form.customer_name}
+                                onChange={(event) => setForm((previous) => ({ ...previous, customer_name: event.target.value }))}
+                                placeholder="Nhập họ tên..."
+                                className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+                            />
+                            <input
+                                type="tel"
+                                required
+                                value={form.phone}
+                                onChange={(event) => setForm((previous) => ({ ...previous, phone: event.target.value }))}
+                                placeholder="0xxx xxx xxx"
+                                className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+                            />
+                            <textarea
+                                rows={2}
+                                value={form.message}
+                                onChange={(event) => setForm((previous) => ({ ...previous, message: event.target.value }))}
+                                placeholder="VD: Tôi muốn tư vấn về bộ đồ thờ..."
+                                className="w-full resize-none rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+                            />
                             <button type="submit" disabled={submitting} className="w-full rounded-xl bg-primary py-3.5 text-sm font-black uppercase tracking-widest text-white shadow-lg transition-all hover:brightness-90 disabled:opacity-50">
-                                {submitting ? 'Đang gửi...' : 'GỬI YÊU CẦU TƯ VẤN'}
+                                {submitting ? 'Đang gửi...' : 'Gửi yêu cầu tư vấn'}
                             </button>
                         </form>
                     )}
@@ -347,6 +404,7 @@ const StorefrontLayout = () => {
     const [siteInfo, setSiteInfo] = useState(null);
     const [headerConfig, setHeaderConfig] = useState(buildHeaderConfig({}));
     const [footerConfig, setFooterConfig] = useState(buildFooterConfig({}));
+    const [storeLocations, setStoreLocations] = useState([]);
     const location = useLocation();
 
     useEffect(() => {
@@ -360,12 +418,16 @@ const StorefrontLayout = () => {
                 ]);
 
                 const settings = settingRes.data || {};
+                const normalizedStoreLocations = normalizeStoreLocations(settings.store_locations);
+                const primaryStore = getPrimaryStoreLocation(normalizedStoreLocations);
+
                 setCategories(catRes.data || []);
                 setHeaderConfig(buildHeaderConfig(settings));
                 setFooterConfig(buildFooterConfig(settings));
+                setStoreLocations(normalizedStoreLocations);
                 setSiteInfo({
                     name: settings.site_name || settings.header_brand_text || '',
-                    phone: settings.contact_phone || '',
+                    phone: settings.contact_phone || primaryStore?.hotline || '',
                     messengerUrl: settings.messenger_link || '',
                 });
             } catch (error) {
@@ -374,7 +436,7 @@ const StorefrontLayout = () => {
         };
 
         load();
-    }, [location.pathname, location.search, location.hash]);
+    }, [location.pathname, location.search]);
 
     const hasTopNotice = Boolean((headerConfig?.topNoticeText || '').trim());
 
@@ -382,8 +444,8 @@ const StorefrontLayout = () => {
         <div className="min-h-screen bg-white text-stone-900 antialiased selection:bg-primary/20 selection:text-primary">
             <TrackingScripts />
             <StorefrontHeader siteInfo={siteInfo} headerConfig={headerConfig} />
-            <main className={`flex min-h-screen flex-col pb-[78px] ${hasTopNotice ? 'pt-[84px] md:pt-[92px] md:pb-0' : 'pt-14 md:pt-16 md:pb-0'}`}>
-                <Outlet context={{ categories, siteInfo, headerConfig, footerConfig }} />
+            <main className={`flex min-h-screen flex-col pb-[82px] ${hasTopNotice ? 'pt-[88px] md:pt-[96px] md:pb-0' : 'pt-[60px] md:pt-[68px] md:pb-0'}`}>
+                <Outlet context={{ categories, siteInfo, headerConfig, footerConfig, storeLocations }} />
             </main>
             <StorefrontFooter siteInfo={siteInfo} footerConfig={footerConfig} />
             <StorefrontMobileBottomNav siteInfo={siteInfo} />

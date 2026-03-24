@@ -2,6 +2,7 @@
 
 import Image from 'next/image';
 import styles from '../../../app/product/[slug]/product.module.css';
+import { resolveVideoEmbedUrl } from '@/lib/media';
 
 export default function ProductGallery({
   images,
@@ -13,57 +14,18 @@ export default function ProductGallery({
   showSingleThumbnail = false
 }) {
   const activeImage = images[activeIndex] || images[0];
-  const hasSingleVisual = images.length === 1 && !videoUrl;
-  const showThumbnailStrip = images.length > 0 && (showSingleThumbnail || images.length > 1 || Boolean(videoUrl));
-
-  const getEmbedUrl = (url) => {
-    if (!url) return '';
-
-    const appendPlayerParams = (rawUrl) => {
-      try {
-        const parsedUrl = new URL(rawUrl);
-        parsedUrl.searchParams.set('playsinline', '1');
-        parsedUrl.searchParams.set('controls', '1');
-        parsedUrl.searchParams.set('fs', '1');
-        parsedUrl.searchParams.set('rel', '0');
-        parsedUrl.searchParams.set('modestbranding', '1');
-        parsedUrl.searchParams.set('enablejsapi', '1');
-
-        if (typeof window !== 'undefined') {
-          parsedUrl.searchParams.set('origin', window.location.origin);
-        }
-
-        return parsedUrl.toString();
-      } catch {
-        return rawUrl;
-      }
-    };
-
-    if (url.includes('embed/')) {
-      return appendPlayerParams(url);
-    }
-
-    let videoId = '';
-    if (url.includes('v=')) {
-      videoId = url.split('v=')[1]?.split('&')[0];
-    } else if (url.includes('youtu.be/')) {
-      videoId = url.split('youtu.be/')[1]?.split('?')[0];
-    } else if (url.includes('live/')) {
-      videoId = url.split('live/')[1]?.split('?')[0];
-    }
-
-    return videoId
-      ? appendPlayerParams(`https://www.youtube.com/embed/${videoId}`)
-      : appendPlayerParams(url);
-  };
+  const embedUrl = resolveVideoEmbedUrl(videoUrl);
+  const hasVideo = Boolean(embedUrl);
+  const hasSingleVisual = images.length === 1 && !hasVideo;
+  const showThumbnailStrip = images.length > 0 && (showSingleThumbnail || images.length > 1 || hasVideo);
 
   return (
     <div className={styles.galleryContainer}>
-      <div className={`${styles.mainImage} ${activeIndex === -1 && videoUrl ? styles.mainImageVideo : ''}`}>
-        {activeIndex === -1 && videoUrl ? (
+      <div className={`${styles.mainImage} ${activeIndex === -1 && hasVideo ? styles.mainImageVideo : ''}`}>
+        {activeIndex === -1 && hasVideo ? (
           <div className={styles.videoEmbedShell}>
             <iframe
-              src={getEmbedUrl(videoUrl)}
+              src={embedUrl}
               title={productName}
               className={styles.videoEmbedFrame}
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen; web-share"
@@ -94,7 +56,7 @@ export default function ProductGallery({
           className={styles.thumbnails}
           data-single-thumbnail={showSingleThumbnail && hasSingleVisual ? 'true' : undefined}
         >
-          {videoUrl && (
+          {hasVideo && (
             <button
               className={`${styles.thumbBtn} ${activeIndex === -1 ? styles.thumbActive : ''} ${styles.videoThumbBtn}`}
               onClick={() => setActiveIndex(-1)}

@@ -19,6 +19,7 @@ import StorefrontHome from './pages/storefront/StorefrontHome';
 import StorefrontProducts from './pages/storefront/StorefrontProducts';
 import StorefrontProductDetail from './pages/storefront/StorefrontProductDetail';
 import StorefrontCheckout from './pages/storefront/StorefrontCheckout';
+import StoreLocationsPage from './pages/storefront/StoreLocationsPage';
 import OrderThankYou from './pages/OrderThankYou';
 
 import AdminLayout from './layouts/AdminLayout';
@@ -106,6 +107,7 @@ function App() {
                 <Route path="san-pham/:slugOrId" element={<StorefrontProductDetail />} />
                 <Route path="danh-muc/:slug" element={<StorefrontProducts />} />
                 <Route path="dat-hang" element={<StorefrontCheckout />} />
+                <Route path="stores" element={<StoreLocationsPage />} />
                 <Route path="about" element={<About />} />
                 <Route path="blog" element={<Blog />} />
                 <Route path="blog/:slug" element={<PostDetail />} />

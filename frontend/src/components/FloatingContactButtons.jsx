@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { cmsApi } from '../services/api';
 import floatingContactConfig from '../config/floatingContact';
+import { getPrimaryStoreLocation } from '../utils/storeLocations';
 
 const iconStyle = {
     width: 24,
@@ -92,9 +93,7 @@ const getFirstAvailablePhone = (settings) => {
         return floatingContactConfig.phone || '';
     }
 
-    const firstStore = Array.isArray(settings.store_locations)
-        ? settings.store_locations.find((item) => item?.is_active !== false)
-        : null;
+    const firstStore = getPrimaryStoreLocation(settings.store_locations);
 
     return (
         settings.contact_phone ||

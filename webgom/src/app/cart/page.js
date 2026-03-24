@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useCart } from '@/context/CartContext';
@@ -10,6 +10,59 @@ import { rememberLeadAttribution } from '@/lib/leadAttribution';
 import SearchableSelect from '@/components/ui/SearchableSelect';
 import styles from './cart.module.css';
 import ThankYouView from '@/components/common/ThankYouView';
+
+const CART_META_IGNORED_KEYS = new Set([
+  'variant_id',
+  'variant_sku',
+  'parent_product_id',
+  'parent_product_name'
+]);
+
+const getCartItemMeta = (item) => {
+  const chips = [];
+  const normalizedName = String(item?.name || '').trim().toLowerCase();
+
+  if (item?.groupedItems?.length) {
+    chips.push(`Combo ${item.groupedItems.length} món`);
+  }
+
+  if (item?.options && typeof item.options === 'object') {
+    Object.entries(item.options).forEach(([key, value]) => {
+      if (!value || CART_META_IGNORED_KEYS.has(key)) {
+        return;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach((entry) => {
+          const formatted = String(entry || '').trim();
+          if (formatted) {
+            chips.push(formatted);
+          }
+        });
+        return;
+      }
+
+      if (typeof value === 'object') {
+        return;
+      }
+
+      const formatted = String(value).trim();
+      if (formatted) {
+        chips.push(formatted);
+      }
+    });
+  }
+
+  if (item?.sku) {
+    chips.push(`SKU ${item.sku}`);
+  }
+
+  return Array.from(
+    new Set(
+      chips.filter((chip) => chip && chip.toLowerCase() !== normalizedName)
+    )
+  ).slice(0, 3);
+};
 
 export default function CartPage() {
   const { cartItems, removeFromCart, updateQuantity, updateItem, restoreCombo, cartCount, cartTotal, clearCart } = useCart();
@@ -32,10 +85,54 @@ export default function CartPage() {
   
   const [bankSettings, setBankSettings] = useState(null);
   const [successOrderData, setSuccessOrderData] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const checkoutSectionRef = useRef(null);
+  const fieldGroupRefs = useRef({});
+  const fieldInputRefs = useRef({});
+  const hasMobileCheckoutIntentRef = useRef(false);
 
   useEffect(() => {
     getWebSiteSettings().then(res => setBankSettings(res)).catch(e => console.error("Error fetching settings:", e));
   }, []);
+
+  const clearFieldErrors = (...fieldNames) => {
+    if (fieldNames.length === 0) {
+      setFieldErrors({});
+      return;
+    }
+
+    setFieldErrors((prev) => {
+      let hasChanges = false;
+      const next = { ...prev };
+
+      fieldNames.forEach((fieldName) => {
+        if (next[fieldName]) {
+          delete next[fieldName];
+          hasChanges = true;
+        }
+      });
+
+      return hasChanges ? next : prev;
+    });
+  };
+
+  const registerFieldGroupRef = (fieldName) => (node) => {
+    if (node) {
+      fieldGroupRefs.current[fieldName] = node;
+      return;
+    }
+
+    delete fieldGroupRefs.current[fieldName];
+  };
+
+  const registerFieldInputRef = (fieldName) => (node) => {
+    if (node) {
+      fieldInputRefs.current[fieldName] = node;
+      return;
+    }
+
+    delete fieldInputRefs.current[fieldName];
+  };
 
   // Location logic
   const [useNewAddress, setUseNewAddress] = useState(true);
@@ -64,6 +161,7 @@ export default function CartPage() {
     setDistricts([]);
     setWards([]);
     setFormData(prev => ({ ...prev, province: '', district: '', ward: '' }));
+    clearFieldErrors('province', 'district', 'ward');
   }, [useNewAddress]);
 
   const [isWardsLoading, setIsWardsLoading] = useState(false);
@@ -71,6 +169,7 @@ export default function CartPage() {
   const handleProvinceChange = async (e) => {
     const pName = e.target.value;
     setFormData(prev => ({ ...prev, province: pName, district: '', ward: '' }));
+    clearFieldErrors('province', 'district', 'ward');
     setDistricts([]);
     setWards([]);
     if (!pName) return;
@@ -103,6 +202,7 @@ export default function CartPage() {
   const handleDistrictChange = async (e) => {
     const dName = e.target.value;
     setFormData(prev => ({ ...prev, district: dName, ward: '' }));
+    clearFieldErrors('district', 'ward');
     setWards([]);
     if (!dName) return;
     
@@ -145,7 +245,144 @@ export default function CartPage() {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
+    clearFieldErrors(name);
     setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const validateCheckoutForm = () => {
+    const errors = {};
+    const phoneRegex = /^(0)[0-9]{9}$/;
+    const fieldOrder = ['customer_name', 'phone', 'province'];
+
+    if (!useNewAddress) {
+      fieldOrder.push('district');
+    }
+
+    fieldOrder.push('ward', 'address');
+
+    if (!formData.customer_name?.trim()) {
+      errors.customer_name = 'Vui lòng nhập họ và tên người nhận.';
+    }
+
+    if (!formData.phone?.trim()) {
+      errors.phone = 'Vui lòng nhập số điện thoại.';
+    } else if (!phoneRegex.test(formData.phone.trim())) {
+      errors.phone = 'Số điện thoại cần đủ 10 số và bắt đầu bằng số 0.';
+    }
+
+    if (!formData.province) {
+      errors.province = 'Vui lòng chọn Tỉnh/Thành phố.';
+    }
+
+    if (!useNewAddress && !formData.district) {
+      errors.district = 'Vui lòng chọn Quận/Huyện.';
+    }
+
+    if (!formData.ward) {
+      errors.ward = 'Vui lòng chọn Phường/Xã.';
+    }
+
+    if (!formData.address?.trim()) {
+      errors.address = 'Vui lòng nhập địa chỉ chi tiết.';
+    }
+
+    const firstInvalidField = fieldOrder.find((fieldName) => errors[fieldName]);
+
+    return {
+      errors,
+      firstInvalidField,
+      firstMessage: firstInvalidField ? errors[firstInvalidField] : '',
+      isValid: Object.keys(errors).length === 0,
+    };
+  };
+
+  const getCheckoutScrollOffset = () => {
+    if (typeof window === 'undefined') {
+      return 0;
+    }
+
+    let offset = 12;
+    const stickyShellNode = document.querySelector('.mobile-sticky-header-shell');
+
+    if (stickyShellNode instanceof HTMLElement) {
+      const shellStyles = window.getComputedStyle(stickyShellNode);
+      const shellPosition = shellStyles.position;
+      const shellTop = Number.parseFloat(shellStyles.top || '0');
+
+      if ((shellPosition === 'fixed' || shellPosition === 'sticky') && Number.isFinite(shellTop) && shellTop <= 4) {
+        offset += stickyShellNode.getBoundingClientRect().height;
+        return offset;
+      }
+    }
+
+    const headerNode = document.querySelector('.site-header');
+
+    if (headerNode instanceof HTMLElement) {
+      const headerStyles = window.getComputedStyle(headerNode);
+      const headerPosition = headerStyles.position;
+      const headerTop = Number.parseFloat(headerStyles.top || '0');
+
+      if ((headerPosition === 'fixed' || headerPosition === 'sticky') && Number.isFinite(headerTop) && headerTop <= 4) {
+        offset += headerNode.getBoundingClientRect().height;
+      }
+    }
+
+    return offset;
+  };
+
+  const scrollToCheckoutTarget = () => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const targetNode = checkoutSectionRef.current;
+
+    if (!targetNode) {
+      return;
+    }
+
+    const top = targetNode.getBoundingClientRect().top + window.scrollY - getCheckoutScrollOffset();
+    window.scrollTo({
+      top: Math.max(top, 0),
+      behavior: 'smooth',
+    });
+  };
+
+  const focusCheckoutField = (fieldName = 'customer_name') => {
+    const inputNode = fieldInputRefs.current[fieldName];
+    const groupNode = fieldGroupRefs.current[fieldName];
+    const sectionNode = checkoutSectionRef.current;
+    const isMobileViewport = typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(max-width: 767px)').matches;
+
+    window.setTimeout(() => {
+      if (isMobileViewport) {
+        if (sectionNode && typeof sectionNode.focus === 'function') {
+          sectionNode.focus({ preventScroll: true });
+          return;
+        }
+
+        if (groupNode && typeof groupNode.focus === 'function') {
+          groupNode.focus({ preventScroll: true });
+        }
+        return;
+      }
+
+      if (inputNode && typeof inputNode.focus === 'function') {
+        inputNode.focus({ preventScroll: true });
+        return;
+      }
+
+      if (groupNode && typeof groupNode.focus === 'function') {
+        groupNode.focus({ preventScroll: true });
+      }
+    }, 220);
+  };
+
+  const guideToCheckoutForm = (fieldName = 'customer_name') => {
+    scrollToCheckoutTarget(fieldName);
+    focusCheckoutField(fieldName);
   };
 
   // ── Remove a sub-item from a bundle combo (uid-aware) ──────────────────────
@@ -274,6 +511,73 @@ export default function CartPage() {
     }
   };
 
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const handleMobileCartConfirmRequest = (event) => {
+      const respond = typeof event?.detail?.respond === 'function'
+        ? event.detail.respond
+        : () => {};
+
+      if (isOrderSuccess) {
+        respond({ success: true, showNotice: false });
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+
+      if (isSubmitting) {
+        respond({
+          success: false,
+          showNotice: true,
+          message: 'Đơn hàng đang được xử lý, vui lòng chờ trong giây lát.',
+        });
+        return;
+      }
+
+      if (cartItems.length === 0) {
+        respond({
+          success: false,
+          showNotice: true,
+          message: 'Giỏ hàng đang trống, vui lòng chọn sản phẩm trước khi đặt hàng.',
+        });
+        return;
+      }
+
+      if (!hasMobileCheckoutIntentRef.current) {
+        hasMobileCheckoutIntentRef.current = true;
+        const initialTargetField = validateCheckoutForm().firstInvalidField || 'customer_name';
+        guideToCheckoutForm(initialTargetField);
+        respond({ success: true, showNotice: false });
+        return;
+      }
+
+      const validation = validateCheckoutForm();
+
+      if (!validation.isValid) {
+        setFieldErrors(validation.errors);
+        guideToCheckoutForm(validation.firstInvalidField || 'customer_name');
+        respond({
+          success: false,
+          showNotice: true,
+          message: validation.firstMessage || 'Vui lòng kiểm tra lại thông tin giao hàng.',
+        });
+        return;
+      }
+
+      setFieldErrors({});
+      respond({ success: true, showNotice: false });
+      handleSubmit();
+    };
+
+    window.addEventListener('webgom:mobile-cart-confirm-request', handleMobileCartConfirmRequest);
+
+    return () => {
+      window.removeEventListener('webgom:mobile-cart-confirm-request', handleMobileCartConfirmRequest);
+    };
+  }, [cartItems, formData, isOrderSuccess, isSubmitting, useNewAddress, cartTotal, discount, totalAfterDiscount]);
+
   if (isOrderSuccess) {
     return (
       <ThankYouView 
@@ -323,24 +627,52 @@ export default function CartPage() {
           {/* ════ LEFT: Delivery + Payment ════ */}
           <div className={styles.mainContent}>
 
-            <section className={styles.sectionCard}>
+            <section className={styles.sectionCard} ref={checkoutSectionRef} tabIndex={-1}>
               <div className={styles.sectionHead}>
                 <span className={styles.sectionNumber}>1</span>
                 <h3 className={styles.sectionTitle}>Thông tin giao hàng</h3>
               </div>
 
               <div className={styles.formGrid}>
-                <div className={styles.inputGroup}>
+                <div
+                  ref={registerFieldGroupRef('customer_name')}
+                  tabIndex={-1}
+                  className={`${styles.inputGroup} ${fieldErrors.customer_name ? styles.inputGroupError : ''}`}
+                >
                   <label>Họ và tên người nhận <span style={{color: '#ef4444'}}>*</span></label>
-                  <input className={styles.inputField} type="text" name="customer_name"
+                  <input
+                    ref={registerFieldInputRef('customer_name')}
+                    className={`${styles.inputField} ${fieldErrors.customer_name ? styles.inputFieldError : ''}`}
+                    type="text"
+                    name="customer_name"
                     placeholder="Nhập họ và tên" value={formData.customer_name}
-                    onChange={handleInputChange} required />
+                    onChange={handleInputChange}
+                    aria-invalid={Boolean(fieldErrors.customer_name)}
+                    required
+                  />
+                  {fieldErrors.customer_name ? (
+                    <p className={styles.fieldError}>{fieldErrors.customer_name}</p>
+                  ) : null}
                 </div>
-                <div className={styles.inputGroup}>
+                <div
+                  ref={registerFieldGroupRef('phone')}
+                  tabIndex={-1}
+                  className={`${styles.inputGroup} ${fieldErrors.phone ? styles.inputGroupError : ''}`}
+                >
                   <label>Số điện thoại <span style={{color: '#ef4444'}}>*</span></label>
-                  <input className={styles.inputField} type="tel" name="phone"
+                  <input
+                    ref={registerFieldInputRef('phone')}
+                    className={`${styles.inputField} ${fieldErrors.phone ? styles.inputFieldError : ''}`}
+                    type="tel"
+                    name="phone"
                     placeholder="Nhập số điện thoại" value={formData.phone}
-                    onChange={handleInputChange} required />
+                    onChange={handleInputChange}
+                    aria-invalid={Boolean(fieldErrors.phone)}
+                    required
+                  />
+                  {fieldErrors.phone ? (
+                    <p className={styles.fieldError}>{fieldErrors.phone}</p>
+                  ) : null}
                 </div>
 
                 {/* Chuyển đổi địa chỉ hành chính mới */}
@@ -349,7 +681,10 @@ export default function CartPage() {
                     <input 
                       type="checkbox" 
                       checked={useNewAddress} 
-                      onChange={(e) => setUseNewAddress(e.target.checked)}
+                      onChange={(e) => {
+                        clearFieldErrors('province', 'district', 'ward');
+                        setUseNewAddress(e.target.checked);
+                      }}
                       style={{ marginRight: '8px', cursor: 'pointer', width: '16px', height: '16px', accentColor: '#C5A059' }}
                     />
                     Sử dụng đơn vị hành chính mới (Chỉ gồm 2 cấp: Tỉnh/Thành phố và Phường/Xã)
@@ -357,56 +692,94 @@ export default function CartPage() {
                 </div>
 
                 <div className={styles.threeCol} style={useNewAddress ? { gridTemplateColumns: '1fr 1fr' } : {}}>
-                  <div className={styles.inputGroup}>
+                  <div
+                    ref={registerFieldGroupRef('province')}
+                    tabIndex={-1}
+                    className={`${styles.inputGroup} ${fieldErrors.province ? styles.inputGroupError : ''}`}
+                  >
                     <label>Tỉnh / Thành phố <span style={{color: '#ef4444'}}>*</span></label>
                     <SearchableSelect
                       name="province"
-                      className={styles.inputField}
+                      className={`${styles.inputField} ${fieldErrors.province ? styles.inputFieldError : ''}`}
                       value={formData.province}
                       onChange={handleProvinceChange}
+                      preserveMobileScroll
                       required
                       placeholder="Chọn Tỉnh/Thành phố"
                       options={provinces.map(p => ({ value: p.PROVINCE_NAME, label: p.PROVINCE_NAME }))}
                     />
+                    {fieldErrors.province ? (
+                      <p className={styles.fieldError}>{fieldErrors.province}</p>
+                    ) : null}
                   </div>
                   
                   {!useNewAddress && (
-                    <div className={styles.inputGroup}>
+                    <div
+                      ref={registerFieldGroupRef('district')}
+                      tabIndex={-1}
+                      className={`${styles.inputGroup} ${fieldErrors.district ? styles.inputGroupError : ''}`}
+                    >
                       <label>Quận / Huyện <span style={{color: '#ef4444'}}>*</span></label>
                       <SearchableSelect
                         name="district"
-                        className={styles.inputField}
+                        className={`${styles.inputField} ${fieldErrors.district ? styles.inputFieldError : ''}`}
                         value={formData.district}
                         onChange={handleDistrictChange}
+                        preserveMobileScroll
                         required
                         disabled={!formData.province || districts.length === 0}
                         placeholder="Chọn Quận/Huyện"
                         options={districts.map(d => ({ value: d.DISTRICT_NAME, label: d.DISTRICT_NAME }))}
                       />
+                      {fieldErrors.district ? (
+                        <p className={styles.fieldError}>{fieldErrors.district}</p>
+                      ) : null}
                     </div>
                   )}
 
-                  <div className={styles.inputGroup}>
+                  <div
+                    ref={registerFieldGroupRef('ward')}
+                    tabIndex={-1}
+                    className={`${styles.inputGroup} ${fieldErrors.ward ? styles.inputGroupError : ''}`}
+                  >
                     <label>Phường / Xã <span style={{color: '#ef4444'}}>*</span></label>
                     <SearchableSelect
                       name="ward"
-                      className={styles.inputField}
+                      className={`${styles.inputField} ${fieldErrors.ward ? styles.inputFieldError : ''}`}
                       value={formData.ward}
                       onChange={handleInputChange}
+                      preserveMobileScroll
                       required
                       disabled={useNewAddress ? (isWardsLoading || !formData.province) : (!formData.district || wards.length === 0)}
                       placeholder={isWardsLoading ? 'Đang tải...' : 'Chọn Phường/Xã'}
                       options={wards.map(w => ({ value: w.WARD_NAME, label: w.WARD_NAME }))}
                     />
+                    {fieldErrors.ward ? (
+                      <p className={styles.fieldError}>{fieldErrors.ward}</p>
+                    ) : null}
                   </div>
                 </div>
 
                 <div className={styles.fullWidth}>
-                  <div className={styles.inputGroup}>
+                  <div
+                    ref={registerFieldGroupRef('address')}
+                    tabIndex={-1}
+                    className={`${styles.inputGroup} ${fieldErrors.address ? styles.inputGroupError : ''}`}
+                  >
                     <label>Địa chỉ chi tiết <span style={{color: '#ef4444'}}>*</span></label>
-                    <input className={styles.inputField} type="text" name="address"
+                    <input
+                      ref={registerFieldInputRef('address')}
+                      className={`${styles.inputField} ${fieldErrors.address ? styles.inputFieldError : ''}`}
+                      type="text"
+                      name="address"
                       placeholder="Ví dụ: 123 Đường Lê Lợi" value={formData.address}
-                      onChange={handleInputChange} required />
+                      onChange={handleInputChange}
+                      aria-invalid={Boolean(fieldErrors.address)}
+                      required
+                    />
+                    {fieldErrors.address ? (
+                      <p className={styles.fieldError}>{fieldErrors.address}</p>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -479,6 +852,171 @@ export default function CartPage() {
                 Tóm Tắt Đơn Hàng 
                 <span style={{ fontSize: '0.8rem', fontWeight: 'normal', color: '#64748b', textTransform: 'none' }}>({cartCount} sản phẩm)</span>
               </h3>
+
+              <div className={styles.mobileCartList}>
+                {cartItems.map((item) => {
+                  const itemMeta = getCartItemMeta(item);
+                  const imgSrc = getImageUrl(item);
+                  const originalCount = item.originalSubCount ?? item.groupedItems?.length ?? 0;
+                  const isFullCombo = item.groupedItems?.length > 0 &&
+                    item.groupedItems.length >= originalCount;
+                  const effectivePrice = item.groupedItems?.length > 0
+                    ? item.groupedItems.reduce((s, gi) => s + (parseFloat(gi.price || 0) * (gi.qty || 1)), 0)
+                    : item.price;
+                  const lineTotal = effectivePrice * item.quantity;
+
+                  return (
+                    <div key={`${item.cartKey}-mobile`} className={styles.mobileCartItem}>
+                      <button
+                        type="button"
+                        className={styles.mobileRemoveBtn}
+                        onClick={() => removeFromCart(item.cartKey)}
+                        aria-label={`Xóa ${item.name}`}
+                      >
+                        <span className="material-symbols-outlined">delete</span>
+                      </button>
+
+                      <div className={styles.mobileItemMain}>
+                        <div className={styles.mobileItemImage}>
+                          {imgSrc ? (
+                            <Image src={imgSrc} alt={item.name} fill style={{ objectFit: 'cover' }} unoptimized />
+                          ) : (
+                            <div style={{
+                              width: '100%', height: '100%', display: 'flex',
+                              alignItems: 'center', justifyContent: 'center', background: '#F0EDE6'
+                            }}>
+                              <span className="material-symbols-outlined" style={{ color: '#C5A065', fontSize: 24 }}>
+                                image
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className={styles.mobileItemBody}>
+                          <h4 className={styles.mobileItemName}>{item.name}</h4>
+
+                          {itemMeta.length > 0 ? (
+                            <div className={styles.mobileMetaList}>
+                              {itemMeta.map((meta) => (
+                                <span key={`${item.cartKey}-meta-${meta}`} className={styles.mobileMetaBadge}>
+                                  {meta}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className={styles.mobileMetaFallback}>
+                              {item.groupedItems?.length > 0 ? 'Combo bộ sưu tập' : 'Tác phẩm đơn'}
+                            </p>
+                          )}
+
+                          <div className={styles.mobileItemFooter}>
+                            <div className={styles.mobilePriceGroup}>
+                              <span className={styles.mobileLabel}>
+                                {item.groupedItems?.length > 0 ? 'Giá combo' : 'Đơn giá'}
+                              </span>
+                              <strong className={styles.mobileUnitPrice}>{formatPrice(effectivePrice)}</strong>
+                            </div>
+
+                            <div className={styles.mobileQuantityCtrl}>
+                              <button
+                                type="button"
+                                onClick={() => updateQuantity(item.cartKey, item.quantity - 1)}
+                                aria-label={`Giảm số lượng ${item.name}`}
+                              >
+                                −
+                              </button>
+                              <span>{item.quantity}</span>
+                              <button
+                                type="button"
+                                onClick={() => updateQuantity(item.cartKey, item.quantity + 1)}
+                                aria-label={`Tăng số lượng ${item.name}`}
+                              >
+                                +
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className={styles.mobileLineTotal}>
+                            <span className={styles.mobileLineLabel}>Thành tiền</span>
+                            <strong className={styles.mobileLinePrice}>{formatPrice(lineTotal)}</strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      {item.groupedItems?.length > 0 && (
+                        <div className={styles.mobileBundleBlock}>
+                          <div className={styles.mobileBundleTopRow}>
+                            <div className={styles.mobileBundleSummary}>
+                              <span className={styles.mobileBundleSummaryLabel}>
+                                Combo {item.groupedItems.length} món
+                              </span>
+                              <span className={styles.mobileBundleSummaryNote}>
+                                Chi tiết các món nằm trong combo này
+                              </span>
+                            </div>
+                            <span className={styles.mobileBundleTag}>
+                              {isFullCombo ? 'Ưu đãi 10%' : `${item.groupedItems.length}/${originalCount} món`}
+                            </span>
+                          </div>
+
+                          <div className={styles.mobileBundleList}>
+                            {item.groupedItems.map((gi) => {
+                              const giUid = gi.uid ?? gi.id;
+                              return (
+                                <div key={`${item.cartKey}-bundle-${giUid}`} className={styles.mobileBundleItem}>
+                                  <div className={styles.mobileBundleCopy}>
+                                    <span className={styles.mobileBundleName}>
+                                      {gi.name || `Sản phẩm #${gi.id}`}
+                                    </span>
+                                    <span className={styles.mobileBundlePrice}>
+                                      {formatPrice(parseFloat(gi.price || 0))}
+                                    </span>
+                                  </div>
+
+                                  <div className={styles.mobileBundleActions}>
+                                    <div className={styles.mobileSubQtyCtrl}>
+                                      <button type="button" onClick={() => handleSubItemQty(item.cartKey, giUid, -1)}>−</button>
+                                      <span>{gi.qty || 1}</span>
+                                      <button type="button" onClick={() => handleSubItemQty(item.cartKey, giUid, 1)}>+</button>
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      className={styles.mobileChildRemove}
+                                      onClick={() => handleRemoveSubItem(item.cartKey, giUid)}
+                                    >
+                                      Xóa
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          <div className={styles.mobileBundleFooter}>
+                            {isFullCombo ? (
+                              <span className={styles.mobileBundleStatus}>✓ Combo đầy đủ, ưu đãi 10% đang áp dụng</span>
+                            ) : (
+                              <>
+                                <span className={styles.mobileBundleStatusMuted}>
+                                  Mua đủ {originalCount} món để nhận ưu đãi 10%
+                                </span>
+                                <button
+                                  type="button"
+                                  className={styles.mobileRestoreBtn}
+                                  onClick={() => restoreCombo(item.cartKey)}
+                                >
+                                  Khôi phục combo
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
 
               <div className={styles.cartList}>
                 {cartItems.map((item) => {
@@ -643,6 +1181,30 @@ export default function CartPage() {
           </aside>
         </div>
       </main>
+
+      <div className={styles.mobileCheckoutBar}>
+        <div className="container">
+          <div className={styles.mobileCheckoutInner}>
+            <div className={styles.mobileCheckoutCopy}>
+              <span className={styles.mobileCheckoutLabel}>Tổng cộng</span>
+              <strong className={styles.mobileCheckoutPrice}>{formatPrice(totalAfterDiscount)}</strong>
+              <span className={styles.mobileCheckoutSubtext}>
+                {cartCount} sản phẩm
+                {discount > 0 ? ` • Giảm ${formatPrice(discount)}` : ' • Miễn phí vận chuyển'}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              className={styles.mobileCheckoutButton}
+              onClick={handleSubmit}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? 'Đang xử lý...' : 'Xác nhận đơn'}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

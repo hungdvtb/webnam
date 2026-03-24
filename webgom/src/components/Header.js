@@ -213,6 +213,7 @@ export default function Header({
   const currentNormalizedPath = normalizePath(pathname);
   const isAllProductsView = currentNormalizedPath === "/products" && !currentMobileSearchParamsString;
   const isProductDetailPage = currentNormalizedPath.startsWith("/product/");
+  const isCartCheckoutView = currentNormalizedPath === "/cart";
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
   const filteredSearchHistory = searchHistory.filter((term) =>
     !normalizedSearchQuery || term.toLowerCase().includes(normalizedSearchQuery)
@@ -491,6 +492,35 @@ export default function Header({
     event.preventDefault();
     setIsMobileProductsMenuOpen(false);
 
+    if (isCartCheckoutView && typeof window !== "undefined") {
+      let requestHandled = false;
+      let requestMessage = "";
+      let shouldShowNotice = false;
+
+      window.dispatchEvent(
+        new CustomEvent("webgom:mobile-cart-confirm-request", {
+          detail: {
+            source: "mobile-bottom-order",
+            respond: (payload = {}) => {
+              requestHandled = true;
+              requestMessage = String(payload.message || "").trim();
+              shouldShowNotice = Boolean(requestMessage) && payload.showNotice !== false;
+            },
+          },
+        })
+      );
+
+      if (requestHandled) {
+        if (shouldShowNotice) {
+          showMobileOrderNotice(requestMessage);
+        }
+        return;
+      }
+
+      showMobileOrderNotice("Vui lòng chờ tải xong trang thanh toán rồi thử lại.");
+      return;
+    }
+
     if (isProductDetailPage && typeof window !== "undefined") {
       let requestHandled = false;
       let requestSucceeded = false;
@@ -721,12 +751,15 @@ export default function Header({
               {mobileMenuItems.map((item) => {
                 const isProductsTrigger = item.id === "header-default-products" || item.shortLabel === "Sản phẩm";
                 const isOrderItem = item.id === MOBILE_ORDER_ITEM.id;
+                const isOrderConfirmMode = isOrderItem && isCartCheckoutView;
                 const isActive = isProductsTrigger
                   ? isMobileProductsMenuOpen || isMobileMenuItemActive(pathname, item)
                   : isMobileMenuItemActive(pathname, item);
                 const className = `mobile-bottom-item ${isActive ? "mobile-bottom-item-active" : ""} ${
                   isOrderItem ? "mobile-bottom-item-order" : ""
-                }`;
+                } ${isOrderConfirmMode ? "mobile-bottom-item-order-confirm" : ""}`;
+                const itemTitle = isOrderConfirmMode ? "Xác nhận đơn hàng" : item.title;
+                const itemShortLabel = isOrderConfirmMode ? "Xác nhận đơn hàng" : item.shortLabel;
 
                 const content = (
                   <span className="mobile-bottom-item__content">
@@ -744,7 +777,7 @@ export default function Header({
                       </span>
                     </span>
                     <span className="mobile-bottom-item__label-wrap">
-                      <span className="mobile-bottom-item__label">{item.shortLabel}</span>
+                      <span className="mobile-bottom-item__label">{itemShortLabel}</span>
                     </span>
                   </span>
                 );
@@ -756,7 +789,7 @@ export default function Header({
                       ref={mobileProductsToggleRef}
                       type="button"
                       className={`${className} mobile-bottom-item-button`}
-                      title={item.title}
+                      title={itemTitle}
                       aria-expanded={isMobileProductsMenuOpen}
                       aria-controls="mobile-products-sheet"
                       onClick={toggleMobileProductsMenu}
@@ -772,7 +805,7 @@ export default function Header({
                       key={item.id}
                       type="button"
                       className={`${className} mobile-bottom-item-button`}
-                      title={item.title}
+                      title={itemTitle}
                       aria-current={isActive ? "page" : undefined}
                       onClick={(event) => handleMobileOrderClick(event, item)}
                     >
@@ -787,7 +820,7 @@ export default function Header({
                       key={item.id}
                       href={item.href}
                       className={className}
-                      title={item.title}
+                      title={itemTitle}
                       aria-current={isActive ? "page" : undefined}
                       target="_blank"
                       rel="noopener noreferrer"
@@ -802,7 +835,7 @@ export default function Header({
                     key={item.id}
                     href={item.href}
                     className={className}
-                    title={item.title}
+                    title={itemTitle}
                     aria-current={isActive ? "page" : undefined}
                   >
                     {content}
@@ -1665,6 +1698,23 @@ export default function Header({
               inset 0 0 0 1px rgba(185, 136, 60, 0.14);
           }
 
+          .mobile-bottom-item-order-confirm .mobile-bottom-item__content {
+            min-height: 68px;
+            padding-top: 6px;
+            padding-bottom: 5px;
+          }
+
+          .mobile-bottom-item-order-confirm .mobile-bottom-item__label-wrap {
+            min-height: 24px;
+            flex-basis: 24px;
+          }
+
+          .mobile-bottom-item-order-confirm .mobile-bottom-item__label {
+            font-size: 7.2px;
+            line-height: 1.08;
+            white-space: normal;
+          }
+
           .mobile-bottom-item__icon-wrap {
             box-sizing: border-box;
             width: 24px;
@@ -1719,7 +1769,7 @@ export default function Header({
           }
 
           :global(body) {
-            padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 92px);
+            padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 100px);
           }
         }
 
@@ -1802,6 +1852,10 @@ export default function Header({
 
           .mobile-bottom-item__label {
             font-size: 7.1px;
+          }
+
+          .mobile-bottom-item-order-confirm .mobile-bottom-item__label {
+            font-size: 6.45px;
           }
         }
       `}</style>

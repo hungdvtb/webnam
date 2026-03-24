@@ -340,7 +340,7 @@ class StorefrontController extends Controller
                 'primary_image' => $v->primary_image,
             ]) : [],
             'bundle_items' => $product->type === 'bundle'
-                ? $product->bundleItems->map(function ($bundleItem) {
+                ? $product->bundleItems->map(function ($bundleItem) use ($linkedPosts) {
                     $selectedVariantId = $bundleItem->pivot->variant_id ? (int) $bundleItem->pivot->variant_id : null;
                     $optionPostId = filled($bundleItem->pivot->option_post_id ?? null) ? (int) $bundleItem->pivot->option_post_id : null;
                     $optionPost = $optionPostId ? $linkedPosts->get($optionPostId) : null;
@@ -388,13 +388,20 @@ class StorefrontController extends Controller
      * GET /api/storefront/products/{id}/related
      * Public: Sản phẩm liên quan
      */
-    public function relatedProducts(Request $request, $id)
+    public function relatedProducts(Request $request, $idOrSlug)
     {
         $accountId = $request->header('X-Account-Id');
         $product = Product::query()
             ->when($accountId, fn($q) => $q->where('products.account_id', $accountId))
             ->with('categories:id')
-            ->findOrFail($id);
+            ->where(function ($query) use ($idOrSlug) {
+                $query->where('products.slug', $idOrSlug);
+
+                if (is_numeric($idOrSlug)) {
+                    $query->orWhere('products.id', (int) $idOrSlug);
+                }
+            })
+            ->firstOrFail();
         
         $limit = 8;
         

@@ -61,6 +61,10 @@
     animation: fadeInUp 0.5s ease forwards;
 }
 
+.sectionCard:focus {
+    outline: none;
+}
+
 .sectionHead {
     display: flex;
     align-items: center;
@@ -135,6 +139,12 @@
     gap: 0.4rem;
 }
 
+.inputGroup:focus {
+    outline: 2px solid rgba(197, 160, 101, 0.28);
+    outline-offset: 4px;
+    border-radius: 14px;
+}
+
 .inputGroup label {
     font-size: 0.8rem;
     font-weight: 600;
@@ -163,6 +173,33 @@
 .inputField:focus {
     border-color: var(--primary);
     box-shadow: none;
+}
+
+.inputGroupError label {
+    color: #b42318;
+}
+
+.inputGroupError:focus {
+    outline-color: rgba(220, 38, 38, 0.26);
+}
+
+.inputFieldError {
+    border-color: #dc2626;
+    background: #fff7f7;
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.08);
+}
+
+.inputFieldError:focus {
+    border-color: #dc2626;
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+}
+
+.fieldError {
+    margin: 0;
+    color: #b42318;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    font-weight: 600;
 }
 
 /* ============================
@@ -760,4 +797,689 @@
 @keyframes fadeInUp {
     from { opacity: 0; transform: translateY(16px); }
     to   { opacity: 1; transform: translateY(0); }
+}
+
+.mobileCartList,
+.mobileCheckoutBar {
+    display: none;
+}
+
+@media (max-width: 1024px) {
+    .sidebar {
+        position: static;
+        top: auto;
+    }
+}
+
+@media (max-width: 768px) {
+    .cartPage {
+        padding: 1rem 0 calc(env(safe-area-inset-bottom, 0px) + 10rem);
+    }
+
+    .pageHeader {
+        margin-bottom: 1rem;
+    }
+
+    .pageTitle {
+        font-size: 1.7rem;
+        line-height: 1.1;
+        margin-bottom: 0.35rem;
+    }
+
+    .pageSubtitle {
+        display: none;
+    }
+
+    .checkoutGrid {
+        gap: 1rem;
+    }
+
+    .sidebar {
+        order: -1;
+    }
+
+    .sectionCard {
+        padding: 1rem;
+        margin-bottom: 1rem;
+        border-radius: 18px;
+    }
+
+    .sectionHead {
+        gap: 0.65rem;
+        margin-bottom: 1rem;
+    }
+
+    .sectionNumber {
+        width: 28px;
+        height: 28px;
+        font-size: 0.85rem;
+    }
+
+    .sectionTitle {
+        font-size: 1.15rem;
+        line-height: 1.2;
+    }
+
+    .formGrid,
+    .threeCol {
+        gap: 0.85rem;
+    }
+
+    .inputGroup {
+        gap: 0.32rem;
+    }
+
+    .inputGroup label {
+        font-size: 0.7rem;
+        letter-spacing: 0.08em;
+    }
+
+    .inputField {
+        min-height: 46px;
+        padding: 0.82rem 0.95rem;
+        border-radius: 12px;
+        font-size: 0.95rem;
+    }
+
+    .fieldError {
+        font-size: 0.72rem;
+        line-height: 1.35;
+    }
+
+    .paymentOptions {
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+    }
+
+    .paymentOption {
+        padding: 0.9rem;
+        border-radius: 14px;
+        gap: 0.7rem;
+        align-items: flex-start;
+    }
+
+    .paymentOption input[type="radio"] {
+        width: 18px;
+        height: 18px;
+        margin-top: 0.1rem;
+    }
+
+    .paymentIcon {
+        font-size: 24px;
+    }
+
+    .paymentTitle {
+        font-size: 0.8rem;
+    }
+
+    .paymentSubtext {
+        font-size: 0.72rem;
+        line-height: 1.35;
+    }
+
+    .ctaButton {
+        min-height: 52px;
+        padding: 0.95rem 1rem;
+        border-radius: 16px;
+        font-size: 1rem;
+        letter-spacing: 0.12em;
+    }
+
+    .ctaNote {
+        margin-top: 0.85rem;
+        font-size: 0.74rem;
+        line-height: 1.45;
+    }
+
+    .summaryCard {
+        padding: 1rem;
+        border-left-width: 0;
+        border: 1px solid rgba(197, 160, 101, 0.22);
+        border-radius: 20px;
+        box-shadow: 0 18px 36px rgba(27, 54, 93, 0.08);
+    }
+
+    .summaryCard h3 {
+        align-items: flex-start !important;
+        gap: 0.6rem;
+        margin-bottom: 0.9rem;
+        padding-bottom: 0.9rem;
+        font-size: 0.92rem;
+        letter-spacing: 0.12em;
+        line-height: 1.35;
+    }
+
+    .summaryCard h3 span {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.35rem 0.65rem;
+        border-radius: 999px;
+        background: rgba(27, 54, 93, 0.06);
+        font-size: 0.68rem !important;
+        font-weight: 700 !important;
+        color: var(--primary) !important;
+        white-space: nowrap;
+    }
+
+    .mobileCartList {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+    }
+
+    .cartList {
+        display: none;
+    }
+
+    .mobileCartItem {
+        position: relative;
+        padding: 0.85rem;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(250, 246, 239, 0.98) 100%);
+        border: 1px solid rgba(197, 160, 101, 0.18);
+        border-radius: 18px;
+        box-shadow: 0 10px 22px rgba(27, 54, 93, 0.06);
+    }
+
+    .mobileRemoveBtn {
+        position: absolute;
+        top: 0.75rem;
+        right: 0.75rem;
+        width: 2.1rem;
+        height: 2.1rem;
+        border: none;
+        border-radius: 999px;
+        background: rgba(27, 54, 93, 0.05);
+        color: #64748b;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .mobileRemoveBtn .material-symbols-outlined {
+        font-size: 18px;
+    }
+
+    .mobileItemMain {
+        display: flex;
+        gap: 0.75rem;
+        align-items: flex-start;
+    }
+
+    .mobileItemImage {
+        width: 76px;
+        height: 76px;
+        flex-shrink: 0;
+        position: relative;
+        overflow: hidden;
+        border-radius: 16px;
+        background: #F5F1EA;
+        border: 1px solid rgba(197, 160, 101, 0.16);
+    }
+
+    .mobileItemBody {
+        min-width: 0;
+        flex: 1;
+        padding-right: 2rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+    }
+
+    .mobileItemName {
+        font-size: 0.98rem;
+        line-height: 1.28;
+        color: var(--primary);
+        font-family: 'Playfair Display', serif;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .mobileMetaList {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+    }
+
+    .mobileMetaBadge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 1.6rem;
+        padding: 0.25rem 0.55rem;
+        border-radius: 999px;
+        background: rgba(27, 54, 93, 0.06);
+        color: var(--primary);
+        font-size: 0.68rem;
+        font-weight: 700;
+        line-height: 1.15;
+        text-align: left;
+    }
+
+    .mobileMetaFallback {
+        font-size: 0.75rem;
+        color: #64748b;
+        font-style: italic;
+        line-height: 1.35;
+    }
+
+    .mobileItemFooter {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 0.65rem;
+    }
+
+    .mobilePriceGroup {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+    }
+
+    .mobileLabel,
+    .mobileLineLabel {
+        font-size: 0.65rem;
+        font-family: 'Inter', sans-serif;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #94A3B8;
+        font-weight: 700;
+    }
+
+    .mobileUnitPrice {
+        font-size: 0.92rem;
+        line-height: 1.2;
+        color: var(--accent-dark);
+        font-weight: 700;
+        font-family: 'Inter', sans-serif;
+    }
+
+    .mobileQuantityCtrl {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid rgba(197, 160, 101, 0.3);
+        border-radius: 999px;
+        background: #fff;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    }
+
+    .mobileQuantityCtrl button {
+        width: 2.3rem;
+        height: 2.3rem;
+        border: none;
+        background: transparent;
+        color: var(--primary);
+        font-size: 1.15rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .mobileQuantityCtrl span {
+        min-width: 2.1rem;
+        text-align: center;
+        font-family: 'Inter', sans-serif;
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: var(--primary);
+    }
+
+    .mobileLineTotal {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding-top: 0.55rem;
+        border-top: 1px solid rgba(27, 54, 93, 0.08);
+    }
+
+    .mobileLinePrice {
+        font-size: 1rem;
+        font-family: 'Playfair Display', serif;
+        color: var(--primary);
+        font-weight: 700;
+    }
+
+    .mobileBundleBlock {
+        margin-top: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px dashed rgba(197, 160, 101, 0.35);
+        display: flex;
+        flex-direction: column;
+        gap: 0.65rem;
+    }
+
+    .mobileBundleTopRow {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.65rem;
+    }
+
+    .mobileBundleSummary {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.18rem;
+    }
+
+    .mobileBundleSummaryLabel {
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--accent-dark);
+    }
+
+    .mobileBundleSummaryNote {
+        font-size: 0.74rem;
+        line-height: 1.35;
+        color: #64748b;
+    }
+
+    .mobileBundleHeader {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.65rem;
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--accent-dark);
+    }
+
+    .mobileBundleTag {
+        padding: 0.25rem 0.5rem;
+        border-radius: 999px;
+        background: rgba(197, 160, 101, 0.14);
+        font-size: 0.66rem;
+        white-space: nowrap;
+    }
+
+    .mobileBundleList {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        padding-top: 0.1rem;
+    }
+
+    .mobileBundleItem {
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+        padding: 0.65rem 0.7rem;
+        background: #fff;
+        border: 1px solid rgba(27, 54, 93, 0.06);
+        border-radius: 14px;
+    }
+
+    .mobileBundleCopy {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.6rem;
+    }
+
+    .mobileBundleName {
+        flex: 1;
+        font-size: 0.82rem;
+        line-height: 1.35;
+        color: var(--primary);
+        font-weight: 700;
+    }
+
+    .mobileBundlePrice {
+        font-size: 0.78rem;
+        color: var(--accent-dark);
+        font-weight: 700;
+        white-space: nowrap;
+    }
+
+    .mobileBundleActions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6rem;
+    }
+
+    .mobileSubQtyCtrl {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid rgba(197, 160, 101, 0.3);
+        border-radius: 999px;
+        background: #F9F5F0;
+    }
+
+    .mobileSubQtyCtrl button {
+        width: 2rem;
+        height: 2rem;
+        border: none;
+        background: transparent;
+        color: var(--primary);
+        font-size: 1rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .mobileSubQtyCtrl span {
+        min-width: 1.75rem;
+        text-align: center;
+        font-family: 'Inter', sans-serif;
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: var(--primary);
+    }
+
+    .mobileChildRemove {
+        min-height: 2rem;
+        padding: 0.35rem 0.7rem;
+        border: none;
+        border-radius: 999px;
+        background: rgba(166, 75, 42, 0.1);
+        color: var(--brick);
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+
+    .mobileBundleFooter {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6rem;
+        flex-wrap: wrap;
+    }
+
+    .mobileBundleStatus,
+    .mobileBundleStatusMuted {
+        flex: 1 1 12rem;
+        font-size: 0.74rem;
+        line-height: 1.4;
+    }
+
+    .mobileBundleStatus {
+        color: #2E7D32;
+        font-weight: 700;
+    }
+
+    .mobileBundleStatusMuted {
+        color: #64748b;
+    }
+
+    .mobileRestoreBtn {
+        min-height: 2.15rem;
+        padding: 0.45rem 0.8rem;
+        border: none;
+        border-radius: 999px;
+        background: var(--primary);
+        color: #fff;
+        font-size: 0.75rem;
+        font-weight: 700;
+        box-shadow: 0 10px 18px rgba(27, 54, 93, 0.16);
+    }
+
+    .addMoreBtn {
+        margin-top: 0.2rem;
+        margin-bottom: 1rem;
+        padding: 0.85rem 1rem;
+        border-radius: 16px;
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+    }
+
+    .summaryBody {
+        margin-top: 0;
+        padding-top: 0.15rem;
+    }
+
+    .summaryRow {
+        align-items: flex-start;
+        gap: 0.75rem;
+        padding: 0.65rem 0;
+        font-size: 0.84rem;
+    }
+
+    .summaryRow span:last-child {
+        text-align: right;
+    }
+
+    .totalRow {
+        margin-top: 0.35rem;
+        padding-top: 0.85rem;
+    }
+
+    .totalLabel {
+        font-size: 0.86rem;
+        letter-spacing: 0.08em;
+    }
+
+    .totalPrice {
+        font-size: 1.45rem;
+    }
+
+    .trustBadges {
+        display: none;
+    }
+
+    .mobileCheckoutBar {
+        display: block;
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 980;
+        padding: 0 0 calc(env(safe-area-inset-bottom, 0px) + 0.7rem);
+        background: linear-gradient(180deg, rgba(253, 251, 247, 0) 0%, rgba(253, 251, 247, 0.96) 14%, rgba(253, 251, 247, 1) 100%);
+        pointer-events: none;
+    }
+
+    .mobileCheckoutBar .container {
+        pointer-events: none;
+    }
+
+    .mobileCheckoutInner {
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.75rem 0.8rem;
+        border-top: 1px solid rgba(197, 160, 101, 0.18);
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 -18px 38px rgba(27, 54, 93, 0.14);
+        backdrop-filter: blur(14px);
+        border-radius: 22px 22px 0 0;
+    }
+
+    .mobileCheckoutCopy {
+        min-width: 0;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 0.08rem;
+    }
+
+    .mobileCheckoutLabel {
+        font-size: 0.66rem;
+        font-family: 'Inter', sans-serif;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 700;
+        color: #94A3B8;
+    }
+
+    .mobileCheckoutPrice {
+        font-size: 1.12rem;
+        font-family: 'Playfair Display', serif;
+        line-height: 1.1;
+        color: var(--primary);
+    }
+
+    .mobileCheckoutSubtext {
+        font-size: 0.76rem;
+        color: #64748b;
+        line-height: 1.3;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .mobileCheckoutButton {
+        flex-shrink: 0;
+        min-width: 8.4rem;
+        min-height: 3.2rem;
+        padding: 0.7rem 1rem;
+        border: none;
+        border-radius: 16px;
+        background: linear-gradient(135deg, #1B365D 0%, #254573 100%);
+        color: #fff;
+        font-size: 0.82rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        box-shadow: 0 14px 24px rgba(27, 54, 93, 0.24);
+    }
+
+    .mobileCheckoutButton:disabled {
+        opacity: 0.65;
+    }
+}
+
+@media (max-width: 390px) {
+    .mobileItemImage {
+        width: 70px;
+        height: 70px;
+    }
+
+    .mobileItemBody {
+        padding-right: 1.85rem;
+    }
+
+    .mobileItemFooter {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .mobilePriceGroup {
+        width: 100%;
+    }
+
+    .mobileQuantityCtrl {
+        align-self: flex-start;
+    }
+
+    .mobileCheckoutInner {
+        gap: 0.6rem;
+        padding: 0.7rem 0.65rem;
+    }
+
+    .mobileCheckoutButton {
+        min-width: 7.4rem;
+        padding: 0.7rem 0.85rem;
+        font-size: 0.78rem;
+    }
 }

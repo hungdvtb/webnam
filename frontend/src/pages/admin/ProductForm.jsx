@@ -387,6 +387,307 @@ const Field = ({ label, children, className = "", labelClassName = "" }) => (
     </div>
 );
 
+const OverflowPreviewInput = ({
+    value,
+    name,
+    onChange,
+    type = 'text',
+    tooltipLabel,
+    editor = 'input',
+    rows = 3,
+    className = "",
+    wrapperClassName = "",
+    mirrorClassName = "",
+    popoverInputClassName = "",
+    onClick,
+    onBlur,
+    onFocus,
+    ...props
+}) => {
+    const wrapperRef = useRef(null);
+    const mainInputRef = useRef(null);
+    const measureRef = useRef(null);
+    const popoverInputRef = useRef(null);
+    const [isOverflowing, setIsOverflowing] = useState(false);
+    const [isHovered, setIsHovered] = useState(false);
+    const [isPinnedOpen, setIsPinnedOpen] = useState(false);
+    const [draftValue, setDraftValue] = useState(String(value ?? ''));
+    const valueSnapshotRef = useRef(String(value ?? ''));
+
+    const normalizedValue = String(value ?? '');
+    const hasValue = normalizedValue.trim().length > 0;
+
+    const syncOverflowState = useCallback(() => {
+        const wrapperWidth = wrapperRef.current?.clientWidth || 0;
+        const measureWidth = measureRef.current?.scrollWidth || 0;
+        const hasOverflow = hasValue && wrapperWidth > 0 && measureWidth > (wrapperWidth - 6);
+        setIsOverflowing(hasOverflow);
+    }, [hasValue, normalizedValue]);
+
+    useEffect(() => {
+        syncOverflowState();
+    }, [syncOverflowState]);
+
+    useEffect(() => {
+        setDraftValue(normalizedValue);
+        if (!isPinnedOpen) {
+            valueSnapshotRef.current = normalizedValue;
+        }
+    }, [isPinnedOpen, normalizedValue]);
+
+    useEffect(() => {
+        if (!wrapperRef.current || typeof ResizeObserver === 'undefined') {
+            return undefined;
+        }
+
+        const observer = new ResizeObserver(() => {
+            syncOverflowState();
+        });
+
+        observer.observe(wrapperRef.current);
+
+        return () => {
+            observer.disconnect();
+        };
+    }, [syncOverflowState]);
+
+    const emitChange = useCallback((nextValue) => {
+        if (typeof onChange !== 'function') {
+            return;
+        }
+
+        onChange({
+            target: {
+                name,
+                value: nextValue,
+                type,
+                checked: false,
+            },
+        });
+    }, [name, onChange, type]);
+
+    const closePopover = useCallback(({ restore = false, focusMain = false } = {}) => {
+        if (restore) {
+            const previousValue = valueSnapshotRef.current;
+            setDraftValue(previousValue);
+            emitChange(previousValue);
+        }
+
+        setIsPinnedOpen(false);
+        setIsHovered(false);
+
+        if (focusMain) {
+            requestAnimationFrame(() => {
+                if (!mainInputRef.current) {
+                    return;
+                }
+
+                mainInputRef.current.focus({ preventScroll: true });
+                if (typeof mainInputRef.current.select === 'function') {
+                    mainInputRef.current.select();
+                }
+            });
+        }
+    }, [emitChange]);
+
+    const openPinnedPopover = useCallback((focusEditor = false) => {
+        if (!isOverflowing && !isPinnedOpen) {
+            return;
+        }
+
+        valueSnapshotRef.current = normalizedValue;
+        setIsPinnedOpen(true);
+
+        if (focusEditor) {
+            requestAnimationFrame(() => {
+                popoverInputRef.current?.focus({ preventScroll: true });
+                if (typeof popoverInputRef.current?.select === 'function' && editor !== 'textarea') {
+                    popoverInputRef.current.select();
+                }
+            });
+        }
+    }, [editor, isOverflowing, isPinnedOpen, normalizedValue]);
+
+    const handleBaseInputChange = useCallback((event) => {
+        setDraftValue(event.target.value);
+        onChange?.(event);
+    }, [onChange]);
+
+    const handlePopoverInputChange = useCallback((event) => {
+        const nextValue = event.target.value;
+        setDraftValue(nextValue);
+        emitChange(nextValue);
+    }, [emitChange]);
+
+    const handlePopoverKeyDown = useCallback((event) => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closePopover({ restore: true, focusMain: true });
+            return;
+        }
+
+        if (editor === 'textarea') {
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                event.preventDefault();
+                closePopover({ focusMain: true });
+            }
+            return;
+        }
+
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            closePopover({ focusMain: true });
+        }
+    }, [closePopover, editor]);
+
+    useEffect(() => {
+        if (!isPinnedOpen) {
+            return undefined;
+        }
+
+        const handlePointerDownOutside = (event) => {
+            if (!wrapperRef.current?.contains(event.target)) {
+                setIsPinnedOpen(false);
+                setIsHovered(false);
+            }
+        };
+
+        document.addEventListener('mousedown', handlePointerDownOutside);
+        document.addEventListener('touchstart', handlePointerDownOutside);
+
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDownOutside);
+            document.removeEventListener('touchstart', handlePointerDownOutside);
+        };
+    }, [isPinnedOpen]);
+
+    const isPopoverVisible = (isOverflowing || isPinnedOpen) && (isHovered || isPinnedOpen);
+    const isTextareaEditor = editor === 'textarea';
+
+    return (
+        <div
+            ref={wrapperRef}
+            className={`relative flex-1 min-w-0 ${wrapperClassName}`}
+            onMouseEnter={() => {
+                if (isOverflowing) {
+                    setIsHovered(true);
+                }
+            }}
+            onMouseLeave={() => {
+                setIsHovered(false);
+            }}
+        >
+            <input
+                {...props}
+                ref={mainInputRef}
+                name={name}
+                type={type}
+                value={value}
+                onChange={handleBaseInputChange}
+                onClick={(event) => {
+                    onClick?.(event);
+                    if (isOverflowing) {
+                        openPinnedPopover(true);
+                    }
+                }}
+                onBlur={onBlur}
+                onFocus={onFocus}
+                title={isOverflowing ? normalizedValue : undefined}
+                className={className}
+            />
+
+            <span
+                ref={measureRef}
+                aria-hidden="true"
+                className={`pointer-events-none invisible absolute left-0 top-0 whitespace-pre ${mirrorClassName}`}
+            >
+                {normalizedValue}
+            </span>
+
+            <AnimatePresence>
+                {isPopoverVisible ? (
+                    <motion.div
+                        initial={{ opacity: 0, y: 8, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 6, scale: 0.98 }}
+                        transition={{ duration: 0.16, ease: 'easeOut' }}
+                        className="absolute left-0 top-full z-[80] mt-2 w-[min(26rem,calc(100vw-3rem))] overflow-hidden rounded-xl border border-gold/15 bg-white shadow-[0_18px_42px_rgba(26,48,84,0.18)]"
+                        onMouseDown={() => {
+                            if (!isPinnedOpen) {
+                                valueSnapshotRef.current = normalizedValue;
+                                setIsPinnedOpen(true);
+                            }
+                        }}
+                    >
+                        <div className="flex items-start justify-between gap-3 border-b border-stone/10 px-3 py-2.5">
+                            <div className="min-w-0">
+                                {tooltipLabel ? (
+                                    <p className="text-[10px] font-black uppercase tracking-[0.18em] text-gold/85">
+                                        {tooltipLabel}
+                                    </p>
+                                ) : null}
+                                <p className="mt-1 text-[11px] font-medium text-stone/45">
+                                    Xem đầy đủ và sửa nhanh ngay tại đây.
+                                </p>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={() => closePopover()}
+                                className="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-stone/5 text-stone/45 transition-colors hover:bg-stone/10 hover:text-primary"
+                                title="Đóng popup"
+                            >
+                                <span className="material-symbols-outlined text-[16px]">close</span>
+                            </button>
+                        </div>
+
+                        <div className="px-3 py-3">
+                            {isTextareaEditor ? (
+                                <textarea
+                                    ref={popoverInputRef}
+                                    value={draftValue}
+                                    onFocus={() => setIsPinnedOpen(true)}
+                                    onChange={handlePopoverInputChange}
+                                    onKeyDown={handlePopoverKeyDown}
+                                    placeholder={props.placeholder}
+                                    rows={rows}
+                                    className={`w-full resize-none rounded-lg border border-gold/20 bg-[#fcfcfa] px-3 py-2.5 text-[14px] font-bold text-primary shadow-inner outline-none transition-colors focus:border-primary/30 ${popoverInputClassName}`}
+                                />
+                            ) : (
+                                <input
+                                    ref={popoverInputRef}
+                                    type={type}
+                                    value={draftValue}
+                                    onFocus={() => setIsPinnedOpen(true)}
+                                    onChange={handlePopoverInputChange}
+                                    onKeyDown={handlePopoverKeyDown}
+                                    placeholder={props.placeholder}
+                                    className={`w-full rounded-lg border border-gold/20 bg-[#fcfcfa] px-3 py-2.5 text-[14px] font-bold shadow-inner outline-none transition-colors focus:border-primary/30 ${popoverInputClassName}`}
+                                />
+                            )}
+                        </div>
+
+                        <div className="flex items-center justify-between gap-3 border-t border-stone/10 px-3 py-2.5">
+                            <p className="text-[10px] font-semibold text-stone/45">
+                                {isTextareaEditor ? 'Đồng bộ ngay với ô chính. Ctrl+Enter để đóng.' : 'Đồng bộ ngay với ô chính. Enter để đóng.'}
+                            </p>
+
+                            <button
+                                type="button"
+                                onClick={() => closePopover({ focusMain: true })}
+                                className="inline-flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-white transition-colors hover:bg-umber"
+                            >
+                                <span className="material-symbols-outlined text-[14px]">check</span>
+                                Cập nhật
+                            </button>
+                        </div>
+                    </motion.div>
+                ) : null}
+            </AnimatePresence>
+        </div>
+    );
+};
+
 const SectionTitle = ({ icon, title }) => (
     <div className="flex items-center gap-2.5 mb-6 border-b border-stone/10 pb-2">
         <span className="material-symbols-outlined text-primary/40 p-1.5 bg-stone/5 rounded-full text-base">{icon}</span>
@@ -2430,12 +2731,19 @@ const ProductForm = () => {
     ), [formData.slug, showSlugModal, tempSlug]);
 
     const baseProductLink = useMemo(() => {
-        if (!previewSlug) {
+        const domain = String(selectedDomain?.domain || '').trim().replace(/^https?:\/\//, '');
+        if (!previewSlug || !domain) {
             return '';
         }
 
-        return `https://${selectedDomain.domain}/product/${previewSlug}`;
+        try {
+            return new URL(`/product/${encodeURIComponent(previewSlug)}`, `https://${domain}`).toString();
+        } catch (error) {
+            return '';
+        }
     }, [previewSlug, selectedDomain]);
+
+    const hasValidProductLink = Boolean(baseProductLink);
 
     const buildTrackingLink = useCallback((url, source) => {
         if (!url) {
@@ -2474,7 +2782,7 @@ const ProductForm = () => {
 
     const copyTextToClipboard = useCallback((value, successMessage) => {
         if (!value) {
-            showToast({ message: 'Sản phẩm chưa có đường dẫn link (slug).', type: 'warning' });
+            showToast({ message: 'Sản phẩm chưa có link hợp lệ để sao chép.', type: 'warning' });
             return;
         }
 
@@ -2505,40 +2813,16 @@ const ProductForm = () => {
 
     const handleCopyLink = () => {
         copyTextToClipboard(baseProductLink, 'Đã sao chép link hiển thị của sản phẩm!');
-        return;
-        const slug = formData.slug;
-        if (!slug) {
-            showToast({ message: 'Sản phẩm chưa có đường dẫn link (slug).', type: 'warning' });
+    };
+
+    const handleOpenProductPage = useCallback(() => {
+        if (!hasValidProductLink) {
+            showToast({ message: 'Sản phẩm chưa có link hợp lệ để mở.', type: 'warning' });
             return;
         }
-        
-        const selectedDomain = domains.find(d => String(d.id) === String(formData.site_domain_id)) || domains.find(d => d.is_default) || { domain: 'di-san.com' };
-        const fullLink = `https://${selectedDomain.domain}/product/${slug}`;
 
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(fullLink)
-                .then(() => {
-                    showToast({ message: 'Đã sao chép link sản phẩm thành công!', type: 'success' });
-                })
-                .catch(err => {
-                    console.error('Copy failed:', err);
-                    showToast({ message: 'Lỗi khi sao chép link.', type: 'error' });
-                });
-        } else {
-            // Fallback for older browsers
-            const textArea = document.createElement("textarea");
-            textArea.value = fullLink;
-            document.body.appendChild(textArea);
-            textArea.select();
-            try {
-                document.execCommand('copy');
-                showToast({ message: 'Đã sao chép link sản phẩm!', type: 'success' });
-            } catch (err) {
-                showToast({ message: 'Trình duyệt không hỗ trợ sao chép tự động.', type: 'error' });
-            }
-            document.body.removeChild(textArea);
-        }
-    };
+        window.open(baseProductLink, '_blank', 'noopener,noreferrer');
+    }, [baseProductLink, hasValidProductLink, showToast]);
 
     return (
         <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full overflow-hidden">
@@ -2594,25 +2878,39 @@ const ProductForm = () => {
                                         className="flex items-center gap-1.5 px-2 py-0.5 bg-gold/10 text-gold rounded-full hover:bg-gold/20 transition-all border border-gold/10 group/slug"
                                         title="Quản lý đường dẫn sản phẩm"
                                     >
-                                        <span className="material-symbols-outlined text-[14px] group-hover/slug:rotate-12 transition-transform">link</span>
-                                        <span className="text-[9px] font-black uppercase tracking-wider">{formData.slug || (formData.name ? 'Tự động tạo...' : 'Thiết lập link')}</span>
-                                    </button>
-                                    {formData.slug && (
-                                        <button 
+                                            <span className="material-symbols-outlined text-[14px] group-hover/slug:rotate-12 transition-transform">link</span>
+                                            <span className="text-[9px] font-black uppercase tracking-wider">{formData.slug || (formData.name ? 'Tự động tạo...' : 'Thiết lập link')}</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleOpenProductPage();
+                                            }}
+                                            disabled={!hasValidProductLink}
+                                            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 transition-all ${hasValidProductLink ? 'border-primary/10 bg-primary/5 text-primary hover:bg-primary hover:text-white' : 'cursor-not-allowed border-stone/10 bg-stone/5 text-stone/35'}`}
+                                            title={hasValidProductLink ? 'Mở trang sản phẩm ở website' : 'Sản phẩm chưa có link hợp lệ để mở'}
+                                        >
+                                            <span className="material-symbols-outlined text-[12px]">open_in_new</span>
+                                            <span className="text-[9px] font-black uppercase tracking-wider">
+                                                {hasValidProductLink ? 'Mở trang' : 'Chưa có link'}
+                                            </span>
+                                        </button>
+                                        <button
                                             type="button"
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 handleCopyLink();
                                             }}
-                                            className="size-5 flex items-center justify-center bg-stone/5 text-stone/40 hover:bg-gold hover:text-white rounded-full transition-all group/copy"
-                                            title="Sao chép nhanh link sản phẩm"
+                                            disabled={!hasValidProductLink}
+                                            className={`size-5 flex items-center justify-center rounded-full transition-all group/copy ${hasValidProductLink ? 'bg-stone/5 text-stone/40 hover:bg-gold hover:text-white' : 'cursor-not-allowed bg-stone/5 text-stone/20'}`}
+                                            title={hasValidProductLink ? 'Sao chép nhanh link sản phẩm' : 'Sản phẩm chưa có link để sao chép'}
                                         >
                                             <span className="material-symbols-outlined text-[12px] group-hover/copy:scale-110 transition-transform">content_copy</span>
                                         </button>
-                                    )}
+                                    </div>
                                 </div>
                             </div>
-                        </div>
                     </div>
 
                     <div className="flex gap-3 w-full md:w-auto">
@@ -2649,12 +2947,17 @@ const ProductForm = () => {
                                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
                                     <div>
                                         <Field label={<>Tên sản phẩm <span className="text-brick text-[14px] ml-1">*</span></>}>
-                                            <input
+                                            <OverflowPreviewInput
                                                 name="name"
                                                 value={formData.name}
                                                 onChange={handleChange}
                                                 required
+                                                editor="textarea"
+                                                rows={3}
                                                 className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[16px] placeholder:text-stone/20"
+                                                mirrorClassName="text-[16px] font-bold text-primary"
+                                                popoverInputClassName="min-h-[92px] leading-6"
+                                                tooltipLabel="Tên sản phẩm"
                                                 placeholder="Nhập tên nghệ thuật của tác phẩm..."
                                             />
                                         </Field>
@@ -2662,13 +2965,16 @@ const ProductForm = () => {
 
                                     <div>
                                         <Field label={<>Mã sản phẩm (SKU) <span className="text-brick text-[14px] ml-1">*</span></>} className={`group/sku ${parentSkuError ? 'border-brick/50 bg-brick/5' : 'border-gold/20'}`}>
-                                            <input
+                                            <OverflowPreviewInput
                                                 name="sku"
                                                 value={formData.sku}
                                                 onChange={handleChange}
                                                 required
                                                 placeholder="GỐM-VH-001"
                                                 className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-gold font-bold tracking-widest text-[14px]"
+                                                mirrorClassName="text-[14px] font-bold tracking-widest text-gold"
+                                                popoverInputClassName="font-mono tracking-[0.18em] text-gold"
+                                                tooltipLabel="Mã sản phẩm"
                                             />
                                             <button
                                                 type="button"

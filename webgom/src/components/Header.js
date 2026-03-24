@@ -197,6 +197,7 @@ export default function Header({
   const [currentMobileCategorySlug, setCurrentMobileCategorySlug] = useState("");
   const [currentMobileSearchParamsString, setCurrentMobileSearchParamsString] = useState("");
   const [mobileOrderNotice, setMobileOrderNotice] = useState("");
+  const [mobileCartFormReady, setMobileCartFormReady] = useState(false);
   const { cartCount } = useCart();
   const router = useRouter();
   const pathname = usePathname();
@@ -298,6 +299,28 @@ export default function Header({
     setIsMobileProductsMenuOpen(false);
     setIsSearchHistoryOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    if (!isCartCheckoutView) {
+      setMobileCartFormReady(false);
+    }
+  }, [isCartCheckoutView]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const handleMobileCartStatus = (event) => {
+      setMobileCartFormReady(Boolean(event?.detail?.isCheckoutFormValid));
+    };
+
+    window.addEventListener("webgom:mobile-cart-status", handleMobileCartStatus);
+
+    return () => {
+      window.removeEventListener("webgom:mobile-cart-status", handleMobileCartStatus);
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -751,15 +774,26 @@ export default function Header({
               {mobileMenuItems.map((item) => {
                 const isProductsTrigger = item.id === "header-default-products" || item.shortLabel === "Sản phẩm";
                 const isOrderItem = item.id === MOBILE_ORDER_ITEM.id;
-                const isOrderConfirmMode = isOrderItem && isCartCheckoutView;
+                const isOrderEntryMode = isOrderItem && isCartCheckoutView && !mobileCartFormReady;
+                const isOrderConfirmMode = isOrderItem && isCartCheckoutView && mobileCartFormReady;
                 const isActive = isProductsTrigger
                   ? isMobileProductsMenuOpen || isMobileMenuItemActive(pathname, item)
                   : isMobileMenuItemActive(pathname, item);
                 const className = `mobile-bottom-item ${isActive ? "mobile-bottom-item-active" : ""} ${
                   isOrderItem ? "mobile-bottom-item-order" : ""
-                } ${isOrderConfirmMode ? "mobile-bottom-item-order-confirm" : ""}`;
-                const itemTitle = isOrderConfirmMode ? "Xác nhận đơn hàng" : item.title;
-                const itemShortLabel = isOrderConfirmMode ? "Xác nhận đơn hàng" : item.shortLabel;
+                } ${isOrderEntryMode ? "mobile-bottom-item-order-entry" : ""} ${
+                  isOrderConfirmMode ? "mobile-bottom-item-order-confirm" : ""
+                }`;
+                const itemTitle = isOrderEntryMode
+                  ? "Nhập thông tin nhận hàng"
+                  : isOrderConfirmMode
+                    ? "Xác nhận đơn hàng"
+                    : item.title;
+                const itemLabelLines = isOrderEntryMode
+                  ? ["Nhập thông tin", "nhận hàng"]
+                  : isOrderConfirmMode
+                    ? ["Xác nhận", "đơn hàng"]
+                    : [item.shortLabel];
 
                 const content = (
                   <span className="mobile-bottom-item__content">
@@ -776,8 +810,25 @@ export default function Header({
                         {item.icon}
                       </span>
                     </span>
-                    <span className="mobile-bottom-item__label-wrap">
-                      <span className="mobile-bottom-item__label">{itemShortLabel}</span>
+                    <span
+                      className={`mobile-bottom-item__label-wrap ${
+                        itemLabelLines.length > 1 ? "mobile-bottom-item__label-wrap-multiline" : ""
+                      }`}
+                    >
+                      <span
+                        className={`mobile-bottom-item__label ${
+                          itemLabelLines.length > 1 ? "mobile-bottom-item__label-multiline" : ""
+                        }`}
+                      >
+                        {itemLabelLines.map((line, index) => (
+                          <span
+                            key={`${item.id}-label-${index}`}
+                            className="mobile-bottom-item__label-line"
+                          >
+                            {line}
+                          </span>
+                        ))}
+                      </span>
                     </span>
                   </span>
                 );
@@ -1698,18 +1749,81 @@ export default function Header({
               inset 0 0 0 1px rgba(185, 136, 60, 0.14);
           }
 
+          .mobile-bottom-item-order-entry .mobile-bottom-item__content,
           .mobile-bottom-item-order-confirm .mobile-bottom-item__content {
             min-height: 68px;
             padding-top: 6px;
             padding-bottom: 5px;
           }
 
+          .mobile-bottom-item-order-entry .mobile-bottom-item__content {
+            border-color: rgba(148, 163, 184, 0.34);
+            background: linear-gradient(180deg, rgba(248, 250, 252, 0.98) 0%, rgba(255, 255, 255, 1) 100%);
+            box-shadow:
+              0 10px 22px rgba(148, 163, 184, 0.12),
+              inset 0 0 0 1px rgba(226, 232, 240, 0.92);
+          }
+
+          .mobile-bottom-item-order-entry .mobile-bottom-item__icon-wrap {
+            background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
+            color: #334155;
+            box-shadow: 0 8px 16px rgba(148, 163, 184, 0.18);
+          }
+
+          .mobile-bottom-item-order-entry .mobile-bottom-item__label {
+            color: #475569;
+          }
+
+          .mobile-bottom-item-order-entry:hover .mobile-bottom-item__content,
+          .mobile-bottom-item-order-entry:focus-visible .mobile-bottom-item__content,
+          .mobile-bottom-item-order-entry.mobile-bottom-item-active .mobile-bottom-item__content {
+            border-color: rgba(100, 116, 139, 0.4);
+            background: linear-gradient(180deg, rgba(241, 245, 249, 0.98) 0%, rgba(255, 255, 255, 1) 100%);
+            box-shadow:
+              0 14px 28px rgba(148, 163, 184, 0.16),
+              inset 0 0 0 1px rgba(203, 213, 225, 0.98);
+          }
+
+          .mobile-bottom-item-order-confirm .mobile-bottom-item__content {
+            color: #fffaf0;
+            border-color: rgba(21, 41, 76, 0.44);
+            background: linear-gradient(180deg, #2a487f 0%, #1a2c4e 100%);
+            box-shadow:
+              0 14px 28px rgba(26, 44, 78, 0.24),
+              inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+          }
+
+          .mobile-bottom-item-order-confirm .mobile-bottom-item__icon-wrap {
+            background: linear-gradient(135deg, #f7d48d 0%, #d3a24f 100%);
+            color: #1a2c4e;
+            box-shadow: 0 8px 18px rgba(211, 162, 79, 0.28);
+          }
+
+          .mobile-bottom-item-order-confirm .mobile-bottom-item__label {
+            color: #fffaf0;
+          }
+
+          .mobile-bottom-item-order-confirm:hover .mobile-bottom-item__content,
+          .mobile-bottom-item-order-confirm:focus-visible .mobile-bottom-item__content,
+          .mobile-bottom-item-order-confirm.mobile-bottom-item-active .mobile-bottom-item__content {
+            border-color: rgba(26, 44, 78, 0.52);
+            background: linear-gradient(180deg, #31518e 0%, #1d3258 100%);
+            box-shadow:
+              0 16px 30px rgba(26, 44, 78, 0.28),
+              inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+          }
+
+          .mobile-bottom-item-order-entry .mobile-bottom-item__label-wrap,
           .mobile-bottom-item-order-confirm .mobile-bottom-item__label-wrap {
             min-height: 24px;
             flex-basis: 24px;
           }
 
-          .mobile-bottom-item-order-confirm .mobile-bottom-item__label {
+          .mobile-bottom-item__label-wrap-multiline {
+            align-items: center;
+          }
+
+          .mobile-bottom-item__label-multiline {
             font-size: 7.2px;
             line-height: 1.08;
             white-space: normal;
@@ -1746,6 +1860,24 @@ export default function Header({
             font-variation-settings: "FILL" 1, "wght" 500, "GRAD" 0, "opsz" 24;
           }
 
+          .mobile-bottom-item-order-entry .mobile-bottom-item__icon-wrap.mobile-bottom-item__icon-wrap-active {
+            background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
+            color: #334155;
+          }
+
+          .mobile-bottom-item-order-confirm .mobile-bottom-item__icon-wrap.mobile-bottom-item__icon-wrap-active {
+            background: linear-gradient(135deg, #f7d48d 0%, #d3a24f 100%);
+            color: #1a2c4e;
+          }
+
+          .mobile-bottom-item-order-entry .mobile-bottom-item__icon.mobile-bottom-item__icon-active {
+            color: #334155;
+          }
+
+          .mobile-bottom-item-order-confirm .mobile-bottom-item__icon.mobile-bottom-item__icon-active {
+            color: #1a2c4e;
+          }
+
           .mobile-bottom-item__label-wrap {
             box-sizing: border-box;
             display: flex;
@@ -1754,11 +1886,17 @@ export default function Header({
             width: 100%;
             min-height: 18px;
             flex: 0 0 18px;
+            transition: min-height 180ms ease;
           }
 
           .mobile-bottom-item__label {
-            display: block;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 1px;
             max-width: 100%;
+            width: 100%;
             font-size: 8px;
             font-weight: 700;
             line-height: 1.15;
@@ -1766,6 +1904,11 @@ export default function Header({
             white-space: nowrap;
             margin: 0;
             padding: 0;
+          }
+
+          .mobile-bottom-item__label-line {
+            display: block;
+            max-width: 100%;
           }
 
           :global(body) {
@@ -1854,7 +1997,7 @@ export default function Header({
             font-size: 7.1px;
           }
 
-          .mobile-bottom-item-order-confirm .mobile-bottom-item__label {
+          .mobile-bottom-item__label-multiline {
             font-size: 6.45px;
           }
         }

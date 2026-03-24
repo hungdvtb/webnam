@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 
 export default function SearchableSelect({
@@ -19,6 +19,7 @@ export default function SearchableSelect({
   const [mounted, setMounted] = useState(false);
   const wrapperRef = useRef(null);
   const dropdownRef = useRef(null);
+  const searchInputRef = useRef(null);
   const savedScrollTopRef = useRef(0);
   const restoreTimeoutRef = useRef(null);
 
@@ -79,6 +80,14 @@ export default function SearchableSelect({
     }
   }, []);
 
+  useLayoutEffect(() => {
+    if (!isOpen || typeof window === 'undefined') {
+      return;
+    }
+
+    updatePosition();
+  }, [isOpen, updatePosition]);
+
   useEffect(() => {
     if (isOpen) {
       updatePosition();
@@ -93,6 +102,20 @@ export default function SearchableSelect({
       window.removeEventListener('scroll', updatePosition, true);
     };
   }, [isOpen, updatePosition]);
+
+  useEffect(() => {
+    if (!isOpen || !searchInputRef.current || dropdownPos.width <= 0 || typeof window === 'undefined') {
+      return;
+    }
+
+    const rafId = window.requestAnimationFrame(() => {
+      if (searchInputRef.current && typeof searchInputRef.current.focus === 'function') {
+        searchInputRef.current.focus({ preventScroll: true });
+      }
+    });
+
+    return () => window.cancelAnimationFrame(rafId);
+  }, [isOpen, dropdownPos.top, dropdownPos.left, dropdownPos.width]);
 
   useEffect(() => {
     function handleClickOutside(event) {
@@ -178,8 +201,8 @@ export default function SearchableSelect({
         <div style={{ display: 'flex', alignItems: 'center', backgroundColor: '#f3f4f6', borderRadius: '4px', padding: '8px 10px' }}>
           <span className="material-symbols-outlined" style={{ fontSize: '18px', color: '#9ca3af', marginRight: '6px' }}>search</span>
           <input 
+            ref={searchInputRef}
             type="text" 
-            autoFocus
             placeholder="Tìm kiếm nhanh..." 
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -240,6 +263,7 @@ export default function SearchableSelect({
             e.preventDefault();
             if (!isOpen) {
               rememberScrollPosition();
+              updatePosition();
             }
             setIsOpen(!isOpen);
           }

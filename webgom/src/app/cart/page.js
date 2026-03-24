@@ -296,6 +296,8 @@ export default function CartPage() {
     };
   };
 
+  const isCheckoutFormReady = !isOrderSuccess && cartItems.length > 0 && validateCheckoutForm().isValid;
+
   const getCheckoutScrollOffset = () => {
     if (typeof window === 'undefined') {
       return 0;
@@ -577,6 +579,30 @@ export default function CartPage() {
       window.removeEventListener('webgom:mobile-cart-confirm-request', handleMobileCartConfirmRequest);
     };
   }, [cartItems, formData, isOrderSuccess, isSubmitting, useNewAddress, cartTotal, discount, totalAfterDiscount]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    window.dispatchEvent(
+      new CustomEvent('webgom:mobile-cart-status', {
+        detail: {
+          isCheckoutFormValid: isCheckoutFormReady,
+        },
+      })
+    );
+
+    return () => {
+      window.dispatchEvent(
+        new CustomEvent('webgom:mobile-cart-status', {
+          detail: {
+            isCheckoutFormValid: false,
+          },
+        })
+      );
+    };
+  }, [isCheckoutFormReady]);
 
   if (isOrderSuccess) {
     return (

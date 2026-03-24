@@ -17,6 +17,24 @@ import Breadcrumb from './common/Breadcrumb';
 
 const MOBILE_STICKY_CLUSTER_GAP = 8;
 
+const normalizeConfigMediaKey = (configName = '') =>
+  String(configName)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+const getConfigMediaFamilyKey = (configName = '') =>
+  String(configName)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\b\d+(?:[.,]\d+)?m\d*\b/g, ' ')
+    .replace(/\b\d+\b/g, ' ')
+    .replace(/[^a-z]+/g, ' ')
+    .trim();
+
 const getMobileStickyHeaderHeight = () => {
   if (typeof document === 'undefined') {
     return 0;
@@ -236,6 +254,7 @@ export default function BundleProductView({
   const [isMobileBundleViewport, setIsMobileBundleViewport] = useState(false);
   // Active tab in the detail section (separate from upper config selector)
   const [activeTab, setActiveTab] = useState(null);
+  const [isMobileHeroConfigMenuOpen, setIsMobileHeroConfigMenuOpen] = useState(false);
   const [isMobileConfigMenuOpen, setIsMobileConfigMenuOpen] = useState(false);
   const [isMobileStickyClusterActive, setIsMobileStickyClusterActive] = useState(false);
   const [mobileStickyClusterLayout, setMobileStickyClusterLayout] = useState({ top: 0, left: 0, width: 0, height: 0 });
@@ -320,13 +339,43 @@ export default function BundleProductView({
 
   useEffect(() => {
     if (!isMobileBundleViewport) {
+      setIsMobileHeroConfigMenuOpen(false);
       setIsMobileConfigMenuOpen(false);
     }
   }, [isMobileBundleViewport]);
 
   useEffect(() => {
+    setIsMobileHeroConfigMenuOpen(false);
     setIsMobileConfigMenuOpen(false);
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!isMobileHeroConfigMenuOpen || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const handlePointerDown = (event) => {
+      if (!event.target.closest('[data-bundle-top-config-selector="true"]')) {
+        setIsMobileHeroConfigMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setIsMobileHeroConfigMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMobileHeroConfigMenuOpen]);
 
   useEffect(() => {
     if (!isMobileConfigMenuOpen || typeof document === 'undefined') {
@@ -390,7 +439,7 @@ export default function BundleProductView({
   }, [bundleItems, configurations]);
 
   const activeConfigMedia = useMemo(() => {
-    const selectedConfig = activeConfig || activeTab || configurations[0];
+    const selectedConfig = activeTab || activeConfig || configurations[0];
 
     if (!selectedConfig) {
       return null;
@@ -401,42 +450,85 @@ export default function BundleProductView({
       ...(product.bundle_items || product.grouped_items || []),
     ];
 
-    const matchedConfigPost = sourceItems.find((item) => {
+    const configIndexes = new Map(
+      configurations.map((configName, configIndex) => [
+        normalizeConfigMediaKey(configName),
+        configIndex,
+      ])
+    );
+
+    const mediaEntries = sourceItems.reduce((entries, item) => {
       const itemConfig = item.option_title || item.pivot?.option_title;
-
-      if (itemConfig !== selectedConfig) {
-        return false;
-      }
-
-      return Boolean(
+      const slugOrId =
         item.option_post_slug ||
         item.pivot?.option_post_slug ||
         item.option_post_id ||
-        item.pivot?.option_post_id
-      );
-    });
+        item.pivot?.option_post_id;
 
-    if (!matchedConfigPost) {
+      if (!itemConfig || !slugOrId) {
+        return entries;
+      }
+
+      const configKey = normalizeConfigMediaKey(itemConfig);
+
+      if (!configKey || entries.some((entry) => entry.configKey === configKey)) {
+        return entries;
+      }
+
+      entries.push({
+        configName: itemConfig,
+        configKey,
+        familyKey: getConfigMediaFamilyKey(itemConfig),
+        title:
+          item.option_post_title ||
+          item.pivot?.option_post_title ||
+          itemConfig,
+        href: `/blog/${encodeURIComponent(String(slugOrId))}`,
+      });
+
+      return entries;
+    }, []);
+
+    if (mediaEntries.length === 0) {
       return null;
     }
 
-    const slugOrId =
-      matchedConfigPost.option_post_slug ||
-      matchedConfigPost.pivot?.option_post_slug ||
-      matchedConfigPost.option_post_id ||
-      matchedConfigPost.pivot?.option_post_id;
+    const selectedConfigKey = normalizeConfigMediaKey(selectedConfig);
+    const selectedFamilyKey = getConfigMediaFamilyKey(selectedConfig);
+    const selectedConfigIndex = configIndexes.get(selectedConfigKey) ?? Number.MAX_SAFE_INTEGER;
 
-    if (!slugOrId) {
-      return null;
+    let matchedConfigPost =
+      mediaEntries.find((entry) => entry.configKey === selectedConfigKey) || null;
+
+    if (!matchedConfigPost && selectedFamilyKey) {
+      const familyMatches = mediaEntries.filter((entry) => entry.familyKey === selectedFamilyKey);
+
+      if (familyMatches.length > 0) {
+        matchedConfigPost = familyMatches.reduce((closestEntry, currentEntry) => {
+          if (!closestEntry) {
+            return currentEntry;
+          }
+
+          const currentDistance = Math.abs(
+            (configIndexes.get(currentEntry.configKey) ?? Number.MAX_SAFE_INTEGER) - selectedConfigIndex
+          );
+          const closestDistance = Math.abs(
+            (configIndexes.get(closestEntry.configKey) ?? Number.MAX_SAFE_INTEGER) - selectedConfigIndex
+          );
+
+          return currentDistance < closestDistance ? currentEntry : closestEntry;
+        }, null);
+      }
+    }
+
+    if (!matchedConfigPost) {
+      matchedConfigPost = mediaEntries[0];
     }
 
     return {
       configName: selectedConfig,
-      title:
-        matchedConfigPost.option_post_title ||
-        matchedConfigPost.pivot?.option_post_title ||
-        selectedConfig,
-      href: `/blog/${encodeURIComponent(String(slugOrId))}`,
+      title: matchedConfigPost.title || selectedConfig,
+      href: matchedConfigPost.href,
     };
   }, [activeConfig, activeTab, bundleItems, configurations, product.bundle_items, product.grouped_items]);
 
@@ -798,28 +890,30 @@ export default function BundleProductView({
 
         {tabItems.length > 0 ? (
           <div className={builderStyles.mobileConfigSummaryRow}>
-            <div
-              className={`${builderStyles.mobileConfigOfferChip} ${
-                isFullCombo
-                  ? builderStyles.mobileConfigOfferChipActive
-                  : builderStyles.mobileConfigOfferChipHint
-              }`}
-            >
-              <span className="material-symbols-outlined">
-                {isFullCombo ? 'local_offer' : 'info'}
-              </span>
-              <span>
-                {isFullCombo
-                  ? `Trọn bộ giảm ${(DISCOUNT_RATE * 100).toFixed(0)}%`
-                  : `Đủ ${tabItems.length} món giảm ${(DISCOUNT_RATE * 100).toFixed(0)}%`}
-              </span>
-            </div>
-
             <div className={builderStyles.mobileConfigCheckoutRow}>
               <div className={builderStyles.mobileConfigCheckoutBox}>
-                <span className={builderStyles.mobileConfigCheckoutLabel}>Thanh toán</span>
-                <span className={builderStyles.mobileConfigCheckoutValue}>
-                  {formatPrice(tabFinalPrice)}
+                <div className={builderStyles.mobileConfigCheckoutInfo}>
+                  <span className={builderStyles.mobileConfigCheckoutLabel}>Thanh toán</span>
+                  <span className={builderStyles.mobileConfigCheckoutValue}>
+                    {formatPrice(tabFinalPrice)}
+                  </span>
+                </div>
+
+                <span
+                  className={`${builderStyles.mobileConfigOfferChip} ${
+                    isFullCombo
+                      ? builderStyles.mobileConfigOfferChipActive
+                      : builderStyles.mobileConfigOfferChipHint
+                  }`}
+                >
+                  <span className="material-symbols-outlined">
+                    {isFullCombo ? 'local_offer' : 'info'}
+                  </span>
+                  <span>
+                    {isFullCombo
+                      ? `Giảm giá ${(DISCOUNT_RATE * 100).toFixed(0)}% khi mua trọn bộ`
+                      : `Đủ ${tabItems.length} món: -${(DISCOUNT_RATE * 100).toFixed(0)}%`}
+                  </span>
                 </span>
               </div>
 
@@ -836,6 +930,78 @@ export default function BundleProductView({
                 </button>
               ) : null}
             </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderMobileHeroConfigSelector = () => {
+    if (configurations.length === 0) {
+      return null;
+    }
+
+    const selectedConfig = activeBundlePopover || activeConfig || configurations[0];
+
+    return (
+      <div
+        className={styles.configOptionsMobileDropdown}
+        data-bundle-top-config-selector="true"
+      >
+        <button
+          type="button"
+          aria-haspopup="listbox"
+          aria-expanded={isMobileHeroConfigMenuOpen}
+          className={`${styles.configOptionsMobileTrigger} ${isMobileHeroConfigMenuOpen ? styles.configOptionsMobileTriggerOpen : ''}`}
+          onClick={() => setIsMobileHeroConfigMenuOpen((currentValue) => !currentValue)}
+        >
+          <span className={styles.configOptionsMobileTriggerCopy}>
+            <span className={styles.configOptionsMobileTriggerEyebrow}>{'Đang chọn'}</span>
+            <span className={styles.configOptionsMobileTriggerValue}>{selectedConfig}</span>
+          </span>
+
+          <span className={`material-symbols-outlined ${styles.configOptionsMobileTriggerArrow}`}>
+            {isMobileHeroConfigMenuOpen ? 'expand_less' : 'expand_more'}
+          </span>
+        </button>
+
+        {isMobileHeroConfigMenuOpen ? (
+          <div
+            className={styles.configOptionsMobileMenu}
+            role="listbox"
+            aria-label={product.bundle_title || 'Danh sách cấu hình bộ'}
+          >
+            {configurations.map((config) => {
+              const isActive = activeConfig === config || activeBundlePopover === config;
+
+              return (
+                <button
+                  key={config}
+                  type="button"
+                  role="option"
+                  aria-selected={isActive}
+                  className={`${styles.configOptionsMobileOption} ${isActive ? styles.configOptionsMobileOptionActive : ''}`}
+                  onClick={() => {
+                    handleOpenBundleActions(config);
+                    setIsMobileHeroConfigMenuOpen(false);
+                  }}
+                >
+                  <span className={styles.configOptionsMobileOptionCopy}>
+                    <span className={styles.configOptionsMobileOptionTitle}>{config}</span>
+                    {isActive ? (
+                      <span className={styles.configOptionsMobileOptionHint}>{'Đang chọn'}</span>
+                    ) : null}
+                  </span>
+
+                  <span className={styles.configOptionsMobileOptionMeta}>
+                    <span className={styles.configOptionsMobileOptionDot}></span>
+                    <span className={`material-symbols-outlined ${styles.configOptionsMobileOptionIcon}`}>
+                      {isActive ? 'check_circle' : 'chevron_right'}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
           </div>
         ) : null}
       </div>
@@ -1059,43 +1225,45 @@ export default function BundleProductView({
                       {product.bundle_title}
                     </h4>
                   )}
-                  <div className={styles.configOptionsGrid}>
-                    {configurations.map(config => {
-                      const isActive = activeConfig === config || activeBundlePopover === config;
-                      const compactLabel = getCompactConfigLabel(config);
+                  {isMobileBundleViewport ? renderMobileHeroConfigSelector() : (
+                    <div className={styles.configOptionsGrid}>
+                      {configurations.map(config => {
+                        const isActive = activeConfig === config || activeBundlePopover === config;
+                        const compactLabel = getCompactConfigLabel(config);
 
-                      return (
-                        <div
-                          key={config}
-                          className={styles.configOptionWrap}
-                          data-bundle-config-wrapper="true"
-                          data-config-name={config}
-                          onMouseEnter={() => handleBundleMouseEnter(config)}
-                          onMouseLeave={() => handleBundleMouseLeave(config)}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => handleOpenBundleActions(config)}
-                            className={`${styles.configOptionBtn} ${isActive ? styles.configOptionBtnActive : ''}`}
-                            aria-expanded={activeBundlePopover === config}
-                            aria-pressed={isActive}
-                            title={config}
+                        return (
+                          <div
+                            key={config}
+                            className={styles.configOptionWrap}
+                            data-bundle-config-wrapper="true"
+                            data-config-name={config}
+                            onMouseEnter={() => handleBundleMouseEnter(config)}
+                            onMouseLeave={() => handleBundleMouseLeave(config)}
                           >
-                            <span className={styles.configOptionLabelDesktop}>{config}</span>
-                            <span className={styles.configOptionLabelMobile}>{compactLabel}</span>
-                          </button>
-                          {!isMobileBundleViewport && activeBundlePopover === config ? (
-                            <InlineBundleActionPopover
-                              configName={config}
-                              onViewDetails={handleViewBundleDetails}
-                              onAddToCart={handlePopupAddToCart}
-                              onBuyNow={handlePopupBuyNow}
-                            />
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </div>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenBundleActions(config)}
+                              className={`${styles.configOptionBtn} ${isActive ? styles.configOptionBtnActive : ''}`}
+                              aria-expanded={activeBundlePopover === config}
+                              aria-pressed={isActive}
+                              title={config}
+                            >
+                              <span className={styles.configOptionLabelDesktop}>{config}</span>
+                              <span className={styles.configOptionLabelMobile}>{compactLabel}</span>
+                            </button>
+                            {!isMobileBundleViewport && activeBundlePopover === config ? (
+                              <InlineBundleActionPopover
+                                configName={config}
+                                onViewDetails={handleViewBundleDetails}
+                                onAddToCart={handlePopupAddToCart}
+                                onBuyNow={handlePopupBuyNow}
+                              />
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 

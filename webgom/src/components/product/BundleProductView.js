@@ -380,6 +380,68 @@ export default function BundleProductView({
     });
   }, [tabItems, originalTabItems]);
 
+  // activeConfig for the upper config buttons
+  const activeConfig = useMemo(() => {
+    for (const config of configurations) {
+      const itemsInConfig = bundleItems.filter(item => (item.option_title || item.pivot?.option_title) === config);
+      if (itemsInConfig.every(item => item.selected && !item.removed)) return config;
+    }
+    return null;
+  }, [bundleItems, configurations]);
+
+  const activeConfigMedia = useMemo(() => {
+    const selectedConfig = activeConfig || activeTab || configurations[0];
+
+    if (!selectedConfig) {
+      return null;
+    }
+
+    const sourceItems = [
+      ...(Array.isArray(bundleItems) ? bundleItems : []),
+      ...(product.bundle_items || product.grouped_items || []),
+    ];
+
+    const matchedConfigPost = sourceItems.find((item) => {
+      const itemConfig = item.option_title || item.pivot?.option_title;
+
+      if (itemConfig !== selectedConfig) {
+        return false;
+      }
+
+      return Boolean(
+        item.option_post_slug ||
+        item.pivot?.option_post_slug ||
+        item.option_post_id ||
+        item.pivot?.option_post_id
+      );
+    });
+
+    if (!matchedConfigPost) {
+      return null;
+    }
+
+    const slugOrId =
+      matchedConfigPost.option_post_slug ||
+      matchedConfigPost.pivot?.option_post_slug ||
+      matchedConfigPost.option_post_id ||
+      matchedConfigPost.pivot?.option_post_id;
+
+    if (!slugOrId) {
+      return null;
+    }
+
+    return {
+      configName: selectedConfig,
+      title:
+        matchedConfigPost.option_post_title ||
+        matchedConfigPost.pivot?.option_post_title ||
+        selectedConfig,
+      href: `/blog/${encodeURIComponent(String(slugOrId))}`,
+    };
+  }, [activeConfig, activeTab, bundleItems, configurations, product.bundle_items, product.grouped_items]);
+
+  const hasActiveConfigMedia = Boolean(activeConfigMedia?.href);
+
   // Subtotal of tab items (active items only)
   const tabSubtotal = useMemo(() =>
     tabItems
@@ -486,15 +548,6 @@ export default function BundleProductView({
 
   // Use global displayPrice from parent (already computed from all selected items)
   const infoDiscount = subtotal - displayPrice;
-
-  // activeConfig for the upper config buttons
-  const activeConfig = useMemo(() => {
-    for (const config of configurations) {
-      const itemsInConfig = bundleItems.filter(item => (item.option_title || item.pivot?.option_title) === config);
-      if (itemsInConfig.every(item => item.selected && !item.removed)) return config;
-    }
-    return null;
-  }, [bundleItems, configurations]);
 
   const isConfigEligibleForDiscount = (configName) => {
     const cfgItems = bundleItems.filter((item) => (item.option_title || item.pivot?.option_title) === configName);
@@ -732,6 +785,18 @@ export default function BundleProductView({
             </div>
           ) : null}
         </div>
+
+        {hasActiveConfigMedia ? (
+          <Link
+            href={activeConfigMedia.href}
+            className={`${builderStyles.configMediaLink} ${builderStyles.mobileConfigMediaLink}`}
+            title={activeConfigMedia.title ? `Xem media: ${activeConfigMedia.title}` : 'Xem media'}
+            aria-label={`Xem media cho ${activeConfigMedia.configName}`}
+          >
+            <span className="material-symbols-outlined">perm_media</span>
+            <span className={builderStyles.configMediaLinkText}>Xem media</span>
+          </Link>
+        ) : null}
       </div>
     );
   };
@@ -817,22 +882,34 @@ export default function BundleProductView({
       )}
 
       {tabItems.length > 0 && (
-        <div className={builderStyles.topActionBar}>
-          {isFullCombo ? (
-            <div className={builderStyles.discountBannerInline}>
-              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>local_offer</span>
-              <span>Báº¡n Ä‘ang mua trá»n bá»™ â€” Æ¯u Ä‘Ã£i giáº£m <strong>{(DISCOUNT_RATE * 100).toFixed(0)}%</strong>!</span>
-            </div>
+              <div className={`${builderStyles.topActionBar} ${hasActiveConfigMedia ? builderStyles.topActionBarWithMedia : ''}`}>
+                {isFullCombo ? (
+                  <div className={builderStyles.discountBannerInline}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 18 }}>local_offer</span>
+                    <span>Báº¡n Ä‘ang mua trá»n bá»™ â€” Æ¯u Ä‘Ã£i giáº£m <strong>{(DISCOUNT_RATE * 100).toFixed(0)}%</strong>!</span>
+                  </div>
           ) : (
             <div className={builderStyles.discountHintInline}>
               <span className="material-symbols-outlined" style={{ fontSize: 18 }}>info</span>
-              <span>Mua Ä‘á»§ <strong>{tabItems.length} mÃ³n</strong> nháº­n Æ°u Ä‘Ã£i giáº£m {(DISCOUNT_RATE * 100).toFixed(0)}%</span>
-            </div>
-          )}
+                    <span>Mua Ä‘á»§ <strong>{tabItems.length} mÃ³n</strong> nháº­n Æ°u Ä‘Ã£i giáº£m {(DISCOUNT_RATE * 100).toFixed(0)}%</span>
+                  </div>
+                )}
 
-          <div className={builderStyles.quickSummaryTopInline}>
-            <div className={builderStyles.quickSummaryPrice}>
-              <span className={builderStyles.quickSummaryLabel}>Thanh toÃ¡n:</span>
+                {hasActiveConfigMedia ? (
+                  <Link
+                    href={activeConfigMedia.href}
+                    className={`${builderStyles.configMediaLink} ${builderStyles.topActionMediaLink}`}
+                    title={activeConfigMedia.title ? `Xem media: ${activeConfigMedia.title}` : 'Xem media'}
+                    aria-label={`Xem media cho ${activeConfigMedia.configName}`}
+                  >
+                    <span className="material-symbols-outlined">perm_media</span>
+                    <span className={builderStyles.configMediaLinkText}>Xem media</span>
+                  </Link>
+                ) : null}
+
+                <div className={builderStyles.quickSummaryTopInline}>
+                  <div className={builderStyles.quickSummaryPrice}>
+                    <span className={builderStyles.quickSummaryLabel}>Thanh toÃ¡n:</span>
               <span className={builderStyles.quickSummaryValue}>{formatPrice(tabFinalPrice)}</span>
             </div>
             {handleBuyTabConfig && tabItems.some(i => !i.removed) && (
@@ -1101,7 +1178,7 @@ export default function BundleProductView({
 
               {/* === Top Action Bar === */}
             {tabItems.length > 0 && (
-              <div className={builderStyles.topActionBar}>
+              <div className={`${builderStyles.topActionBar} ${hasActiveConfigMedia ? builderStyles.topActionBarWithMedia : ''}`}>
                 {isFullCombo ? (
                   <div className={builderStyles.discountBannerInline}>
                     <span className="material-symbols-outlined" style={{ fontSize: 18 }}>local_offer</span>
@@ -1113,6 +1190,18 @@ export default function BundleProductView({
                     <span>Mua đủ <strong>{tabItems.length} món</strong> nhận ưu đãi giảm {(DISCOUNT_RATE * 100).toFixed(0)}%</span>
                   </div>
                 )}
+
+                {hasActiveConfigMedia ? (
+                  <Link
+                    href={activeConfigMedia.href}
+                    className={`${builderStyles.configMediaLink} ${builderStyles.topActionMediaLink}`}
+                    title={activeConfigMedia.title ? `Xem media: ${activeConfigMedia.title}` : 'Xem media'}
+                    aria-label={`Xem media cho ${activeConfigMedia.configName}`}
+                  >
+                    <span className="material-symbols-outlined">perm_media</span>
+                    <span className={builderStyles.configMediaLinkText}>Xem media</span>
+                  </Link>
+                ) : null}
 
                 <div className={builderStyles.quickSummaryTopInline}>
                   <div className={builderStyles.quickSummaryPrice}>

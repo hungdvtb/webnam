@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\InventoryUnit;
+use App\Models\Post;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\BulkUpdateLog;
@@ -66,7 +67,7 @@ class ProductController extends Controller
             },
             'bundleItems' => function ($q) {
                 $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
-                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'is_default', 'variant_id', 'price', 'cost_price'])
+                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
                         'images:id,product_id,image_url,is_primary',
@@ -92,6 +93,45 @@ class ProductController extends Controller
         $product->setAttribute('supplier_ids', $supplierIds);
         $product->setAttribute('supplier_count', count($supplierIds));
         $product->setAttribute('has_multiple_suppliers', count($supplierIds) > 1);
+
+        return $this->appendBundleOptionPostMeta($product);
+    }
+
+    protected function appendBundleOptionPostMeta(Product $product): Product
+    {
+        if (!$product->relationLoaded('bundleItems')) {
+            return $product;
+        }
+
+        $postIds = $product->bundleItems
+            ->pluck('pivot.option_post_id')
+            ->filter(fn ($postId) => filled($postId))
+            ->map(fn ($postId) => (int) $postId)
+            ->unique()
+            ->values();
+
+        if ($postIds->isEmpty()) {
+            return $product;
+        }
+
+        $posts = Post::query()
+            ->whereIn('id', $postIds)
+            ->get(['id', 'title', 'slug'])
+            ->keyBy(fn (Post $post) => (int) $post->id);
+
+        $product->bundleItems->each(function (Product $bundleItem) use ($posts) {
+            $postId = filled($bundleItem->pivot?->option_post_id ?? null)
+                ? (int) $bundleItem->pivot->option_post_id
+                : null;
+
+            if (!$postId) {
+                return;
+            }
+
+            $post = $posts->get($postId);
+            $bundleItem->pivot->setAttribute('option_post_title', $post?->title);
+            $bundleItem->pivot->setAttribute('option_post_slug', $post?->slug);
+        });
 
         return $product;
     }
@@ -1260,6 +1300,7 @@ class ProductController extends Controller
             'grouped_items.*.is_required' => 'required|boolean',
             'grouped_items.*.variant_id' => 'nullable|exists:products,id',
             'grouped_items.*.option_title' => 'nullable|string',
+            'grouped_items.*.option_post_id' => 'nullable|exists:posts,id',
             'grouped_items.*.is_default' => 'nullable|boolean',
             'grouped_items.*.price' => 'nullable|numeric|min:0',
             'grouped_items.*.cost_price' => 'nullable|numeric|min:0',
@@ -1400,6 +1441,7 @@ class ProductController extends Controller
                             'link_type' => $linkType,
                             'position' => $idx,
                             'option_title' => $item['option_title'] ?? null,
+                            'option_post_id' => $item['option_post_id'] ?? null,
                             'is_default' => $item['is_default'] ?? false,
                             'variant_id' => $item['variant_id'] ?? null,
                             'price' => $item['price'] ?? null,
@@ -1665,6 +1707,7 @@ class ProductController extends Controller
             'grouped_items.*.is_required' => 'required|boolean',
             'grouped_items.*.variant_id' => 'nullable|exists:products,id',
             'grouped_items.*.option_title' => 'nullable|string',
+            'grouped_items.*.option_post_id' => 'nullable|exists:posts,id',
             'grouped_items.*.is_default' => 'nullable|boolean',
             'grouped_items.*.price' => 'nullable|numeric|min:0',
             'grouped_items.*.cost_price' => 'nullable|numeric|min:0',
@@ -1808,6 +1851,7 @@ class ProductController extends Controller
                     'link_type' => $linkType,
                     'position' => $idx,
                     'option_title' => $item['option_title'] ?? null,
+                    'option_post_id' => $item['option_post_id'] ?? null,
                     'is_default' => $item['is_default'] ?? false,
                     'variant_id' => $item['variant_id'] ?? null,
                     'price' => $item['price'] ?? null,
@@ -2071,6 +2115,7 @@ class ProductController extends Controller
                         'quantity' => $bundleItem->pivot->quantity ?? 1,
                         'is_required' => $bundleItem->pivot->is_required ?? true,
                         'option_title' => $bundleItem->pivot->option_title ?? null,
+                        'option_post_id' => $bundleItem->pivot->option_post_id ?? null,
                         'is_default' => $bundleItem->pivot->is_default ?? false,
                         'variant_id' => $bundleItem->pivot->variant_id ?? null,
                         'price' => $bundleItem->pivot->price ?? null,
@@ -2196,6 +2241,7 @@ class ProductController extends Controller
                     'quantity' => $bundleItem->pivot->quantity ?? 1,
                     'is_required' => $bundleItem->pivot->is_required ?? true,
                     'option_title' => $bundleItem->pivot->option_title ?? null,
+                    'option_post_id' => $bundleItem->pivot->option_post_id ?? null,
                     'is_default' => $bundleItem->pivot->is_default ?? false,
                     'variant_id' => $bundleItem->pivot->variant_id ?? null,
                     'price' => $bundleItem->pivot->price ?? null,

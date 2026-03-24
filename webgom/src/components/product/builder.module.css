@@ -1551,6 +1551,19 @@
     white-space: nowrap;
   }
 
+  .mobileConfigMediaLink {
+    width: 100%;
+    min-height: 2.9rem;
+    padding: 0.78rem 0.92rem;
+    border-radius: 16px;
+    font-size: 0.76rem;
+    box-shadow: 0 12px 22px rgba(27, 54, 93, 0.12);
+  }
+
+  .topActionMediaLink {
+    display: none;
+  }
+
   .mobileConfigRailScroller {
     position: relative;
     width: 100%;
@@ -1672,7 +1685,8 @@
     box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.16);
   }
 
-  .mobileStickyCluster .topActionBar {
+  .mobileStickyCluster .topActionBar,
+  .mobileStickyCluster .topActionBarWithMedia {
     position: static;
     top: auto;
     z-index: auto;
@@ -1975,10 +1989,18 @@
   box-shadow: 0 4px 12px rgba(197, 160, 101, 0.05);
 }
 
+.topActionBarWithMedia {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: 12px;
+}
+
 .discountBannerInline {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   padding: 6px 12px;
   border-radius: 6px;
   background: rgba(16, 185, 129, 0.08);
@@ -1991,6 +2013,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   padding: 6px 12px;
   border-radius: 6px;
   background: rgba(197, 160, 101, 0.06);
@@ -2004,6 +2027,56 @@
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
+}
+
+.topActionBarWithMedia .quickSummaryTopInline {
+  justify-self: end;
+  flex-wrap: nowrap;
+  gap: 12px;
+}
+
+.topActionBarWithMedia .quickSummaryPrice {
+  white-space: nowrap;
+}
+
+.configMediaLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(27, 54, 93, 0.12);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 243, 235, 0.96) 100%);
+  color: #1b365d;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  transition: border-color 0.2s ease, color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 8px 16px rgba(27, 54, 93, 0.08);
+}
+
+.configMediaLink:hover {
+  color: #c5a065;
+  border-color: rgba(197, 160, 101, 0.38);
+  transform: translateY(-1px);
+  box-shadow: 0 12px 22px rgba(197, 160, 101, 0.16);
+}
+
+.configMediaLink :global(.material-symbols-outlined) {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.configMediaLinkText {
+  display: inline-block;
+}
+
+.topActionMediaLink {
+  justify-self: center;
 }
 
 .quickSummaryPrice {

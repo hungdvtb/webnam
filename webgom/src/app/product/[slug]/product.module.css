@@ -939,9 +939,10 @@
   }
 
   .bundleView .customizeBundleBtn {
-    justify-content: center;
-    gap: 0.5rem;
-    padding: 0.76rem 0.88rem;
+    grid-template-columns: 1.05rem minmax(0, 1fr);
+    justify-content: stretch;
+    gap: 0.42rem;
+    padding: 0.82rem 0.72rem;
   }
 
   .bundleView .customizeBundleBtn::after {
@@ -953,13 +954,16 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.04rem;
-    max-width: none;
-    margin: 0 auto;
+    justify-self: stretch;
+    width: 100%;
+    gap: 0.06rem;
+    max-width: 100%;
+    margin: 0;
     text-align: center;
-    font-size: 0.77rem;
-    line-height: 1.16;
+    font-size: 0.84rem;
+    line-height: 1.18;
     font-weight: 700;
+    letter-spacing: 0.01em;
   }
 
   .bundleView .customizeBundleBtnText span {
@@ -968,7 +972,8 @@
   }
 
   .bundleView .customizeBundleBtn > .material-symbols-outlined {
-    font-size: 1rem;
+    justify-self: center;
+    font-size: 1.06rem;
   }
 }
 

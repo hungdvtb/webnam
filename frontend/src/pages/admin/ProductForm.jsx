@@ -321,6 +321,82 @@ const DraggableBundleItem = ({
     );
 };
 
+const BundleOptionPostSelector = ({
+    option,
+    blogSearchQuery,
+    setBlogSearchQuery,
+    isSearchingBlog,
+    blogResults,
+    searchBlogPosts,
+    onSelectPost,
+    onClearPost,
+}) => {
+    const searchKey = option.id;
+    const selectedPostId = option.post_id ?? '';
+    const selectedPostTitle = option.post_title || (selectedPostId ? `Bài viết #${selectedPostId}` : '');
+
+    return (
+        <div className="relative w-full max-w-[360px] min-w-[240px] shrink">
+            <div className="flex items-center gap-2 rounded-sm border border-gold/15 bg-white/90 px-3 py-2 shadow-sm">
+                <span className="material-symbols-outlined text-[17px] text-gold/70 shrink-0">article</span>
+                {selectedPostId ? (
+                    <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                        <div className="min-w-0">
+                            <p className="text-[9px] font-black uppercase tracking-[0.14em] text-stone/35">Bài viết web</p>
+                            <p className="truncate text-[12px] font-bold text-gold" title={selectedPostTitle}>
+                                {selectedPostTitle}
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => onClearPost(option.id)}
+                            className="shrink-0 text-stone/40 transition-colors hover:text-brick"
+                            title="Bỏ liên kết bài viết"
+                        >
+                            <span className="material-symbols-outlined text-[16px]">cancel</span>
+                        </button>
+                    </div>
+                ) : (
+                    <>
+                        <div className="relative min-w-0 flex-1">
+                            <input
+                                type="text"
+                                value={blogSearchQuery[searchKey] || ''}
+                                onChange={(e) => {
+                                    const query = e.target.value;
+                                    setBlogSearchQuery(prev => ({ ...prev, [searchKey]: query }));
+                                    searchBlogPosts(searchKey, query);
+                                }}
+                                placeholder="Tìm bài viết trên web..."
+                                className="w-full bg-transparent border-none p-0 pr-5 text-[12px] font-semibold text-primary placeholder:text-stone/35 focus:outline-none focus:ring-0"
+                            />
+                            {isSearchingBlog[searchKey] && (
+                                <span className="absolute right-0 top-1/2 -translate-y-1/2 material-symbols-outlined text-[12px] animate-spin text-gold">refresh</span>
+                            )}
+                        </div>
+                        <span className="material-symbols-outlined text-[16px] text-stone/25 shrink-0">search</span>
+                    </>
+                )}
+            </div>
+
+            {blogResults[searchKey]?.length > 0 && !selectedPostId && (
+                <div className="absolute left-0 right-0 top-full z-[120] mt-1 max-h-[220px] overflow-y-auto rounded-sm border border-stone/15 bg-white shadow-xl custom-scrollbar">
+                    {blogResults[searchKey].map((post) => (
+                        <button
+                            key={post.id}
+                            type="button"
+                            onClick={() => onSelectPost(option.id, post)}
+                            className="block w-full border-b border-stone/5 px-3 py-2 text-left transition-colors last:border-0 hover:bg-gold/5"
+                        >
+                            <p className="text-[11px] font-bold leading-tight text-primary">{post.title}</p>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
 
 const formatNumberOutput = (num) => {
     if (num === null || num === undefined || num === '') return '';
@@ -789,7 +865,7 @@ const ProductForm = () => {
     const [selectedSuperAttributes, setSelectedSuperAttributes] = useState([]);
     const [showVariantConfig, setShowVariantConfig] = useState(false);
     const [refreshingAttributes, setRefreshingAttributes] = useState(false);
-    const [bundleOptions, setBundleOptions] = useState([]); // [{ id, title, items: [] }]
+    const [bundleOptions, setBundleOptions] = useState([]); // [{ id, title, post_id, post_title, items: [] }]
     const [showBundleSearch, setShowBundleSearch] = useState(null); // optionId
     const [isSortingBundle, setIsSortingBundle] = useState({}); // { optionId: boolean }
     const [bundleItemVariants, setBundleItemVariants] = useState({}); // { productId: [variants] }
@@ -1633,8 +1709,18 @@ const ProductForm = () => {
                 const optionsMap = {};
                 bItems.forEach(item => {
                     const title = item.pivot?.option_title || 'Tùy chọn';
-                    if (!optionsMap[title]) optionsMap[title] = [];
-                    optionsMap[title].push({
+                    if (!optionsMap[title]) {
+                        optionsMap[title] = {
+                            post_id: item.pivot?.option_post_id || '',
+                            post_title: item.pivot?.option_post_title || '',
+                            items: []
+                        };
+                    } else if (!optionsMap[title].post_id && item.pivot?.option_post_id) {
+                        optionsMap[title].post_id = item.pivot.option_post_id;
+                        optionsMap[title].post_title = item.pivot?.option_post_title || '';
+                    }
+
+                    optionsMap[title].items.push({
                         id: item.id,
                         name: item.name,
                         sku: item.sku,
@@ -1657,10 +1743,12 @@ const ProductForm = () => {
                         }).catch(e => console.error(e));
                     }
                 });
-                setBundleOptions(Object.entries(optionsMap).map(([title, its]) => ({
+                setBundleOptions(Object.entries(optionsMap).map(([title, optionData]) => ({
                     id: Math.random().toString(36).substr(2, 9),
                     title: title ?? '',
-                    items: its
+                    post_id: optionData.post_id || '',
+                    post_title: optionData.post_title || '',
+                    items: optionData.items
                 })));
             } else {
                 setBundleOptions([]);
@@ -2336,15 +2424,56 @@ const ProductForm = () => {
 
     // --- Bundle Specific Handlers ---
     const handleAddBundleOption = () => {
-        setBundleOptions(prev => [{ id: Math.random().toString(36).substr(2, 9), title: 'Tùy chọn mới', items: [] }, ...prev]);
+        setBundleOptions(prev => [{
+            id: Math.random().toString(36).substr(2, 9),
+            title: 'Tùy chọn mới',
+            post_id: '',
+            post_title: '',
+            items: []
+        }, ...prev]);
     };
 
     const handleRemoveBundleOption = (optionId) => {
         setBundleOptions(prev => prev.filter(o => o.id !== optionId));
+        setBlogSearchQuery(prev => {
+            const next = { ...prev };
+            delete next[optionId];
+            return next;
+        });
+        setBlogResults(prev => {
+            const next = { ...prev };
+            delete next[optionId];
+            return next;
+        });
+        setIsSearchingBlog(prev => {
+            const next = { ...prev };
+            delete next[optionId];
+            return next;
+        });
     };
 
     const handleUpdateOptionTitle = (optionId, title) => {
         setBundleOptions(prev => prev.map(o => o.id === optionId ? { ...o, title } : o));
+    };
+
+    const handleSelectBundleOptionPost = (optionId, post) => {
+        setBundleOptions(prev => prev.map(option => (
+            option.id === optionId
+                ? { ...option, post_id: post.id, post_title: post.title || '' }
+                : option
+        )));
+        setBlogSearchQuery(prev => ({ ...prev, [optionId]: '' }));
+        setBlogResults(prev => ({ ...prev, [optionId]: [] }));
+    };
+
+    const handleClearBundleOptionPost = (optionId) => {
+        setBundleOptions(prev => prev.map(option => (
+            option.id === optionId
+                ? { ...option, post_id: '', post_title: '' }
+                : option
+        )));
+        setBlogSearchQuery(prev => ({ ...prev, [optionId]: '' }));
+        setBlogResults(prev => ({ ...prev, [optionId]: [] }));
     };
 
     const handleAddItemToOption = (optionId, product) => {
@@ -2590,7 +2719,11 @@ const ProductForm = () => {
                     let itemsToSubmit = val;
                     if (formData.type === 'bundle' && bundleOptions.length > 0) {
                         itemsToSubmit = bundleOptions.flatMap(opt => 
-                            opt.items.map(it => ({ ...it, option_title: opt.title }))
+                            opt.items.map(it => ({
+                                ...it,
+                                option_title: opt.title,
+                                option_post_id: opt.post_id || ''
+                            }))
                         );
                     }
                     itemsToSubmit.forEach((item, idx) => {
@@ -2598,6 +2731,9 @@ const ProductForm = () => {
                         submitData.append(`grouped_items[${idx}][quantity]`, item.quantity);
                         submitData.append(`grouped_items[${idx}][is_required]`, item.is_required ? '1' : '0');
                         submitData.append(`grouped_items[${idx}][option_title]`, item.option_title || '');
+                        if (item.option_post_id) {
+                            submitData.append(`grouped_items[${idx}][option_post_id]`, item.option_post_id);
+                        }
                         submitData.append(`grouped_items[${idx}][is_default]`, item.is_default ? '1' : '0');
                         submitData.append(`grouped_items[${idx}][price]`, item.price || 0);
                         if (item.cost_price !== undefined && item.cost_price !== null) {
@@ -4095,16 +4231,28 @@ const ProductForm = () => {
                                                      <div className="size-8 rounded-full bg-gold/10 flex items-center justify-center shrink-0">
                                                         <span className="text-[13px] font-black text-gold">{optIdx + 1}</span>
                                                      </div>
-                                                     <div className="flex-1">
-                                                        <input
-                                                            type="text"
-                                                            value={option.title ?? ''}
-                                                            onChange={(e) => handleUpdateOptionTitle(option.id, e.target.value)}
-                                                            className="w-full bg-transparent border-none p-0 text-[15px] font-black text-primary focus:ring-0"
-                                                            placeholder="Nhập tên tùy chọn..."
+                                                     <div className="flex min-w-0 flex-1 items-center gap-4">
+                                                        <div className="min-w-0 flex-1">
+                                                            <input
+                                                                type="text"
+                                                                value={option.title ?? ''}
+                                                                onChange={(e) => handleUpdateOptionTitle(option.id, e.target.value)}
+                                                                className="w-full bg-transparent border-none p-0 text-[15px] font-black text-primary focus:ring-0"
+                                                                placeholder="Nhập tên tùy chọn..."
+                                                            />
+                                                        </div>
+                                                        <BundleOptionPostSelector
+                                                            option={option}
+                                                            blogSearchQuery={blogSearchQuery}
+                                                            setBlogSearchQuery={setBlogSearchQuery}
+                                                            isSearchingBlog={isSearchingBlog}
+                                                            blogResults={blogResults}
+                                                            searchBlogPosts={searchBlogPosts}
+                                                            onSelectPost={handleSelectBundleOptionPost}
+                                                            onClearPost={handleClearBundleOptionPost}
                                                         />
                                                      </div>
-                                                     <div className="flex items-center gap-3">
+                                                     <div className="flex shrink-0 items-center gap-3">
                                                          <button
                                                             type="button"
                                                             onClick={() => toggleBundleSorting(option.id)}

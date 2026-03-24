@@ -237,12 +237,6 @@ export default async function RootLayout({ children }) {
               will-change: transform, opacity;
             }
 
-            body.bundle-mobile-summary-sticky-active .mobile-sticky-header-shell .site-header {
-              opacity: 0;
-              pointer-events: none;
-              transform: translateY(calc(-100% - 0.4rem));
-            }
-
             .site-content-shell {
               padding-top: 112px;
             }

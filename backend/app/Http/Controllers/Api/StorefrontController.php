@@ -249,10 +249,20 @@ class StorefrontController extends Controller
             ->filter()
             ->values();
 
+        $bundleOptionPostIds = $product->type === 'bundle'
+            ? $product->bundleItems
+                ->pluck('pivot.option_post_id')
+                ->filter(fn ($postId) => filled($postId))
+                ->map(fn ($postId) => (int) $postId)
+                ->unique()
+                ->values()
+            : collect();
+
         $linkedPostIds = $additionalInfoItems
             ->pluck('post_id')
             ->filter(fn ($postId) => filled($postId))
             ->map(fn ($postId) => (int) $postId)
+            ->merge($bundleOptionPostIds)
             ->unique()
             ->values();
 
@@ -332,6 +342,8 @@ class StorefrontController extends Controller
             'bundle_items' => $product->type === 'bundle'
                 ? $product->bundleItems->map(function ($bundleItem) {
                     $selectedVariantId = $bundleItem->pivot->variant_id ? (int) $bundleItem->pivot->variant_id : null;
+                    $optionPostId = filled($bundleItem->pivot->option_post_id ?? null) ? (int) $bundleItem->pivot->option_post_id : null;
+                    $optionPost = $optionPostId ? $linkedPosts->get($optionPostId) : null;
                     $selectedVariant = $selectedVariantId
                         ? $bundleItem->variations->firstWhere('id', $selectedVariantId)
                         : null;
@@ -348,6 +360,9 @@ class StorefrontController extends Controller
                         'quantity' => $bundleItem->pivot->quantity ?? 1,
                         'is_required' => $bundleItem->pivot->is_required ?? false,
                         'option_title' => $bundleItem->pivot->option_title,
+                        'option_post_id' => $optionPostId,
+                        'option_post_title' => $optionPost?->title,
+                        'option_post_slug' => $optionPost?->slug,
                         'is_default' => $bundleItem->pivot->is_default ?? false,
                         'position' => $bundleItem->pivot->position ?? 0,
                         'selected_variant_id' => $selectedVariantId,

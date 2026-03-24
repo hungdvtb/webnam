@@ -2,21 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import AccountSelector from '../../components/AccountSelector';
 import Pagination from '../../components/Pagination';
+import { ACTIVE_PRODUCT_TYPE_OPTIONS as productTypeOptions, PRODUCT_TYPE_LABELS } from '../../config/productTypes';
 import { categoryApi, orderStatusApi, reportApi, warehouseApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 
 const PRODUCT_COLUMN_WIDTH = 320;
 const TOTAL_COLUMN_WIDTH = 228;
 const DAY_COLUMN_WIDTH = 208;
-
-const productTypeOptions = [
-    { value: 'simple', label: 'Sản phẩm đơn' },
-    { value: 'configurable', label: 'Biến thể' },
-    { value: 'grouped', label: 'Nhóm sản phẩm' },
-    { value: 'bundle', label: 'Combo' },
-    { value: 'virtual', label: 'Dịch vụ' },
-    { value: 'downloadable', label: 'Tài liệu số' },
-];
 
 const moneyFormatter = new Intl.NumberFormat('vi-VN');
 const integerFormatter = new Intl.NumberFormat('vi-VN');
@@ -485,7 +477,7 @@ const SalesReportPage = () => {
     );
 
     const typeLabelMap = useMemo(
-        () => Object.fromEntries(productTypeOptions.map((option) => [option.value, option.label])),
+        () => PRODUCT_TYPE_LABELS,
         []
     );
 

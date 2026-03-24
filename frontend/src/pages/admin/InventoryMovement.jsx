@@ -6,6 +6,7 @@ import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel'
 import { useUI } from '../../context/UIContext';
 import useAiAvailability from '../../hooks/useAiAvailability';
 import { useTableColumns } from '../../hooks/useTableColumns';
+import { ACTIVE_PRODUCT_TYPE_OPTIONS } from '../../config/productTypes';
 import { aiApi, categoryApi, cmsApi, inventoryApi, orderApi, productApi } from '../../services/api';
 
 const emptyPagination = { current_page: 1, last_page: 1, total: 0, per_page: 20 };
@@ -84,10 +85,7 @@ const productCostSourceFilterOptions = [
     { value: 'expected', label: 'Đang dùng giá dự kiến' },
     { value: 'empty', label: 'Chưa có giá' },
 ];
-const productTypeFilterOptions = [
-    { value: 'simple', label: 'Sản phẩm thường' },
-    { value: 'configurable', label: 'Sản phẩm có biến thể' },
-];
+const productTypeFilterOptions = ACTIVE_PRODUCT_TYPE_OPTIONS;
 const productVariantScopeFilterOptions = [
     { value: 'has_variants', label: 'Có biến thể' },
     { value: 'no_variants', label: 'Không có biến thể' },
@@ -5759,8 +5757,7 @@ const InventoryMovement = () => {
                     </select>
                     <select value={productFilters.type} onChange={(event) => setProductFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[165px] ${selectClass}`}>
                         <option value="">Tất cả loại sản phẩm</option>
-                        <option value="simple">Sản phẩm thường</option>
-                        <option value="configurable">Sản phẩm có biến thể</option>
+                        {productTypeFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                     </select>
                     <select value={productFilters.category_id} onChange={(event) => setProductFilters((prev) => ({ ...prev, category_id: event.target.value }))} className={`w-[165px] ${selectClass}`}>
                         <option value="">Tất cả danh mục</option>
@@ -5919,7 +5916,7 @@ const InventoryMovement = () => {
                     <input value={supplierCatalogFilters.sku} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, sku: event.target.value }))} placeholder="Lọc theo mã SP / mã NCC" className={`w-[170px] ${inputClass}`} />
                     <input value={supplierCatalogFilters.name} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, name: event.target.value }))} placeholder="Lọc theo tên sản phẩm" className={`w-[180px] ${inputClass}`} />
                     <select value={supplierCatalogFilters.category_id} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, category_id: event.target.value }))} className={`w-[160px] ${selectClass}`}><option value="">Tất cả danh mục</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
-                    <select value={supplierCatalogFilters.type} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[160px] ${selectClass}`}><option value="">Tất cả loại sản phẩm</option><option value="simple">Sản phẩm thường</option><option value="configurable">Sản phẩm có biến thể</option></select>
+                    <select value={supplierCatalogFilters.type} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[160px] ${selectClass}`}><option value="">Tất cả loại sản phẩm</option>{productTypeFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
                     <select value={supplierCatalogFilters.variant_scope} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, variant_scope: event.target.value }))} className={`w-[170px] ${selectClass}`}><option value="">Tất cả biến thể</option><option value="no_variants">Sản phẩm thường</option><option value="only_variants">Biến thể</option><option value="has_variants">Nhóm có biến thể</option><option value="roots">Nhóm gốc</option></select>
                     <select value={supplierCatalogFilters.missing_supplier_price} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, missing_supplier_price: event.target.value }))} className={`w-[170px] ${selectClass}`}><option value="">Tất cả trạng thái giá</option><option value="1">Chưa có giá nhập</option></select>
                     <select value={supplierCatalogFilters.multiple_suppliers} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, multiple_suppliers: event.target.value }))} className={`w-[180px] ${selectClass}`}><option value="">Tất cả nguồn nhập</option><option value="1">Có nhiều nhà cung cấp</option></select>
@@ -6345,7 +6342,7 @@ const InventoryMovement = () => {
                                 <input value={supplierCatalogFilters.sku} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, sku: event.target.value }))} placeholder="Lọc theo mã SP / mã NCC" className={`w-[170px] ${inputClass}`} />
                                 <input value={supplierCatalogFilters.name} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, name: event.target.value }))} placeholder="Lọc theo tên sản phẩm" className={`w-[180px] ${inputClass}`} />
                                 <select value={supplierCatalogFilters.category_id} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, category_id: event.target.value }))} className={`w-[160px] ${selectClass}`}><option value="">Tất cả danh mục</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
-                                <select value={supplierCatalogFilters.type} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[160px] ${selectClass}`}><option value="">Tất cả loại sản phẩm</option><option value="simple">Sản phẩm thường</option><option value="configurable">Sản phẩm có biến thể</option></select>
+                                <select value={supplierCatalogFilters.type} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[160px] ${selectClass}`}><option value="">Tất cả loại sản phẩm</option>{productTypeFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
                                 <select value={supplierCatalogFilters.variant_scope} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, variant_scope: event.target.value }))} className={`w-[170px] ${selectClass}`}><option value="">Sản phẩm thường / biến thể</option><option value="no_variants">Sản phẩm thường</option><option value="only_variants">Biến thể</option><option value="has_variants">Nhóm có biến thể</option><option value="roots">Nhóm gốc</option></select>
                             </FilterPanel>
                         ) : null}

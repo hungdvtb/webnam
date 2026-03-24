@@ -13,6 +13,7 @@ ReactQuill.Quill.register('modules/imageResize', ImageResize);
 window.Quill = ReactQuill.Quill;
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
+import { PRODUCT_TYPE_FORM_META } from '../../config/productTypes';
 import { compressImage, formatBytes } from '../../utils/imageUtils';
 
 const ItemType = {
@@ -2415,13 +2416,7 @@ const ProductForm = () => {
 
     // handleCancel handles navigation directly without confirm for a faster experience
 
-    const TYPE_INFO = {
-        simple: { label: 'Sản phẩm đơn', icon: 'inventory_2', desc: 'Không có biến thể. VD: Bình gốm cụ thể.' },
-        configurable: { label: 'Có biến thể', icon: 'settings_input_component', desc: 'Biến thể theo màu men, nghệ nhân...' },
-        grouped: { label: 'Nhóm sản phẩm', icon: 'group_work', desc: 'Nhóm nhiều sản phẩm đơn lại.' },
-        bundle: { label: 'Bộ / Combo', icon: 'inventory', desc: 'Combo sản phẩm linh hoạt.' },
-        virtual: { label: 'Dịch vụ', icon: 'cloud', desc: 'Phi vật thể, không cần vận chuyển.' },
-    };
+    const TYPE_INFO = PRODUCT_TYPE_FORM_META;
 
 
     const selectedDomain = useMemo(() => (

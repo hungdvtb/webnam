@@ -1,19 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { PRODUCT_TYPE_LABELS } from '../../config/productTypes';
 import api from '../../services/api';
 import { LeadFormModal } from '../../layouts/StorefrontLayout';
 import { trackAddToCart } from '../../components/TrackingScripts';
 
 const FALLBACK_IMAGE = 'https://placehold.co/800x800?text=No+Image';
-
-const PRODUCT_TYPE_LABELS = {
-    simple: 'Sản phẩm đơn',
-    configurable: 'Có biến thể',
-    bundle: 'Bộ sản phẩm',
-    grouped: 'Nhóm sản phẩm',
-    virtual: 'Dịch vụ',
-    downloadable: 'Tài liệu số',
-};
 
 const formatCurrency = (value) => `${Number(value || 0).toLocaleString('vi-VN')}đ`;
 
@@ -42,6 +34,47 @@ const normalizeImages = (entity) => {
     }
 
     return [{ id: entity?.id || 0, url: FALLBACK_IMAGE, is_primary: true }];
+};
+
+const isRenderableMediaUrl = (value) => {
+    const normalized = String(value || '').trim();
+
+    if (!normalized || normalized === '/' || normalized === '#' || /^javascript:/i.test(normalized)) {
+        return false;
+    }
+
+    if (/^(https?:)?\/\//i.test(normalized) || /^data:image\//i.test(normalized) || /^blob:/i.test(normalized)) {
+        return true;
+    }
+
+    return normalized.startsWith('/') && normalized.length > 1;
+};
+
+const extractRenderableImages = (entity) => {
+    const images = Array.isArray(entity?.images)
+        ? entity.images
+            .map((image, index) => ({
+                id: image.id || `${entity?.id || 'image'}-${index}`,
+                url: image.url || image.path || image.image_url || entity?.main_image || '',
+                is_primary: Boolean(image.is_primary),
+            }))
+            .filter((image) => isRenderableMediaUrl(image.url))
+        : [];
+
+    if (images.length > 0) {
+        return images;
+    }
+
+    const primaryUrl = entity?.primary_image?.url || entity?.primary_image?.path || entity?.main_image;
+    if (isRenderableMediaUrl(primaryUrl)) {
+        return [{
+            id: entity?.primary_image?.id || entity?.id || 0,
+            url: primaryUrl,
+            is_primary: true,
+        }];
+    }
+
+    return [];
 };
 
 const normalizeAdditionalInfo = (rawValue) => {
@@ -240,6 +273,37 @@ const buildMediaItems = (product, displayEntity) => {
 
     if (!videoItem) {
         return imageItems;
+    }
+
+    if (imageItems.length === 0) {
+        return [videoItem];
+    }
+
+    const [primaryImage, ...remainingImages] = imageItems;
+    return [primaryImage, videoItem, ...remainingImages];
+};
+
+const buildBundleMobileMediaItems = (product, selectionRows) => {
+    const productImages = extractRenderableImages(product);
+    const bundleImages = (Array.isArray(selectionRows) ? selectionRows : [])
+        .flatMap((item) => extractRenderableImages(item?.selectedVariant || item));
+
+    const dedupedImages = [...productImages, ...bundleImages].filter((image, index, collection) => (
+        collection.findIndex((candidate) => candidate.url === image.url) === index
+    ));
+
+    const imageItems = dedupedImages.map((image) => ({
+        id: `image-${image.id}`,
+        type: 'image',
+        url: image.url,
+        thumbnailUrl: image.url,
+        is_primary: image.is_primary,
+    }));
+
+    const videoItem = getVideoMediaItem(product?.video_url, imageItems[0]?.thumbnailUrl);
+
+    if (!videoItem) {
+        return imageItems.length > 0 ? imageItems : buildMediaItems(product, product);
     }
 
     if (imageItems.length === 0) {
@@ -926,6 +990,9 @@ const StorefrontProductDetail = () => {
     const mustChooseBundleVariants = product.type === 'bundle' && activeBundleSelectionRows.some((item) => item.requiresSelection);
     const displayEntity = product.type === 'bundle' ? product : (displayVariant || product);
     const mediaItems = buildMediaItems(product, displayEntity);
+    const mobileMediaItems = product.type === 'bundle'
+        ? buildBundleMobileMediaItems(product, activeBundleSelectionRows)
+        : mediaItems;
     const rawCurrentPrice = product.type === 'bundle'
         ? (activeBundleSelectionRows.length > 0 ? bundleCurrentTotal : Number(product.current_price ?? product.price ?? 0))
         : Number(displayVariant?.current_price ?? displayVariant?.price ?? product.current_price ?? product.price ?? 0);
@@ -1103,7 +1170,18 @@ const StorefrontProductDetail = () => {
             <div className="mx-auto max-w-7xl px-0 pb-24 md:px-4 md:py-8 md:pb-10">
                 <div className="grid grid-cols-1 gap-6 md:gap-10 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
                     <div className="md:sticky md:top-[96px] md:self-start">
-                        <ProductMediaGallery items={mediaItems} title={product.name} />
+                        {product.type === 'bundle' ? (
+                            <>
+                                <div className="md:hidden">
+                                    <ProductMediaGallery items={mobileMediaItems} title={product.name} />
+                                </div>
+                                <div className="hidden md:block">
+                                    <ProductMediaGallery items={mediaItems} title={product.name} />
+                                </div>
+                            </>
+                        ) : (
+                            <ProductMediaGallery items={mediaItems} title={product.name} />
+                        )}
                     </div>
 
                     <div className="space-y-3.5 px-3 md:px-0 md:space-y-5">

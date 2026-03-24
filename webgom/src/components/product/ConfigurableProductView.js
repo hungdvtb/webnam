@@ -17,7 +17,7 @@ function VariantActionPopover({ variantLabel, onAddToCart, onBuyNow }) {
   }
 
   return (
-    <div className={styles.bundleActionPopover}>
+    <div className={`${styles.bundleActionPopover} ${styles.variantActionPopover}`}>
       <div className={styles.bundleActionContent}>
         <p className={styles.bundleActionEyebrow}>Chọn phân loại</p>
         <h3 className={styles.bundleActionTitle}>{variantLabel}</h3>
@@ -332,7 +332,11 @@ export default function ConfigurableProductView({
             <ActionLinks additionalInfo={additionalInfo} />
 
             <div className={styles.actionSectionMB}>
-              <QuantitySelector quantity={quantity} setQuantity={setQuantity} />
+              <QuantitySelector
+                quantity={quantity}
+                setQuantity={setQuantity}
+                statusText="Sẵn sàng giao ngay"
+              />
               <BuyButtons onAddToCart={handleAddToCart} onBuyNow={handleBuyNow} />
             </div>
 

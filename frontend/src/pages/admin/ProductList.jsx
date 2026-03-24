@@ -9,15 +9,9 @@ import Pagination from '../../components/Pagination';
 import { useTableColumns } from '../../hooks/useTableColumns';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
 import SortIndicator from '../../components/SortIndicator';
+import { ACTIVE_PRODUCT_TYPE_KEYS, ACTIVE_PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_META, sanitizeActiveProductTypeValues } from '../../config/productTypes';
 
-const TYPE_LABELS = {
-    simple: { label: 'Sản phẩm đơn', cls: 'bg-primary/10 text-primary border-primary/30' },
-    configurable: { label: 'Sản phẩm có biến thể', cls: 'bg-primary/10 text-primary border-primary/20' },
-    grouped: { label: 'Nhóm sản phẩm', cls: 'bg-umber/10 text-umber border-umber/20' },
-    bundle: { label: 'Bộ sản phẩm (Combo)', cls: 'bg-gold/15 text-gold border-gold/30' },
-    virtual: { label: 'Dịch vụ/Phi vật thể', cls: 'bg-brick/10 text-brick border-brick/20' },
-    downloadable: { label: 'Tài liệu/Dữ liệu số', cls: 'bg-blue-50 text-blue-900 border-blue-200' },
-};
+const TYPE_LABELS = PRODUCT_TYPE_META;
 
 const DEFAULT_COLUMNS = [
     { id: 'sku', label: 'Mã SP', minWidth: '130px', fixed: true },
@@ -81,6 +75,13 @@ function getDefaultProductFilters() {
         start_date: '',
         end_date: '',
         attributes: {},
+    };
+}
+
+function sanitizeProductFilters(rawFilters) {
+    return {
+        ...rawFilters,
+        type: sanitizeActiveProductTypeValues(rawFilters?.type),
     };
 }
 
@@ -220,6 +221,8 @@ const ProductList = () => {
             baseFilters.type = [];
         }
 
+        baseFilters.type = sanitizeActiveProductTypeValues(baseFilters.type);
+
         if (baseFilters.supplier_ids && !Array.isArray(baseFilters.supplier_ids)) {
             if (typeof baseFilters.supplier_ids === 'string') {
                 baseFilters.supplier_ids = baseFilters.supplier_ids.trim() === '' ? [] : baseFilters.supplier_ids.split(',').filter(Boolean);
@@ -240,7 +243,7 @@ const ProductList = () => {
             baseFilters.attributes = {};
         }
         
-        return baseFilters;
+        return sanitizeProductFilters(baseFilters);
     };
 
     const [filters, setFilters] = useState(getInitialFilters());
@@ -392,6 +395,7 @@ const ProductList = () => {
     const fetchProducts = async (page = 1, currentFilters = filters, currentSort = sortConfig, limit = pagination.per_page) => {
         setLoading(true);
         try {
+            const normalizedFilters = sanitizeProductFilters(currentFilters);
             const params = {
                 page,
                 per_page: limit,
@@ -400,38 +404,38 @@ const ProductList = () => {
                 sort_order: currentSort.direction === 'none' ? 'desc' : currentSort.direction
             };
 
-            if (currentFilters.search) {
-                params.search = currentFilters.search;
+            if (normalizedFilters.search) {
+                params.search = normalizedFilters.search;
             }
 
-            if (Array.isArray(currentFilters.category_id) && currentFilters.category_id.length > 0) {
-                params.category_ids = currentFilters.category_id.join(',');
+            if (Array.isArray(normalizedFilters.category_id) && normalizedFilters.category_id.length > 0) {
+                params.category_ids = normalizedFilters.category_id.join(',');
             }
 
-            if (Array.isArray(currentFilters.type) && currentFilters.type.length > 0) {
-                params.type = currentFilters.type.join(',');
+            if (Array.isArray(normalizedFilters.type) && normalizedFilters.type.length > 0) {
+                params.type = normalizedFilters.type.join(',');
             }
 
-            if (Array.isArray(currentFilters.supplier_ids) && currentFilters.supplier_ids.length > 0) {
-                params.supplier_ids = currentFilters.supplier_ids.join(',');
+            if (Array.isArray(normalizedFilters.supplier_ids) && normalizedFilters.supplier_ids.length > 0) {
+                params.supplier_ids = normalizedFilters.supplier_ids.join(',');
             }
 
-            if (currentFilters.missing_purchase_price) {
+            if (normalizedFilters.missing_purchase_price) {
                 params.missing_purchase_price = 1;
             }
 
-            if (currentFilters.multiple_suppliers) {
+            if (normalizedFilters.multiple_suppliers) {
                 params.multiple_suppliers = 1;
             }
 
             ['is_featured', 'is_new', 'min_price', 'max_price', 'min_stock', 'max_stock', 'start_date', 'end_date'].forEach((key) => {
-                if (currentFilters[key] !== '' && currentFilters[key] !== null && currentFilters[key] !== undefined) {
-                    params[key] = currentFilters[key];
+                if (normalizedFilters[key] !== '' && normalizedFilters[key] !== null && normalizedFilters[key] !== undefined) {
+                    params[key] = normalizedFilters[key];
                 }
             });
 
-            if (currentFilters.attributes) {
-                Object.entries(currentFilters.attributes).forEach(([id, val]) => {
+            if (normalizedFilters.attributes) {
+                Object.entries(normalizedFilters.attributes).forEach(([id, val]) => {
                     if (val && (Array.isArray(val) ? val.length > 0 : val !== '')) {
                         params[`attributes[${id}]`] = Array.isArray(val) ? val.join(',') : val;
                     }
@@ -460,7 +464,10 @@ const ProductList = () => {
             let newValues;
             if (currentValues.includes(value)) newValues = currentValues.filter(v => v !== value);
             else newValues = [...currentValues, value];
-            return { ...prev, [name]: newValues };
+            return {
+                ...prev,
+                [name]: name === 'type' ? sanitizeActiveProductTypeValues(newValues) : newValues
+            };
         });
     };
 
@@ -475,9 +482,11 @@ const ProductList = () => {
     };
 
     const applyFilters = () => {
-        setFilters(tempFilters);
+        const normalizedFilters = sanitizeProductFilters(tempFilters);
+        setTempFilters(normalizedFilters);
+        setFilters(normalizedFilters);
         setShowAdvanced(false);
-        fetchProducts(1, tempFilters);
+        fetchProducts(1, normalizedFilters);
     };
 
     const removeFilter = (key, value = null) => {
@@ -504,8 +513,9 @@ const ProductList = () => {
             } else {
                 newFilters[key] = '';
             }
-            fetchProducts(1, newFilters);
-            return newFilters;
+            const normalizedFilters = sanitizeProductFilters(newFilters);
+            fetchProducts(1, normalizedFilters);
+            return normalizedFilters;
         });
     };
 
@@ -984,7 +994,7 @@ const ProductList = () => {
                         <button 
                             data-filter-btn 
                             onClick={() => {
-                                if (!showAdvanced) setTempFilters({ ...filters });
+                                if (!showAdvanced) setTempFilters(sanitizeProductFilters(filters));
                                 setShowAdvanced(!showAdvanced);
                             }} 
                             className={`p-1.5 border transition-all rounded-sm w-9 h-9 ${showAdvanced ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`} 
@@ -1218,7 +1228,7 @@ const ProductList = () => {
                                                         e.stopPropagation();
                                                         setTempFilters(prev => ({
                                                             ...prev,
-                                                            type: Object.keys(TYPE_LABELS)
+                                                            type: ACTIVE_PRODUCT_TYPE_KEYS
                                                         }));
                                                     }}
                                                 >Chọn tất cả</button>
@@ -1230,15 +1240,15 @@ const ProductList = () => {
                                                     }}
                                                 >Xóa hết</button>
                                             </div>
-                                            {Object.entries(TYPE_LABELS).map(([k, v]) => (
-                                                <label key={k} className="px-3 py-2 hover:bg-primary/5 cursor-pointer flex items-center gap-3 transition-colors select-none" onClick={(e) => e.stopPropagation()}>
+                                            {ACTIVE_PRODUCT_TYPE_OPTIONS.map((option) => (
+                                                <label key={option.value} className="px-3 py-2 hover:bg-primary/5 cursor-pointer flex items-center gap-3 transition-colors select-none" onClick={(e) => e.stopPropagation()}>
                                                     <input 
                                                         type="checkbox" 
-                                                        checked={(tempFilters.type || []).includes(k)}
-                                                        onChange={() => handleTempMultiSelectChange('type', k)}
+                                                        checked={(tempFilters.type || []).includes(option.value)}
+                                                        onChange={() => handleTempMultiSelectChange('type', option.value)}
                                                         className="w-4 h-4 accent-primary"
                                                     />
-                                                    <span className={`text-[13px] ${(tempFilters.type || []).includes(k) ? 'font-bold text-primary' : 'text-stone-600'}`}>{v.label}</span>
+                                                    <span className={`text-[13px] ${(tempFilters.type || []).includes(option.value) ? 'font-bold text-primary' : 'text-stone-600'}`}>{option.label}</span>
                                                 </label>
                                             ))}
                                         </div>
@@ -1456,7 +1466,7 @@ const ProductList = () => {
                     {filters.type && Array.isArray(filters.type) && filters.type.length > 0 && filters.type.map(t => (
                         <div key={t} className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">Loại:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{TYPE_LABELS[t]?.label}</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{TYPE_LABELS[t]?.label || t}</span>
                             <button onClick={() => removeFilter('type', t)} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     ))}
@@ -2016,7 +2026,7 @@ const ProductList = () => {
                                             onChange={e => setBulkUpdateData({...bulkUpdateData, type: e.target.value})}
                                         >
                                             <option value="">-- Bỏ qua --</option>
-                                            {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                                            {ACTIVE_PRODUCT_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                                         </select>
                                     </div>
                                     <div className="space-y-1">

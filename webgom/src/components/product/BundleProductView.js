@@ -139,6 +139,38 @@ export default function BundleProductView({
   // Active tab in the detail section (separate from upper config selector)
   const [activeTab, setActiveTab] = useState(null);
 
+  const bundleMobileGalleryImages = useMemo(() => {
+    const sourceImages = Array.isArray(images) ? images : [];
+    const seenSources = new Set();
+
+    const isRenderableGallerySource = (value) => {
+      const normalized = String(value || '').trim();
+
+      if (!normalized || normalized === '/' || normalized === '#' || /^javascript:/i.test(normalized)) {
+        return false;
+      }
+
+      if (normalized.includes('placehold.co/800')) {
+        return false;
+      }
+
+      return true;
+    };
+
+    const cleanedImages = sourceImages.filter((image) => {
+      const resolvedSource = getImageUrl(image);
+
+      if (!isRenderableGallerySource(resolvedSource) || seenSources.has(resolvedSource)) {
+        return false;
+      }
+
+      seenSources.add(resolvedSource);
+      return true;
+    });
+
+    return cleanedImages.length > 0 ? cleanedImages : sourceImages;
+  }, [getImageUrl, images]);
+
   // Extract unique configurations (tabs)
   const configurations = useMemo(() => {
     const titles = bundleItems
@@ -315,14 +347,28 @@ export default function BundleProductView({
         <div className={styles.mainGrid}>
           {/* Gallery */}
           <div className={styles.galleryColumn}>
-            <ProductGallery
-              images={images}
-              videoUrl={videoUrl}
-              activeIndex={activeIndex}
-              setActiveIndex={setActiveIndex}
-              getImageUrl={getImageUrl}
-              productName={product.name}
-            />
+            <div className={styles.bundleGalleryDesktopOnly}>
+              <ProductGallery
+                images={images}
+                videoUrl={videoUrl}
+                activeIndex={activeIndex}
+                setActiveIndex={setActiveIndex}
+                getImageUrl={getImageUrl}
+                productName={product.name}
+              />
+            </div>
+
+            <div className={`${styles.bundleGalleryMobileOnly} ${styles.configurableMediaShell}`}>
+              <ProductGallery
+                images={bundleMobileGalleryImages}
+                videoUrl={videoUrl}
+                activeIndex={activeIndex}
+                setActiveIndex={setActiveIndex}
+                getImageUrl={getImageUrl}
+                productName={product.name}
+                showSingleThumbnail
+              />
+            </div>
           </div>
 
           {/* Info */}

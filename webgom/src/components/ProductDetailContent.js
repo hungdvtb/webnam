@@ -374,11 +374,11 @@ export default function ProductDetailContent({ product }) {
     }
 
     if (!currentProduct?.id || !selectedVariantId) {
-      return 'Vui lòng chọn biến thể sản phẩm trước khi đặt hàng.';
+      return 'Vui lòng chọn phân loại sản phẩm trước khi đặt hàng.';
     }
 
     if (hasConfigurableChoices && !hasExplicitVariantSelection) {
-      return 'Vui lòng chọn biến thể sản phẩm trước khi đặt hàng.';
+      return 'Vui lòng chọn phân loại sản phẩm trước khi đặt hàng.';
     }
 
     return '';

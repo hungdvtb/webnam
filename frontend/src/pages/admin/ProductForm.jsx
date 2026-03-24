@@ -275,7 +275,7 @@ const DraggableBundleItem = ({
                         onChange={(e) => handleUpdateBundleItemVariant(optionId, item.id, e.target.value)}
                         className="w-full bg-stone/5 border border-stone/10 rounded px-2 py-1 text-[11px] font-bold text-black focus:outline-none focus:border-gold/30"
                     >
-                        <option value="">Chọn biến thể...</option>
+                        <option value="">Chọn phân loại...</option>
                         {(bundleItemVariants[item.id] || []).map(v => (
                             <option key={v.id} value={v.id}>{v.name || (v.attribute_values || []).map(av => av.value).join(' / ')}</option>
                         ))}

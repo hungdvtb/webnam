@@ -1301,7 +1301,7 @@ const StorefrontProductDetail = () => {
                             <section className="rounded-[30px] border border-stone-200/80 bg-white p-5 shadow-[0_18px_40px_-34px_rgba(27,54,93,0.42)]">
                                 <SectionHeading
                                     icon="tune"
-                                    eyebrow="Chọn biến thể"
+                                    eyebrow="Chọn phân loại"
                                     title={mustChooseVariant ? 'Hoàn tất lựa chọn trước khi đặt hàng' : 'Biến thể đã sẵn sàng'}
                                 />
 
@@ -1533,7 +1533,7 @@ const StorefrontProductDetail = () => {
                                                 <div className="mt-3 rounded-[20px] bg-white p-3 shadow-sm">
                                                     <div className="flex items-center justify-between gap-3">
                                                         <p className="text-[11px] font-black uppercase tracking-[0.16em] text-stone-500">
-                                                            Chọn biến thể
+                                                            Chọn phân loại
                                                         </p>
                                                         <span className={`text-[11px] font-bold ${item.requiresSelection ? 'text-amber-700' : 'text-stone-500'}`}>
                                                             {item.selectedVariant ? getVariantLabel(item.name, item.selectedVariant) : 'Chưa chọn'}
@@ -1562,7 +1562,7 @@ const StorefrontProductDetail = () => {
 
                                                     {item.requiresSelection ? (
                                                         <p className="mt-2 text-xs font-semibold text-amber-700">
-                                                            Cần chọn biến thể cho sản phẩm con này trước khi mua bộ.
+                                                            Cần chọn phân loại cho sản phẩm con này trước khi mua bộ.
                                                         </p>
                                                     ) : null}
                                                 </div>
@@ -1577,7 +1577,7 @@ const StorefrontProductDetail = () => {
                                             Tổng giá bộ
                                         </p>
                                         <p className="mt-1 text-xs text-stone-500">
-                                            Cập nhật tức thì theo lựa chọn biến thể từng sản phẩm con.
+                                            Cập nhật tức thì theo lựa chọn phân loại từng sản phẩm con.
                                         </p>
                                     </div>
                                     <p className="text-lg font-black text-primary">

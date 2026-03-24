@@ -19,7 +19,7 @@ function VariantActionPopover({ variantLabel, onAddToCart, onBuyNow }) {
   return (
     <div className={styles.bundleActionPopover}>
       <div className={styles.bundleActionContent}>
-        <p className={styles.bundleActionEyebrow}>Chọn biến thể</p>
+        <p className={styles.bundleActionEyebrow}>Chọn phân loại</p>
         <h3 className={styles.bundleActionTitle}>{variantLabel}</h3>
         <div className={styles.bundleActionGrid}>
           <button type="button" onClick={onAddToCart} className={styles.bundleActionPrimary}>
@@ -147,18 +147,21 @@ export default function ConfigurableProductView({
   };
 
   return (
-    <>
+    <div className={styles.configurableView}>
       <Breadcrumb product={product} />
       <div className={styles.mainGrid}>
         <div className={styles.galleryColumn}>
-          <ProductGallery
-            images={images}
-            videoUrl={videoUrl}
-            activeIndex={activeIndex}
-            setActiveIndex={setActiveIndex}
-            getImageUrl={getImageUrl}
-            productName={currentProduct.name}
-          />
+          <div className={styles.configurableMediaShell}>
+            <ProductGallery
+              images={images}
+              videoUrl={videoUrl}
+              activeIndex={activeIndex}
+              setActiveIndex={setActiveIndex}
+              getImageUrl={getImageUrl}
+              productName={currentProduct.name}
+              showSingleThumbnail
+            />
+          </div>
         </div>
 
         <div className={styles.infoColumn}>
@@ -166,6 +169,11 @@ export default function ConfigurableProductView({
             <div className={styles.titleSection}>
 
               <h1 className={styles.title}>{product.name}</h1>
+              {currentProduct?.sku ? (
+                <p className={styles.configurableMobileSku}>
+                  Mã sản phẩm: <span>{currentProduct.sku}</span>
+                </p>
+              ) : null}
 
               <div className={styles.meta}>
                 <span className={styles.sku}>SKU: <span className={styles.skuValue}>{currentProduct.sku}</span></span>
@@ -282,7 +290,7 @@ export default function ConfigurableProductView({
             ) : (
               <div className={styles.variantsCard}>
                 <div className={styles.variantGroup}>
-                  <h4 className={styles.variantLabel}>Chọn biến thể</h4>
+                  <h4 className={styles.variantLabel}>Chọn phân loại</h4>
                   <div className={styles.variantList}>
                     {(product.variations || []).map((variant) => {
                       const isActive = currentProduct?.id === variant.id;
@@ -332,7 +340,7 @@ export default function ConfigurableProductView({
           </div>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 

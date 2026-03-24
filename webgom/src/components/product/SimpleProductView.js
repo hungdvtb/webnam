@@ -50,6 +50,11 @@ export default function SimpleProductView({
                 <div className={styles.simpleTitleRow}>
                   <h1 className={styles.title}>{product.name}</h1>
                 </div>
+                {product?.sku ? (
+                  <p className={styles.simpleMobileSku}>
+                    Mã sản phẩm: <span>{product.sku}</span>
+                  </p>
+                ) : null}
               </div>
 
               <div className={styles.priceContainer}>
@@ -75,7 +80,11 @@ export default function SimpleProductView({
             </div>
 
             <div className={`${styles.actionSectionMB} ${styles.simpleMobileActionSection}`}>
-              <QuantitySelector quantity={quantity} setQuantity={setQuantity} />
+              <QuantitySelector
+                quantity={quantity}
+                setQuantity={setQuantity}
+                statusText="Sẵn sàng giao ngay"
+              />
               <BuyButtons onAddToCart={handleAddToCart} onBuyNow={handleBuyNow} />
             </div>
           </div>

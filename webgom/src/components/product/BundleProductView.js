@@ -769,6 +769,22 @@ export default function BundleProductView({
     });
   };
 
+  const handleMobileHeroConfigSelection = (configName) => {
+    handleTabChange(configName);
+    closeBundleActions();
+    setIsMobileHeroConfigMenuOpen(false);
+
+    if (typeof window === 'undefined' || !isMobileBundleViewport) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        scrollToBundleDetailControls({ behavior: 'smooth' });
+      });
+    });
+  };
+
   const handlePopupAddToCart = (event) => {
     if (!activeBundlePopover || !handleAddBundleConfig) return;
     handleAddBundleConfig(activeBundlePopover, event);
@@ -941,7 +957,7 @@ export default function BundleProductView({
       return null;
     }
 
-    const selectedConfig = activeBundlePopover || activeConfig || configurations[0];
+    const selectedConfig = activeTab || activeConfig || configurations[0];
 
     return (
       <div
@@ -972,7 +988,7 @@ export default function BundleProductView({
             aria-label={product.bundle_title || 'Danh sách cấu hình bộ'}
           >
             {configurations.map((config) => {
-              const isActive = activeConfig === config || activeBundlePopover === config;
+              const isActive = selectedConfig === config;
 
               return (
                 <button
@@ -982,8 +998,7 @@ export default function BundleProductView({
                   aria-selected={isActive}
                   className={`${styles.configOptionsMobileOption} ${isActive ? styles.configOptionsMobileOptionActive : ''}`}
                   onClick={() => {
-                    handleOpenBundleActions(config);
-                    setIsMobileHeroConfigMenuOpen(false);
+                    handleMobileHeroConfigSelection(config);
                   }}
                 >
                   <span className={styles.configOptionsMobileOptionCopy}>

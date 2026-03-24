@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import { getWebProducts, fetchFromApi } from '@/lib/api';
 import styles from '../builder.module.css';
@@ -26,6 +26,32 @@ export default function ComponentSelectionModal({
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
+  const [mobileTopOffset, setMobileTopOffset] = useState(0);
+  const savedScrollTopRef = useRef(0);
+
+  const restorePageScrollPosition = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const targetTop = savedScrollTopRef.current || 0;
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: targetTop, behavior: 'auto' });
+      });
+    });
+  }, []);
+
+  const handleClose = useCallback(() => {
+    onClose();
+    restorePageScrollPosition();
+  }, [onClose, restorePageScrollPosition]);
+
+  const handleSelectItem = useCallback((item) => {
+    onSelect(item);
+    restorePageScrollPosition();
+  }, [onSelect, restorePageScrollPosition]);
 
   // Load variants of current slot's parent product
   const fetchVariants = useCallback(async () => {
@@ -88,6 +114,36 @@ export default function ComponentSelectionModal({
     }
   }, [isOpen, currentSlot?.id]);
 
+  useEffect(() => {
+    if (!isOpen || typeof window === 'undefined') {
+      setMobileTopOffset(0);
+      return undefined;
+    }
+
+    savedScrollTopRef.current = window.scrollY || window.pageYOffset || 0;
+
+    const syncMobileTopOffset = () => {
+      const isMobileViewport = window.matchMedia('(max-width: 768px)').matches;
+
+      if (!isMobileViewport) {
+        setMobileTopOffset(0);
+        return;
+      }
+
+      const mobileHeaderShell = document.querySelector('.mobile-sticky-header-shell');
+      const shellRect = mobileHeaderShell?.getBoundingClientRect();
+      const shellHeight = Math.round(shellRect?.height || mobileHeaderShell?.offsetHeight || 0);
+      setMobileTopOffset(shellHeight > 0 ? shellHeight + 14 : 96);
+    };
+
+    syncMobileTopOffset();
+    window.addEventListener('resize', syncMobileTopOffset);
+
+    return () => {
+      window.removeEventListener('resize', syncMobileTopOffset);
+    };
+  }, [isOpen]);
+
   // Re-fetch search when searchTerm changes
   useEffect(() => {
     if (mode !== 'search' || !isOpen) return;
@@ -107,7 +163,11 @@ export default function ComponentSelectionModal({
   const displayItems = mode === 'variants' ? variants : searchResults;
 
   return (
-    <div className={styles.modalOverlay} onClick={onClose}>
+    <div
+      className={styles.modalOverlay}
+      style={mobileTopOffset > 0 ? { '--bundle-mobile-modal-offset': `${mobileTopOffset}px` } : undefined}
+      onClick={handleClose}
+    >
       <div className={styles.modalContent} onClick={e => e.stopPropagation()}>
 
         {/* Header */}
@@ -116,8 +176,9 @@ export default function ComponentSelectionModal({
             <h2>Chọn sản phẩm thay thế</h2>
             <p>Đang thay thế: <strong>{currentSlot?.name}</strong></p>
           </div>
-          <button onClick={onClose} className={styles.closeBtn}>
+          <button type="button" onClick={handleClose} className={styles.closeBtn}>
             <span className="material-symbols-outlined">close</span>
+            <span className={styles.closeBtnLabel}>Đóng</span>
           </button>
         </div>
 
@@ -171,7 +232,7 @@ export default function ComponentSelectionModal({
                   <div
                     key={item.id}
                     className={`${styles.productCard} ${isCurrent ? styles.productCardActive : ''}`}
-                    onClick={() => onSelect(item)}
+                    onClick={() => handleSelectItem(item)}
                   >
                     {isCurrent && (
                       <span className={styles.currentBadge}>Đang dùng</span>
@@ -197,7 +258,7 @@ export default function ComponentSelectionModal({
                         </span>
                       )}
                     </div>
-                    <button className={styles.productCardSelectBtn}>
+                    <button type="button" className={styles.productCardSelectBtn}>
                       <span className="material-symbols-outlined" style={{ fontSize: 16 }}>check_circle</span>
                       {isCurrent ? 'Giữ nguyên' : 'Chọn'}
                     </button>
@@ -221,6 +282,7 @@ export default function ComponentSelectionModal({
               )}
               {mode === 'variants' && !errorMsg && (
                 <button
+                  type="button"
                   className={styles.switchModeBtn}
                   onClick={() => setMode('search')}
                 >
@@ -236,7 +298,7 @@ export default function ComponentSelectionModal({
           <span style={{ fontSize: 13, color: '#555', fontWeight: 600 }}>
             {displayItems.length} kết quả
           </span>
-          <button onClick={onClose} className={styles.footerBtn}>Đóng</button>
+          <button type="button" onClick={handleClose} className={styles.footerBtn}>Đóng</button>
         </div>
       </div>
     </div>

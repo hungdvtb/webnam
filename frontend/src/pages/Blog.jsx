@@ -3,24 +3,6 @@ import { Link } from 'react-router-dom';
 import { blogApi } from '../services/api';
 
 const DEFAULT_CATEGORY_LABEL = 'Cẩm nang gốm sứ';
-const POLICY_CATEGORY_PHRASES = ['chinh sach', 'policy'];
-const POLICY_SIGNAL_PHRASES = [
-    'bao hanh',
-    'giao hang',
-    'kiem hang',
-    'doi tra',
-    'hoan tien',
-    'bao mat',
-];
-
-const normalizeSearchText = (value = '') => String(value)
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/đ/g, 'd')
-    .replace(/Đ/g, 'd')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
 
 const stripHtml = (value = '') => String(value).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 
@@ -58,49 +40,7 @@ const resolveCategoryLabel = (post, categoryMap) => (
     || DEFAULT_CATEGORY_LABEL
 );
 
-const isPolicyCategory = (categoryName = '') => {
-    const normalizedCategory = normalizeSearchText(categoryName);
-
-    return POLICY_CATEGORY_PHRASES.some((phrase) => normalizedCategory.includes(phrase));
-};
-
-const isPolicyPost = (post, categoryMap) => {
-    const normalizedSlug = normalizeSearchText(post?.slug || '');
-    const normalizedTitle = normalizeSearchText(post?.title || '');
-    const normalizedExcerpt = normalizeSearchText(post?.excerpt || '');
-    const normalizedCategory = normalizeSearchText(resolveCategoryLabel(post, categoryMap));
-    const haystack = [normalizedSlug, normalizedTitle, normalizedExcerpt, normalizedCategory]
-        .filter(Boolean)
-        .join(' ');
-
-    if (!haystack) {
-        return false;
-    }
-
-    const hasPolicyPrefix = [normalizedSlug, normalizedTitle, normalizedExcerpt, normalizedCategory]
-        .some((value) => value.includes('chinh sach'));
-
-    const hasPolicySignal = POLICY_SIGNAL_PHRASES.some((phrase) => haystack.includes(phrase));
-    const startsWithPolicySignal = POLICY_SIGNAL_PHRASES.some((phrase) => (
-        normalizedSlug.startsWith(phrase)
-        || normalizedTitle.startsWith(phrase)
-        || normalizedExcerpt.startsWith(phrase)
-    ));
-
-    if (normalizedSlug.startsWith('chinh sach')) {
-        return true;
-    }
-
-    if (isPolicyCategory(normalizedCategory)) {
-        return true;
-    }
-
-    if (post?.is_system && hasPolicySignal) {
-        return true;
-    }
-
-    return (hasPolicyPrefix && hasPolicySignal) || startsWithPolicySignal;
-};
+const isSystemPost = (post) => Boolean(post?.is_system);
 
 const BlogImage = ({ src, alt, className, iconClassName = 'text-4xl', eager = false }) => {
     const [hasError, setHasError] = useState(!src);
@@ -288,8 +228,8 @@ const Blog = () => {
     );
 
     const filteredPosts = useMemo(
-        () => posts.filter((post) => !isPolicyPost(post, categoryMap)),
-        [posts, categoryMap],
+        () => posts.filter((post) => !isSystemPost(post)),
+        [posts],
     );
 
     const filteredCategories = useMemo(() => {
@@ -299,10 +239,7 @@ const Blog = () => {
                 .filter((categoryId) => Number.isInteger(categoryId) && categoryId > 0),
         );
 
-        return categories.filter((category) => (
-            !isPolicyCategory(category.name)
-            && visibleCategoryIds.has(Number(category.id))
-        ));
+        return categories.filter((category) => visibleCategoryIds.has(Number(category.id)));
     }, [categories, filteredPosts]);
 
     useEffect(() => {

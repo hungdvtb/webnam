@@ -37,9 +37,16 @@ class BlogController extends Controller
             $query->with(['category:id,account_id,name,slug,sort_order']);
         }
 
-        // Public visitors only see visible posts.
+        // Public visitors only see visible non-system posts.
         if (!$request->user()) {
             $query->published();
+
+            if ($this->hasSystemPostSupport()) {
+                $query->where(function (Builder $publicQuery) {
+                    $publicQuery->whereNull('is_system')
+                        ->orWhere('is_system', false);
+                });
+            }
         }
 
         $search = trim((string) $request->query('search', ''));

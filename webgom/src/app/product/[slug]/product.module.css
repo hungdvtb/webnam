@@ -950,15 +950,21 @@
   }
 
   .bundleView .customizeBundleBtnText {
-    display: block;
-    max-width: 16ch;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.04rem;
+    max-width: none;
     margin: 0 auto;
-    white-space: normal;
     text-align: center;
-    text-wrap: balance;
-    font-size: 0.8rem;
+    font-size: 0.77rem;
     line-height: 1.16;
     font-weight: 700;
+  }
+
+  .bundleView .customizeBundleBtnText span {
+    display: block;
+    white-space: nowrap;
   }
 
   .bundleView .customizeBundleBtn > .material-symbols-outlined {

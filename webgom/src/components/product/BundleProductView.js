@@ -11,7 +11,7 @@ import BuyButtons from './common/BuyButtons';
 import SpecificationList from './common/SpecificationList';
 import ActionLinks from './common/ActionLinks';
 import ComponentSelectionModal from './common/ComponentSelectionModal';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Breadcrumb from './common/Breadcrumb';
 
@@ -209,6 +209,11 @@ export default function BundleProductView({
   const [isMobileBundleViewport, setIsMobileBundleViewport] = useState(false);
   // Active tab in the detail section (separate from upper config selector)
   const [activeTab, setActiveTab] = useState(null);
+  const [isMobileStickyClusterActive, setIsMobileStickyClusterActive] = useState(false);
+  const [mobileStickyClusterLayout, setMobileStickyClusterLayout] = useState({ top: 0, left: 0, width: 0, height: 0 });
+  const bundleListRef = useRef(null);
+  const mobileStickyClusterShellRef = useRef(null);
+  const mobileStickyClusterRef = useRef(null);
 
   const bundleMobileGalleryImages = useMemo(() => {
     const sourceImages = Array.isArray(images) ? images : [];
@@ -261,6 +266,39 @@ export default function BundleProductView({
     return Array.from(new Set(titles));
   }, [bundleItems]);
 
+  const bundleConfigLayout = useMemo(() => {
+    const total = configurations.length;
+
+    if (total === 0) {
+      return { columns: 0, rows: [] };
+    }
+
+    if (total <= 4) {
+      return { columns: total, rows: [configurations] };
+    }
+
+    if (total <= 6) {
+      return {
+        columns: 3,
+        rows: [configurations.slice(0, 3), configurations.slice(3)],
+      };
+    }
+
+    if (total <= 8) {
+      return {
+        columns: 4,
+        rows: [configurations.slice(0, 4), configurations.slice(4)],
+      };
+    }
+
+    const rows = [];
+    for (let index = 0; index < total; index += 4) {
+      rows.push(configurations.slice(index, index + 4));
+    }
+
+    return { columns: 4, rows };
+  }, [configurations]);
+
   // Initialise activeTab to first config
   useEffect(() => {
     if (configurations.length > 0 && !activeTab) {
@@ -284,6 +322,19 @@ export default function BundleProductView({
     mediaQuery.addListener(syncViewport);
     return () => mediaQuery.removeListener(syncViewport);
   }, []);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+
+    document.body.classList.toggle(
+      'bundle-mobile-summary-sticky-active',
+      isMobileBundleViewport && isMobileStickyClusterActive
+    );
+
+    return () => {
+      document.body.classList.remove('bundle-mobile-summary-sticky-active');
+    };
+  }, [isMobileBundleViewport, isMobileStickyClusterActive]);
 
   // Items of the active tab (including removed ones for placeholder)
   const tabItems = useMemo(() => {
@@ -330,6 +381,89 @@ export default function BundleProductView({
   const DISCOUNT_RATE = 0.10;
   const tabDiscountAmount = isFullCombo ? Math.round(tabSubtotal * DISCOUNT_RATE) : 0;
   const tabFinalPrice = tabSubtotal - tabDiscountAmount;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    if (!isMobileBundleViewport) {
+      setIsMobileStickyClusterActive(false);
+      setMobileStickyClusterLayout({ top: 0, left: 0, width: 0, height: 0 });
+      return undefined;
+    }
+
+    let frameId = 0;
+
+    const updateStickyState = () => {
+      const promoBar = document.querySelector('.top-promotion-bar');
+      const siteHeader = document.querySelector('.site-header');
+      const stickyClusterShell = mobileStickyClusterShellRef.current;
+      const stickyCluster = mobileStickyClusterRef.current;
+      const bundleList = bundleListRef.current;
+
+      const promoHeight = Math.round(promoBar?.getBoundingClientRect().height || 32);
+      const headerHeight = Math.round(siteHeader?.getBoundingClientRect().height || 72);
+
+      if (!stickyClusterShell || !stickyCluster || !bundleList) {
+        setIsMobileStickyClusterActive(false);
+        return;
+      }
+
+      const stickyClusterShellRect = stickyClusterShell.getBoundingClientRect();
+      const bundleListRect = bundleList.getBoundingClientRect();
+      const stickyClusterHeight = stickyCluster.offsetHeight;
+      const stickyTriggerTop = promoHeight + headerHeight + 8;
+      const stickyPinnedTop = promoHeight + 8;
+      const canRemainPinned = bundleListRect.bottom > stickyPinnedTop + stickyClusterHeight + 18;
+      const nextStickyState = stickyClusterShellRect.top <= stickyTriggerTop && canRemainPinned;
+
+      setMobileStickyClusterLayout((currentValue) => {
+        const nextValue = {
+          top: stickyPinnedTop,
+          left: Math.round(stickyClusterShellRect.left),
+          width: Math.round(stickyClusterShellRect.width),
+          height: Math.round(stickyClusterHeight),
+        };
+
+        return (
+          currentValue.top === nextValue.top &&
+          currentValue.left === nextValue.left &&
+          currentValue.width === nextValue.width &&
+          currentValue.height === nextValue.height
+        )
+          ? currentValue
+          : nextValue;
+      });
+
+      setIsMobileStickyClusterActive((currentValue) =>
+        currentValue === nextStickyState ? currentValue : nextStickyState
+      );
+    };
+
+    const requestStickyUpdate = () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+
+      frameId = window.requestAnimationFrame(() => {
+        frameId = 0;
+        updateStickyState();
+      });
+    };
+
+    updateStickyState();
+    window.addEventListener('scroll', requestStickyUpdate, { passive: true });
+    window.addEventListener('resize', requestStickyUpdate);
+
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+
+      window.removeEventListener('scroll', requestStickyUpdate);
+      window.removeEventListener('resize', requestStickyUpdate);
+      setMobileStickyClusterLayout({ top: 0, left: 0, width: 0, height: 0 });
+    };
+  }, [isMobileBundleViewport, activeTab, isFullCombo, tabFinalPrice, tabItems.length]);
 
   // For upper info section: selectedItems (all configs) for top-level displayPrice
   const selectedItems = bundleItems.filter(item => item.selected && !item.removed);
@@ -445,6 +579,180 @@ export default function BundleProductView({
     handleBuyBundleConfig(activeBundlePopover);
     closeBundleActions();
   };
+
+  const mobileStickyClusterShellStyle =
+    isMobileBundleViewport && isMobileStickyClusterActive && mobileStickyClusterLayout.height > 0
+      ? { minHeight: `${mobileStickyClusterLayout.height}px` }
+      : undefined;
+
+  const mobileStickyClusterStyle =
+    isMobileBundleViewport && isMobileStickyClusterActive && mobileStickyClusterLayout.width > 0
+      ? {
+          top: `${mobileStickyClusterLayout.top}px`,
+          left: `${mobileStickyClusterLayout.left}px`,
+          width: `${mobileStickyClusterLayout.width}px`,
+          maxWidth: `${mobileStickyClusterLayout.width}px`,
+        }
+      : undefined;
+
+  const renderBundleConfigGrid = () => {
+    if (bundleConfigLayout.rows.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className={builderStyles.tabBar}>
+        {bundleConfigLayout.rows.map((row, rowIndex) => (
+          <div
+            key={`bundle-config-row-${rowIndex}`}
+            className={builderStyles.tabBarRow}
+            style={{ '--bundle-tab-columns': bundleConfigLayout.columns }}
+          >
+            {row.map((config) => (
+              <button
+                key={config}
+                className={`${builderStyles.tabBtn} ${activeTab === config ? builderStyles.tabBtnActive : ''}`}
+                onClick={() => handleTabChange(config)}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                  {activeTab === config ? 'radio_button_checked' : 'radio_button_unchecked'}
+                </span>
+                {config}
+                {(() => {
+                  const cfgItems = bundleItems.filter((item) => (item.option_title || item.pivot?.option_title) === config);
+                  const origSrc = product.bundle_items || product.grouped_items || [];
+                  const origCfg = origSrc.filter((item) => (item.option_title || item.pivot?.option_title) === config);
+                  const full = cfgItems.every((item) => {
+                    if (item.removed) return false;
+                    const originalItem = origCfg.find((candidate) => candidate.id === item.id);
+                    return (item.qty || 1) >= (originalItem?.pivot?.quantity || 1);
+                  });
+
+                  return cfgItems.length > 0 && full ? (
+                    <span className={builderStyles.tabFullDot} title="Đủ điều kiện giảm giá"></span>
+                  ) : null;
+                })()}
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const renderBundleDetailControls = () => (
+    <>
+      {configurations.length > 0 && (
+        <div className={builderStyles.tabBar}>
+          {configurations.map(config => (
+            <button
+              key={config}
+              className={`${builderStyles.tabBtn} ${activeTab === config ? builderStyles.tabBtnActive : ''}`}
+              onClick={() => handleTabChange(config)}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                {activeTab === config ? 'radio_button_checked' : 'radio_button_unchecked'}
+              </span>
+              {config}
+              {(() => {
+                const cfgItems = bundleItems.filter(i => (i.option_title || i.pivot?.option_title) === config);
+                const origSrc = product.bundle_items || product.grouped_items || [];
+                const origCfg = origSrc.filter(i => (i.option_title || i.pivot?.option_title) === config);
+                const full = cfgItems.every(item => {
+                  if (item.removed) return false;
+                  const o = origCfg.find(x => x.id === item.id);
+                  return (item.qty || 1) >= (o?.pivot?.quantity || 1);
+                });
+
+                return cfgItems.length > 0 && full
+                  ? <span className={builderStyles.tabFullDot} title="Äá»§ Ä‘iá»u kiá»‡n giáº£m giÃ¡"></span>
+                  : null;
+              })()}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {tabItems.length > 0 && (
+        <div className={builderStyles.topActionBar}>
+          {isFullCombo ? (
+            <div className={builderStyles.discountBannerInline}>
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>local_offer</span>
+              <span>Báº¡n Ä‘ang mua trá»n bá»™ â€” Æ¯u Ä‘Ã£i giáº£m <strong>{(DISCOUNT_RATE * 100).toFixed(0)}%</strong>!</span>
+            </div>
+          ) : (
+            <div className={builderStyles.discountHintInline}>
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>info</span>
+              <span>Mua Ä‘á»§ <strong>{tabItems.length} mÃ³n</strong> nháº­n Æ°u Ä‘Ã£i giáº£m {(DISCOUNT_RATE * 100).toFixed(0)}%</span>
+            </div>
+          )}
+
+          <div className={builderStyles.quickSummaryTopInline}>
+            <div className={builderStyles.quickSummaryPrice}>
+              <span className={builderStyles.quickSummaryLabel}>Thanh toÃ¡n:</span>
+              <span className={builderStyles.quickSummaryValue}>{formatPrice(tabFinalPrice)}</span>
+            </div>
+            {handleBuyTabConfig && tabItems.some(i => !i.removed) && (
+              <button
+                className={builderStyles.buyTabBtnSmall}
+                onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>shopping_cart_checkout</span>
+                Mua ngay
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  const renderStickyBundleDetailControls = () => (
+    <>
+      {renderBundleConfigGrid()}
+
+      {tabItems.length > 0 && (
+        <div className={builderStyles.topActionBar}>
+          {isFullCombo ? (
+            <div className={builderStyles.discountBannerInline}>
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>local_offer</span>
+              <span>
+                {'\u0042\u1ea1n \u0111ang mua tr\u1ecdn b\u1ed9 \u2014 \u01afu \u0111\u00e3i gi\u1ea3m '}
+                <strong>{(DISCOUNT_RATE * 100).toFixed(0)}%</strong>
+                !
+              </span>
+            </div>
+          ) : (
+            <div className={builderStyles.discountHintInline}>
+              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>info</span>
+              <span>
+                {'Mua \u0111\u1ee7 '}
+                <strong>{tabItems.length} {'m\u00f3n'}</strong>
+                {' nh\u1eadn \u01b0u \u0111\u00e3i gi\u1ea3m '}
+                {(DISCOUNT_RATE * 100).toFixed(0)}%
+              </span>
+            </div>
+          )}
+
+          <div className={builderStyles.quickSummaryTopInline}>
+            <div className={builderStyles.quickSummaryPrice}>
+              <span className={builderStyles.quickSummaryLabel}>{'Thanh to\u00e1n:'}</span>
+              <span className={builderStyles.quickSummaryValue}>{formatPrice(tabFinalPrice)}</span>
+            </div>
+            {handleBuyTabConfig && tabItems.some((item) => !item.removed) && (
+              <button
+                className={builderStyles.buyTabBtnSmall}
+                onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>shopping_cart_checkout</span>
+                {'Mua ngay'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
 
   return (
     <div className={styles.bundleView}>
@@ -609,7 +917,8 @@ export default function BundleProductView({
                   >
                     <span className="material-symbols-outlined">tune</span>
                     <span className={styles.customizeBundleBtnText}>
-                    Xem chi tiết & tùy chỉnh thành phần bên dưới
+                      <span>Xem chi tiết & tùy chỉnh</span>
+                      <span>thành phần bên dưới</span>
                     </span>
                   </button>
                 </div>
@@ -633,7 +942,12 @@ export default function BundleProductView({
         </div>
 
         {/* ===== Chi tiết thành phần bộ ===== */}
-        <div id="bundle-list" className="pt-16 border-t border-stone/10" style={{ marginTop: '10px' }}>
+        <div
+          id="bundle-list"
+          ref={bundleListRef}
+          className="pt-16 border-t border-stone/10"
+          style={{ marginTop: '10px' }}
+        >
           <div className="text-center" style={{ marginBottom: '10px' }}>
             <h2 className="text-3xl font-display font-bold text-primary italic" style={{ marginBottom: '10px' }}>Chi tiết thành phần bộ</h2>
             <div className="w-20 h-1 bg-accent mx-auto rounded-full"></div>
@@ -644,7 +958,20 @@ export default function BundleProductView({
 
           <div className="max-w-5xl mx-auto" style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
 
-            {/* === Tab bar === */}
+            <div
+              ref={mobileStickyClusterShellRef}
+              className={builderStyles.mobileStickyClusterShell}
+              style={mobileStickyClusterShellStyle}
+            >
+              <div
+                ref={mobileStickyClusterRef}
+                className={`${builderStyles.mobileStickyCluster} ${isMobileBundleViewport && isMobileStickyClusterActive ? builderStyles.mobileStickyClusterHidden : ''}`}
+              >
+                <div className={builderStyles.tabBarGridWrap}>
+                  {renderBundleConfigGrid()}
+                </div>
+
+              {/* === Tab bar === */}
             {configurations.length > 0 && (
               <div className={builderStyles.tabBar}>
                 {configurations.map(config => (
@@ -676,7 +1003,7 @@ export default function BundleProductView({
               </div>
             )}
 
-            {/* === Top Action Bar === */}
+              {/* === Top Action Bar === */}
             {tabItems.length > 0 && (
               <div className={builderStyles.topActionBar}>
                 {isFullCombo ? (
@@ -706,6 +1033,17 @@ export default function BundleProductView({
                     </button>
                   )}
                 </div>
+              </div>
+            )}
+              </div>
+            </div>
+
+            {isMobileBundleViewport && isMobileStickyClusterActive && mobileStickyClusterLayout.width > 0 && (
+              <div
+                className={`${builderStyles.mobileStickyCluster} ${builderStyles.mobileStickyClusterFloating}`}
+                style={mobileStickyClusterStyle}
+              >
+                {renderStickyBundleDetailControls()}
               </div>
             )}
 
@@ -768,6 +1106,89 @@ export default function BundleProductView({
                     }
 
                     const lineTotal = parseFloat(item.price || 0) * (item.qty || 1);
+                    if (isMobileBundleViewport) {
+                      return (
+                        <div key={item.id} className={`${builderStyles.tableRow} ${builderStyles.tableRowMobileCompact}`}>
+                          <div className={builderStyles.colStt}>
+                            <span className={builderStyles.sttBadge}>{idx + 1}</span>
+                          </div>
+
+                          <div className={builderStyles.colImg}>
+                            <div className={builderStyles.tableImgWrap}>
+                              <Image
+                                src={getImageUrl(item.images?.[0] || item.primary_image || { path: item.main_image })}
+                                alt={item.name}
+                                fill
+                                style={{ objectFit: 'cover' }}
+                                unoptimized
+                              />
+                            </div>
+                          </div>
+
+                          <div className={builderStyles.mobileItemContent}>
+                            <div className={builderStyles.colName}>
+                              <div className={builderStyles.nameRow}>
+                                <p className={builderStyles.itemName}>{item.name}</p>
+                                <button
+                                  className={builderStyles.inlineChangeBtn}
+                                  onClick={() => openSelectionModal(item)}
+                                  title={'Thay s\u1EA3n ph\u1EA9m kh\u00E1c'}
+                                >
+                                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>swap_horiz</span>
+                                  {'\u0110\u1ED5i'}
+                                </button>
+                              </div>
+                              {item.sku && <span className={builderStyles.variantHint}>SKU: {item.sku}</span>}
+                            </div>
+
+                            <div className={builderStyles.mobileItemBottom}>
+                              <div className={builderStyles.mobilePriceStack}>
+                                <div className={builderStyles.mobilePriceLine}>
+                                  <span className={builderStyles.mobileMetaLabel}>{'\u0110\u01A1n gi\u00E1'}</span>
+                                  <span className={builderStyles.unitPrice}>{formatPrice(item.price)}</span>
+                                </div>
+                                <div className={builderStyles.mobilePriceLine}>
+                                  <span className={builderStyles.mobileMetaLabel}>{'Th\u00E0nh ti\u1EC1n'}</span>
+                                  <span className={builderStyles.lineTotal}>{formatPrice(lineTotal)}</span>
+                                </div>
+                              </div>
+
+                              <div className={builderStyles.mobileControlStack}>
+                                <div className={builderStyles.colQty}>
+                                  <div className={builderStyles.qtyControl}>
+                                    <button
+                                      className={builderStyles.qtyBtn}
+                                      onClick={() => updateBundleItemQuantity(item.id, (item.qty || 1) - 1)}
+                                      disabled={(item.qty || 1) <= 1}
+                                    >
+                                      <span className="material-symbols-outlined" style={{ fontSize: 16 }}>remove</span>
+                                    </button>
+                                    <span className={builderStyles.qtyDisplay}>{item.qty || 1}</span>
+                                    <button
+                                      className={builderStyles.qtyBtn}
+                                      onClick={() => updateBundleItemQuantity(item.id, (item.qty || 1) + 1)}
+                                    >
+                                      <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className={builderStyles.colActions}>
+                                  <button
+                                    className={builderStyles.deleteBtn}
+                                    onClick={() => removeBundleItem(item.id)}
+                                    title={'X\u00F3a kh\u1ECFi combo'}
+                                  >
+                                    <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+
                     return (
                       <div key={item.id} className={builderStyles.tableRow}>
                         {/* STT */}

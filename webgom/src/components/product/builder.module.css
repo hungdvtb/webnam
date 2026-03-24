@@ -974,6 +974,17 @@
   margin-bottom: 12px;
 }
 
+.tabBarGridWrap {
+  display: none;
+  width: 100%;
+}
+
+.tabBarRow {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
 .tabBtn {
   display: flex;
   align-items: center;
@@ -1169,25 +1180,347 @@
   border-color: #c5a065;
 }
 
+.mobileItemContent {
+  min-width: 0;
+}
+
+.mobileItemBottom {
+  min-width: 0;
+}
+
+.mobilePriceStack {
+  min-width: 0;
+}
+
+.mobileStickyClusterShell {
+  position: relative;
+  width: 100%;
+  overflow: visible;
+}
+
+.mobileStickyCluster {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
 @media (max-width: 768px) {
+  .mobileStickyCluster {
+    position: relative;
+    z-index: 24;
+    gap: 0.55rem;
+    margin-bottom: 0.7rem;
+    transition: filter 0.24s ease, transform 0.24s ease;
+    overflow: visible;
+  }
+
+  .mobileStickyClusterHidden {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .mobileStickyClusterFloating {
+    position: fixed;
+    z-index: 1120;
+    margin-bottom: 0;
+    filter: drop-shadow(0 12px 24px rgba(27, 54, 93, 0.16));
+  }
+
+  .mobileStickyCluster .tabBar {
+    gap: 0.45rem;
+    margin-bottom: 0;
+  }
+
+  .mobileStickyCluster:not(.mobileStickyClusterFloating) > .tabBar {
+    display: none;
+  }
+
+  .mobileStickyCluster:not(.mobileStickyClusterFloating) > .tabBarGridWrap {
+    display: block;
+  }
+
+  .mobileStickyCluster:not(.mobileStickyClusterFloating) > .tabBarGridWrap .tabBar,
+  .mobileStickyClusterFloating .tabBar {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    flex-wrap: nowrap;
+    width: 100%;
+    margin-bottom: 0;
+  }
+
+  .mobileStickyCluster:not(.mobileStickyClusterFloating) > .tabBarGridWrap .tabBarRow,
+  .mobileStickyClusterFloating .tabBarRow {
+    display: flex;
+    justify-content: center;
+    gap: 0.45rem;
+    width: 100%;
+  }
+
+  .mobileStickyCluster:not(.mobileStickyClusterFloating) > .tabBarGridWrap .tabBtn,
+  .mobileStickyClusterFloating .tabBtn {
+    flex: 0 0 calc((100% - (var(--bundle-tab-columns, 4) - 1) * 0.45rem) / var(--bundle-tab-columns, 4));
+    max-width: calc((100% - (var(--bundle-tab-columns, 4) - 1) * 0.45rem) / var(--bundle-tab-columns, 4));
+    min-width: 0;
+    min-height: 2.45rem;
+    justify-content: center;
+    padding: 0.55rem 0.38rem;
+    gap: 0.3rem;
+    font-size: 0.72rem;
+    line-height: 1.1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-shadow: 0 4px 10px rgba(27, 54, 93, 0.08);
+  }
+
+  .mobileStickyCluster:not(.mobileStickyClusterFloating) > .tabBarGridWrap .tabBtn .material-symbols-outlined,
+  .mobileStickyClusterFloating .tabBtn .material-symbols-outlined {
+    flex-shrink: 0;
+    font-size: 0.9rem !important;
+  }
+
+  .mobileStickyCluster:not(.mobileStickyClusterFloating) > .tabBarGridWrap .tabBtnActive,
+  .mobileStickyClusterFloating .tabBtnActive {
+    box-shadow: 0 8px 18px rgba(27, 54, 93, 0.16);
+  }
+
+  .mobileStickyCluster:not(.mobileStickyClusterFloating) > .tabBarGridWrap .tabFullDot,
+  .mobileStickyClusterFloating .tabFullDot {
+    flex-shrink: 0;
+    margin-left: 0.15rem;
+  }
+
+  .mobileStickyCluster .topActionBar {
+    position: static;
+    top: auto;
+    z-index: auto;
+    gap: 0.55rem;
+    margin-bottom: 0;
+    padding: 0.65rem 0.75rem;
+    border-radius: 14px;
+    border-color: rgba(197, 160, 101, 0.22);
+    background: rgba(255, 255, 255, 0.96);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 12px 28px rgba(27, 54, 93, 0.14);
+  }
+
+  .discountBannerInline,
+  .discountHintInline {
+    width: 100%;
+    gap: 0.4rem;
+    padding: 0.42rem 0.55rem;
+    border-radius: 10px;
+    font-size: 0.68rem;
+    line-height: 1.28;
+  }
+
+  .quickSummaryTopInline {
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
+    flex-wrap: nowrap;
+  }
+
+  .quickSummaryPrice {
+    gap: 0.35rem;
+    min-width: 0;
+  }
+
+  .quickSummaryLabel {
+    font-size: 0.7rem;
+    white-space: nowrap;
+  }
+
+  .quickSummaryValue {
+    font-size: 1.1rem;
+    white-space: nowrap;
+  }
+
+  .buyTabBtnSmall {
+    flex: 0 0 auto;
+    min-height: 2.35rem;
+    padding: 0.58rem 0.82rem;
+    border-radius: 10px;
+    font-size: 0.72rem;
+    line-height: 1;
+    box-shadow: 0 8px 18px rgba(197, 160, 101, 0.28);
+  }
+
   .tableHeader {
     display: none;
   }
 
-  .tableRow {
+  .tableRow:not(.tableRowMobileCompact) {
     grid-template-columns: 32px 44px 1fr;
     grid-template-rows: auto auto;
   }
 
-  .colPrice, .colQty, .colTotal, .colActions {
+  .tableRow:not(.tableRowMobileCompact) > .colPrice,
+  .tableRow:not(.tableRowMobileCompact) > .colQty,
+  .tableRow:not(.tableRowMobileCompact) > .colTotal,
+  .tableRow:not(.tableRowMobileCompact) > .colActions {
     grid-column: 1 / -1;
     justify-content: flex-start;
   }
 
-  .colPrice { display: flex; align-items: center; gap: 8px; }
+  .tableRow:not(.tableRowMobileCompact) > .colPrice { display: flex; align-items: center; gap: 8px; }
   .colPrice::before { content: 'Đơn giá:'; font-size: 12px; color: #999; }
-  .colTotal { display: flex; align-items: center; gap: 8px; }
+  .tableRow:not(.tableRowMobileCompact) > .colTotal { display: flex; align-items: center; gap: 8px; }
   .colTotal::before { content: 'Thành tiền:'; font-size: 12px; color: #999; }
+
+  .tableRow:not(.tableRowMobileCompact) > .colPrice::before { content: 'Đơn giá:'; }
+  .tableRow:not(.tableRowMobileCompact) > .colTotal::before { content: 'Thành tiền:'; }
+
+  .tableRowMobileCompact {
+    grid-template-columns: 24px 40px minmax(0, 1fr);
+    gap: 0.5rem;
+    padding: 0.55rem 0.7rem;
+    align-items: flex-start;
+  }
+
+  .tableRowMobileCompact .colStt,
+  .tableRowMobileCompact .colImg {
+    align-self: flex-start;
+  }
+
+  .tableRowMobileCompact .sttBadge {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    font-size: 10px;
+  }
+
+  .tableRowMobileCompact .tableImgWrap {
+    width: 40px;
+    height: 40px;
+    border-radius: 7px;
+  }
+
+  .tableRowMobileCompact .colName {
+    gap: 0.14rem;
+  }
+
+  .tableRowMobileCompact .nameRow {
+    gap: 0.4rem;
+    align-items: flex-start;
+  }
+
+  .tableRowMobileCompact .itemName {
+    font-size: 12px;
+    line-height: 1.25;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .tableRowMobileCompact .variantHint {
+    font-size: 10px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tableRowMobileCompact .inlineChangeBtn {
+    gap: 1px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 9px;
+    letter-spacing: 0.02em;
+    margin-top: 0;
+  }
+
+  .tableRowMobileCompact .inlineChangeBtn :global(.material-symbols-outlined) {
+    font-size: 12px !important;
+  }
+
+  .mobileItemContent {
+    display: flex;
+    flex-direction: column;
+    gap: 0.34rem;
+  }
+
+  .mobileItemBottom {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 0.45rem;
+  }
+
+  .mobilePriceStack {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.16rem;
+  }
+
+  .mobilePriceLine {
+    display: flex;
+    align-items: center;
+    gap: 0.28rem;
+    flex-wrap: wrap;
+    line-height: 1.12;
+  }
+
+  .mobileMetaLabel {
+    font-size: 10px;
+    font-weight: 700;
+    color: rgba(27, 54, 93, 0.52);
+    white-space: nowrap;
+  }
+
+  .tableRowMobileCompact .unitPrice {
+    font-size: 11px;
+    line-height: 1.1;
+  }
+
+  .tableRowMobileCompact .lineTotal {
+    font-size: 11.5px;
+    line-height: 1.1;
+  }
+
+  .mobileControlStack {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-shrink: 0;
+  }
+
+  .tableRowMobileCompact .colQty,
+  .tableRowMobileCompact .colActions {
+    grid-column: auto;
+    justify-content: flex-end;
+  }
+
+  .tableRowMobileCompact .qtyControl {
+    gap: 1px;
+    padding: 1px;
+    border-radius: 7px;
+  }
+
+  .tableRowMobileCompact .qtyBtn {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+  }
+
+  .tableRowMobileCompact .qtyBtn :global(.material-symbols-outlined) {
+    font-size: 14px !important;
+  }
+
+  .tableRowMobileCompact .qtyDisplay {
+    min-width: 20px;
+    font-size: 12px;
+  }
+
+  .tableRowMobileCompact .deleteBtn {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+  }
 
   .tableFooter {
     flex-direction: column;

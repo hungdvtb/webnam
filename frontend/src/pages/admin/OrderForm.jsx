@@ -542,18 +542,13 @@ const OrderForm = () => {
         [productQuickFilterAttributeId, productQuickFilterAttributes]
     );
     const normalizedProductQuickFilterValues = useMemo(
-        () => Array.from(new Set(productQuickFilterValues.map(normalizeQuickFilterOptionValue).filter(Boolean))),
+        () => Array.from(new Set(productQuickFilterValues.map(normalizeQuickFilterOptionValue).filter(Boolean))).slice(0, 1),
         [productQuickFilterValues]
     );
     const activeProductQuickFilterSummary = useMemo(() => {
         if (!activeProductQuickFilterAttribute || normalizedProductQuickFilterValues.length === 0) return '';
 
-        const previewValues = normalizedProductQuickFilterValues.slice(0, 2).join(', ');
-        const overflowCount = normalizedProductQuickFilterValues.length - 2;
-
-        return overflowCount > 0
-            ? `${activeProductQuickFilterAttribute.name}: ${previewValues} +${overflowCount}`
-            : `${activeProductQuickFilterAttribute.name}: ${previewValues}`;
+        return `${activeProductQuickFilterAttribute.name}: ${normalizedProductQuickFilterValues[0]}`;
     }, [activeProductQuickFilterAttribute, normalizedProductQuickFilterValues]);
     const hasActiveProductQuickFilter = normalizedProductQuickFilterValues.length > 0;
 
@@ -962,14 +957,18 @@ const OrderForm = () => {
         setShowSearchHistory(false);
     }, []);
 
+    const openProductQuickFilterPanel = useCallback((event) => {
+        event?.stopPropagation?.();
+        setShowSearchDropdown(true);
+        setShowSearchHistory(false);
+    }, []);
+
     const toggleProductQuickFilterValue = useCallback((value) => {
         const normalizedValue = normalizeQuickFilterOptionValue(value);
         if (!normalizedValue) return;
 
         setProductQuickFilterValues((prev) => (
-            prev.includes(normalizedValue)
-                ? prev.filter((item) => item !== normalizedValue)
-                : [...prev, normalizedValue]
+            prev[0] === normalizedValue ? [] : [normalizedValue]
         ));
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
@@ -1935,11 +1934,7 @@ const OrderForm = () => {
                                         {productQuickFilterAttributes.length > 0 && (
                                             <button
                                                 type="button"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    setShowSearchDropdown(true);
-                                                    setShowSearchHistory(false);
-                                                }}
+                                                onClick={openProductQuickFilterPanel}
                                                 className={`relative ml-3 border-l border-primary/10 pl-3 transition-all ${hasActiveProductQuickFilter ? 'text-primary' : 'text-primary/30 hover:text-primary'}`}
                                                 title={'Lọc nhanh theo thuộc tính'}
                                             >
@@ -1954,18 +1949,26 @@ const OrderForm = () => {
                                     </div>
 
                                     {hasActiveProductQuickFilter && activeProductQuickFilterSummary && (
-                                        <div className="mt-2 flex items-center gap-2 rounded-sm border border-primary/10 bg-primary/[0.03] px-2.5 py-1.5 shadow-sm">
-                                            <span className="material-symbols-outlined text-[13px] text-primary/35">tune</span>
-                                            <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-primary/70">
-                                                {activeProductQuickFilterSummary}
-                                            </span>
+                                        <div className="mt-2 flex items-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={openProductQuickFilterPanel}
+                                                className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/15 bg-primary/[0.03] px-2.5 py-1.5 shadow-sm transition-all hover:border-primary/30 hover:bg-white"
+                                                title={'Đổi thuộc tính lọc nhanh'}
+                                            >
+                                                <span className="material-symbols-outlined shrink-0 text-[12px] text-primary/35">tune</span>
+                                                <span className="min-w-0 truncate text-[11px] font-semibold leading-none text-primary/70">
+                                                    {activeProductQuickFilterSummary}
+                                                </span>
+                                                <span className="material-symbols-outlined shrink-0 text-[12px] text-primary/30">swap_horiz</span>
+                                            </button>
                                             <button
                                                 type="button"
                                                 onClick={clearProductQuickFilterValues}
-                                                className="text-primary/35 hover:text-brick transition-colors"
+                                                className="inline-flex size-6 shrink-0 items-center justify-center rounded-full border border-primary/10 bg-white text-primary/35 shadow-sm transition-all hover:border-brick/20 hover:text-brick"
                                                 title={'Xóa lọc nhanh'}
                                             >
-                                                <span className="material-symbols-outlined text-[14px]">close</span>
+                                                <span className="material-symbols-outlined text-[12px]">close</span>
                                             </button>
                                         </div>
                                     )}

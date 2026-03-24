@@ -231,6 +231,18 @@ export default async function RootLayout({ children }) {
               width: 100%;
             }
 
+            .mobile-sticky-header-shell .site-header {
+              transform-origin: top center;
+              transition: transform 0.28s ease, opacity 0.22s ease;
+              will-change: transform, opacity;
+            }
+
+            body.bundle-mobile-summary-sticky-active .mobile-sticky-header-shell .site-header {
+              opacity: 0;
+              pointer-events: none;
+              transform: translateY(calc(-100% - 0.4rem));
+            }
+
             .site-content-shell {
               padding-top: 112px;
             }

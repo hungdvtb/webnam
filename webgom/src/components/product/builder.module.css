@@ -1017,6 +1017,10 @@
   width: 100%;
 }
 
+.mobileConfigDropdownRow {
+  width: 100%;
+}
+
 .mobileConfigDropdownTrigger {
   width: 100%;
 }
@@ -1031,6 +1035,26 @@
 
 .mobileConfigDropdownMenu {
   width: 100%;
+}
+
+.mobileConfigSummaryRow {
+  width: 100%;
+}
+
+.mobileConfigOfferChip {
+  width: 100%;
+}
+
+.mobileConfigCheckoutRow {
+  width: 100%;
+}
+
+.mobileConfigCheckoutBox {
+  min-width: 0;
+}
+
+.mobileConfigBuyBtn {
+  border: none;
 }
 
 .mobileConfigDropdownOption {
@@ -1277,13 +1301,13 @@
 
 @media (max-width: 768px) {
   .mobileStickyClusterShell {
-    margin-bottom: 0.7rem;
+    margin-bottom: 0.38rem;
   }
 
   .mobileStickyCluster {
     position: relative;
     z-index: 24;
-    gap: 0.55rem;
+    gap: 0.3rem;
     margin-bottom: 0;
     transition: filter 0.24s ease, transform 0.24s ease;
     overflow: visible;
@@ -1322,28 +1346,28 @@
   .mobileConfigRailCard {
     display: flex;
     flex-direction: column;
-    gap: 0.62rem;
-    padding: 0.78rem;
-    border-radius: 20px;
+    gap: 0.44rem;
+    padding: 0.62rem;
+    border-radius: 18px;
     border: 1px solid rgba(27, 54, 93, 0.08);
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 243, 235, 0.94) 100%);
-    box-shadow: 0 14px 28px rgba(27, 54, 93, 0.1);
+    box-shadow: 0 10px 22px rgba(27, 54, 93, 0.1);
     overflow: visible;
   }
 
   .mobileConfigRailHeader {
-    align-items: flex-start;
+    align-items: center;
   }
 
   .mobileConfigRailTitle {
-    font-size: 0.68rem;
+    font-size: 0.62rem;
     letter-spacing: 0.12em;
   }
 
   .mobileConfigRailMeta {
-    padding: 0.3rem 0.54rem;
-    font-size: 0.58rem;
+    padding: 0.24rem 0.46rem;
+    font-size: 0.52rem;
     letter-spacing: 0.04em;
   }
 
@@ -1352,13 +1376,21 @@
     z-index: 3;
   }
 
+  .mobileConfigDropdownRow {
+    display: flex;
+    align-items: center;
+    gap: 0.42rem;
+  }
+
   .mobileConfigDropdownTrigger {
+    flex: 1 1 auto;
+    min-width: 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.68rem;
-    padding: 0.8rem 0.84rem;
-    border-radius: 18px;
+    gap: 0.48rem;
+    padding: 0.58rem 0.64rem;
+    border-radius: 16px;
     border: 1px solid rgba(27, 54, 93, 0.1);
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(244, 239, 230, 0.92) 100%);
@@ -1386,9 +1418,9 @@
   }
 
   .mobileConfigDropdownEyebrow {
-    font-size: 0.58rem;
+    font-size: 0.52rem;
     font-weight: 800;
-    letter-spacing: 0.11em;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
     color: rgba(27, 54, 93, 0.46);
   }
@@ -1398,7 +1430,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.92rem;
+    font-size: 0.86rem;
     font-weight: 800;
     line-height: 1.15;
     color: #1b365d;
@@ -1407,7 +1439,7 @@
   .mobileConfigDropdownActions {
     display: flex;
     align-items: center;
-    gap: 0.45rem;
+    gap: 0;
     justify-content: flex-end;
   }
 
@@ -1428,18 +1460,18 @@
   .mobileConfigDropdownArrow {
     display: grid;
     place-items: center;
-    width: 2rem;
-    height: 2rem;
+    width: 1.84rem;
+    height: 1.84rem;
     border-radius: 999px;
     background: rgba(27, 54, 93, 0.08);
     color: #1b365d;
-    font-size: 1.2rem !important;
+    font-size: 1.08rem !important;
     line-height: 1;
   }
 
   .mobileConfigDropdownMenu {
     position: absolute;
-    top: calc(100% + 0.55rem);
+    top: calc(100% + 0.42rem);
     left: 0;
     right: 0;
     display: flex;
@@ -1552,12 +1584,119 @@
   }
 
   .mobileConfigMediaLink {
-    width: 100%;
-    min-height: 2.9rem;
-    padding: 0.78rem 0.92rem;
-    border-radius: 16px;
-    font-size: 0.76rem;
-    box-shadow: 0 12px 22px rgba(27, 54, 93, 0.12);
+    flex: 0 0 auto;
+    min-width: 0;
+    min-height: 2.5rem;
+    padding: 0.58rem 0.64rem;
+    border-radius: 14px;
+    font-size: 0.64rem;
+    gap: 0.28rem;
+    white-space: nowrap;
+    box-shadow: 0 8px 16px rgba(27, 54, 93, 0.08);
+  }
+
+  .mobileConfigMediaLink :global(.material-symbols-outlined) {
+    font-size: 0.88rem;
+  }
+
+  .mobileConfigMediaLink .configMediaLinkText {
+    font-size: 0.62rem;
+    letter-spacing: 0.01em;
+  }
+
+  .mobileConfigSummaryRow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.42rem;
+    padding-top: 0.04rem;
+  }
+
+  .mobileConfigOfferChip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.34rem;
+    min-width: 0;
+    padding: 0.38rem 0.52rem;
+    border-radius: 999px;
+    font-size: 0.6rem;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mobileConfigOfferChip :global(.material-symbols-outlined) {
+    flex-shrink: 0;
+    font-size: 0.84rem !important;
+    line-height: 1;
+  }
+
+  .mobileConfigOfferChipActive {
+    background: rgba(16, 185, 129, 0.09);
+    color: #059669;
+  }
+
+  .mobileConfigOfferChipHint {
+    background: rgba(197, 160, 101, 0.08);
+    color: rgba(27, 54, 93, 0.72);
+  }
+
+  .mobileConfigCheckoutRow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.42rem;
+  }
+
+  .mobileConfigCheckoutBox {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding: 0.46rem 0.58rem;
+    border-radius: 14px;
+    background: rgba(27, 54, 93, 0.04);
+    border: 1px solid rgba(27, 54, 93, 0.06);
+  }
+
+  .mobileConfigCheckoutLabel {
+    font-size: 0.53rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(27, 54, 93, 0.5);
+    line-height: 1.1;
+  }
+
+  .mobileConfigCheckoutValue {
+    font-size: 1rem;
+    font-weight: 900;
+    line-height: 1.05;
+    color: #c5a065;
+    white-space: nowrap;
+  }
+
+  .mobileConfigBuyBtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.34rem;
+    min-height: 2.55rem;
+    padding: 0.58rem 0.82rem;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #c5a065 0%, #d4b584 100%);
+    color: #fff;
+    font-size: 0.68rem;
+    font-weight: 900;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    box-shadow: 0 10px 18px rgba(197, 160, 101, 0.26);
+  }
+
+  .mobileConfigBuyBtn :global(.material-symbols-outlined) {
+    font-size: 0.96rem !important;
+    line-height: 1;
   }
 
   .topActionMediaLink {
@@ -1687,20 +1826,7 @@
 
   .mobileStickyCluster .topActionBar,
   .mobileStickyCluster .topActionBarWithMedia {
-    position: static;
-    top: auto;
-    z-index: auto;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.62rem;
-    margin-bottom: 0;
-    padding: 0.76rem;
-    border-radius: 18px;
-    border-color: rgba(197, 160, 101, 0.18);
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(249, 245, 238, 0.95) 100%);
-    backdrop-filter: blur(10px);
-    box-shadow: 0 14px 28px rgba(27, 54, 93, 0.12);
+    display: none;
   }
 
   .discountBannerInline,

@@ -710,7 +710,6 @@ export default function BundleProductView({
     }
 
     const selectedConfig = activeTab || configurations[0];
-    const selectedConfigHasDiscount = isConfigEligibleForDiscount(selectedConfig);
     const mobileConfigHint = `${configurations.length} c\u1EA5u h\u00ECnh`;
 
     return (
@@ -724,27 +723,38 @@ export default function BundleProductView({
         </div>
 
         <div className={builderStyles.mobileConfigDropdown}>
-          <button
-            type="button"
-            aria-haspopup="listbox"
-            aria-expanded={isMobileConfigMenuOpen}
-            className={`${builderStyles.mobileConfigDropdownTrigger} ${isMobileConfigMenuOpen ? builderStyles.mobileConfigDropdownTriggerOpen : ''}`}
-            onClick={() => setIsMobileConfigMenuOpen((currentValue) => !currentValue)}
-          >
-            <span className={builderStyles.mobileConfigDropdownValueWrap}>
-              <span className={builderStyles.mobileConfigDropdownEyebrow}>{'\u0110ang ch\u1ECDn'}</span>
-              <span className={builderStyles.mobileConfigDropdownValue}>{selectedConfig}</span>
-            </span>
-
-            <span className={builderStyles.mobileConfigDropdownActions}>
-              {selectedConfigHasDiscount ? (
-                <span className={builderStyles.mobileConfigDropdownBadge}>{'\u0110\u1EE7 b\u1ED9'}</span>
-              ) : null}
-              <span className={`material-symbols-outlined ${builderStyles.mobileConfigDropdownArrow}`}>
-                {isMobileConfigMenuOpen ? 'expand_less' : 'expand_more'}
+          <div className={builderStyles.mobileConfigDropdownRow}>
+            <button
+              type="button"
+              aria-haspopup="listbox"
+              aria-expanded={isMobileConfigMenuOpen}
+              className={`${builderStyles.mobileConfigDropdownTrigger} ${isMobileConfigMenuOpen ? builderStyles.mobileConfigDropdownTriggerOpen : ''}`}
+              onClick={() => setIsMobileConfigMenuOpen((currentValue) => !currentValue)}
+            >
+              <span className={builderStyles.mobileConfigDropdownValueWrap}>
+                <span className={builderStyles.mobileConfigDropdownEyebrow}>{'\u0110ang ch\u1ECDn'}</span>
+                <span className={builderStyles.mobileConfigDropdownValue}>{selectedConfig}</span>
               </span>
-            </span>
-          </button>
+
+              <span className={builderStyles.mobileConfigDropdownActions}>
+                <span className={`material-symbols-outlined ${builderStyles.mobileConfigDropdownArrow}`}>
+                  {isMobileConfigMenuOpen ? 'expand_less' : 'expand_more'}
+                </span>
+              </span>
+            </button>
+
+            {hasActiveConfigMedia ? (
+              <Link
+                href={activeConfigMedia.href}
+                className={`${builderStyles.configMediaLink} ${builderStyles.mobileConfigMediaLink}`}
+                title={activeConfigMedia.title ? `Xem media: ${activeConfigMedia.title}` : 'Xem media'}
+                aria-label={`Xem media cho ${activeConfigMedia.configName}`}
+              >
+                <span className="material-symbols-outlined">perm_media</span>
+                <span className={builderStyles.configMediaLinkText}>Xem media</span>
+              </Link>
+            ) : null}
+          </div>
 
           {isMobileConfigMenuOpen ? (
             <div className={builderStyles.mobileConfigDropdownMenu} role="listbox" aria-label="Danh s\u00E1ch c\u1EA5u h\u00ECnh b\u1ED9">
@@ -786,16 +796,47 @@ export default function BundleProductView({
           ) : null}
         </div>
 
-        {hasActiveConfigMedia ? (
-          <Link
-            href={activeConfigMedia.href}
-            className={`${builderStyles.configMediaLink} ${builderStyles.mobileConfigMediaLink}`}
-            title={activeConfigMedia.title ? `Xem media: ${activeConfigMedia.title}` : 'Xem media'}
-            aria-label={`Xem media cho ${activeConfigMedia.configName}`}
-          >
-            <span className="material-symbols-outlined">perm_media</span>
-            <span className={builderStyles.configMediaLinkText}>Xem media</span>
-          </Link>
+        {tabItems.length > 0 ? (
+          <div className={builderStyles.mobileConfigSummaryRow}>
+            <div
+              className={`${builderStyles.mobileConfigOfferChip} ${
+                isFullCombo
+                  ? builderStyles.mobileConfigOfferChipActive
+                  : builderStyles.mobileConfigOfferChipHint
+              }`}
+            >
+              <span className="material-symbols-outlined">
+                {isFullCombo ? 'local_offer' : 'info'}
+              </span>
+              <span>
+                {isFullCombo
+                  ? `Trọn bộ giảm ${(DISCOUNT_RATE * 100).toFixed(0)}%`
+                  : `Đủ ${tabItems.length} món giảm ${(DISCOUNT_RATE * 100).toFixed(0)}%`}
+              </span>
+            </div>
+
+            <div className={builderStyles.mobileConfigCheckoutRow}>
+              <div className={builderStyles.mobileConfigCheckoutBox}>
+                <span className={builderStyles.mobileConfigCheckoutLabel}>Thanh toán</span>
+                <span className={builderStyles.mobileConfigCheckoutValue}>
+                  {formatPrice(tabFinalPrice)}
+                </span>
+              </div>
+
+              {handleBuyTabConfig && tabItems.some((item) => !item.removed) ? (
+                <button
+                  type="button"
+                  className={builderStyles.mobileConfigBuyBtn}
+                  onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                    shopping_cart_checkout
+                  </span>
+                  Mua ngay
+                </button>
+              ) : null}
+            </div>
+          </div>
         ) : null}
       </div>
     );

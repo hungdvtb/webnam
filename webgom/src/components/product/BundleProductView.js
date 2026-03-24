@@ -157,7 +157,10 @@ function MobileBundleActionPopover({ configName, onViewDetails, onAddToCart, onB
         <h3 className={styles.bundleActionTitle}>{configName}</h3>
         <button type="button" onClick={onViewDetails} className={styles.bundleActionTop}>
           <span className="material-symbols-outlined">tune</span>
-          {'Xem chi ti\u1EBFt v\u00E0 t\u00F9y ch\u1EC9nh th\u00E0nh ph\u1EA7n b\u1ED9'}
+          <span className={styles.bundleActionTopText}>
+            <span>{'Xem chi tiết'}</span>
+            <span>{'& tùy chỉnh thành phần bộ'}</span>
+          </span>
         </button>
         <div className={styles.bundleActionGrid}>
           <button type="button" onClick={onAddToCart} className={styles.bundleActionPrimary}>
@@ -605,7 +608,9 @@ export default function BundleProductView({
                     className={styles.customizeBundleBtn}
                   >
                     <span className="material-symbols-outlined">tune</span>
+                    <span className={styles.customizeBundleBtnText}>
                     Xem chi tiết & tùy chỉnh thành phần bên dưới
+                    </span>
                   </button>
                 </div>
               </div>
@@ -614,7 +619,11 @@ export default function BundleProductView({
               <ActionLinks additionalInfo={additionalInfo} />
 
               <div className={styles.actionSectionMB}>
-                <QuantitySelector quantity={quantity} setQuantity={setQuantity} />
+                <QuantitySelector
+                  quantity={quantity}
+                  setQuantity={setQuantity}
+                  statusText="Sẵn sàng giao ngay"
+                />
                 <BuyButtons onAddToCart={handleAddToCart} onBuyNow={handleBuyNow} />
               </div>
 

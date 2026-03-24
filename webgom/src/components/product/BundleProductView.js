@@ -342,7 +342,9 @@ export default function BundleProductView({
 
   return (
     <>
-      <Breadcrumb product={product} />
+      <div className={styles.bundleBreadcrumb}>
+        <Breadcrumb product={product} />
+      </div>
       <div className="flex flex-col gap-12">
         <div className={styles.mainGrid}>
           {/* Gallery */}
@@ -378,7 +380,7 @@ export default function BundleProductView({
                 <h1 className={styles.title}>{product.name}</h1>
                 <div className={styles.meta}>
                   <span className={styles.sku}>Mã bộ: <span className={styles.skuValue}>{product.sku || `COMBO-${product.id}`}</span></span>
-                  <span className={styles.statusDot} style={{ backgroundColor: '#10b981' }}></span>
+                  <span className={`${styles.statusDot} ${styles.bundleStatusDot}`} style={{ backgroundColor: '#10b981' }}></span>
                   <span className={styles.statusText} style={{ color: '#059669' }}>Sẵn sàng giao ngay</span>
                 </div>
               </div>

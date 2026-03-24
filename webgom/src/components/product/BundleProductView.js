@@ -1362,7 +1362,7 @@ export default function BundleProductView({
             >
               <div
                 ref={mobileStickyClusterRef}
-                className={`${builderStyles.mobileStickyCluster} ${isMobileBundleViewport && isMobileStickyClusterActive ? builderStyles.mobileStickyClusterHidden : ''}`}
+                className={`${builderStyles.mobileStickyCluster} ${isMobileBundleViewport && isMobileStickyClusterActive ? builderStyles.mobileStickyClusterHidden : ''} ${isMobileBundleViewport && isModalOpen ? builderStyles.mobileStickyClusterSuppressed : ''}`}
               >
                 <div className={builderStyles.tabBarGridWrap}>
                   {renderBundleConfigGrid()}
@@ -1447,11 +1447,11 @@ export default function BundleProductView({
               </div>
             </div>
 
-            {isMobileBundleViewport && isMobileStickyClusterActive && mobileStickyClusterLayout.width > 0 && (
-              <div
-                className={`${builderStyles.mobileStickyCluster} ${builderStyles.mobileStickyClusterFloating}`}
-                style={mobileStickyClusterStyle}
-              >
+            {isMobileBundleViewport && !isModalOpen && isMobileStickyClusterActive && mobileStickyClusterLayout.width > 0 && (
+                <div
+                  className={`${builderStyles.mobileStickyCluster} ${builderStyles.mobileStickyClusterFloating}`}
+                  style={mobileStickyClusterStyle}
+                >
                 {renderStickyBundleDetailControls()}
               </div>
             )}

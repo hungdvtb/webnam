@@ -1537,6 +1537,12 @@
     right: 0;
   }
 
+  .mobileStickyClusterSuppressed {
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+  }
+
   .mobileStickyClusterFloating {
     position: fixed;
     z-index: 1090;

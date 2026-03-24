@@ -3,22 +3,35 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Attribute;
 use App\Models\Cart;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Customer;
 use App\Models\Invoice;
+use App\Models\OrderStatus;
+use App\Models\QuoteTemplate;
 use App\Models\ShippingIntegration;
+use App\Models\SiteSetting;
 use App\Services\Inventory\InventoryService;
 use App\Services\Shipping\ShipmentDispatchService;
 use App\Services\Shipping\ShippingAlertService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class OrderController extends Controller
 {
+    private const BOOTSTRAP_CACHE_TTL_SECONDS = 15;
+    private const QUOTE_SETTING_KEYS = [
+        'quote_logo_url',
+        'quote_store_name',
+        'quote_store_address',
+        'quote_store_phone',
+    ];
+
     private function generateOrderNumber($accountId = null)
     {
         $query = Order::withTrashed();
@@ -38,9 +51,149 @@ class OrderController extends Controller
         return "OR{$nextNumber}A0";
     }
 
+    private function resolveAccountId(Request $request): int
+    {
+        return (int) $request->header('X-Account-Id');
+    }
+
+    private function connectedCarrierCacheKey(int $accountId): string
+    {
+        return "orders:connected-carriers:{$accountId}";
+    }
+
+    private function bootstrapCacheKey(int $accountId, string $mode): string
+    {
+        return "orders:bootstrap:{$accountId}:{$mode}";
+    }
+
+    private function loadConnectedCarriers(int $accountId): array
+    {
+        return Cache::remember(
+            $this->connectedCarrierCacheKey($accountId),
+            now()->addSeconds(self::BOOTSTRAP_CACHE_TTL_SECONDS),
+            function () use ($accountId) {
+                return ShippingIntegration::query()
+                    ->where('account_id', $accountId)
+                    ->where('is_enabled', true)
+                    ->where(function ($query) {
+                        $query
+                            ->where('connection_status', 'connected')
+                            ->orWhere('connection_status', 'configured')
+                            ->orWhereNotNull('access_token');
+                    })
+                    ->orderBy('carrier_name')
+                    ->with('defaultWarehouse:id,name')
+                    ->get([
+                        'carrier_code',
+                        'carrier_name',
+                        'connection_status',
+                        'is_enabled',
+                        'access_token',
+                        'webhook_url',
+                        'default_warehouse_id',
+                    ])
+                    ->map(function (ShippingIntegration $integration) {
+                        $effectiveStatus = $integration->connection_status ?: 'configured';
+                        if ($integration->is_enabled && filled($integration->access_token) && $effectiveStatus === 'disconnected') {
+                            $effectiveStatus = 'configured';
+                        }
+
+                        return [
+                            'carrier_code' => $integration->carrier_code,
+                            'carrier_name' => $integration->carrier_name,
+                            'connection_status' => $effectiveStatus,
+                            'is_enabled' => $integration->is_enabled,
+                            'webhook_url' => $integration->webhook_url,
+                            'default_warehouse_id' => $integration->default_warehouse_id,
+                            'default_warehouse_name' => $integration->defaultWarehouse?->name,
+                        ];
+                    })
+                    ->values()
+                    ->all();
+            }
+        );
+    }
+
+    private function loadOrderAttributes(string $entityType): array
+    {
+        return Attribute::query()
+            ->with('options')
+            ->byEntityType($entityType)
+            ->where('status', true)
+            ->orderBy('name')
+            ->get()
+            ->toArray();
+    }
+
+    private function loadOrderStatuses(int $accountId): array
+    {
+        return OrderStatus::query()
+            ->where('account_id', $accountId)
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get()
+            ->toArray();
+    }
+
+    private function loadQuoteSettings(int $accountId): array
+    {
+        $settings = array_fill_keys(self::QUOTE_SETTING_KEYS, '');
+
+        return array_merge(
+            $settings,
+            SiteSetting::query()
+                ->where('account_id', $accountId)
+                ->whereIn('key', self::QUOTE_SETTING_KEYS)
+                ->pluck('value', 'key')
+                ->toArray()
+        );
+    }
+
+    public function bootstrap(Request $request)
+    {
+        $accountId = $this->resolveAccountId($request);
+        if (!$accountId) {
+            return response()->json([]);
+        }
+
+        $mode = strtolower((string) $request->input('mode', 'list'));
+        if (!in_array($mode, ['list', 'form'], true)) {
+            $mode = 'list';
+        }
+
+        $payload = Cache::remember(
+            $this->bootstrapCacheKey($accountId, $mode),
+            now()->addSeconds(self::BOOTSTRAP_CACHE_TTL_SECONDS),
+            function () use ($accountId, $mode) {
+                if ($mode === 'form') {
+                    return [
+                        'order_statuses' => $this->loadOrderStatuses($accountId),
+                        'order_attributes' => $this->loadOrderAttributes('order'),
+                        'product_attributes' => $this->loadOrderAttributes('product'),
+                        'quote_settings' => $this->loadQuoteSettings($accountId),
+                        'quote_templates' => QuoteTemplate::query()
+                            ->where('account_id', $accountId)
+                            ->orderBy('sort_order')
+                            ->orderBy('name')
+                            ->get()
+                            ->toArray(),
+                    ];
+                }
+
+                return [
+                    'order_statuses' => $this->loadOrderStatuses($accountId),
+                    'order_attributes' => $this->loadOrderAttributes('order'),
+                    'connected_carriers' => $this->loadConnectedCarriers($accountId),
+                ];
+            }
+        );
+
+        return response()->json($payload);
+    }
+
     public function index(Request $request)
     {
-        $accountId = $request->header('X-Account-Id');
+        $accountId = $this->resolveAccountId($request);
         
         // Base select for listing - avoid * to reduce payload
         $query = Order::query()
@@ -57,10 +210,7 @@ class OrderController extends Controller
         // Eager load only what is needed for the table
         $query->with([
             'items:id,order_id,account_id,product_id,product_name_snapshot,product_sku_snapshot,quantity,price',
-            'items.product:id,name,sku',
-            'customer:id,name,phone',
             'attributeValues:id,order_id,attribute_id,value',
-            'attributeValues.attribute:id,name,code',
             'activeShipment:id,order_id,shipment_number,carrier_name,carrier_tracking_code,shipment_status,problem_code,problem_message,problem_detected_at'
         ]);
 
@@ -697,45 +847,8 @@ class OrderController extends Controller
 
     public function connectedCarriers(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = $this->resolveAccountId($request);
 
-        return response()->json(
-            ShippingIntegration::query()
-                ->where('account_id', $accountId)
-                ->where('is_enabled', true)
-                ->where(function ($query) {
-                    $query
-                        ->where('connection_status', 'connected')
-                        ->orWhere('connection_status', 'configured')
-                        ->orWhereNotNull('access_token');
-                })
-                ->orderBy('carrier_name')
-                ->with('defaultWarehouse:id,name')
-                ->get([
-                    'carrier_code',
-                    'carrier_name',
-                    'connection_status',
-                    'is_enabled',
-                    'access_token',
-                    'webhook_url',
-                    'default_warehouse_id',
-                ])
-                ->map(function (ShippingIntegration $integration) {
-                    $effectiveStatus = $integration->connection_status ?: 'configured';
-                    if ($integration->is_enabled && filled($integration->access_token) && $effectiveStatus === 'disconnected') {
-                        $effectiveStatus = 'configured';
-                    }
-
-                    return [
-                        'carrier_code' => $integration->carrier_code,
-                        'carrier_name' => $integration->carrier_name,
-                        'connection_status' => $effectiveStatus,
-                        'is_enabled' => $integration->is_enabled,
-                        'webhook_url' => $integration->webhook_url,
-                        'default_warehouse_id' => $integration->default_warehouse_id,
-                        'default_warehouse_name' => $integration->defaultWarehouse?->name,
-                    ];
-                })
-        );
+        return response()->json($this->loadConnectedCarriers($accountId));
     }
 }

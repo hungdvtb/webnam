@@ -65,6 +65,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/products/bulk-update-attributes', [ProductController::class , 'bulkUpdateAttributes']);
     Route::post('/products/bulk-update-undo', [ProductController::class , 'undoBulkUpdate']);
     Route::delete('/products/bulk-force-delete', [ProductController::class , 'bulkForceDelete']);
+    Route::post('/products/refresh-order-items', [ProductController::class , 'refreshOrderItems']);
     Route::post('/products/{id}/duplicate', [ProductController::class , 'duplicate']);
     Route::post('/products/{id}', [ProductController::class , 'update']); // Use POST for update to handle file uploads
     Route::delete('/products/{id}', [ProductController::class , 'destroy']);
@@ -115,6 +116,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/warehouses/{id}/inventory', [App\Http\Controllers\Api\WarehouseController::class , 'updateInventory']);
 
     // Order management
+    Route::get('/orders/bootstrap', [\App\Http\Controllers\Api\OrderController::class , 'bootstrap']);
     Route::get('/orders', [\App\Http\Controllers\Api\OrderController::class , 'index']);
     Route::post('/orders', [\App\Http\Controllers\Api\OrderController::class , 'store']);
     Route::get('/orders/connected-carriers', [\App\Http\Controllers\Api\OrderController::class , 'connectedCarriers']);

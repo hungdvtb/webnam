@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { orderApi, attributeApi, orderStatusApi, warehouseApi, default as api } from '../../services/api';
+import { orderApi, warehouseApi } from '../../services/api';
 import { useNavigate, Link } from 'react-router-dom';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
@@ -493,7 +493,6 @@ const OrderList = () => {
     const [orderStatuses, setOrderStatuses] = useState([]);
     const [orders, setOrders] = useState([]);
     const [allAttributes, setAllAttributes] = useState([]);
-    const [productAttributes, setProductAttributes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedIds, setSelectedIds] = useState([]);
     const [showFilters, setShowFilters] = useState(false);
@@ -532,10 +531,11 @@ const OrderList = () => {
     const searchContainerRef = useRef(null);
     const shippingAlertRef = useRef(null);
     const previousUnreadRef = useRef([]);
+    const orderRequestAbortRef = useRef(null);
 
     const [pagination, setPagination] = useState({ current_page: 1, last_page: 1, total: 0, per_page: 20 });
     const [filters, setFilters] = useState({
-        search: '',
+        search: localStorage.getItem('order_list_search_current') || '',
         status: [],
         customer_name: '',
         order_number: '',
@@ -571,18 +571,41 @@ const OrderList = () => {
         setVisibleColumns
     } = useTableColumns('order_list', ORDER_TABLE_COLUMNS);
 
+    const [hasLoadedOrdersOnce, setHasLoadedOrdersOnce] = useState(false);
+    const statusMap = useMemo(
+        () => new Map(orderStatuses.map((status) => [String(status.code), status])),
+        [orderStatuses]
+    );
+    const carrierMap = useMemo(
+        () => new Map(connectedCarriers.map((carrier) => [String(carrier.carrier_code), carrier])),
+        [connectedCarriers]
+    );
+    const attributeMap = useMemo(
+        () => new Map(allAttributes.map((attribute) => [Number(attribute.id), attribute])),
+        [allAttributes]
+    );
+    const activeStatusMenuOrder = useMemo(
+        () => orders.find((order) => String(order.id) === String(statusMenuOrderId)) || null,
+        [orders, statusMenuOrderId]
+    );
+    const activeProductPopupOrder = useMemo(
+        () => orders.find((order) => order.id === productPopupOrderId) || null,
+        [orders, productPopupOrderId]
+    );
+
     const fetchInitialData = async () => {
         try {
-            const [statusRes, orderAttrRes, prodAttrRes] = await Promise.all([
-                orderStatusApi.getAll(),
-                attributeApi.getAll({ entity_type: 'order', active_only: true }),
-                attributeApi.getAll({ entity_type: 'product', active_only: true })
-            ]);
-            setOrderStatuses(statusRes.data || []);
-            setAllAttributes(orderAttrRes.data || []);
-            setProductAttributes(prodAttrRes.data || []);
+            const response = await orderApi.getBootstrap({ mode: 'list' });
+            const bootstrap = response.data || {};
+            const nextStatuses = bootstrap.order_statuses || [];
+            const nextAttributes = bootstrap.order_attributes || [];
+            const nextCarriers = bootstrap.connected_carriers || [];
 
-            const attrColumns = (orderAttrRes.data || []).map(attr => ({
+            setOrderStatuses(nextStatuses);
+            setAllAttributes(nextAttributes);
+            setConnectedCarriers(nextCarriers);
+
+            const attrColumns = nextAttributes.map(attr => ({
                 id: `attr_${attr.id}`,
                 label: attr.name,
                 minWidth: '150px',
@@ -610,9 +633,6 @@ const OrderList = () => {
             const savedVisible = localStorage.getItem('order_list_columns');
             if (savedVisible) setVisibleColumns(JSON.parse(savedVisible));
             else setVisibleColumns(sortedColumns.map(c => c.id));
-
-            const currentSearch = localStorage.getItem('order_list_search_current');
-            if (currentSearch) setFilters(prev => ({ ...prev, search: currentSearch }));
         } catch (error) { console.error("Error initial data", error); }
     };
 
@@ -626,6 +646,9 @@ const OrderList = () => {
     };
 
     const fetchOrders = useCallback(async (page = 1, currentFilters = filters, perPage = pagination.per_page, currentSort = sortConfig) => {
+        orderRequestAbortRef.current?.abort();
+        const controller = new AbortController();
+        orderRequestAbortRef.current = controller;
         setLoading(true);
         try {
             const params = {
@@ -655,24 +678,24 @@ const OrderList = () => {
                 });
             }
 
-            const response = await orderApi.getAll(params);
+            const response = await orderApi.getAll(params, controller.signal);
+            if (controller.signal.aborted) return;
             setOrders(response.data.data);
             setPagination({ current_page: response.data.current_page, last_page: response.data.last_page, total: response.data.total, per_page: response.data.per_page });
+            setHasLoadedOrdersOnce(true);
         } catch (error) {
+            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
             console.error("Error fetching orders", error);
             setNotification({ type: 'error', message: 'Không thể tải danh sách đơn hàng' });
-        } finally { setLoading(false); }
+        } finally {
+            if (orderRequestAbortRef.current === controller) {
+                orderRequestAbortRef.current = null;
+                setLoading(false);
+            }
+        }
     }, [isTrashView, pagination.per_page, sortConfig, filters]);
 
     useEffect(() => { fetchInitialData(); }, []);
-
-    useEffect(() => {
-        orderApi.getConnectedCarriers()
-            .then((response) => setConnectedCarriers(response.data || []))
-            .catch((error) => {
-                console.error('Failed to load connected carriers', error);
-            });
-    }, []);
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -686,11 +709,17 @@ const OrderList = () => {
                     fetchOrders(1);
                 }
             }
-        }, 600);
+        }, 250);
         return () => clearTimeout(timer);
     }, [filters.search]);
 
     useEffect(() => { fetchOrders(1); }, [isTrashView]);
+
+    useEffect(() => {
+        return () => {
+            orderRequestAbortRef.current?.abort();
+        };
+    }, []);
 
     useEffect(() => {
         const handleClickOutside = (e) => {
@@ -744,19 +773,20 @@ const OrderList = () => {
     }, [shippingSoundSettings]);
 
     useEffect(() => {
+        if (!hasLoadedOrdersOnce) return;
         fetchShippingAlerts();
         const intervalId = window.setInterval(fetchShippingAlerts, 15000);
         return () => window.clearInterval(intervalId);
-    }, [fetchShippingAlerts]);
+    }, [fetchShippingAlerts, hasLoadedOrdersOnce]);
 
     useEffect(() => {
         if (!dispatchModalOpen || !selectedCarrierCode) return;
-        const activeCarrier = connectedCarriers.find((carrier) => carrier.carrier_code === selectedCarrierCode);
+        const activeCarrier = carrierMap.get(String(selectedCarrierCode));
         setSelectedWarehouseId((current) => {
             if (current) return current;
             return activeCarrier?.default_warehouse_id ? String(activeCarrier.default_warehouse_id) : '';
         });
-    }, [dispatchModalOpen, selectedCarrierCode, connectedCarriers]);
+    }, [carrierMap, dispatchModalOpen, selectedCarrierCode]);
 
     useEffect(() => {
         if (!dispatchModalOpen || !selectedCarrierCode || selectedIds.length === 0) return;
@@ -842,15 +872,18 @@ const OrderList = () => {
 
     const handleDispatchCarrierChange = (carrierCode) => {
         setSelectedCarrierCode(carrierCode);
-        const nextCarrier = connectedCarriers.find((carrier) => carrier.carrier_code === carrierCode);
+        const nextCarrier = carrierMap.get(String(carrierCode));
         setSelectedWarehouseId(nextCarrier?.default_warehouse_id ? String(nextCarrier.default_warehouse_id) : '');
     };
 
     const openDispatchModal = async () => {
         if (!selectedIds.length) return;
         try {
+            const carrierPromise = connectedCarriers.length
+                ? Promise.resolve({ data: connectedCarriers })
+                : orderApi.getConnectedCarriers();
             const [carrierResponse, warehouseResponse] = await Promise.all([
-                orderApi.getConnectedCarriers(),
+                carrierPromise,
                 warehouseApi.getAll({ active_only: 1 }),
             ]);
             const carriers = carrierResponse.data || [];
@@ -998,7 +1031,7 @@ const OrderList = () => {
     };
 
     const getStatusStyle = (s) => {
-        const f = orderStatuses.find(st => st.code === s);
+        const f = statusMap.get(String(s));
         return f ? { backgroundColor: `${f.color}15`, color: f.color, borderColor: `${f.color}30` } : {};
     };
 
@@ -1319,7 +1352,7 @@ const OrderList = () => {
                     {filters.status?.length > 0 && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">Trạng thái:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.status.map(s => orderStatuses.find(st => st.code === s)?.name).join(', ')}</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.status.map((s) => statusMap.get(String(s))?.name || s).join(', ')}</span>
                             <button onClick={() => removeFilter('status')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     )}
@@ -1340,7 +1373,7 @@ const OrderList = () => {
                     {filters.shipping_carrier_code && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">Vận chuyển:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{connectedCarriers.find((carrier) => carrier.carrier_code === filters.shipping_carrier_code)?.carrier_name || filters.shipping_carrier_code}</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{carrierMap.get(String(filters.shipping_carrier_code))?.carrier_name || filters.shipping_carrier_code}</span>
                             <button onClick={() => removeFilter('shipping_carrier_code')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     )}
@@ -1360,7 +1393,7 @@ const OrderList = () => {
                     )}
                     {filters.attributes && Object.entries(filters.attributes).map(([id, v]) => {
                         if (!v) return null;
-                        const a = allAttributes.find(x => x.id === parseInt(id));
+                        const a = attributeMap.get(parseInt(id, 10));
                         return (
                             <div key={id} className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                                 <span className="text-[11px] text-primary/40">{a?.name}:</span>
@@ -1537,7 +1570,7 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'status') {
-                                            const statusName = orderStatuses.find(s => s.code === o.status)?.name || o.status;
+                                            const statusName = statusMap.get(String(o.status))?.name || o.status;
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-left group/status relative">
                                                     <div className="flex items-center justify-start gap-1">
@@ -1658,7 +1691,7 @@ const OrderList = () => {
             </div>
 
             <StatusDropdownPortal
-                order={orders.find(o => String(o.id) === String(statusMenuOrderId))}
+                order={activeStatusMenuOrder}
                 orderStatuses={orderStatuses}
                 onUpdate={handleQuickStatusUpdate}
                 anchorRef={statusMenuAnchorRef}
@@ -1666,7 +1699,7 @@ const OrderList = () => {
                 onClose={() => setStatusMenuOrderId(null)}
                 statusMenuRef={statusMenuRef}
             />
-            <OrderProductsPortal items={orders.find(o => o.id === productPopupOrderId)?.items || []} copiedText={copiedText} onCopy={handleCopy} anchorRef={productPopupAnchorRef} visible={!!productPopupOrderId} onClose={() => setProductPopupOrderId(null)} />
+            <OrderProductsPortal items={activeProductPopupOrder?.items || []} copiedText={copiedText} onCopy={handleCopy} anchorRef={productPopupAnchorRef} visible={!!productPopupOrderId} onClose={() => setProductPopupOrderId(null)} />
             <ShippingDispatchModal
                 open={dispatchModalOpen}
                 carriers={connectedCarriers}

@@ -38,6 +38,7 @@ const multipartConfig = (data) => (
 export const productApi = {
     getAll: (params, signal) => api.get('/products', { params, signal }),
     getOne: (id) => api.get(`/products/${id}`),
+    refreshOrderItems: (data) => api.post('/products/refresh-order-items', data),
     store: (data) => api.post('/products', data),
     update: (id, data) => api.post(`/products/${id}`, data), // POST for multipart support
     destroy: (id) => api.delete(`/products/${id}`),
@@ -99,6 +100,7 @@ export const warehouseApi = {
 };
 
 export const orderApi = {
+    getBootstrap: (params) => api.get('/orders/bootstrap', { params }),
     getAll: (params, signal) => api.get('/orders', { params, signal }),
     getOne: (id) => api.get(`/orders/${id}`),
     store: (data) => api.post('/orders', data),

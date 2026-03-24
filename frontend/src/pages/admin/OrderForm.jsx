@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import api, { cmsApi, orderApi, productApi, attributeApi, orderStatusApi, quoteTemplateApi, leadApi } from '../../services/api';
+import api, { orderApi, productApi, leadApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
@@ -66,6 +66,12 @@ const quoteCurrencyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionD
 const quoteCanvasFontFamily = '"Tahoma", "Arial", sans-serif';
 
 const normalizeCanvasText = (value) => String(value ?? '').normalize('NFC').trim();
+const escapeHtml = (value) => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 const normalizeProductSearchText = (value) => String(value ?? '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -530,14 +536,21 @@ const OrderForm = () => {
     const [showProductQuickFilterPanel, setShowProductQuickFilterPanel] = useState(false);
     const [showColumnConfig, setShowColumnConfig] = useState(false);
     const [isCapturing, setIsCapturing] = useState(false);
+    const [isRefreshingItems, setIsRefreshingItems] = useState(false);
     const [quoteSettings, setQuoteSettings] = useState(defaultQuoteSettings);
     const [quoteTemplates, setQuoteTemplates] = useState([]);
     const [showQuoteTemplatePicker, setShowQuoteTemplatePicker] = useState(false);
     const [quoteTemplateSearch, setQuoteTemplateSearch] = useState('');
     const [quoteCaptureTemplate, setQuoteCaptureTemplate] = useState(null);
     const [leadConversionSummary, setLeadConversionSummary] = useState(null);
+    const [notification, setNotification] = useState(null);
+    const [copiedText, setCopiedText] = useState(null);
     const captureRef = useRef(null);
     const quoteCaptureRef = useRef(null);
+    const copyFeedbackTimeoutRef = useRef(null);
+    const copyNotificationTimeoutRef = useRef(null);
+    const productSearchAbortRef = useRef(null);
+    const productSearchCacheRef = useRef(new Map());
     const activeProductQuickFilterAttribute = useMemo(
         () => productQuickFilterAttributes.find((attribute) => String(attribute.id) === String(productQuickFilterAttributeId)) || null,
         [productQuickFilterAttributeId, productQuickFilterAttributes]
@@ -637,19 +650,6 @@ const OrderForm = () => {
     const useNewAddress = regionType === 'new';
     const isWardsLoading = false;
     const isDistrictsLoading = false;
-
-    useEffect(() => {
-        fetchInitialData();
-        if (isEdit) {
-            fetchOrder(id);
-        } else if (duplicateFromId) {
-            fetchOrder(duplicateFromId, true);
-        } else if (leadId) {
-            fetchLeadDraft(leadId);
-        } else {
-            setLoading(false);
-        }
-    }, [id, duplicateFromId, leadId]);
 
     useEffect(() => {
         if (productQuickFilterAttributes.length === 0) {
@@ -887,6 +887,25 @@ const OrderForm = () => {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [closeProductSearchDropdown, showColumnConfig, showSearchDropdown, showQuoteTemplatePicker, handleCancel]);
 
+    useEffect(() => () => {
+        if (copyFeedbackTimeoutRef.current) {
+            window.clearTimeout(copyFeedbackTimeoutRef.current);
+        }
+        if (copyNotificationTimeoutRef.current) {
+            window.clearTimeout(copyNotificationTimeoutRef.current);
+        }
+    }, []);
+
+    const showTransientNotification = useCallback((type, message, duration = 2000) => {
+        setNotification({ type, message });
+
+        if (copyNotificationTimeoutRef.current) {
+            window.clearTimeout(copyNotificationTimeoutRef.current);
+        }
+
+        copyNotificationTimeoutRef.current = window.setTimeout(() => setNotification(null), duration);
+    }, []);
+
     const saveColumnSettings = () => {
         localStorage.setItem('order_form_column_order', JSON.stringify(columnOrder));
         localStorage.setItem('order_form_visible_columns', JSON.stringify(visibleColumns));
@@ -916,26 +935,49 @@ const OrderForm = () => {
 
     // handleCancel now handles navigation directly without confirm for a faster experience
 
-    const fetchProducts = async (term = '', filterOverrides = {}) => {
-        try {
-            const params = { per_page: 50 };
-            if (term) params.search = term;
+    const fetchProducts = useCallback(async (term = '', filterOverrides = {}) => {
+        const params = { per_page: 50, picker: 1 };
+        if (term) params.search = term;
 
-            const activeFilterAttributeId = filterOverrides.attributeId ?? productQuickFilterAttributeId;
-            const activeFilterValues = Array.isArray(filterOverrides.values)
-                ? filterOverrides.values.map(normalizeQuickFilterOptionValue).filter(Boolean)
-                : normalizedProductQuickFilterValues;
+        const activeFilterAttributeId = filterOverrides.attributeId ?? productQuickFilterAttributeId;
+        const activeFilterValues = Array.isArray(filterOverrides.values)
+            ? filterOverrides.values.map(normalizeQuickFilterOptionValue).filter(Boolean)
+            : normalizedProductQuickFilterValues;
 
-            if (activeFilterAttributeId && activeFilterValues.length > 0) {
-                params[`attributes[${activeFilterAttributeId}]`] = activeFilterValues.join(',');
-            }
-
-            const prodRes = await productApi.getAll(params);
-            setProducts(prodRes.data.data || []);
-        } catch (error) {
-            console.error("Error fetching products", error);
+        if (activeFilterAttributeId && activeFilterValues.length > 0) {
+            params[`attributes[${activeFilterAttributeId}]`] = activeFilterValues.join(',');
         }
-    };
+
+        const activeAccountId = typeof window === 'undefined'
+            ? 'default'
+            : (window.localStorage.getItem('activeAccountId') || 'default');
+        const cacheKey = JSON.stringify({ account_id: activeAccountId, ...params });
+        const cachedProducts = productSearchCacheRef.current.get(cacheKey);
+        if (cachedProducts) {
+            setProducts(cachedProducts);
+            return;
+        }
+
+        productSearchAbortRef.current?.abort();
+        const controller = new AbortController();
+        productSearchAbortRef.current = controller;
+
+        try {
+            const prodRes = await productApi.getAll(params, controller.signal);
+            if (controller.signal.aborted) return;
+
+            const nextProducts = prodRes.data.data || [];
+            productSearchCacheRef.current.set(cacheKey, nextProducts);
+            setProducts(nextProducts);
+        } catch (error) {
+            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+            console.error("Error fetching products", error);
+        } finally {
+            if (productSearchAbortRef.current === controller) {
+                productSearchAbortRef.current = null;
+            }
+        }
+    }, [normalizedProductQuickFilterValues, productQuickFilterAttributeId]);
 
     const pushSearchHistory = useCallback((term) => {
         const trimmedTerm = normalizeCanvasText(term);
@@ -1013,7 +1055,7 @@ const OrderForm = () => {
     useEffect(() => {
         const timerId = setTimeout(() => {
             setDebouncedSearchTerm(searchTerm);
-        }, 500);
+        }, 250);
 
         return () => {
             clearTimeout(timerId);
@@ -1025,6 +1067,7 @@ const OrderForm = () => {
             fetchProducts(debouncedSearchTerm);
         }
     }, [
+        fetchProducts,
         debouncedSearchTerm,
         hasActiveProductQuickFilter,
         productQuickFilterAttributeId,
@@ -1037,59 +1080,30 @@ const OrderForm = () => {
         pushSearchHistory(debouncedSearchTerm);
     }, [debouncedSearchTerm, pushSearchHistory, showSearchDropdown]);
 
-    const fetchInitialData = async () => {
+    useEffect(() => () => {
+        productSearchAbortRef.current?.abort();
+    }, []);
+
+    const fetchInitialData = useCallback(async () => {
         try {
-            // Fetch statuses first and independently
-            const statusRes = await orderStatusApi.getAll();
-            setOrderStatuses(statusRes.data || []);
-        } catch (error) {
-            console.error("Error fetching order statuses", error);
-        }
+            const response = await orderApi.getBootstrap({ mode: 'form' });
+            const bootstrap = response.data || {};
 
-        const [prodRes, attrRes, productAttrRes, settingsRes, templatesRes] = await Promise.allSettled([
-            productApi.getAll({ per_page: 50 }),
-            attributeApi.getAll({ entity_type: 'order', active_only: true }),
-            attributeApi.getAll({ entity_type: 'product', active_only: true }),
-            cmsApi.settings.get(),
-            quoteTemplateApi.getAll()
-        ]);
-
-        if (prodRes.status === 'fulfilled') {
-            setProducts(prodRes.value.data.data || []);
-        } else {
-            console.error("Error fetching products", prodRes.reason);
-        }
-
-        if (attrRes.status === 'fulfilled') {
-            setAttributes(attrRes.value.data || []);
-        } else {
-            console.error("Error fetching order attributes", attrRes.reason);
-        }
-
-        if (productAttrRes.status === 'fulfilled') {
-            setProductQuickFilterAttributes(buildProductQuickFilterAttributes(productAttrRes.value.data || []));
-        } else {
-            setProductQuickFilterAttributes([]);
-            console.error("Error fetching product quick-filter attributes", productAttrRes.reason);
-        }
-
-        if (settingsRes.status === 'fulfilled') {
-            setQuoteSettings((prev) => ({ ...prev, ...(settingsRes.value.data || {}) }));
-        } else {
-            console.error("Error fetching quote settings", settingsRes.reason);
-        }
-
-        if (templatesRes.status === 'fulfilled') {
-            setQuoteTemplates((templatesRes.value.data || []).sort((a, b) => {
+            setOrderStatuses(bootstrap.order_statuses || []);
+            setAttributes(bootstrap.order_attributes || []);
+            setProductQuickFilterAttributes(buildProductQuickFilterAttributes(bootstrap.product_attributes || []));
+            setQuoteSettings((prev) => ({ ...prev, ...(bootstrap.quote_settings || {}) }));
+            setQuoteTemplates((bootstrap.quote_templates || []).sort((a, b) => {
                 const sortA = Number(a.sort_order) || 0;
                 const sortB = Number(b.sort_order) || 0;
                 if (sortA !== sortB) return sortA - sortB;
                 return String(a.name || '').localeCompare(String(b.name || ''), 'vi');
             }));
-        } else {
-            console.error("Error fetching quote templates", templatesRes.reason);
+        } catch (error) {
+            setProductQuickFilterAttributes([]);
+            console.error("Error fetching order form bootstrap", error);
         }
-    };
+    }, []);
 
     const fetchOrder = async (targetId, isDuplicating = false) => {
         try {
@@ -1226,6 +1240,19 @@ const OrderForm = () => {
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        fetchInitialData();
+        if (isEdit) {
+            fetchOrder(id);
+        } else if (duplicateFromId) {
+            fetchOrder(duplicateFromId, true);
+        } else if (leadId) {
+            fetchLeadDraft(leadId);
+        } else {
+            setLoading(false);
+        }
+    }, [duplicateFromId, fetchInitialData, id, isEdit, leadId]);
 
     const handleInputChange = (e) => {
         const { name, value } = e.target;
@@ -1625,6 +1652,141 @@ const OrderForm = () => {
         setShowQuoteTemplatePicker(true);
     };
 
+    const handleCopyCellValue = async (text, message, event, copyId) => {
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+
+        const value = text == null ? '' : String(text);
+        if (!value) return;
+
+        try {
+            await navigator.clipboard.writeText(value);
+            setCopiedText(copyId || value);
+            showTransientNotification('success', `Đã sao chép ${message}: ${value}`);
+            if (copyFeedbackTimeoutRef.current) {
+                window.clearTimeout(copyFeedbackTimeoutRef.current);
+            }
+
+            copyFeedbackTimeoutRef.current = window.setTimeout(() => setCopiedText(null), 2000);
+        } catch (error) {
+            console.error('Copy failed:', error);
+            showTransientNotification('error', 'Không thể sao chép dữ liệu.');
+        }
+    };
+
+    const handleRefreshOrderItems = async (event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+
+        if (isRefreshingItems) return;
+
+        if (formData.items.length === 0) {
+            showModal({
+                title: 'Chưa có sản phẩm',
+                content: 'Đơn hiện tại chưa có sản phẩm để làm mới.',
+                type: 'info'
+            });
+            return;
+        }
+
+        setIsRefreshingItems(true);
+
+        try {
+            const response = await productApi.refreshOrderItems({
+                items: formData.items.map((item) => ({
+                    product_id: item.product_id,
+                    sku: item.sku,
+                    name: item.name,
+                }))
+            });
+
+            const refreshedItems = Array.isArray(response.data?.items) ? response.data.items : [];
+            const issues = Array.isArray(response.data?.issues) ? response.data.issues : [];
+            const refreshedMap = new Map(
+                refreshedItems.map((item) => [Number(item.product_id), item])
+            );
+
+            setFormData((prev) => {
+                const nextItems = prev.items.map((item) => {
+                    const latest = refreshedMap.get(Number(item.product_id));
+                    if (!latest) return item;
+
+                    return {
+                        ...item,
+                        name: latest.name ?? item.name,
+                        sku: latest.sku ?? item.sku,
+                        price: Number(latest.price ?? 0),
+                        cost_price: Number(latest.cost_price ?? 0),
+                    };
+                });
+
+                const costTotal = nextItems.reduce(
+                    (sum, item) => sum + ((Number(item.cost_price) || 0) * (Number(item.quantity) || 0)),
+                    0
+                );
+
+                return {
+                    ...prev,
+                    items: nextItems,
+                    cost_total: costTotal,
+                };
+            });
+
+            setProducts((prev) => prev.map((product) => {
+                const latest = refreshedMap.get(Number(product.id));
+                if (!latest) return product;
+
+                return {
+                    ...product,
+                    sku: latest.sku ?? product.sku,
+                    name: latest.name ?? product.name,
+                    price: Number(latest.price ?? product.price ?? 0),
+                    cost_price: Number(latest.cost_price ?? product.cost_price ?? 0),
+                    status: latest.status ?? product.status,
+                };
+            }));
+
+            if (refreshedItems.length > 0) {
+                showTransientNotification(
+                    'success',
+                    issues.length > 0
+                        ? `Đã làm mới ${refreshedItems.length} sản phẩm. Có ${issues.length} sản phẩm cần kiểm tra.`
+                        : `Đã làm mới ${refreshedItems.length} sản phẩm trong đơn.`
+                );
+            } else {
+                showTransientNotification('error', 'Không tìm thấy dữ liệu sản phẩm để làm mới.');
+            }
+
+            if (issues.length > 0) {
+                const issueContent = issues
+                    .map((issue, index) => {
+                        const code = issue.sku ? `<strong>${escapeHtml(issue.sku)}</strong>` : `<strong>#${Number(issue.product_id) || '-'}</strong>`;
+                        const name = escapeHtml(issue.name || `Sản phẩm #${issue.product_id}`);
+                        const message = escapeHtml(issue.message || 'Sản phẩm đang có vấn đề.');
+
+                        return `${index + 1}. ${code} - ${name}: ${message}`;
+                    })
+                    .join('<br/>');
+
+                showModal({
+                    title: 'Sản phẩm cần kiểm tra',
+                    content: issueContent,
+                    type: 'warning'
+                });
+            }
+        } catch (error) {
+            console.error('Error refreshing order items', error);
+            showTransientNotification(
+                'error',
+                error.response?.data?.message || 'Không thể làm mới sản phẩm trong đơn.'
+            );
+        } finally {
+            setIsRefreshingItems(false);
+        }
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         
@@ -1795,6 +1957,17 @@ const OrderForm = () => {
                 .order-form-table::-webkit-scrollbar-track { background: #F0F4F8; }
                 .order-form-table::-webkit-scrollbar-thumb { background: #1B365D; border: 2px solid #F0F4F8; border-radius: 5px; }
             `}</style>
+            {notification && (
+                <div className={`fixed top-6 right-6 z-[2000] p-4 rounded-md shadow-2xl flex items-center gap-4 animate-in fade-in slide-in-from-top-4 duration-300 ${notification.type === 'error' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-green-50 text-green-700 border border-green-200'}`}>
+                    <div className="flex items-center gap-3">
+                        <span className="material-symbols-outlined">{notification.type === 'error' ? 'report' : 'check_circle'}</span>
+                        <span className="font-bold">{notification.message}</span>
+                    </div>
+                    <button type="button" onClick={() => setNotification(null)} className="ml-2 opacity-50 hover:opacity-100 flex items-center">
+                        <span className="material-symbols-outlined text-[18px]">close</span>
+                    </button>
+                </div>
+            )}
             <div className="flex-none bg-[#F8FAFC] pb-4 space-y-2">
                 <div className="flex justify-between items-center">
                 <div className="flex items-center gap-3">
@@ -1931,18 +2104,11 @@ const OrderForm = () => {
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                if (searchTerm.trim()) pushSearchHistory(searchTerm);
-                                                fetchProducts(searchTerm.trim());
-                                                setShowSearchDropdown(true);
-                                                setShowProductQuickFilterPanel(false);
-                                                setShowSearchHistory(false);
-                                            }}
+                                            onClick={handleRefreshOrderItems}
                                             className="text-primary/30 hover:text-primary ml-3 border-l border-primary/10 pl-3 transition-all"
-                                            title={'L\u00e0m m\u1edbi danh s\u00e1ch s\u1ea3n ph\u1ea9m'}
+                                            title={'L\u00e0m m\u1edbi s\u1ea3n ph\u1ea9m trong \u0111\u01a1n hi\u1ec7n t\u1ea1i'}
                                         >
-                                            <span className="material-symbols-outlined text-xs">refresh</span>
+                                            <span className={`material-symbols-outlined text-xs ${isRefreshingItems ? 'animate-refresh-spin' : ''}`}>refresh</span>
                                         </button>
                                         {productQuickFilterAttributes.length > 0 && (
                                             <button
@@ -2250,37 +2416,63 @@ const OrderForm = () => {
                                                             return <td key={colId} className="py-2.5 text-center text-primary/30 font-sans text-[12px] font-bold border border-primary/10">{index + 1}</td>;
                                                         case 'sku':
                                                             return (
-                                                <td key={colId} className="py-2.5 px-4 border border-primary/10 relative group/cell">
-                                                    <p className="font-sans text-[13px] text-primary font-bold leading-none truncate max-w-[120px]">{item.sku || '---'}</p>
-                                                    {/* Tooltip */}
-                                                    <div className="absolute bottom-full left-4 mb-2 bg-slate-900 text-white p-2 rounded shadow-2xl opacity-0 group-hover/cell:opacity-100 pointer-events-none transition-all z-50 whitespace-nowrap text-[11px] font-bold border border-white/10 scale-90 group-hover/cell:scale-100 origin-bottom-left">
-                                                        Mã: {item.sku || 'N/A'}
-                                                        <div className="absolute top-full left-2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-slate-900"></div>
-                                                    </div>
-                                                </td>
+                                                                <td key={colId} className="py-2.5 px-4 border border-primary/10 relative group/cell">
+                                                                    <div className="flex items-center justify-between gap-2">
+                                                                        <p className="font-sans text-[13px] text-primary font-bold leading-none truncate flex-1 min-w-0">{item.sku || '---'}</p>
+                                                                        {item.sku && (
+                                                                            <button
+                                                                                type="button"
+                                                                                onPointerDown={(e) => e.stopPropagation()}
+                                                                                onClick={(e) => handleCopyCellValue(item.sku, 'mã sản phẩm', e, `${item.product_id}-sku-${index}`)}
+                                                                                className={`${copiedText === `${item.product_id}-sku-${index}` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`}
+                                                                                title="Sao chép mã SP"
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === `${item.product_id}-sku-${index}` ? 'check' : 'content_copy'}</span>
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="absolute bottom-full left-4 mb-2 bg-slate-900 text-white p-2 rounded shadow-2xl opacity-0 group-hover/cell:opacity-100 pointer-events-none transition-all z-50 whitespace-nowrap text-[11px] font-bold border border-white/10 scale-90 group-hover/cell:scale-100 origin-bottom-left">
+                                                                        Mã: {item.sku || 'N/A'}
+                                                                        <div className="absolute top-full left-2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-slate-900"></div>
+                                                                    </div>
+                                                                </td>
                                                             );
                                                         case 'name':
                                                             return (
-                                               <td key={colId} className="py-2.5 px-4 border border-primary/10 relative group/cell">
-                                                    <p className="text-primary font-bold text-[13px] leading-tight truncate max-w-[300px]">{item.name}</p>
-                                                    {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
-                                                        <div className="mt-1 max-w-[320px] truncate text-[11px] font-semibold text-primary/55">
-                                                            {item.options?.bundle_parent_name ? `Từ bundle: ${item.options.bundle_parent_name}` : 'Từ bundle'}
-                                                            {item.options?.bundle_option_title ? ` - ${item.options.bundle_option_title}` : ''}
-                                                        </div>
-                                                    ) : null}
-                                                    {/* Tooltip */}
-                                                    <div className="absolute bottom-full left-4 mb-2 bg-slate-900 text-white p-3 rounded shadow-2xl opacity-0 group-hover/cell:opacity-100 pointer-events-none transition-all z-50 w-80 text-[12px] font-bold border border-white/10 scale-95 group-hover/cell:scale-100 origin-bottom-left leading-relaxed">
-                                                        <div>{item.name}</div>
-                                                        {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
-                                                            <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/80">
-                                                                {item.options?.bundle_parent_name ? `Bundle gốc: ${item.options.bundle_parent_name}` : 'Bundle gốc'}
-                                                                {item.options?.bundle_option_title ? ` - ${item.options.bundle_option_title}` : ''}
-                                                            </div>
-                                                        ) : null}
-                                                        <div className="absolute top-full left-4 w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-t-[5px] border-t-slate-900"></div>
-                                                    </div>
-                                                </td>
+                                                                <td key={colId} className="py-2.5 px-4 border border-primary/10 relative group/cell">
+                                                                    <div className="flex items-center gap-2 overflow-hidden">
+                                                                        <div className="flex-1 min-w-0">
+                                                                            <p className="text-primary font-bold text-[13px] leading-tight truncate">{item.name}</p>
+                                                                            {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
+                                                                                <div className="mt-1 truncate text-[11px] font-semibold text-primary/55">
+                                                                                    {item.options?.bundle_parent_name ? `Từ bundle: ${item.options.bundle_parent_name}` : 'Từ bundle'}
+                                                                                    {item.options?.bundle_option_title ? ` - ${item.options.bundle_option_title}` : ''}
+                                                                                </div>
+                                                                            ) : null}
+                                                                        </div>
+                                                                        {item.name && (
+                                                                            <button
+                                                                                type="button"
+                                                                                onPointerDown={(e) => e.stopPropagation()}
+                                                                                onClick={(e) => handleCopyCellValue(item.name, 'tên sản phẩm', e, `${item.product_id}-name-${index}`)}
+                                                                                className={`${copiedText === `${item.product_id}-name-${index}` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`}
+                                                                                title="Sao chép tên SP"
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === `${item.product_id}-name-${index}` ? 'check' : 'content_copy'}</span>
+                                                                            </button>
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="absolute bottom-full left-4 mb-2 bg-slate-900 text-white p-3 rounded shadow-2xl opacity-0 group-hover/cell:opacity-100 pointer-events-none transition-all z-50 w-80 text-[12px] font-bold border border-white/10 scale-95 group-hover/cell:scale-100 origin-bottom-left leading-relaxed">
+                                                                        <div>{item.name}</div>
+                                                                        {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
+                                                                            <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/80">
+                                                                                {item.options?.bundle_parent_name ? `Bundle gốc: ${item.options.bundle_parent_name}` : 'Bundle gốc'}
+                                                                                {item.options?.bundle_option_title ? ` - ${item.options.bundle_option_title}` : ''}
+                                                                            </div>
+                                                                        ) : null}
+                                                                        <div className="absolute top-full left-4 w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-t-[5px] border-t-slate-900"></div>
+                                                                    </div>
+                                                                </td>
                                                             );
                                                         case 'quantity':
                                                             return (

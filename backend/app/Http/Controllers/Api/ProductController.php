@@ -764,11 +764,108 @@ class ProductController extends Controller
         }
     }
 
+    protected function pickerIndex(Request $request)
+    {
+        $query = Product::query()->select([
+            'products.id',
+            'products.sku',
+            'products.name',
+            'products.price',
+            'products.cost_price',
+            'products.stock_quantity',
+            'products.type',
+        ]);
+
+        $searchRankingSql = null;
+        $searchRankingBindings = [];
+
+        $this->applyProductAttributeFilters($query, $request->input('attributes'));
+
+        if ($request->filled('search')) {
+            [$searchRankingSql, $searchRankingBindings] = $this->applyProductSearch(
+                $query,
+                (string) $request->input('search')
+            );
+        }
+
+        if (!$request->filled('type')) {
+            $query->whereDoesntHave('parentConfigurable');
+        }
+
+        $query->with([
+            'images:id,product_id,image_url,is_primary,sort_order',
+            'attributeValues:id,product_id,attribute_id,value',
+            'variations:id,sku,name,price,cost_price,type',
+            'variations.attributeValues:id,product_id,attribute_id,value',
+        ]);
+
+        if ($searchRankingSql !== null) {
+            $query->orderByRaw("{$searchRankingSql} DESC", $searchRankingBindings)
+                ->orderByRaw("CASE WHEN type = 'configurable' THEN 0 ELSE 1 END")
+                ->orderBy('name', 'asc');
+        } else {
+            $query->orderByRaw("CASE WHEN type = 'configurable' THEN 0 ELSE 1 END")
+                ->orderBy('name', 'asc');
+        }
+
+        $perPage = min(max((int) $request->get('per_page', 50), 1), 100);
+        $paginated = $query->paginate($perPage);
+
+        $paginated->setCollection(
+            $paginated->getCollection()->map(function (Product $product) {
+                $primaryImage = $product->images->firstWhere('is_primary', true)
+                    ?: $product->images->sortBy('sort_order')->first();
+
+                return [
+                    'id' => (int) $product->id,
+                    'sku' => $product->sku,
+                    'name' => $product->name,
+                    'price' => (float) ($product->price ?? 0),
+                    'cost_price' => (float) ($product->cost_price ?? 0),
+                    'stock_quantity' => (float) ($product->stock_quantity ?? 0),
+                    'type' => $product->type,
+                    'main_image' => $primaryImage?->image_url,
+                    'attribute_values' => $product->attributeValues
+                        ->map(fn ($attributeValue) => [
+                            'attribute_id' => (int) $attributeValue->attribute_id,
+                            'value' => $attributeValue->value,
+                        ])
+                        ->values()
+                        ->all(),
+                    'variations' => $product->variations
+                        ->map(fn (Product $variation) => [
+                            'id' => (int) $variation->id,
+                            'sku' => $variation->sku,
+                            'name' => $variation->name,
+                            'price' => (float) ($variation->price ?? 0),
+                            'cost_price' => (float) ($variation->cost_price ?? 0),
+                            'type' => $variation->type,
+                            'attribute_values' => $variation->attributeValues
+                                ->map(fn ($attributeValue) => [
+                                    'attribute_id' => (int) $attributeValue->attribute_id,
+                                    'value' => $attributeValue->value,
+                                ])
+                                ->values()
+                                ->all(),
+                        ])
+                        ->values()
+                        ->all(),
+                ];
+            })
+        );
+
+        return response()->json($paginated);
+    }
+
     /**
      * Display a listing of the resource.
      */
     public function index(Request $request)
     {
+        if ($request->boolean('picker')) {
+            return $this->pickerIndex($request);
+        }
+
         // Start with optimized column selection for products list to reduce memory & payload
         $query = Product::query()
             ->select([
@@ -1433,6 +1530,92 @@ class ProductController extends Controller
         }
 
         return response()->json($this->appendSupplierMeta($product));
+    }
+
+    public function refreshOrderItems(Request $request)
+    {
+        $validated = $request->validate([
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'required|integer',
+            'items.*.sku' => 'nullable|string|max:120',
+            'items.*.name' => 'nullable|string|max:255',
+        ]);
+
+        $requestedItems = collect($validated['items'])
+            ->map(function (array $item) {
+                return [
+                    'product_id' => (int) $item['product_id'],
+                    'sku' => trim((string) ($item['sku'] ?? '')),
+                    'name' => trim((string) ($item['name'] ?? '')),
+                ];
+            })
+            ->filter(fn (array $item) => $item['product_id'] > 0)
+            ->unique('product_id')
+            ->values();
+
+        $products = Product::withTrashed()
+            ->select(['id', 'sku', 'name', 'price', 'cost_price', 'status', 'deleted_at'])
+            ->whereIn('id', $requestedItems->pluck('product_id')->all())
+            ->get()
+            ->keyBy('id');
+
+        $items = [];
+        $issues = [];
+
+        foreach ($requestedItems as $requestedItem) {
+            $productId = $requestedItem['product_id'];
+            /** @var Product|null $product */
+            $product = $products->get($productId);
+
+            if (!$product) {
+                $issues[] = [
+                    'product_id' => $productId,
+                    'sku' => $requestedItem['sku'] ?: null,
+                    'name' => $requestedItem['name'] ?: "Sản phẩm #{$productId}",
+                    'reason' => 'missing',
+                    'message' => 'Sản phẩm không còn tồn tại hoặc không thuộc tài khoản hiện tại.',
+                ];
+                continue;
+            }
+
+            $items[] = [
+                'product_id' => (int) $product->id,
+                'sku' => $product->sku,
+                'name' => $product->name,
+                'price' => (float) ($product->price ?? 0),
+                'cost_price' => (float) ($product->cost_price ?? 0),
+                'status' => (bool) $product->status,
+                'deleted' => $product->trashed(),
+            ];
+
+            if ($product->trashed()) {
+                $issues[] = [
+                    'product_id' => (int) $product->id,
+                    'sku' => $product->sku,
+                    'name' => $product->name,
+                    'reason' => 'deleted',
+                    'message' => 'Sản phẩm đã bị xóa khỏi kho.',
+                ];
+                continue;
+            }
+
+            if (!(bool) $product->status) {
+                $issues[] = [
+                    'product_id' => (int) $product->id,
+                    'sku' => $product->sku,
+                    'name' => $product->name,
+                    'reason' => 'inactive',
+                    'message' => 'Sản phẩm đang ở trạng thái ngừng hoạt động.',
+                ];
+            }
+        }
+
+        return response()->json([
+            'items' => $items,
+            'issues' => $issues,
+            'requested_count' => $requestedItems->count(),
+            'refreshed_count' => count($items),
+        ]);
     }
 
     /**

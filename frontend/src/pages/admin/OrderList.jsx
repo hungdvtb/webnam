@@ -9,6 +9,7 @@ import { useTableColumns } from '../../hooks/useTableColumns';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
 import SortIndicator from '../../components/SortIndicator';
 import { SHIPPING_SOUND_STORAGE_KEY, defaultSoundSettings, beep } from '../../components/admin/ShippingSettingsPanel';
+import OrderInventorySlipDrawer from '../../components/admin/OrderInventorySlipDrawer';
 
 const DEFAULT_COLUMNS = [
     { id: 'order_number', label: 'Mã Đơn', minWidth: '140px', fixed: true },
@@ -26,6 +27,8 @@ const DEFAULT_COLUMNS = [
     { id: 'shipping_tracking_code', label: 'Mã vận đơn', minWidth: '170px' },
     { id: 'shipping_dispatched_at', label: 'Ngày gửi VC', minWidth: '160px' },
 ];
+
+DEFAULT_COLUMNS.splice(7, 0, { id: 'inventory_slips', label: 'Phiếu kho', minWidth: '180px' });
 
 const ORDER_TABLE_COLUMNS = [
     ...DEFAULT_COLUMNS.filter((column) => column.id !== 'actions'),
@@ -238,6 +241,7 @@ const StatusDropdownPortal = ({ order, orderStatuses, onUpdate, anchorRef, visib
 
 const SHIPPING_ALERT_SEEN_STORAGE_KEY = 'order_shipping_alert_seen_v1';
 
+const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0));
 const formatMoney = (value) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(Number(value || 0));
 
 const formatDateTime = (value) => {
@@ -249,6 +253,18 @@ const formatDateTime = (value) => {
         minute: '2-digit',
         second: '2-digit',
     })}`;
+};
+
+const inventorySlipToneClasses = {
+    emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    amber: 'border-amber-200 bg-amber-50 text-amber-700',
+    slate: 'border-primary/15 bg-primary/[0.04] text-primary/70',
+};
+
+const inventorySlipChipClasses = {
+    export: 'border-cyan-200 bg-cyan-50 text-cyan-700',
+    return: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    damaged: 'border-rose-200 bg-rose-50 text-rose-700',
 };
 
 const getAlertSignature = (alert) => `${alert.id}:${alert.shipping_issue_code || alert.active_shipment?.problem_code || 'issue'}`;
@@ -677,6 +693,7 @@ const OrderList = () => {
     const [copiedText, setCopiedText] = useState(null);
     const [statusMenuOrderId, setStatusMenuOrderId] = useState(null);
     const [productPopupOrderId, setProductPopupOrderId] = useState(null);
+    const [inventorySlipOrderId, setInventorySlipOrderId] = useState(null);
     const productPopupAnchorRef = useRef(null);
     const statusMenuAnchorRef = useRef(null);
     const statusMenuRef = useRef(null);
@@ -864,8 +881,16 @@ const OrderList = () => {
             setAvailableColumns(sortedColumns);
 
             const savedVisible = localStorage.getItem('order_list_columns');
-            if (savedVisible) setVisibleColumns(JSON.parse(savedVisible));
-            else setVisibleColumns(sortedColumns.map(c => c.id));
+            const allColumnIds = sortedColumns.map((column) => column.id);
+            if (savedVisible) {
+                const savedIds = JSON.parse(savedVisible);
+                const nextVisible = allColumnIds.filter((id) => savedIds.includes(id));
+                const mergedVisible = [...nextVisible, ...allColumnIds.filter((id) => !nextVisible.includes(id))];
+                setVisibleColumns(mergedVisible);
+                localStorage.setItem('order_list_columns', JSON.stringify(mergedVisible));
+            } else {
+                setVisibleColumns(allColumnIds);
+            }
         } catch (error) { console.error("Error initial data", error); }
     };
 
@@ -945,6 +970,12 @@ const OrderList = () => {
         }, 250);
         return () => clearTimeout(timer);
     }, [filters.search]);
+
+    useEffect(() => {
+        setSelectedIds([]);
+        setStatusMenuOrderId(null);
+        setProductPopupOrderId(null);
+    }, [isTrashView]);
 
     useEffect(() => { fetchOrders(1); }, [isTrashView]);
 
@@ -1359,6 +1390,59 @@ const OrderList = () => {
         } catch (e) { setNotification({ type: 'error', message: 'Lỗi xóa' }); } finally { setLoading(false); }
     };
 
+    const handleMoveOrderToTrash = async (orderId, event) => {
+        event?.stopPropagation();
+        if (!window.confirm('Chuyển đơn này vào thùng rác?')) return;
+
+        try {
+            setLoading(true);
+            await orderApi.destroy(orderId);
+            setNotification({ type: 'success', message: 'Đã chuyển đơn vào thùng rác' });
+            setSelectedIds(prev => prev.filter(id => id !== orderId));
+            fetchOrders(1);
+        } catch (e) {
+            const errorMsg = e.response?.data?.message || 'Lỗi xóa đơn';
+            setNotification({ type: 'error', message: errorMsg });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleRestoreOrder = async (orderId, event) => {
+        event?.stopPropagation();
+
+        try {
+            setLoading(true);
+            await orderApi.restore(orderId);
+            setNotification({ type: 'success', message: 'Đã khôi phục đơn hàng' });
+            setSelectedIds(prev => prev.filter(id => id !== orderId));
+            fetchOrders(1);
+        } catch (e) {
+            const errorMsg = e.response?.data?.message || 'Lỗi khôi phục đơn';
+            setNotification({ type: 'error', message: errorMsg });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleForceDeleteOrder = async (orderId, event) => {
+        event?.stopPropagation();
+        if (!window.confirm('Xóa vĩnh viễn đơn này?')) return;
+
+        try {
+            setLoading(true);
+            await orderApi.forceDelete(orderId);
+            setNotification({ type: 'success', message: 'Đã xóa vĩnh viễn đơn hàng' });
+            setSelectedIds(prev => prev.filter(id => id !== orderId));
+            fetchOrders(1);
+        } catch (e) {
+            const errorMsg = e.response?.data?.message || 'Lỗi xóa vĩnh viễn đơn';
+            setNotification({ type: 'error', message: errorMsg });
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const handleCopy = (t, e) => {
         if (e) e.stopPropagation();
         navigator.clipboard.writeText(t);
@@ -1419,7 +1503,7 @@ const OrderList = () => {
             )}
 
             <div className="flex-none bg-[#F8FAFC] pb-4 space-y-2">
-                <div className="flex justify-between items-center"><h1 className="admin-header-title italic">Quản lý đơn hàng</h1><AccountSelector user={user} /></div>
+                <div className="flex justify-between items-center"><h1 className="admin-header-title italic">{isTrashView ? 'Thùng rác đơn hàng' : 'Quản lý đơn hàng'}</h1><AccountSelector user={user} /></div>
 
                 <div className="bg-white border border-primary/10 p-2 shadow-sm rounded-sm flex items-center gap-2">
                     <div className="flex gap-1 items-center">
@@ -1776,14 +1860,14 @@ const OrderList = () => {
                                 <td colSpan={renderedColumns.length + 1} className="p-12 text-center">
                                     <div className="flex flex-col items-center gap-2 text-primary/40">
                                         <span className="material-symbols-outlined text-[48px]">inventory_2</span>
-                                        <p className="font-bold text-[15px]">Không tìm thấy đơn hàng nào</p>
-                                        <p className="text-[13px]">Thử thay đổi bộ lọc hoặc từ khóa tìm kiếm</p>
+                                        <p className="font-bold text-[15px]">{isTrashView ? 'Thùng rác đang trống' : 'Không tìm thấy đơn hàng nào'}</p>
+                                        <p className="text-[13px]">{isTrashView ? 'Các đơn đã chuyển vào thùng rác sẽ hiển thị tại đây' : 'Thử thay đổi bộ lọc hoặc từ khóa tìm kiếm'}</p>
                                     </div>
                                 </td>
                             </tr>
                         ) : (
                             orders.map(o => (
-                                <tr key={o.id} onDoubleClick={() => navigate(`/admin/orders/edit/${o.id}`)} onClick={() => toggleSelectOrder(o.id)} className={`transition-all group cursor-pointer ${selectedIds.includes(o.id) ? 'bg-primary/10' : 'hover:bg-primary/5'}`}>
+                                <tr key={o.id} onDoubleClick={() => { if (!isTrashView) navigate(`/admin/orders/edit/${o.id}`); }} onClick={() => toggleSelectOrder(o.id)} className={`transition-all group cursor-pointer ${selectedIds.includes(o.id) ? 'bg-primary/10' : 'hover:bg-primary/5'}`}>
                                     <td className="p-3 border border-primary/20 sticky-col-0 group-hover:bg-primary/5 transition-colors"><input type="checkbox" checked={selectedIds.includes(o.id)} readOnly className="size-4 accent-primary" /></td>
                                     {renderedColumns.map(c => {
                                         const cs = { width: columnWidths[c.id] || c.minWidth };
@@ -1918,24 +2002,86 @@ const OrderList = () => {
                                                 </td>
                                             );
                                         }
+                                        if (c.id === 'inventory_slips') {
+                                            const summary = o.inventory_slip_summary || {
+                                                label: 'Chưa tạo phiếu',
+                                                tone: 'slate',
+                                                required_quantity: 0,
+                                                exported_quantity: 0,
+                                                return_slip_count: 0,
+                                                damaged_slip_count: 0,
+                                                export_slip_count: 0,
+                                                quick_summary: 'Chưa có dữ liệu phiếu kho.',
+                                            };
+
+                                            return (
+                                                <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20">
+                                                    <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setInventorySlipOrderId(o.id);
+                                                        }}
+                                                        title={summary.quick_summary || 'Xem chi tiết phiếu kho'}
+                                                        className="group/slip flex w-full flex-col items-start gap-1 rounded-sm border border-primary/10 bg-[#fbfcfe] px-3 py-2 text-left transition hover:border-primary/25 hover:bg-white"
+                                                    >
+                                                        <span className={`inline-flex items-center gap-1 rounded-sm border px-2 py-1 text-[11px] font-black ${inventorySlipToneClasses[summary.tone] || inventorySlipToneClasses.slate}`}>
+                                                            <span className="material-symbols-outlined text-[14px]">
+                                                                {summary.state === 'fulfilled' ? 'verified' : summary.state === 'partial' ? 'rule' : 'inventory_2'}
+                                                            </span>
+                                                            {summary.label}
+                                                        </span>
+                                                        <div className="flex flex-wrap items-center gap-1.5">
+                                                            <span className="text-[11px] font-black text-primary/65">
+                                                                {formatNumber(summary.exported_quantity || 0)}/{formatNumber(summary.required_quantity || 0)}
+                                                            </span>
+                                                            {(summary.export_slip_count || 0) > 0 && (
+                                                                <span className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] font-black ${inventorySlipChipClasses.export}`}>
+                                                                    PX {formatNumber(summary.export_slip_count)}
+                                                                </span>
+                                                            )}
+                                                            {(summary.return_slip_count || 0) > 0 && (
+                                                                <span className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] font-black ${inventorySlipChipClasses.return}`}>
+                                                                    Hoàn {formatNumber(summary.return_slip_count)}
+                                                                </span>
+                                                            )}
+                                                            {(summary.damaged_slip_count || 0) > 0 && (
+                                                                <span className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] font-black ${inventorySlipChipClasses.damaged}`}>
+                                                                    Hỏng {formatNumber(summary.damaged_slip_count)}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </button>
+                                                </td>
+                                            );
+                                        }
                                         if (c.id === 'status') {
                                             const statusName = statusMap.get(String(o.status))?.name || o.status;
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-left group/status relative">
                                                     <div className="flex items-center justify-start gap-1">
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                statusMenuAnchorRef.current = e.currentTarget;
-                                                                setStatusMenuOrderId(o.id);
-                                                            }}
-                                                            data-status-edit-btn
-                                                            className="px-2 py-1 rounded-sm text-[11px] font-black border transition-all hover:scale-105 active:scale-95 shadow-sm group/status-btn flex items-center gap-1.5"
-                                                            style={getStatusStyle(o.status)}
-                                                        >
-                                                            <span className="truncate">{statusName}</span>
-                                                            <span className="material-symbols-outlined text-[16px] leading-none opacity-40 group-hover/status-btn:opacity-100 transition-opacity">expand_more</span>
-                                                        </button>
+                                                        {!isTrashView ? (
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    statusMenuAnchorRef.current = e.currentTarget;
+                                                                    setStatusMenuOrderId(o.id);
+                                                                }}
+                                                                data-status-edit-btn
+                                                                className="px-2 py-1 rounded-sm text-[11px] font-black border transition-all hover:scale-105 active:scale-95 shadow-sm group/status-btn flex items-center gap-1.5"
+                                                                style={getStatusStyle(o.status)}
+                                                            >
+                                                                <span className="truncate">{statusName}</span>
+                                                                <span className="material-symbols-outlined text-[16px] leading-none opacity-40 group-hover/status-btn:opacity-100 transition-opacity">expand_more</span>
+                                                            </button>
+                                                        ) : (
+                                                            <span
+                                                                className="px-2 py-1 rounded-sm text-[11px] font-black border inline-flex items-center gap-1.5 shadow-sm"
+                                                                style={getStatusStyle(o.status)}
+                                                            >
+                                                                <span className="truncate">{statusName}</span>
+                                                            </span>
+                                                        )}
                                                         <button onClick={(e) => { e.stopPropagation(); handleCopy(statusName, e); }} className={`opacity-0 group-hover/status:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === statusName ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
                                                             <span className="material-symbols-outlined text-[13px]">content_copy</span>
                                                         </button>
@@ -1984,8 +2130,17 @@ const OrderList = () => {
                                         }
                                         if (c.id === 'actions') return (
                                             <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-right sticky right-0 bg-white group-hover:bg-primary/5"><div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                                                <button onClick={(e) => { e.stopPropagation(); navigate(`/admin/orders/edit/${o.id}`); }} className="p-1 hover:text-primary"><span className="material-symbols-outlined text-[18px]">edit</span></button>
-                                                <button onClick={(e) => { e.stopPropagation(); if (window.confirm("Xóa?")) orderApi.destroy(o.id).then(() => { handleRefresh(); setNotification({ type: 'success', message: 'Đã xóa' }); }); }} className="p-1 hover:text-brick"><span className="material-symbols-outlined text-[18px]">delete</span></button>
+                                                {!isTrashView ? (
+                                                    <>
+                                                        <button onClick={(e) => { e.stopPropagation(); navigate(`/admin/orders/edit/${o.id}`); }} className="p-1 hover:text-primary" title="Sửa đơn"><span className="material-symbols-outlined text-[18px]">edit</span></button>
+                                                        <button onClick={(e) => handleMoveOrderToTrash(o.id, e)} className="p-1 hover:text-brick" title="Chuyển vào thùng rác"><span className="material-symbols-outlined text-[18px]">delete</span></button>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <button onClick={(e) => handleRestoreOrder(o.id, e)} className="p-1 hover:text-green-600" title="Khôi phục"><span className="material-symbols-outlined text-[18px]">restore_from_trash</span></button>
+                                                        <button onClick={(e) => handleForceDeleteOrder(o.id, e)} className="p-1 hover:text-brick" title="Xóa vĩnh viễn"><span className="material-symbols-outlined text-[18px]">delete_forever</span></button>
+                                                    </>
+                                                )}
                                             </div></td>
                                         );
                                         if (c.isAttribute) {
@@ -2072,6 +2227,13 @@ const OrderList = () => {
                 onFieldChange={handleQuickDispatchFieldChange}
                 onClose={closeQuickDispatchModal}
                 onSubmit={handleQuickDispatchOrders}
+            />
+            <OrderInventorySlipDrawer
+                open={!!inventorySlipOrderId}
+                orderId={inventorySlipOrderId}
+                onClose={() => setInventorySlipOrderId(null)}
+                onUpdated={() => fetchOrders(pagination.current_page || 1)}
+                onNotify={setNotification}
             />
         </div>
     );

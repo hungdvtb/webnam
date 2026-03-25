@@ -124,10 +124,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/dispatch/preview', [\App\Http\Controllers\Api\OrderController::class , 'dispatchPreview']);
     Route::post('/orders/dispatch', [\App\Http\Controllers\Api\OrderController::class , 'dispatch']);
     Route::post('/orders/quick-dispatch', [\App\Http\Controllers\Api\OrderController::class , 'quickDispatch']);
+    Route::get('/orders/{id}/inventory-slips', [\App\Http\Controllers\Api\OrderController::class , 'inventorySlips'])->whereNumber('id');
+    Route::post('/orders/{id}/inventory-slips', [\App\Http\Controllers\Api\OrderController::class , 'storeInventorySlip'])->whereNumber('id');
+    Route::delete('/orders/{id}/inventory-slips/{documentId}', [\App\Http\Controllers\Api\OrderController::class , 'destroyInventorySlip'])->whereNumber('id')->whereNumber('documentId');
     Route::get('/orders/{id}', [\App\Http\Controllers\Api\OrderController::class , 'show'])->whereNumber('id');
     Route::put('/orders/{id}/status', [\App\Http\Controllers\Api\OrderController::class , 'updateStatus'])->whereNumber('id');
     Route::put('/orders/{id}', [\App\Http\Controllers\Api\OrderController::class , 'update'])->whereNumber('id');
     Route::delete('/orders/{id}', [\App\Http\Controllers\Api\OrderController::class , 'destroy'])->whereNumber('id');
+    Route::delete('/orders/{id}/force', [\App\Http\Controllers\Api\OrderController::class , 'forceDelete'])->whereNumber('id');
     Route::post('/orders/{id}/duplicate', [\App\Http\Controllers\Api\OrderController::class , 'duplicate'])->whereNumber('id');
     Route::post('/orders/{id}/restore', [\App\Http\Controllers\Api\OrderController::class , 'restore'])->whereNumber('id');
     Route::post('/orders/bulk-update', [\App\Http\Controllers\Api\OrderController::class , 'bulkUpdate']);

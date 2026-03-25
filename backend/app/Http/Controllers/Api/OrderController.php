@@ -18,10 +18,13 @@ use App\Models\ShipmentStatusLog;
 use App\Models\ShippingIntegration;
 use App\Models\SiteSetting;
 use App\Services\Inventory\InventoryService;
+use App\Services\OrderInventorySlipService;
+use App\Services\RepeatCustomerPhoneService;
 use App\Services\Shipping\ShipmentDispatchService;
 use App\Services\Shipping\ShippingAlertService;
 use App\Services\Shipping\ShipmentStatusSyncService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -36,6 +39,12 @@ class OrderController extends Controller
         'quote_store_address',
         'quote_store_phone',
     ];
+
+    public function __construct(
+        protected RepeatCustomerPhoneService $repeatCustomerPhoneService,
+        protected OrderInventorySlipService $orderInventorySlipService,
+    ) {
+    }
 
     private function generateOrderNumber($accountId = null)
     {
@@ -183,6 +192,48 @@ class OrderController extends Controller
     private function resolveAccountId(Request $request): int
     {
         return (int) $request->header('X-Account-Id');
+    }
+
+    private function scopedOrderQuery(Request $request, bool $withTrashed = false)
+    {
+        $query = $withTrashed ? Order::withTrashed() : Order::query();
+        $accountId = $this->resolveAccountId($request);
+
+        if ($accountId > 0) {
+            $query->where('account_id', $accountId);
+        }
+
+        return $query;
+    }
+
+    private function findScopedOrder(Request $request, int $id, bool $withTrashed = false): Order
+    {
+        return $this->scopedOrderQuery($request, $withTrashed)->findOrFail($id);
+    }
+
+    private function repeatPhoneMetaForOrder(array $repeatMetaMap, int $orderId): array
+    {
+        return $repeatMetaMap["order:{$orderId}"] ?? [
+            'is_repeat_customer_phone' => false,
+            'repeat_phone_previous_count' => 0,
+            'normalized_phone' => null,
+        ];
+    }
+
+    private function transformOrderListItems(Collection $orders, int $accountId): Collection
+    {
+        $repeatMetaMap = $this->repeatCustomerPhoneService->buildOrderMeta($orders, $accountId);
+        $inventorySlipSummaryMap = $this->orderInventorySlipService->buildListSummaryMap($orders);
+
+        return $orders->map(function (Order $order) use ($repeatMetaMap, $inventorySlipSummaryMap) {
+            return array_merge(
+                $order->toArray(),
+                $this->repeatPhoneMetaForOrder($repeatMetaMap, (int) $order->id),
+                [
+                    'inventory_slip_summary' => $inventorySlipSummaryMap[(int) $order->id] ?? null,
+                ]
+            );
+        })->values();
     }
 
     private function connectedCarrierCacheKey(int $accountId): string
@@ -334,6 +385,7 @@ class OrderController extends Controller
                 'shipping_status', 'shipping_carrier_code', 'shipping_carrier_name',
                 'shipping_tracking_code', 'shipping_dispatched_at',
                 'shipping_issue_code', 'shipping_issue_message', 'shipping_issue_detected_at',
+                'deleted_at',
             ]);
 
         // Eager load only what is needed for the table
@@ -404,29 +456,27 @@ class OrderController extends Controller
             $state = trim((string) $request->input('export_slip_state'));
 
             if ($state === 'created') {
-                $q->where(function ($builder) {
+                $q->whereExists(function ($builder) {
                     $builder
-                        ->where('type', 'inventory_export')
-                        ->orWhere(function ($exportQuery) {
-                            $exportQuery
-                                ->whereNotNull('shipping_tracking_code')
-                                ->where('shipping_tracking_code', '!=', '');
-                        });
+                        ->select(DB::raw(1))
+                        ->from('inventory_documents')
+                        ->whereColumn('inventory_documents.reference_id', 'orders.id')
+                        ->where('inventory_documents.reference_type', 'order')
+                        ->where('inventory_documents.type', 'export')
+                        ->whereIn('inventory_documents.status', ['draft', 'completed']);
                 });
             }
 
             if ($state === 'missing') {
-                $q
-                    ->where(function ($builder) {
-                        $builder
-                            ->whereNull('type')
-                            ->orWhere('type', '!=', 'inventory_export');
-                    })
-                    ->where(function ($builder) {
-                        $builder
-                            ->whereNull('shipping_tracking_code')
-                            ->orWhere('shipping_tracking_code', '');
-                    });
+                $q->whereNotExists(function ($builder) {
+                    $builder
+                        ->select(DB::raw(1))
+                        ->from('inventory_documents')
+                        ->whereColumn('inventory_documents.reference_id', 'orders.id')
+                        ->where('inventory_documents.reference_type', 'order')
+                        ->where('inventory_documents.type', 'export')
+                        ->whereIn('inventory_documents.status', ['draft', 'completed']);
+                });
             }
         });
 
@@ -463,7 +513,51 @@ class OrderController extends Controller
         // Ensure per_page is capped to prevent DOS
         $perPage = min(max($perPage, 1), 100);
 
-        return response()->json($query->paginate($perPage));
+        $paginator = $query->paginate($perPage);
+        $paginator->setCollection(
+            $this->transformOrderListItems(collect($paginator->items()), $accountId)
+        );
+
+        return response()->json($paginator);
+    }
+
+    public function inventorySlips(Request $request, int $id)
+    {
+        $order = $this->findScopedOrder($request, $id);
+
+        return response()->json(
+            $this->orderInventorySlipService->getOrderDetail($order)
+        );
+    }
+
+    public function storeInventorySlip(Request $request, int $id)
+    {
+        $order = $this->findScopedOrder($request, $id);
+
+        $validated = $request->validate([
+            'type' => 'required|string|in:export,return,damaged',
+            'document_date' => 'nullable|date',
+            'notes' => 'nullable|string|max:5000',
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'required|integer',
+            'items.*.quantity' => 'nullable|integer|min:0',
+            'items.*.notes' => 'nullable|string|max:1000',
+        ]);
+
+        $document = $this->orderInventorySlipService->createSlip($order, $validated, Auth::id());
+
+        return response()->json($document, 201);
+    }
+
+    public function destroyInventorySlip(Request $request, int $id, int $documentId)
+    {
+        $order = $this->findScopedOrder($request, $id);
+
+        $this->orderInventorySlipService->deleteSlip($order, $documentId);
+
+        return response()->json([
+            'message' => 'Đã xóa phiếu kho của đơn hàng.',
+        ]);
     }
 
     public function store(Request $request)
@@ -623,9 +717,11 @@ class OrderController extends Controller
     }
 
 
-    public function show($id)
+    public function show(Request $request, $id)
     {
-        $order = Order::with(['items.product', 'customer', 'shipments', 'payment', 'attributeValues.attribute', 'user'])->findOrFail($id);
+        $order = $this->scopedOrderQuery($request)
+            ->with(['items.product', 'customer', 'shipments', 'payment', 'attributeValues.attribute', 'user'])
+            ->findOrFail($id);
         return response()->json($order);
     }
 
@@ -652,7 +748,7 @@ class OrderController extends Controller
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        $order = Order::findOrFail($id);
+        $order = $this->findScopedOrder($request, (int) $id);
         $accountId = $order->account_id;
 
         // Check unique order_number if provided
@@ -718,17 +814,42 @@ class OrderController extends Controller
         });
     }
 
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
-        $order = Order::findOrFail($id);
-        app(InventoryService::class)->releaseOrderInventory($order);
-        $order->delete();
-        return response()->json(['message' => 'Order deleted successfully']);
+        $order = $this->findScopedOrder($request, (int) $id, true);
+
+        if ($order->trashed()) {
+            return response()->json(['message' => 'Order is already in trash.'], 422);
+        }
+
+        DB::transaction(function () use ($order) {
+            app(InventoryService::class)->releaseOrderInventory($order);
+            $order->delete();
+        });
+
+        return response()->json(['message' => 'Order moved to trash successfully']);
     }
 
-    public function duplicate($id)
+    public function forceDelete(Request $request, $id)
     {
-        $original = Order::with(['items', 'attributeValues'])->findOrFail($id);
+        $order = $this->findScopedOrder($request, (int) $id, true);
+
+        DB::transaction(function () use ($order) {
+            if (!$order->trashed()) {
+                app(InventoryService::class)->releaseOrderInventory($order);
+            }
+
+            $order->forceDelete();
+        });
+
+        return response()->json(['message' => 'Order permanently deleted successfully']);
+    }
+
+    public function duplicate(Request $request, $id)
+    {
+        $original = $this->scopedOrderQuery($request)
+            ->with(['items', 'attributeValues'])
+            ->findOrFail($id);
         
         return DB::transaction(function () use ($original) {
             $new = $original->replicate();
@@ -758,7 +879,7 @@ class OrderController extends Controller
             $request->validate(['status' => 'required|string']);
             
             return DB::transaction(function () use ($request, $id) {
-                $order = Order::findOrFail($id);
+                $order = $this->findScopedOrder($request, (int) $id);
                 $newStatus = $request->status;
                 $oldStatus = $order->status;
 
@@ -812,49 +933,145 @@ class OrderController extends Controller
         }
     }
 
-    public function restore($id)
+    public function restore(Request $request, $id)
     {
-        $order = Order::withTrashed()->findOrFail($id);
-        $order->restore();
+        $order = $this->findScopedOrder($request, (int) $id, true);
+
+        if (!$order->trashed()) {
+            return response()->json(['message' => 'Order is already active.'], 422);
+        }
+
+        DB::transaction(function () use ($order) {
+            $order->restore();
+            $inventorySummary = app(InventoryService::class)->reserveOrderInventory(
+                $order->fresh(['items'])
+            );
+
+            $order->forceFill([
+                'cost_total' => round((float) ($inventorySummary['cost_total'] ?? 0), 2),
+                'profit_total' => round((float) (($order->total_price ?? 0) - ($inventorySummary['cost_total'] ?? 0)), 2),
+            ])->save();
+        });
+
         return response()->json(['message' => 'Order restored successfully']);
     }
 
     public function bulkDelete(Request $request)
     {
-        $ids = $request->input('ids', []);
-        if (empty($ids)) return response()->json(['message' => 'No IDs provided'], 400);
+        $ids = collect($request->input('ids', []))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
 
-        if ($request->input('force') == '1') {
-            if (Auth::user()->role !== 'admin') {
-                return response()->json(['message' => 'Bạn không có quyền xóa vĩnh viễn đơn hàng.'], 403);
-            }
-            Order::whereIn('id', $ids)->withTrashed()->forceDelete();
-        } else {
-            Order::whereIn('id', $ids)->delete();
+        if ($ids->isEmpty()) {
+            return response()->json(['message' => 'No IDs provided'], 400);
         }
 
-        return response()->json(['message' => 'Thao tác xóa thành công']);
+        $orders = $this->scopedOrderQuery($request, true)
+            ->whereIn('id', $ids->all())
+            ->with(['items'])
+            ->get();
+
+        if ($orders->isEmpty()) {
+            return response()->json(['message' => 'No orders found for the selected IDs.'], 404);
+        }
+
+        $forceDelete = $request->boolean('force');
+
+        DB::transaction(function () use ($orders, $forceDelete) {
+            $inventoryService = app(InventoryService::class);
+
+            foreach ($orders as $order) {
+                if ($forceDelete) {
+                    if (!$order->trashed()) {
+                        $inventoryService->releaseOrderInventory($order);
+                    }
+
+                    $order->forceDelete();
+                    continue;
+                }
+
+                if ($order->trashed()) {
+                    continue;
+                }
+
+                $inventoryService->releaseOrderInventory($order);
+                $order->delete();
+            }
+        });
+
+        return response()->json([
+            'message' => $forceDelete
+                ? 'Orders permanently deleted successfully'
+                : 'Orders moved to trash successfully',
+        ]);
     }
 
     public function bulkRestore(Request $request)
     {
-        $ids = $request->input('ids', []);
-        if (empty($ids)) return response()->json(['message' => 'No IDs provided'], 400);
+        $ids = collect($request->input('ids', []))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
 
-        Order::whereIn('id', $ids)->withTrashed()->restore();
+        if ($ids->isEmpty()) {
+            return response()->json(['message' => 'No IDs provided'], 400);
+        }
+
+        $orders = $this->scopedOrderQuery($request, true)
+            ->whereIn('id', $ids->all())
+            ->with(['items'])
+            ->get();
+
+        if ($orders->isEmpty()) {
+            return response()->json(['message' => 'No orders found for the selected IDs.'], 404);
+        }
+
+        DB::transaction(function () use ($orders) {
+            $inventoryService = app(InventoryService::class);
+
+            foreach ($orders as $order) {
+                if (!$order->trashed()) {
+                    continue;
+                }
+
+                $order->restore();
+                $inventorySummary = $inventoryService->reserveOrderInventory($order->fresh(['items']));
+
+                $order->forceFill([
+                    'cost_total' => round((float) ($inventorySummary['cost_total'] ?? 0), 2),
+                    'profit_total' => round((float) (($order->total_price ?? 0) - ($inventorySummary['cost_total'] ?? 0)), 2),
+                ])->save();
+            }
+        });
+
         return response()->json(['message' => 'Orders restored successfully']);
     }
 
     public function bulkDuplicate(Request $request)
     {
-        $ids = $request->input('ids', []);
-        if (empty($ids)) return response()->json(['message' => 'No IDs provided'], 400);
+        $ids = collect($request->input('ids', []))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            return response()->json(['message' => 'No IDs provided'], 400);
+        }
 
         $duplicatedCount = 0;
-        DB::transaction(function () use ($ids, &$duplicatedCount) {
+        DB::transaction(function () use ($request, $ids, &$duplicatedCount) {
             foreach ($ids as $id) {
-                $original = Order::with(['items', 'attributeValues'])->find($id);
-                if (!$original) continue;
+                $original = $this->scopedOrderQuery($request)
+                    ->with(['items', 'attributeValues'])
+                    ->find($id);
+
+                if (!$original) {
+                    continue;
+                }
 
                 $new = $original->replicate();
                 $new->order_number = $this->generateOrderNumber($original->account_id);
@@ -872,6 +1089,7 @@ class OrderController extends Controller
                     $newVal->order_id = $new->id;
                     $newVal->save();
                 }
+
                 $duplicatedCount++;
             }
         });
@@ -881,18 +1099,26 @@ class OrderController extends Controller
 
     public function bulkUpdate(Request $request)
     {
-        $ids = $request->input('ids', []);
-        if (empty($ids)) return response()->json(['message' => 'Chưa chọn đơn hàng nào.'], 400);
+        $ids = collect($request->input('ids', []))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($ids)) {
+            return response()->json(['message' => 'Chua chon don hang nao.'], 400);
+        }
 
         $data = $request->only([
             'status', 'notes', 'source', 'type', 'shipment_status'
         ]);
-        
+
         $customAttributes = $request->input('custom_attributes', []);
 
-        \Illuminate\Support\Facades\DB::transaction(function () use ($ids, $data, $customAttributes) {
+        DB::transaction(function () use ($request, $ids, $data, $customAttributes) {
             if (!empty($data)) {
-                Order::whereIn('id', $ids)->update($data);
+                $this->scopedOrderQuery($request)->whereIn('id', $ids)->update($data);
             }
 
             if (!empty($customAttributes)) {
@@ -907,8 +1133,9 @@ class OrderController extends Controller
             }
         });
 
-        return response()->json(['message' => 'Cập nhật hàng loạt thành công']);
+        return response()->json(['message' => 'Cap nhat hang loat thanh cong']);
     }
+
     public function dispatchPreview(Request $request, ShipmentDispatchService $dispatchService)
     {
         $validated = $request->validate([
@@ -918,7 +1145,7 @@ class OrderController extends Controller
             'warehouse_id' => 'nullable|integer|exists:warehouses,id',
         ]);
 
-        $orders = Order::query()
+        $orders = $this->scopedOrderQuery($request)
             ->whereIn('id', $validated['order_ids'])
             ->with(['items.product'])
             ->get();
@@ -941,7 +1168,7 @@ class OrderController extends Controller
             'warehouse_id' => 'nullable|integer|exists:warehouses,id',
         ]);
 
-        $orders = Order::query()
+        $orders = $this->scopedOrderQuery($request)
             ->whereIn('id', $validated['order_ids'])
             ->with(['items.product'])
             ->get();
@@ -987,7 +1214,7 @@ class OrderController extends Controller
             ], 422);
         }
 
-        $orders = Order::query()
+        $orders = $this->scopedOrderQuery($request)
             ->whereIn('id', $shipmentsPayload->pluck('order_id')->unique()->values())
             ->with(['items.product', 'activeShipment'])
             ->get()

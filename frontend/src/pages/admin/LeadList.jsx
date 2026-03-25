@@ -350,6 +350,30 @@ const LeadCopyableCell = ({
     );
 };
 
+const LeadPhoneValue = ({ lead }) => {
+    const isRepeatPhone = Boolean(lead?.is_repeat_customer_phone);
+    const repeatCount = Number(lead?.repeat_phone_previous_count || 0);
+    const phoneTitle = isRepeatPhone && repeatCount > 0
+        ? `${lead?.phone || '-'} • Đặt lại (${repeatCount} đơn/lead trước đó)`
+        : (lead?.phone || '-');
+
+    return (
+        <div className="min-w-0">
+            <div
+                className={`truncate text-[13px] font-semibold ${isRepeatPhone ? 'text-brick' : 'text-[#0F172A]'}`}
+                title={phoneTitle}
+            >
+                {lead?.phone || '-'}
+            </div>
+            {isRepeatPhone ? (
+                <span className="mt-1 inline-flex rounded-full border border-brick/15 bg-brick/5 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.08em] text-brick">
+                    Đặt lại
+                </span>
+            ) : null}
+        </div>
+    );
+};
+
 const createDefaultNotificationSettings = () => ({
     enabled: true,
     useDefault: true,
@@ -621,7 +645,7 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
         case 'customer_name':
             return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.customer_name || 'Khách chưa có tên'}>{lead.customer_name || 'Khách chưa có tên'}</div>;
         case 'phone':
-            return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.phone || '-'}>{lead.phone || '-'}</div>;
+            return <LeadPhoneValue lead={lead} />;
         case 'address':
             return <div className="text-[13px] leading-5 text-[#0F172A]" title={lead.address || '-'}>{lead.address || '-'}</div>;
         case 'tag':
@@ -707,7 +731,7 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
         case 'customer_name':
             return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.customer_name || 'Khách chưa có tên'}>{lead.customer_name || 'Khách chưa có tên'}</div>;
         case 'phone':
-            return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.phone || '-'}>{lead.phone || '-'}</div>;
+            return <LeadPhoneValue lead={lead} />;
         case 'address':
             return <div className="text-[13px] leading-5 text-[#0F172A]" title={lead.address || '-'}>{lead.address || '-'}</div>;
         case 'tag':
@@ -2631,7 +2655,7 @@ const LeadList = () => {
         case 'customer_name':
             return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.customer_name || 'Khách chưa có tên'}>{lead.customer_name || 'Khách chưa có tên'}</div>;
         case 'phone':
-            return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.phone || '-'}>{lead.phone || '-'}</div>;
+            return <LeadPhoneValue lead={lead} />;
         case 'address':
             return <div className="text-[13px] leading-5 text-[#0F172A]" title={lead.address || '-'}>{lead.address || '-'}</div>;
         case 'tag':
@@ -2731,7 +2755,7 @@ const LeadList = () => {
                     copiedCellId={copiedCellId}
                     onCopy={handleCopyCellValue}
                 >
-                    <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.phone || '-'}>{lead.phone || '-'}</div>
+                    <LeadPhoneValue lead={lead} />
                 </LeadCopyableCell>
             );
         case 'address':

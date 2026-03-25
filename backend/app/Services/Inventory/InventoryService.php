@@ -342,6 +342,91 @@ class InventoryService
         ];
     }
 
+    public function reserveOrderInventory(Order $order): array
+    {
+        $items = $order->items()
+            ->where('quantity', '>', 0)
+            ->get();
+
+        if ($items->isEmpty()) {
+            throw ValidationException::withMessages([
+                'items' => 'Don hang can co it nhat 1 san pham hop le de khoi phuc ton kho.',
+            ]);
+        }
+
+        if (InventoryBatchAllocation::query()->where('order_id', $order->id)->exists()) {
+            $this->releaseOrderInventory($order);
+        }
+
+        $productIds = $items->pluck('product_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $products = Product::query()
+            ->whereIn('id', $productIds)
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('id');
+
+        if (count($productIds) !== $products->count()) {
+            throw ValidationException::withMessages([
+                'items' => 'Co san pham trong don hang khong ton tai hoac khong thuoc cua hang hien tai.',
+            ]);
+        }
+
+        $touchedProductIds = [];
+        $totalPrice = 0;
+        $costTotal = 0;
+        $profitTotal = 0;
+
+        foreach ($items as $item) {
+            $product = $products->get((int) $item->product_id);
+            $quantity = (int) $item->quantity;
+            $sellingPrice = round((float) ($item->price ?? 0), 2);
+            $allocation = $this->allocateSellableBatches($order->account_id, $product, $quantity);
+            $avgUnitCost = $quantity > 0 ? round($allocation['total_cost'] / $quantity, 2) : 0;
+            $lineTotalPrice = round($sellingPrice * $quantity, 2);
+            $lineProfit = round($lineTotalPrice - $allocation['total_cost'], 2);
+
+            $item->forceFill([
+                'cost_price' => $avgUnitCost,
+                'cost_total' => $allocation['total_cost'],
+                'profit_total' => $lineProfit,
+            ])->save();
+
+            foreach ($allocation['allocations'] as $row) {
+                InventoryBatchAllocation::create([
+                    'account_id' => $order->account_id,
+                    'inventory_batch_id' => $row['inventory_batch_id'],
+                    'product_id' => $product->id,
+                    'order_id' => $order->id,
+                    'order_item_id' => $item->id,
+                    'quantity' => $row['quantity'],
+                    'unit_cost' => $row['unit_cost'],
+                    'total_cost' => $row['total_cost'],
+                    'allocated_at' => now(),
+                ]);
+            }
+
+            $touchedProductIds[] = $product->id;
+            $totalPrice += $lineTotalPrice;
+            $costTotal += (float) $allocation['total_cost'];
+            $profitTotal += $lineProfit;
+        }
+
+        $this->refreshProducts($touchedProductIds);
+
+        return [
+            'items' => $order->items()->whereIn('id', $items->pluck('id'))->get(),
+            'total_price' => round($totalPrice, 2),
+            'cost_total' => round($costTotal, 2),
+            'profit_total' => round($profitTotal, 2),
+        ];
+    }
+
     public function releaseOrderInventory(Order $order): void
     {
         $allocations = InventoryBatchAllocation::query()

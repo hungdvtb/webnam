@@ -10,10 +10,12 @@ use App\Models\LeadStatus;
 use App\Models\Product;
 use App\Models\SiteSetting;
 use App\Services\Leads\LeadBundleResolver;
+use App\Services\RepeatCustomerPhoneService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 class LeadController extends Controller
@@ -23,7 +25,8 @@ class LeadController extends Controller
     protected array $draftStatusCache = [];
 
     public function __construct(
-        protected LeadBundleResolver $bundleResolver
+        protected LeadBundleResolver $bundleResolver,
+        protected RepeatCustomerPhoneService $repeatCustomerPhoneService
     ) {
     }
 
@@ -263,9 +266,23 @@ class LeadController extends Controller
         });
     }
 
-    protected function transformNotificationLead(Lead $lead, ?LeadNotificationRead $notificationRead = null, ?LeadStatus $draftStatus = null): array
+    protected function repeatMetaFor(array $repeatMetaMap, string $recordType, int $id): array
     {
-        return $this->transformLead($lead, $draftStatus) + [
+        return $repeatMetaMap["{$recordType}:{$id}"] ?? [
+            'is_repeat_customer_phone' => false,
+            'repeat_phone_previous_count' => 0,
+            'normalized_phone' => null,
+        ];
+    }
+
+    protected function transformNotificationLead(
+        Lead $lead,
+        ?LeadNotificationRead $notificationRead = null,
+        ?LeadStatus $draftStatus = null,
+        array $repeatMetaMap = []
+    ): array
+    {
+        return $this->transformLead($lead, $draftStatus, $this->repeatMetaFor($repeatMetaMap, 'lead', (int) $lead->id)) + [
             'notification_is_read' => (bool) $notificationRead,
             'notification_read_at' => $this->isoDateTime($notificationRead?->read_at),
         ];
@@ -285,13 +302,14 @@ class LeadController extends Controller
             ->orderByDesc('id')
             ->limit($limit)
             ->get();
+        $repeatMetaMap = $this->repeatCustomerPhoneService->buildLeadMeta($notifications, $accountId);
 
         $leadIds = $notifications->pluck('id')->filter()->map(fn ($id) => (int) $id)->all();
         $readMap = $this->notificationReadMap($accountId, $userId, $leadIds);
 
         return [
             'items' => $notifications
-                ->map(fn (Lead $lead) => $this->transformNotificationLead($lead, $readMap[$lead->id] ?? null, $draftStatus))
+                ->map(fn (Lead $lead) => $this->transformNotificationLead($lead, $readMap[$lead->id] ?? null, $draftStatus, $repeatMetaMap))
                 ->values(),
             'unread_count' => $this->unreadNotificationCount($accountId, $userId),
             'settings' => $this->notificationSettings($accountId, $userId),
@@ -393,7 +411,7 @@ class LeadController extends Controller
         return $query;
     }
 
-    protected function transformLead(Lead $lead, ?LeadStatus $draftStatus = null): array
+    protected function transformLead(Lead $lead, ?LeadStatus $draftStatus = null, array $repeatMeta = []): array
     {
         $status = $this->resolvedLeadStatus($lead, $draftStatus);
         $usesDraftStatus = $this->leadUsesDraftStatus($lead, $draftStatus);
@@ -469,6 +487,9 @@ class LeadController extends Controller
             'items' => $resolvedItems,
             'conversion_data' => $lead->conversion_data ?: [],
             'payload_snapshot' => $lead->payload_snapshot ?: [],
+            'is_repeat_customer_phone' => (bool) ($repeatMeta['is_repeat_customer_phone'] ?? false),
+            'repeat_phone_previous_count' => (int) ($repeatMeta['repeat_phone_previous_count'] ?? 0),
+            'normalized_phone' => $repeatMeta['normalized_phone'] ?? null,
         ];
     }
 
@@ -494,6 +515,8 @@ class LeadController extends Controller
 
         $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
         $paginator = $query->paginate($perPage);
+        $leadItems = collect($paginator->items());
+        $repeatMetaMap = $this->repeatCustomerPhoneService->buildLeadMeta($leadItems, $accountId);
 
         $summaryQuery = Lead::query()->where('account_id', $accountId);
         $this->applyLeadFilters($summaryQuery, $request, false);
@@ -517,7 +540,7 @@ class LeadController extends Controller
             ->values();
 
         return response()->json([
-            'data' => collect($paginator->items())->map(fn (Lead $lead) => $this->transformLead($lead, $draftStatus))->values(),
+            'data' => $leadItems->map(fn (Lead $lead) => $this->transformLead($lead, $draftStatus, $this->repeatMetaFor($repeatMetaMap, 'lead', (int) $lead->id)))->values(),
             'current_page' => $paginator->currentPage(),
             'last_page' => $paginator->lastPage(),
             'per_page' => $paginator->perPage(),
@@ -544,8 +567,9 @@ class LeadController extends Controller
             ->with(['statusConfig', 'items.product', 'notesTimeline.user', 'order:id,order_number'])
             ->findOrFail($id);
         $draftStatus = $this->draftStatusForAccount((int) $lead->account_id);
+        $repeatMetaMap = $this->repeatCustomerPhoneService->buildLeadMeta(new Collection([$lead]), (int) $lead->account_id);
 
-        return response()->json($this->transformLead($lead, $draftStatus) + [
+        return response()->json($this->transformLead($lead, $draftStatus, $this->repeatMetaFor($repeatMetaMap, 'lead', (int) $lead->id)) + [
             'notes_timeline' => $lead->notesTimeline->map(fn ($note) => [
                 'id' => $note->id,
                 'staff_name' => $note->staff_name,
@@ -609,6 +633,7 @@ class LeadController extends Controller
 
         $lead->save();
         $lead->load(['statusConfig', 'items.product', 'order:id,order_number']);
+        $repeatMetaMap = $this->repeatCustomerPhoneService->buildLeadMeta(new Collection([$lead]), (int) $lead->account_id);
 
         if ($statusUpdated) {
             $this->markNotificationsAsRead($request, [$lead->id]);
@@ -618,7 +643,7 @@ class LeadController extends Controller
         $userId = $this->userId($request);
         $readMap = $this->notificationReadMap($accountId, $userId, [$lead->id]);
 
-        return response()->json($this->transformNotificationLead($lead, $readMap[$lead->id] ?? null, $draftStatus) + [
+        return response()->json($this->transformNotificationLead($lead, $readMap[$lead->id] ?? null, $draftStatus, $repeatMetaMap) + [
             'notification_unread_count' => $this->unreadNotificationCount($accountId, $userId),
         ]);
     }
@@ -783,6 +808,7 @@ class LeadController extends Controller
             ->limit(20)
             ->get();
         $draftStatus = $this->draftStatusForAccount($accountId);
+        $repeatMetaMap = $this->repeatCustomerPhoneService->buildLeadMeta($items, $accountId);
 
         $latestReturnedId = $items->last()?->id ?: $afterId;
         $readMap = $this->notificationReadMap(
@@ -796,7 +822,7 @@ class LeadController extends Controller
             'has_more' => $latestKnownId > $latestReturnedId,
             'unread_count' => $this->unreadNotificationCount($accountId, $userId),
             'items' => $items
-                ->map(fn (Lead $lead) => $this->transformNotificationLead($lead, $readMap[$lead->id] ?? null, $draftStatus))
+                ->map(fn (Lead $lead) => $this->transformNotificationLead($lead, $readMap[$lead->id] ?? null, $draftStatus, $repeatMetaMap))
                 ->values(),
         ]);
     }

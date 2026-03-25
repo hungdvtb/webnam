@@ -52,6 +52,14 @@ class Order extends Model
         return $this->hasMany(Shipment::class);
     }
 
+    public function inventoryDocuments()
+    {
+        return $this->hasMany(InventoryDocument::class, 'reference_id')
+            ->where('reference_type', 'order')
+            ->orderBy('document_date', 'desc')
+            ->orderBy('id', 'desc');
+    }
+
     public function attributeValues()
     {
         return $this->hasMany(OrderAttributeValue::class);

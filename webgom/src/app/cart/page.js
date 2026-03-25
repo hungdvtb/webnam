@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useEffectEvent } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useCart } from '@/context/CartContext';
 import config from '@/lib/config';
-import { placeWebOrder, getWebSiteSettings } from '@/lib/api';
+import { placeWebOrder, saveWebOrderDraft, getWebSiteSettings } from '@/lib/api';
 import { rememberLeadAttribution } from '@/lib/leadAttribution';
 import SearchableSelect from '@/components/ui/SearchableSelect';
 import styles from './cart.module.css';
@@ -64,6 +64,75 @@ const getCartItemMeta = (item) => {
   ).slice(0, 3);
 };
 
+const CHECKOUT_PHONE_REGEX = /^(0)[0-9]{9}$/;
+const CHECKOUT_DRAFT_DELAY_MS = 60 * 1000;
+const CHECKOUT_DRAFT_UPDATE_DELAY_MS = 2000;
+const CHECKOUT_DRAFT_STORAGE_KEY = `webgom_checkout_draft_${config.siteCode}`;
+
+const getCartItemUnitPrice = (item) => {
+  if (item?.groupedItems?.length) {
+    return item.groupedItems.reduce(
+      (sum, groupedItem) => sum + (parseFloat(groupedItem.price || 0) * (groupedItem.qty || 1)),
+      0
+    );
+  }
+
+  return parseFloat(item?.price || 0);
+};
+
+const createCheckoutDraftToken = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  return `draft-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const readStoredCheckoutDraft = () => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const rawValue = window.sessionStorage.getItem(CHECKOUT_DRAFT_STORAGE_KEY);
+    if (!rawValue) {
+      return null;
+    }
+
+    const parsed = JSON.parse(rawValue);
+    if (!parsed?.token) {
+      return null;
+    }
+
+    return {
+      token: parsed.token,
+      leadId: parsed.leadId || null,
+    };
+  } catch (error) {
+    console.error('Failed to read checkout draft state:', error);
+    return null;
+  }
+};
+
+const writeStoredCheckoutDraft = (token, leadId = null) => {
+  if (typeof window === 'undefined' || !token) {
+    return;
+  }
+
+  window.sessionStorage.setItem(
+    CHECKOUT_DRAFT_STORAGE_KEY,
+    JSON.stringify({ token, leadId })
+  );
+};
+
+const clearStoredCheckoutDraft = () => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.sessionStorage.removeItem(CHECKOUT_DRAFT_STORAGE_KEY);
+};
+
 export default function CartPage() {
   const { cartItems, removeFromCart, updateQuantity, updateItem, restoreCombo, cartCount, cartTotal, clearCart } = useCart();
 
@@ -90,6 +159,28 @@ export default function CartPage() {
   const fieldGroupRefs = useRef({});
   const fieldInputRefs = useRef({});
   const hasMobileCheckoutIntentRef = useRef(false);
+  const draftTokenRef = useRef('');
+  const draftLeadIdRef = useRef(null);
+  const draftTimerRef = useRef(null);
+  const draftSyncTimerRef = useRef(null);
+  const draftRequestInFlightRef = useRef(null);
+  const lastDraftPayloadRef = useRef('');
+  const checkoutCompletedRef = useRef(false);
+  const latestCheckoutStateRef = useRef(null);
+
+  useEffect(() => {
+    checkoutCompletedRef.current = false;
+    const storedDraft = readStoredCheckoutDraft();
+
+    if (storedDraft?.token) {
+      draftTokenRef.current = storedDraft.token;
+      draftLeadIdRef.current = storedDraft.leadId;
+      return;
+    }
+
+    draftTokenRef.current = createCheckoutDraftToken();
+    writeStoredCheckoutDraft(draftTokenRef.current, null);
+  }, []);
 
   useEffect(() => {
     getWebSiteSettings().then(res => setBankSettings(res)).catch(e => console.error("Error fetching settings:", e));
@@ -249,9 +340,192 @@ export default function CartPage() {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
+  const clearDraftTimers = () => {
+    if (draftTimerRef.current) {
+      window.clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
+    }
+
+    if (draftSyncTimerRef.current) {
+      window.clearTimeout(draftSyncTimerRef.current);
+      draftSyncTimerRef.current = null;
+    }
+  };
+
+  const ensureDraftToken = () => {
+    if (draftTokenRef.current) {
+      return draftTokenRef.current;
+    }
+
+    const storedDraft = readStoredCheckoutDraft();
+    if (storedDraft?.token) {
+      draftTokenRef.current = storedDraft.token;
+      draftLeadIdRef.current = storedDraft.leadId;
+      return draftTokenRef.current;
+    }
+
+    draftTokenRef.current = createCheckoutDraftToken();
+    writeStoredCheckoutDraft(draftTokenRef.current, draftLeadIdRef.current);
+    return draftTokenRef.current;
+  };
+
+  const clearCheckoutDraftSession = () => {
+    clearDraftTimers();
+    draftLeadIdRef.current = null;
+    draftRequestInFlightRef.current = null;
+    lastDraftPayloadRef.current = '';
+    draftTokenRef.current = '';
+    clearStoredCheckoutDraft();
+  };
+
+  const buildCheckoutPayload = (checkoutState = null) => {
+    const state = checkoutState || latestCheckoutStateRef.current || {
+      cartItems,
+      formData,
+      discount,
+      totalAfterDiscount,
+      useNewAddress,
+    };
+    const attribution = rememberLeadAttribution();
+    const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
+    const addressDetail = String(state.formData?.address || '').trim();
+    const province = String(state.formData?.province || '').trim();
+    const district = state.useNewAddress ? '' : String(state.formData?.district || '').trim();
+    const ward = String(state.formData?.ward || '').trim();
+    const fullAddress = [addressDetail, ward, district, province]
+      .filter(Boolean)
+      .join(', ');
+    const draftToken = ensureDraftToken();
+
+    return {
+      customer_name: String(state.formData?.customer_name || '').trim(),
+      phone: String(state.formData?.phone || '').trim(),
+      address: fullAddress,
+      address_detail: addressDetail,
+      province,
+      district,
+      ward,
+      email: String(state.formData?.email || '').trim(),
+      notes: String(state.formData?.notes || '').trim(),
+      paymentMethod: state.formData?.paymentMethod || 'cod',
+      payment_method: state.formData?.paymentMethod || 'cod',
+      source: 'Website',
+      discount: state.discount || 0,
+      total: state.totalAfterDiscount || 0,
+      draft_token: draftToken,
+      draft_lead_id: draftLeadIdRef.current,
+      landing_url: attribution.landing_url || attribution.first_url || currentUrl,
+      current_url: currentUrl,
+      referrer: attribution.referrer || (typeof document !== 'undefined' ? document.referrer : '') || '',
+      utm_source: attribution.utm_source || '',
+      utm_medium: attribution.utm_medium || '',
+      utm_campaign: attribution.utm_campaign || '',
+      utm_content: attribution.utm_content || '',
+      utm_term: attribution.utm_term || '',
+      raw_query: attribution.raw_query || '',
+      items: (state.cartItems || []).map((item) => {
+        const bundleOptionTitle = item?.options?.bundle_option_title || item?.options?.bundle_config || '';
+        const unitPrice = getCartItemUnitPrice(item);
+
+        return {
+          product_id: item.id,
+          quantity: item.quantity,
+          options: item.options,
+          sub_items: item.groupedItems?.map((groupedItem) => {
+            const childUnitPrice = parseFloat(groupedItem.price || 0);
+            const childQuantity = groupedItem.qty || 1;
+
+            return {
+              id: groupedItem.id,
+              product_id: groupedItem.id,
+              qty: childQuantity,
+              quantity: childQuantity,
+              name: groupedItem.name,
+              product_name: groupedItem.name,
+              price: childUnitPrice,
+              unit_price: childUnitPrice,
+              line_total: childUnitPrice * childQuantity,
+              option_title: bundleOptionTitle || undefined,
+            };
+          }),
+          product_name: item.name,
+          product_sku: item.sku,
+          product_slug: item.slug,
+          product_url: item.productUrl || `${window.location.origin}/product/${item.slug || item.id}`,
+          unit_price: unitPrice,
+          line_total: unitPrice * item.quantity,
+        };
+      }),
+    };
+  };
+
+  const saveDraftLeadSnapshot = async (checkoutState = null) => {
+    if (checkoutCompletedRef.current || isOrderSuccess || cartItems.length === 0) {
+      return null;
+    }
+
+    const payload = buildCheckoutPayload(checkoutState);
+
+    if (!CHECKOUT_PHONE_REGEX.test(payload.phone)) {
+      return null;
+    }
+
+    const serializedPayload = JSON.stringify(payload);
+    if (draftLeadIdRef.current && serializedPayload === lastDraftPayloadRef.current) {
+      return null;
+    }
+
+    if (draftRequestInFlightRef.current) {
+      try {
+        await draftRequestInFlightRef.current;
+      } catch (error) {
+        return null;
+      }
+
+      return saveDraftLeadSnapshot(checkoutState);
+    }
+
+    const requestPromise = saveWebOrderDraft(payload)
+      .then((response) => {
+        if (response?.draft_token) {
+          draftTokenRef.current = response.draft_token;
+        }
+
+        if (response?.lead_id) {
+          draftLeadIdRef.current = response.lead_id;
+          writeStoredCheckoutDraft(draftTokenRef.current || payload.draft_token, response.lead_id);
+        }
+
+        if (response?.is_draft === false) {
+          checkoutCompletedRef.current = true;
+          clearDraftTimers();
+        }
+
+        lastDraftPayloadRef.current = serializedPayload;
+        return response;
+      })
+      .catch((error) => {
+        console.error('Checkout draft save failed:', error);
+        throw error;
+      })
+      .finally(() => {
+        draftRequestInFlightRef.current = null;
+      });
+
+    draftRequestInFlightRef.current = requestPromise;
+    return requestPromise;
+  };
+
+  const triggerDraftSave = useEffectEvent(() => {
+    saveDraftLeadSnapshot().catch(() => {});
+  });
+
+  const resetDraftSession = useEffectEvent(() => {
+    clearCheckoutDraftSession();
+  });
+
   const validateCheckoutForm = () => {
     const errors = {};
-    const phoneRegex = /^(0)[0-9]{9}$/;
     const fieldOrder = ['customer_name', 'phone', 'province'];
 
     if (!useNewAddress) {
@@ -266,7 +540,7 @@ export default function CartPage() {
 
     if (!formData.phone?.trim()) {
       errors.phone = 'Vui lòng nhập số điện thoại.';
-    } else if (!phoneRegex.test(formData.phone.trim())) {
+    } else if (!CHECKOUT_PHONE_REGEX.test(formData.phone.trim())) {
       errors.phone = 'Số điện thoại cần đủ 10 số và bắt đầu bằng số 0.';
     }
 
@@ -430,6 +704,90 @@ export default function CartPage() {
     cartItems.every(item => item.groupedItems?.length > 0);
 
   const totalAfterDiscount = cartTotal - discount;
+  const isPhoneReadyForDraft = CHECKOUT_PHONE_REGEX.test(String(formData.phone || '').trim());
+
+  useEffect(() => {
+    latestCheckoutStateRef.current = {
+      cartItems,
+      formData,
+      discount,
+      totalAfterDiscount,
+      useNewAddress,
+    };
+  }, [cartItems, formData, discount, totalAfterDiscount, useNewAddress]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    if (checkoutCompletedRef.current || isOrderSuccess || cartItems.length === 0 || !isPhoneReadyForDraft) {
+      if (draftTimerRef.current) {
+        window.clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+      }
+      return undefined;
+    }
+
+    if (draftLeadIdRef.current || draftTimerRef.current) {
+      return undefined;
+    }
+
+    draftTimerRef.current = window.setTimeout(() => {
+      draftTimerRef.current = null;
+      triggerDraftSave();
+    }, CHECKOUT_DRAFT_DELAY_MS);
+
+    return undefined;
+  }, [cartItems.length, isOrderSuccess, isPhoneReadyForDraft]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    if (
+      checkoutCompletedRef.current
+      || isOrderSuccess
+      || isSubmitting
+      || !draftLeadIdRef.current
+      || cartItems.length === 0
+      || !isPhoneReadyForDraft
+    ) {
+      if (draftSyncTimerRef.current) {
+        window.clearTimeout(draftSyncTimerRef.current);
+        draftSyncTimerRef.current = null;
+      }
+      return undefined;
+    }
+
+    if (draftSyncTimerRef.current) {
+      window.clearTimeout(draftSyncTimerRef.current);
+    }
+
+    draftSyncTimerRef.current = window.setTimeout(() => {
+      draftSyncTimerRef.current = null;
+      triggerDraftSave();
+    }, CHECKOUT_DRAFT_UPDATE_DELAY_MS);
+
+    return undefined;
+  }, [cartItems, discount, formData, isOrderSuccess, isSubmitting, isPhoneReadyForDraft, totalAfterDiscount]);
+
+  useEffect(() => () => {
+    clearDraftTimers();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || isOrderSuccess || cartItems.length > 0) {
+      return;
+    }
+
+    if (!draftTokenRef.current && !draftLeadIdRef.current) {
+      return;
+    }
+
+    resetDraftSession();
+  }, [cartItems.length, isOrderSuccess]);
 
   // ── Submit order ────────────────────────────────────────────────────────────
   const handleSubmit = async (e) => {
@@ -440,8 +798,7 @@ export default function CartPage() {
       alert('Vui lòng nhập Họ và tên người nhận.');
       return;
     }
-    const phoneRegex = /^(0)[0-9]{9}$/;
-    if (!formData.phone?.trim() || !phoneRegex.test(formData.phone)) {
+    if (!formData.phone?.trim() || !CHECKOUT_PHONE_REGEX.test(formData.phone.trim())) {
       alert("Số điện thoại không hợp lệ. Vui lòng nhập đúng 10 số, bắt đầu bằng số 0 (ví dụ: 0987654321).");
       return;
     }
@@ -462,37 +819,10 @@ export default function CartPage() {
       return;
     }
 
+    clearDraftTimers();
     setIsSubmitting(true);
     try {
-      const attribution = rememberLeadAttribution();
-      const fullAddress = [formData.address, formData.ward, formData.district, formData.province]
-        .filter(Boolean).join(', ');
-      const orderData = {
-        ...formData,
-        address: fullAddress,
-        discount,
-        total: totalAfterDiscount,
-        landing_url: attribution.landing_url || attribution.first_url || window.location.href,
-        current_url: window.location.href,
-        referrer: attribution.referrer || document.referrer || '',
-        utm_source: attribution.utm_source || '',
-        utm_medium: attribution.utm_medium || '',
-        utm_campaign: attribution.utm_campaign || '',
-        utm_content: attribution.utm_content || '',
-        utm_term: attribution.utm_term || '',
-        raw_query: attribution.raw_query || '',
-        items: cartItems.map(item => ({
-          product_id: item.id,
-          quantity: item.quantity,
-          options: item.options,
-          sub_items: item.groupedItems?.map(gi => ({ id: gi.id, qty: gi.qty || 1 })),
-          product_name: item.name,
-          product_sku: item.sku,
-          product_slug: item.slug,
-          product_url: item.productUrl || `${window.location.origin}/product/${item.slug || item.id}`,
-          unit_price: item.price,
-        }))
-      };
+      const orderData = buildCheckoutPayload();
       const response = await placeWebOrder(orderData);
       setOrderNumber(response.order_number);
       // Cache details for thank you page
@@ -502,13 +832,15 @@ export default function CartPage() {
         discount,
         formData: { ...formData }
       });
+      checkoutCompletedRef.current = true;
       setIsOrderSuccess(true);
       clearCart();
+      clearCheckoutDraftSession();
       window.scrollTo(0, 0);
     } catch (error) {
       console.error('Order placement failed:', error);
       alert('Có lỗi xảy ra khi đặt hàng. Vui lòng thử lại sau.');
-    } finally {
+  } finally {
       setIsSubmitting(false);
     }
   };
@@ -578,7 +910,7 @@ export default function CartPage() {
     return () => {
       window.removeEventListener('webgom:mobile-cart-confirm-request', handleMobileCartConfirmRequest);
     };
-  }, [cartItems, formData, isOrderSuccess, isSubmitting, useNewAddress, cartTotal, discount, totalAfterDiscount]);
+  }, [cartItems, formData, guideToCheckoutForm, handleSubmit, isOrderSuccess, isSubmitting, useNewAddress, validateCheckoutForm, cartTotal, discount, totalAfterDiscount]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {

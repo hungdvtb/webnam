@@ -80,45 +80,22 @@ function InfoRow({ icon, label, children }) {
 export default function StoresClient({ stores = [] }) {
   const normalizedStores = useMemo(() => normalizeStores(stores), [stores]);
   const [activeId, setActiveId] = useState('');
-  const [search, setSearch] = useState('');
-
-  const filteredStores = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-    if (!keyword) {
-      return normalizedStores;
-    }
-
-    return normalizedStores.filter((store) =>
-      [store.name, store.city, store.address, store.tag, store.phone, store.hotline, store.email, store.note]
-        .filter(Boolean)
-        .some((value) => value.toLowerCase().includes(keyword))
-    );
-  }, [normalizedStores, search]);
 
   const resolvedActiveId = useMemo(() => {
-    if (!filteredStores.length) {
+    if (!normalizedStores.length) {
       return '';
     }
 
-    return filteredStores.some((store) => store.id === activeId) ? activeId : filteredStores[0].id;
-  }, [filteredStores, activeId]);
+    return normalizedStores.some((store) => store.id === activeId) ? activeId : normalizedStores[0].id;
+  }, [normalizedStores, activeId]);
 
   const activeStore = useMemo(
-    () => filteredStores.find((store) => store.id === resolvedActiveId) || filteredStores[0] || null,
-    [filteredStores, resolvedActiveId]
-  );
-
-  const supportHotline = useMemo(
-    () =>
-      normalizedStores.find((store) => store.hotline)?.hotline ||
-      normalizedStores.find((store) => store.phone)?.phone ||
-      '',
-    [normalizedStores]
+    () => normalizedStores.find((store) => store.id === resolvedActiveId) || normalizedStores[0] || null,
+    [normalizedStores, resolvedActiveId]
   );
 
   const hasConfiguredStores = normalizedStores.length > 0;
-  const hasSearchResults = filteredStores.length > 0;
-  const resultsLabel = `${filteredStores.length} địa chỉ`;
+  const resultsLabel = `${normalizedStores.length} địa chỉ`;
   const activeRegionLabel = activeStore ? buildRegionLabel(activeStore) : '';
   const activePhone = activeStore ? getPrimaryPhone(activeStore) : '';
 
@@ -126,86 +103,12 @@ export default function StoresClient({ stores = [] }) {
     <div className="stores-page">
       <div className="stores-shell">
         <section className="stores-hero">
-          <div className="stores-hero-copy">
-            <p className="stores-hero-eyebrow">Showroom & chi nhánh</p>
-            <h1 className="stores-hero-title">Hệ thống cửa hàng</h1>
-            <p className="stores-hero-description">
-              Tìm nhanh showroom gần bạn, xem địa chỉ rõ ràng, gọi điện thuận tiện và mở chỉ đường chỉ với một chạm.
-            </p>
-          </div>
-
-          <div className="stores-hero-meta">
-            <div className="stores-hero-card">
-              <span className="material-symbols-outlined stores-hero-card-icon">storefront</span>
-              <div className="stores-hero-card-copy">
-                <strong>{normalizedStores.length}</strong>
-                <span>Cửa hàng đang hiển thị</span>
-              </div>
-            </div>
-
-            {supportHotline ? (
-              <a href={buildPhoneLink(supportHotline)} className="stores-hero-card stores-hero-card--link">
-                <span className="material-symbols-outlined stores-hero-card-icon">headset_mic</span>
-                <div className="stores-hero-card-copy">
-                  <strong>Hotline hỗ trợ</strong>
-                  <span>{supportHotline}</span>
-                </div>
-              </a>
-            ) : (
-              <div className="stores-hero-card stores-hero-card--muted">
-                <span className="material-symbols-outlined stores-hero-card-icon">support_agent</span>
-                <div className="stores-hero-card-copy">
-                  <strong>Hotline hỗ trợ</strong>
-                  <span>Đang cập nhật</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="stores-search-panel">
-            <label className="stores-search-label" htmlFor="stores-search-input">
-              Tìm cửa hàng gần bạn
-            </label>
-
-            <div className="stores-search-wrap">
-              <span className="material-symbols-outlined stores-search-icon">search</span>
-              <input
-                id="stores-search-input"
-                className="stores-search-input"
-                type="text"
-                placeholder={hasConfiguredStores ? 'Tên cửa hàng, khu vực hoặc địa chỉ...' : 'Chưa có dữ liệu cửa hàng'}
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                disabled={!hasConfiguredStores}
-              />
-              {search ? (
-                <button
-                  type="button"
-                  className="stores-search-clear"
-                  onClick={() => setSearch('')}
-                  aria-label="Xóa từ khóa tìm kiếm"
-                >
-                  <span className="material-symbols-outlined">close</span>
-                </button>
-              ) : null}
-            </div>
-
-            <div className="stores-toolbar">
-              <p className="stores-toolbar-text">
-                {!hasConfiguredStores
-                  ? 'Chưa có dữ liệu cửa hàng để tìm kiếm.'
-                  : search
-                    ? `Kết quả cho "${search}".`
-                    : 'Tìm theo tên, khu vực hoặc địa chỉ để lọc nhanh hơn.'}
-              </p>
-              {hasConfiguredStores ? <span className="stores-results-badge">{resultsLabel}</span> : null}
-            </div>
-          </div>
+          <h1 className="stores-hero-title">Hệ thống cửa hàng</h1>
         </section>
 
         <div className="stores-content">
           <section className="stores-spotlight">
-            {activeStore && hasSearchResults ? (
+            {activeStore ? (
               <div className="stores-spotlight-card">
                 <div className="stores-spotlight-head">
                   <div className="stores-spotlight-icon">
@@ -293,20 +196,9 @@ export default function StoresClient({ stores = [] }) {
               </div>
             ) : (
               <div className="stores-spotlight-empty">
-                <span className="material-symbols-outlined">
-                  {hasConfiguredStores ? 'travel_explore' : 'location_off'}
-                </span>
-                <h2>{hasConfiguredStores ? 'Không có kết quả phù hợp' : EMPTY_TITLE}</h2>
-                <p>
-                  {hasConfiguredStores
-                    ? 'Không tìm thấy cửa hàng trùng với từ khóa hiện tại. Hãy thử tên, khu vực hoặc địa chỉ khác.'
-                    : EMPTY_DESCRIPTION}
-                </p>
-                {search ? (
-                  <button type="button" className="stores-reset-btn" onClick={() => setSearch('')}>
-                    Xóa tìm kiếm
-                  </button>
-                ) : null}
+                <span className="material-symbols-outlined">location_off</span>
+                <h2>{EMPTY_TITLE}</h2>
+                <p>{EMPTY_DESCRIPTION}</p>
               </div>
             )}
           </section>
@@ -329,17 +221,8 @@ export default function StoresClient({ stores = [] }) {
                   <h2>{EMPTY_TITLE}</h2>
                   <p>{EMPTY_DESCRIPTION}</p>
                 </div>
-              ) : !hasSearchResults ? (
-                <div className="stores-empty">
-                  <span className="material-symbols-outlined">search_off</span>
-                  <h2>Không tìm thấy cửa hàng phù hợp</h2>
-                  <p>Thử đổi từ khóa tìm kiếm hoặc xóa bộ lọc để xem toàn bộ hệ thống cửa hàng.</p>
-                  <button type="button" className="stores-reset-btn" onClick={() => setSearch('')}>
-                    Xóa tìm kiếm
-                  </button>
-                </div>
               ) : (
-                filteredStores.map((store) => {
+                normalizedStores.map((store) => {
                   const isActive = activeStore?.id === store.id;
                   const phone = getPrimaryPhone(store);
 
@@ -456,7 +339,7 @@ export default function StoresClient({ stores = [] }) {
         }
 
         .stores-hero {
-          padding: 1.1rem;
+          padding: 0.95rem 1.05rem;
           background:
             linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(247, 241, 232, 0.98)),
             rgba(255, 255, 255, 0.72);
@@ -491,9 +374,9 @@ export default function StoresClient({ stores = [] }) {
         }
 
         .stores-hero-title {
-          margin: 0.35rem 0 0;
-          font-size: clamp(2rem, 8vw, 2.8rem);
-          line-height: 1.02;
+          margin: 0;
+          font-size: clamp(1.95rem, 7vw, 2.4rem);
+          line-height: 1.05;
         }
 
         .stores-hero-description {
@@ -1038,11 +921,7 @@ export default function StoresClient({ stores = [] }) {
           }
 
           .stores-hero {
-            padding: 1.35rem;
-          }
-
-          .stores-hero-meta {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            padding: 1rem 1.35rem;
           }
 
           .stores-map-card,

@@ -396,6 +396,7 @@ Route::group(['prefix' => 'storefront'], function () {
     Route::get('/products', [\App\Http\Controllers\Api\StorefrontController::class , 'products']);
     Route::get('/products/{slugOrId}', [\App\Http\Controllers\Api\StorefrontController::class , 'productDetail']);
     Route::get('/products/{id}/related', [\App\Http\Controllers\Api\StorefrontController::class , 'relatedProducts']);
+    Route::post('/order-draft', [\App\Http\Controllers\Api\StorefrontController::class , 'saveOrderDraft']);
     Route::post('/order', [\App\Http\Controllers\Api\StorefrontController::class , 'placeOrder']);
     Route::post('/lead', [\App\Http\Controllers\Api\StorefrontController::class , 'submitLead']);
 });

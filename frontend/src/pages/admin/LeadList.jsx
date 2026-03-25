@@ -758,6 +758,119 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
         }
     }, [expandedBundleIds, handleToggleBundle, statuses]);
 
+    const renderLeadTableColGroup = () => (
+        <colgroup>
+            {renderedColumns.map((column) => {
+                const width = columnWidths[column.id] || column.minWidth;
+
+                return <col key={`lead-col-${column.id}`} style={{ width, minWidth: width, maxWidth: width }} />;
+            })}
+        </colgroup>
+    );
+
+    const renderStickyLeadTable = () => (
+        <div className="flex min-h-0 flex-1 flex-col">
+            <div
+                ref={leadTableHeaderScrollRef}
+                className="relative z-20 overflow-hidden border-x border-t border-primary/10 bg-[#F0F4F8]"
+                style={{ paddingRight: leadTableScrollbarWidth ? `${leadTableScrollbarWidth}px` : undefined }}
+            >
+                <table className="table-fixed border-collapse bg-[#F0F4F8]" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
+                    {renderLeadTableColGroup()}
+                    <thead>
+                        <tr className="lead-table-head text-left shadow-sm">
+                            {renderedColumns.map((column, index) => (
+                                <th
+                                    key={column.id}
+                                    draggable
+                                    onDragStart={(event) => handleHeaderDragStart(event, index)}
+                                    onDragOver={(event) => event.preventDefault()}
+                                    onDrop={(event) => handleHeaderDrop(event, index)}
+                                    className="group relative border-b border-r border-primary/10 bg-[#F0F4F8] px-4 py-3 text-[12px] font-bold text-primary shadow-sm last:border-r-0"
+                                    title="KÃ©o Ä‘á»ƒ Ä‘á»•i vá»‹ trÃ­ cá»™t"
+                                >
+                                    <div className="truncate pr-4">{column.label}</div>
+                                    <span
+                                        onMouseDown={(event) => handleColumnResize(column.id, event)}
+                                        className="group/resize absolute right-[-4px] top-0 z-20 flex h-full w-2.5 cursor-col-resize items-center justify-center"
+                                        title="KÃ©o Ä‘á»ƒ Ä‘á»•i Ä‘á»™ rá»™ng cá»™t"
+                                    >
+                                        <span
+                                            className={`pointer-events-none block w-px rounded-full bg-primary/45 transition-all ${
+                                                resizingColumnId === column.id
+                                                    ? 'h-10 opacity-100 bg-primary/70'
+                                                    : 'h-6 opacity-0 group-hover/resize:h-8 group-hover/resize:opacity-100'
+                                            }`}
+                                        />
+                                    </span>
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                </table>
+            </div>
+
+            <div
+                ref={leadTableBodyScrollRef}
+                onScroll={handleLeadTableBodyScroll}
+                className="lead-table-scrollbar min-h-0 flex-1 overflow-auto border-x border-b border-primary/10 bg-white"
+            >
+                <table className="min-h-full table-fixed border-collapse bg-white" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
+                    {renderLeadTableColGroup()}
+                    <tbody>
+                        {loading && leads.length === 0 ? (
+                            <tr>
+                                <td colSpan={renderedColumns.length || 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                    Äang táº£i danh sÃ¡ch lead...
+                                </td>
+                            </tr>
+                        ) : leads.length === 0 ? (
+                            <tr>
+                                <td colSpan={renderedColumns.length || 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                    KhÃ´ng tÃ¬m tháº¥y lead phÃ¹ há»£p vá»›i bá»™ lá»c hiá»‡n táº¡i.
+                                </td>
+                            </tr>
+                        ) : leads.map((lead) => {
+                            const detailKey = getLeadDetailKey(lead.id);
+                            const isExpanded = expandedBundleIds.has(detailKey);
+                            const highlightClass = highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-white hover:bg-primary/[0.025]';
+
+                            return (
+                                <React.Fragment key={lead.id}>
+                                    <tr
+                                        id={`lead-row-${lead.id}`}
+                                        className={`align-top transition-all ${highlightClass}`}
+                                        onDoubleClick={() => handleOpenOrderForm(lead)}
+                                    >
+                                        {renderedColumns.map((column) => (
+                                            <td
+                                                key={`${lead.id}-${column.id}`}
+                                                className="group/cell overflow-hidden border-b border-r border-primary/10 px-4 py-3 align-top text-[13px] last:border-r-0"
+                                            >
+                                                {renderLeadTableCellContent(lead, column.id)}
+                                            </td>
+                                        ))}
+                                    </tr>
+
+                                    {isExpanded && hasExpandableProductDetails(lead) ? (
+                                        <tr className={highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-[#FCFDFE]'}>
+                                            <td id={`lead-product-details-${lead.id}`} colSpan={renderedColumns.length || 1} className="border-b border-primary/10 px-4 pb-4 pt-0">
+                                                <LeadExpandedProductsPanel
+                                                    lead={lead}
+                                                    onCollapse={() => handleToggleBundle(detailKey)}
+                                                />
+                                            </td>
+                                        </tr>
+                                    ) : null}
+                                </React.Fragment>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+
     const renderLeadTable = () => (
         <div className="lead-table-scrollbar relative min-h-0 flex-1 overflow-auto">
             <table className="min-h-full table-fixed border-collapse border border-primary/10 bg-white" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
@@ -1514,6 +1627,7 @@ const LeadList = () => {
     const [pendingFocusLeadId, setPendingFocusLeadId] = useState(null);
     const [expandedBundleIds, setExpandedBundleIds] = useState(() => new Set());
     const [copiedCellId, setCopiedCellId] = useState(null);
+    const [leadTableScrollbarWidth, setLeadTableScrollbarWidth] = useState(0);
 
     const {
         availableColumns,
@@ -1541,6 +1655,8 @@ const LeadList = () => {
     const abortControllerRef = useRef(null);
     const highlightTimeoutRef = useRef(null);
     const copyFeedbackTimeoutRef = useRef(null);
+    const leadTableHeaderScrollRef = useRef(null);
+    const leadTableBodyScrollRef = useRef(null);
     const audioElementRef = useRef(null);
     const audioContextRef = useRef(null);
     const notificationSoundQueuedRef = useRef(false);
@@ -2258,6 +2374,32 @@ const LeadList = () => {
         audioElementRef.current?.pause?.();
     }, []);
 
+    useEffect(() => {
+        const bodyScrollLeft = leadTableBodyScrollRef.current?.scrollLeft || 0;
+        if (leadTableHeaderScrollRef.current) {
+            leadTableHeaderScrollRef.current.scrollLeft = bodyScrollLeft;
+        }
+    }, [columnWidths, renderedColumns]);
+
+    useEffect(() => {
+        const syncLeadTableLayout = () => {
+            const bodyElement = leadTableBodyScrollRef.current;
+            if (!bodyElement) {
+                setLeadTableScrollbarWidth(0);
+                return;
+            }
+
+            setLeadTableScrollbarWidth(Math.max(0, bodyElement.offsetWidth - bodyElement.clientWidth));
+            if (leadTableHeaderScrollRef.current) {
+                leadTableHeaderScrollRef.current.scrollLeft = bodyElement.scrollLeft || 0;
+            }
+        };
+
+        syncLeadTableLayout();
+        window.addEventListener('resize', syncLeadTableLayout);
+        return () => window.removeEventListener('resize', syncLeadTableLayout);
+    }, [columnWidths, expandedBundleIds, leads, loading, renderedColumns]);
+
     const handleApplyFilters = () => {
         setPage(1);
         setFilters(draftFilters);
@@ -2280,6 +2422,27 @@ const LeadList = () => {
         fetchLeads(pageRef.current, { silent: false, replaceData: true });
         fetchNotificationCenter({ silent: true });
     };
+
+    const syncLeadTableHeaderScroll = useCallback((scrollLeft = 0) => {
+        if (leadTableHeaderScrollRef.current) {
+            leadTableHeaderScrollRef.current.scrollLeft = scrollLeft;
+        }
+    }, []);
+
+    const handleLeadTableBodyScroll = useCallback((event) => {
+        syncLeadTableHeaderScroll(event.currentTarget.scrollLeft);
+    }, [syncLeadTableHeaderScroll]);
+
+    const measureLeadTableScrollbarWidth = useCallback(() => {
+        const element = leadTableBodyScrollRef.current;
+        if (!element) {
+            setLeadTableScrollbarWidth(0);
+            return;
+        }
+
+        const nextWidth = Math.max(0, element.offsetWidth - element.clientWidth);
+        setLeadTableScrollbarWidth(nextWidth);
+    }, []);
 
     const handleLeadStatusChange = async (lead, nextStatusId) => {
         try {
@@ -2662,11 +2825,123 @@ const LeadList = () => {
         }
     }, [copiedCellId, expandedBundleIds, handleCopyCellValue, handleToggleBundle, renderLeadTableCell, statuses]);
 
+    const renderLeadTableColGroupActive = () => (
+        <colgroup>
+            {renderedColumns.map((column) => {
+                const width = columnWidths[column.id] || column.minWidth;
+
+                return <col key={`lead-active-col-${column.id}`} style={{ width, minWidth: width, maxWidth: width }} />;
+            })}
+        </colgroup>
+    );
+
+    const renderStickyLeadTable = () => (
+        <div className="flex min-h-0 flex-1 flex-col">
+            <div
+                ref={leadTableHeaderScrollRef}
+                className="relative z-20 overflow-hidden border-x border-t border-primary/10 bg-[#F0F4F8]"
+            >
+                <table className="table-fixed border-collapse bg-[#F0F4F8]" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
+                    {renderLeadTableColGroupActive()}
+                    <thead>
+                        <tr className="lead-table-head text-left shadow-sm">
+                            {renderedColumns.map((column, index) => (
+                                <th
+                                    key={column.id}
+                                    draggable
+                                    onDragStart={(event) => handleHeaderDragStart(event, index)}
+                                    onDragOver={(event) => event.preventDefault()}
+                                    onDrop={(event) => handleHeaderDrop(event, index)}
+                                    className="group relative border-b border-r border-primary/10 bg-[#F0F4F8] px-4 py-3 text-[12px] font-bold text-primary shadow-sm last:border-r-0"
+                                    title="KÃ©o Ä‘á»ƒ Ä‘á»•i vá»‹ trÃ­ cá»™t"
+                                >
+                                    <div className="truncate pr-4">{column.label}</div>
+                                    <span
+                                        onMouseDown={(event) => handleColumnResize(column.id, event)}
+                                        className="group/resize absolute right-[-4px] top-0 z-20 flex h-full w-2.5 cursor-col-resize items-center justify-center"
+                                        title="KÃ©o Ä‘á»ƒ Ä‘á»•i Ä‘á»™ rá»™ng cá»™t"
+                                    >
+                                        <span
+                                            className={`pointer-events-none block w-px rounded-full bg-primary/45 transition-all ${
+                                                resizingColumnId === column.id
+                                                    ? 'h-10 opacity-100 bg-primary/70'
+                                                    : 'h-6 opacity-0 group-hover/resize:h-8 group-hover/resize:opacity-100'
+                                            }`}
+                                        />
+                                    </span>
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                </table>
+            </div>
+
+            <div
+                ref={leadTableBodyScrollRef}
+                onScroll={handleLeadTableBodyScroll}
+                className="lead-table-scrollbar min-h-0 flex-1 overflow-auto border-x border-b border-primary/10 bg-white"
+            >
+                <table className="min-h-full table-fixed border-collapse bg-white" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
+                    {renderLeadTableColGroupActive()}
+                    <tbody>
+                        {loading && leads.length === 0 ? (
+                            <tr>
+                                <td colSpan={renderedColumns.length || 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                    Äang táº£i danh sÃ¡ch lead...
+                                </td>
+                            </tr>
+                        ) : leads.length === 0 ? (
+                            <tr>
+                                <td colSpan={renderedColumns.length || 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                    KhÃ´ng tÃ¬m tháº¥y lead phÃ¹ há»£p vá»›i bá»™ lá»c hiá»‡n táº¡i.
+                                </td>
+                            </tr>
+                        ) : leads.map((lead) => {
+                            const detailKey = getLeadDetailKey(lead.id);
+                            const isExpanded = expandedBundleIds.has(detailKey);
+                            const highlightClass = highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-white hover:bg-primary/[0.025]';
+
+                            return (
+                                <React.Fragment key={lead.id}>
+                                    <tr
+                                        id={`lead-row-${lead.id}`}
+                                        className={`align-top transition-all ${highlightClass}`}
+                                        onDoubleClick={() => handleOpenOrderForm(lead)}
+                                    >
+                                        {renderedColumns.map((column) => (
+                                            <td
+                                                key={`${lead.id}-${column.id}`}
+                                                className="group/cell overflow-hidden border-b border-r border-primary/10 px-4 py-3 align-top text-[13px] last:border-r-0"
+                                            >
+                                                {renderLeadTableCellContent(lead, column.id)}
+                                            </td>
+                                        ))}
+                                    </tr>
+
+                                    {isExpanded && hasExpandableProductDetails(lead) ? (
+                                        <tr className={highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-[#FCFDFE]'}>
+                                            <td id={`lead-product-details-${lead.id}`} colSpan={renderedColumns.length || 1} className="border-b border-primary/10 px-4 pb-4 pt-0">
+                                                <LeadExpandedProductsPanel
+                                                    lead={lead}
+                                                    onCollapse={() => handleToggleBundle(detailKey)}
+                                                />
+                                            </td>
+                                        </tr>
+                                    ) : null}
+                                </React.Fragment>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+
     const renderLeadTable = () => (
-        <div className="lead-table-scrollbar min-h-0 flex-1 overflow-auto">
-            <table className="min-h-full table-fixed border-collapse" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
+        <div className="lead-table-scrollbar relative min-h-0 flex-1 overflow-x-auto overflow-y-visible">
+            <table className="min-h-full table-fixed border-collapse border border-primary/10 bg-white" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
                 <thead>
-                    <tr className="lead-table-head sticky top-0 z-10 border-b border-primary/10 text-left shadow-sm">
+                    <tr className="lead-table-head text-left shadow-sm">
                         {renderedColumns.map((column, index) => (
                             <th
                                 key={column.id}
@@ -2674,7 +2949,7 @@ const LeadList = () => {
                                 onDragStart={(event) => handleHeaderDragStart(event, index)}
                                 onDragOver={(event) => event.preventDefault()}
                                 onDrop={(event) => handleHeaderDrop(event, index)}
-                                className="group relative border-r border-primary/10 px-4 py-3 text-[12px] font-bold text-primary last:border-r-0"
+                                className="group sticky top-0 z-20 border border-primary/10 bg-[#F0F4F8] px-4 py-3 text-[12px] font-bold text-primary shadow-sm"
                                 style={{ width: columnWidths[column.id] || column.minWidth, minWidth: columnWidths[column.id] || column.minWidth, maxWidth: columnWidths[column.id] || column.minWidth }}
                                 title="Kéo để đổi vị trí cột"
                             >
@@ -2697,15 +2972,15 @@ const LeadList = () => {
                     </tr>
                 </thead>
                 <tbody>
-                    {loading ? (
+                    {loading && leads.length === 0 ? (
                         <tr>
-                            <td colSpan={renderedColumns.length || 1} className="px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                            <td colSpan={renderedColumns.length || 1} className="border border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
                                 Đang tải danh sách lead...
                             </td>
                         </tr>
                     ) : leads.length === 0 ? (
                         <tr>
-                            <td colSpan={renderedColumns.length || 1} className="px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                            <td colSpan={renderedColumns.length || 1} className="border border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
                                 Không tìm thấy lead phù hợp với bộ lọc hiện tại.
                             </td>
                         </tr>
@@ -2756,18 +3031,14 @@ const LeadList = () => {
     ]), [statuses, totalAcrossStatuses]);
 
     return (
-        <div className="min-h-screen bg-[#fcfcfa] p-6">
+        <div className="h-full min-h-0 bg-[#fcfcfa] p-6">
             <style>{`
                 .lead-table-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
                 .lead-table-scrollbar::-webkit-scrollbar-track { background: #F0F4F8; }
                 .lead-table-scrollbar::-webkit-scrollbar-thumb { background: #1B365D; border: 2px solid #F0F4F8; border-radius: 5px; }
                 .lead-table-head { font-size: 11px; font-weight: 900; color: #1B365D; letter-spacing: 0.02em; background-color: #F0F4F8; }
             `}</style>
-            <div className="mx-auto flex min-h-[calc(100vh-48px)] max-w-[1700px] flex-col gap-5">
-                <div>
-                    <h1 className="text-[15px] font-black uppercase tracking-[0.1em] text-primary">Xử lý lead</h1>
-                </div>
-
+            <div className="mx-auto flex h-full min-h-0 max-w-[1700px] flex-col gap-5">
                 <div className="flex flex-wrap gap-3">
                     {normalizedTabItems.map((item) => {
                         const active = String(filters.status || '') === String(item.id || '');
@@ -2788,7 +3059,7 @@ const LeadList = () => {
                     })}
                 </div>
 
-                <div className="flex min-h-[calc(100vh-250px)] flex-1 flex-col overflow-hidden rounded-md border border-primary/10 bg-white shadow-xl">
+                <div className="flex min-h-0 flex-1 flex-col overflow-visible rounded-md border border-primary/10 bg-white shadow-xl">
                     <div className="flex flex-col gap-3 border-b border-primary/10 bg-[#F8FAFC] px-4 py-4 xl:flex-row xl:items-center xl:justify-between">
                         <div className="flex flex-wrap items-center gap-2 xl:shrink-0">
                             <div className="relative" ref={notificationPanelRef}>
@@ -3159,7 +3430,7 @@ const LeadList = () => {
                         />
                     ) : null}
 
-                    {renderLeadTable()}
+                    {renderStickyLeadTable()}
 
                     {false ? (
                     <div className="lead-table-scrollbar min-h-0 flex-1 overflow-auto">

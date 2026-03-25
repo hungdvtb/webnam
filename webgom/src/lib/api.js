@@ -91,6 +91,13 @@ export async function placeWebOrder(orderData) {
     });
 }
 
+export async function saveWebOrderDraft(orderData) {
+    return fetchFromApi('/storefront/order-draft', {
+        method: 'POST',
+        body: JSON.stringify(orderData)
+    });
+}
+
 export async function getWebSiteSettings() {
     return fetchFromApi('/site-settings', { next: { revalidate: 0 } });
 }

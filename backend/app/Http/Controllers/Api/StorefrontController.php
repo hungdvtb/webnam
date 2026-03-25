@@ -556,15 +556,20 @@ class StorefrontController extends Controller
             'customer_name' => 'required|string|max:255',
             'phone' => 'required|string|max:20',
             'address' => 'required|string|max:1000',
+            'address_detail' => 'nullable|string|max:1000',
             'district' => 'nullable|string|max:255',
             'ward' => 'nullable|string|max:255',
             'email' => 'nullable|email|max:255',
             'notes' => 'nullable|string|max:2000',
             'source' => 'nullable|string|max:50',
+            'payment_method' => 'nullable|string|max:50',
+            'draft_token' => 'nullable|string|max:120',
+            'draft_lead_id' => 'nullable|integer',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.options' => 'nullable|array',
+            'items.*.sub_items' => 'nullable|array',
             'items.*.product_url' => 'nullable|string|max:2000',
             'items.*.product_slug' => 'nullable|string|max:255',
             'items.*.product_name' => 'nullable|string|max:255',
@@ -588,6 +593,60 @@ class StorefrontController extends Controller
             'lead_number' => $lead->lead_number,
             'lead_id' => $lead->id,
             'message' => '??t h?ng th?nh c?ng! ??n ?? ???c ??a v?o b?ng x? l? lead, ch?ng t?i s? li?n h? b?n s?m nh?t.',
+        ], 201);
+    }
+
+    /**
+     * POST /api/storefront/order-draft
+     * Public: Tu dong luu lead nhap tu trang checkout
+     */
+    public function saveOrderDraft(Request $request)
+    {
+        $request->validate([
+            'customer_name' => 'nullable|string|max:255',
+            'phone' => ['required', 'string', 'max:20', 'regex:/^(0)[0-9]{9}$/'],
+            'address' => 'nullable|string|max:1000',
+            'address_detail' => 'nullable|string|max:1000',
+            'province' => 'nullable|string|max:255',
+            'district' => 'nullable|string|max:255',
+            'ward' => 'nullable|string|max:255',
+            'email' => 'nullable|email|max:255',
+            'notes' => 'nullable|string|max:2000',
+            'source' => 'nullable|string|max:50',
+            'payment_method' => 'nullable|string|max:50',
+            'draft_token' => 'required|string|max:120',
+            'draft_lead_id' => 'nullable|integer',
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'nullable|integer',
+            'items.*.quantity' => 'required|integer|min:1',
+            'items.*.options' => 'nullable|array',
+            'items.*.sub_items' => 'nullable|array',
+            'items.*.product_url' => 'nullable|string|max:2000',
+            'items.*.product_slug' => 'nullable|string|max:255',
+            'items.*.product_name' => 'nullable|string|max:255',
+            'items.*.product_sku' => 'nullable|string|max:120',
+            'landing_url' => 'nullable|string|max:2000',
+            'current_url' => 'nullable|string|max:2000',
+            'referrer' => 'nullable|string|max:2000',
+            'utm_source' => 'nullable|string|max:255',
+            'utm_medium' => 'nullable|string|max:255',
+            'utm_campaign' => 'nullable|string|max:255',
+            'utm_content' => 'nullable|string|max:255',
+            'utm_term' => 'nullable|string|max:255',
+            'raw_query' => 'nullable|string|max:2000',
+            'discount' => 'nullable|numeric',
+            'total' => 'nullable|numeric',
+        ]);
+
+        $lead = app(LeadCaptureService::class)->createWebsiteOrderDraft($request);
+
+        return response()->json([
+            'success' => true,
+            'lead_number' => $lead->lead_number,
+            'lead_id' => $lead->id,
+            'draft_token' => $lead->draft_token,
+            'is_draft' => (bool) $lead->is_draft,
+            'message' => 'Lead nhap da duoc luu.',
         ], 201);
     }
     /**

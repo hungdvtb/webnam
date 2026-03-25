@@ -29,10 +29,14 @@ class Lead extends Model
         'utm_medium',
         'utm_campaign',
         'status',
+        'is_draft',
         'placed_at',
+        'draft_captured_at',
+        'converted_at',
         'total_amount',
         'discount_amount',
         'order_id',
+        'draft_token',
         'status_changed_at',
         'notes',
         'latest_note_excerpt',
@@ -45,8 +49,11 @@ class Lead extends Model
 
     protected $casts = [
         'placed_at' => 'datetime',
+        'draft_captured_at' => 'datetime',
+        'converted_at' => 'datetime',
         'status_changed_at' => 'datetime',
         'last_noted_at' => 'datetime',
+        'is_draft' => 'boolean',
         'payload_snapshot' => 'array',
         'conversion_data' => 'array',
     ];

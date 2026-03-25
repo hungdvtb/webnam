@@ -5,12 +5,14 @@ import { useTableColumns } from '../../hooks/useTableColumns';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { leadApi } from '../../services/api';
+import { consumeLeadListReturnHint, readLeadListViewState, writeLeadListViewState } from '../../utils/leadListViewState';
 
 const inputClassName = 'w-full h-10 rounded-sm border border-primary/10 bg-white px-3 text-[13px] text-[#0F172A] shadow-sm transition-all focus:border-primary/30 focus:outline-none';
 const textareaClassName = 'w-full min-h-[132px] rounded-sm border border-primary/10 bg-white px-3 py-2 text-[13px] text-[#0F172A] shadow-sm transition-all focus:border-primary/30 focus:outline-none resize-none';
 const buttonClassName = 'inline-flex h-10 items-center gap-2 rounded-sm border border-primary/10 bg-white px-3 text-[12px] font-black uppercase tracking-[0.08em] text-primary/80 shadow-sm transition-all hover:border-primary/30 hover:text-primary';
 const iconButtonClassName = 'relative inline-flex size-10 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/70 shadow-sm transition-all hover:border-primary/30 hover:text-primary';
 const MAX_NOTIFICATION_ITEMS = 12;
+const LEAD_LIST_COPY_RESET_MS = 1800;
 const emptyFilters = { status: '', tag: '', date_from: '', date_to: '' };
 const LEAD_COLUMNS = [
     { id: 'placed_at', label: 'Thời gian đặt', minWidth: '150px' },
@@ -194,6 +196,158 @@ const mergeLeadCollections = (incoming, current, perPage = 20) => {
             return rightTime - leftTime;
         })
         .slice(0, perPage);
+};
+
+const findCreatedOrderStatus = (statuses = []) => {
+    const directMatch = statuses.find((status) => normalizeSearchTextSafe(status?.code || '') === 'da-tao-don');
+    if (directMatch) return directMatch;
+
+    return statuses.find((status) => {
+        const normalized = normalizeSearchTextSafe(`${status?.code || ''} ${status?.name || ''}`);
+        return normalized.includes('da tao don');
+    }) || null;
+};
+
+const findStatusFromHint = (statuses = [], hint = null) => {
+    if (!hint) return null;
+
+    if (hint.nextStatusId) {
+        const matchedById = statuses.find((status) => Number(status.id) === Number(hint.nextStatusId));
+        if (matchedById) return matchedById;
+    }
+
+    if (hint.nextStatusCode) {
+        const normalizedHint = normalizeSearchTextSafe(hint.nextStatusCode);
+        const matchedByCode = statuses.find((status) => normalizeSearchTextSafe(status?.code || '') === normalizedHint);
+        if (matchedByCode) return matchedByCode;
+    }
+
+    return findCreatedOrderStatus(statuses);
+};
+
+const patchLeadFromReturnHint = (lead, hint, statuses = []) => {
+    if (!lead?.id || !hint?.leadId || Number(lead.id) !== Number(hint.leadId)) return lead;
+
+    const nextStatus = findStatusFromHint(statuses, hint);
+
+    return {
+        ...lead,
+        order_id: hint.orderId || lead.order_id,
+        order_number: hint.orderNumber || lead.order_number,
+        latest_note_excerpt: hint.latestNoteExcerpt || lead.latest_note_excerpt,
+        status: nextStatus?.code || hint.nextStatusCode || lead.status,
+        lead_status_id: nextStatus?.id || lead.lead_status_id,
+        status_config: nextStatus ? {
+            id: nextStatus.id,
+            code: nextStatus.code,
+            name: nextStatus.name,
+            color: nextStatus.color,
+            blocks_order_create: Boolean(nextStatus.blocks_order_create),
+        } : lead.status_config,
+        notification_is_read: true,
+    };
+};
+
+const patchLeadCollectionFromReturnHint = (collection, hint, statuses = [], filters = emptyFilters, search = '') => {
+    if (!Array.isArray(collection) || !hint?.leadId) return collection;
+
+    let patchedLead = null;
+    const nextCollection = collection.map((lead) => {
+        if (Number(lead?.id) !== Number(hint.leadId)) return lead;
+        patchedLead = patchLeadFromReturnHint(lead, hint, statuses);
+        return patchedLead;
+    });
+
+    if (!patchedLead) return collection;
+    if (!leadMatchesFilters(patchedLead, filters, search)) {
+        return nextCollection.filter((lead) => Number(lead?.id) !== Number(hint.leadId));
+    }
+
+    return nextCollection;
+};
+
+const patchStatusCountsForTransition = (statuses = [], previousLead = null, nextLead = null) => {
+    if (!previousLead?.id || !nextLead?.id) return statuses;
+
+    const previousStatusId = Number(previousLead?.status_config?.id || previousLead?.lead_status_id || 0);
+    const nextStatusId = Number(nextLead?.status_config?.id || nextLead?.lead_status_id || 0);
+    if (!previousStatusId || !nextStatusId || previousStatusId === nextStatusId) return statuses;
+
+    return statuses.map((status) => {
+        let nextCount = Number(status.count || 0);
+
+        if (Number(status.id) === previousStatusId) {
+            nextCount = Math.max(0, nextCount - 1);
+        }
+
+        if (Number(status.id) === nextStatusId) {
+            nextCount += 1;
+        }
+
+        return nextCount === Number(status.count || 0)
+            ? status
+            : { ...status, count: nextCount };
+    });
+};
+
+const copyTextToClipboard = async (value) => {
+    const text = String(value ?? '');
+    if (!text.trim()) return false;
+
+    if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+    }
+
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.setAttribute('readonly', '');
+    textArea.style.position = 'fixed';
+    textArea.style.opacity = '0';
+    document.body.appendChild(textArea);
+    textArea.select();
+
+    try {
+        const copied = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        return copied;
+    } catch (error) {
+        document.body.removeChild(textArea);
+        throw error;
+    }
+};
+
+const LeadCopyableCell = ({
+    children,
+    copyValue = '',
+    copyId,
+    copyLabel,
+    copiedCellId,
+    onCopy,
+    iconTopClassName = 'top-0',
+}) => {
+    const canCopy = String(copyValue ?? '').trim() !== '';
+
+    return (
+        <div className="group/copy relative min-w-0">
+            <div className={canCopy ? 'pr-7' : ''}>{children}</div>
+
+            {canCopy ? (
+                <button
+                    type="button"
+                    onClick={(event) => onCopy(copyValue, copyLabel, event, copyId)}
+                    className={`absolute right-0 ${iconTopClassName} inline-flex size-5 items-center justify-center rounded-sm transition-all ${
+                        copiedCellId === copyId
+                            ? 'text-green-600 opacity-100'
+                            : 'text-primary/20 opacity-0 group-hover/copy:opacity-100 hover:text-primary'
+                    }`}
+                    title={`Sao chép ${copyLabel}`}
+                >
+                    <span className="material-symbols-outlined text-[14px]">{copiedCellId === copyId ? 'check' : 'content_copy'}</span>
+                </button>
+            ) : null}
+        </div>
+    );
 };
 
 const createDefaultNotificationSettings = () => ({
@@ -436,16 +590,34 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
         switch (columnId) {
         case 'placed_at':
             return (
-                <div className="text-[13px] text-[#0F172A]">
-                    <div>{lead.placed_date || '-'}</div>
-                    <div className="mt-1 font-semibold text-primary/60">{lead.placed_time || '-'}</div>
-                    {lead.order_number ? (
-                        <div className="mt-2 truncate text-[11px] font-bold text-primary/45" title={lead.order_number}>{lead.order_number}</div>
-                    ) : null}
-                </div>
+                <LeadCopyableCell
+                    copyValue={[lead.placed_date, lead.placed_time, lead.order_number].filter(Boolean).join(' ')}
+                    copyId={`${lead.id}-placed_at`}
+                    copyLabel="thời gian đặt"
+                    copiedCellId={copiedCellId}
+                    onCopy={handleCopyCellValue}
+                >
+                    <div className="text-[13px] text-[#0F172A]">
+                        <div>{lead.placed_date || '-'}</div>
+                        <div className="mt-1 font-semibold text-primary/60">{lead.placed_time || '-'}</div>
+                        {lead.order_number ? (
+                            <div className="mt-2 truncate text-[11px] font-bold text-primary/45" title={lead.order_number}>{lead.order_number}</div>
+                        ) : null}
+                    </div>
+                </LeadCopyableCell>
             );
         case 'product':
-            return <CompactProductCell lead={lead} expandedBundleIds={expandedBundleIds} onToggleBundle={handleToggleBundle} />;
+            return (
+                <LeadCopyableCell
+                    copyValue={buildProductTooltip(lead) || getLeadProductSummary(lead) || lead.product_summary}
+                    copyId={`${lead.id}-product`}
+                    copyLabel="sản phẩm"
+                    copiedCellId={copiedCellId}
+                    onCopy={handleCopyCellValue}
+                >
+                    <CompactProductCell lead={lead} expandedBundleIds={expandedBundleIds} onToggleBundle={handleToggleBundle} />
+                </LeadCopyableCell>
+            );
         case 'customer_name':
             return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.customer_name || 'Khách chưa có tên'}>{lead.customer_name || 'Khách chưa có tên'}</div>;
         case 'phone':
@@ -504,16 +676,34 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
         switch (columnId) {
         case 'placed_at':
             return (
-                <div className="text-[13px] text-[#0F172A]">
-                    <div>{lead.placed_date || '-'}</div>
-                    <div className="mt-1 font-semibold text-primary/60">{lead.placed_time || '-'}</div>
-                    {lead.order_number ? (
-                        <div className="mt-2 truncate text-[11px] font-bold text-primary/45" title={lead.order_number}>{lead.order_number}</div>
-                    ) : null}
-                </div>
+                <LeadCopyableCell
+                    copyValue={[lead.placed_date, lead.placed_time, lead.order_number].filter(Boolean).join(' ')}
+                    copyId={`${lead.id}-placed_at`}
+                    copyLabel="thời gian đặt"
+                    copiedCellId={copiedCellId}
+                    onCopy={handleCopyCellValue}
+                >
+                    <div className="text-[13px] text-[#0F172A]">
+                        <div>{lead.placed_date || '-'}</div>
+                        <div className="mt-1 font-semibold text-primary/60">{lead.placed_time || '-'}</div>
+                        {lead.order_number ? (
+                            <div className="mt-2 truncate text-[11px] font-bold text-primary/45" title={lead.order_number}>{lead.order_number}</div>
+                        ) : null}
+                    </div>
+                </LeadCopyableCell>
             );
         case 'product':
-            return <CompactProductCell lead={lead} expandedBundleIds={expandedBundleIds} onToggleBundle={handleToggleBundle} />;
+            return (
+                <LeadCopyableCell
+                    copyValue={buildProductTooltip(lead) || getLeadProductSummary(lead) || lead.product_summary}
+                    copyId={`${lead.id}-product`}
+                    copyLabel="sản phẩm"
+                    copiedCellId={copiedCellId}
+                    onCopy={handleCopyCellValue}
+                >
+                    <CompactProductCell lead={lead} expandedBundleIds={expandedBundleIds} onToggleBundle={handleToggleBundle} />
+                </LeadCopyableCell>
+            );
         case 'customer_name':
             return <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.customer_name || 'Khách chưa có tên'}>{lead.customer_name || 'Khách chưa có tên'}</div>;
         case 'phone':
@@ -569,10 +759,10 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
     }, [expandedBundleIds, handleToggleBundle, statuses]);
 
     const renderLeadTable = () => (
-        <div className="lead-table-scrollbar min-h-0 flex-1 overflow-auto">
-            <table className="min-h-full table-fixed border-collapse" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
+        <div className="lead-table-scrollbar relative min-h-0 flex-1 overflow-auto">
+            <table className="min-h-full table-fixed border-collapse border border-primary/10 bg-white" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
                 <thead>
-                    <tr className="lead-table-head sticky top-0 z-10 border-b border-primary/10 text-left shadow-sm">
+                    <tr className="lead-table-head text-left shadow-sm">
                         {renderedColumns.map((column, index) => (
                             <th
                                 key={column.id}
@@ -580,7 +770,7 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                                 onDragStart={(event) => handleHeaderDragStart(event, index)}
                                 onDragOver={(event) => event.preventDefault()}
                                 onDrop={(event) => handleHeaderDrop(event, index)}
-                                className="group relative border-r border-primary/10 px-4 py-3 text-[12px] font-bold text-primary last:border-r-0"
+                                className="group sticky top-0 z-20 border border-primary/10 bg-[#F0F4F8] px-4 py-3 text-[12px] font-bold text-primary shadow-sm"
                                 style={{
                                     width: columnWidths[column.id] || column.minWidth,
                                     minWidth: columnWidths[column.id] || column.minWidth,
@@ -606,15 +796,15 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                     </tr>
                 </thead>
                 <tbody>
-                    {loading ? (
+                    {loading && leads.length === 0 ? (
                         <tr>
-                            <td colSpan={renderedColumns.length || 1} className="px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                            <td colSpan={renderedColumns.length || 1} className="border border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
                                 Đang tải danh sách lead...
                             </td>
                         </tr>
                     ) : leads.length === 0 ? (
                         <tr>
-                            <td colSpan={renderedColumns.length || 1} className="px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                            <td colSpan={renderedColumns.length || 1} className="border border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
                                 Không tìm thấy lead phù hợp với bộ lọc hiện tại.
                             </td>
                         </tr>
@@ -1285,15 +1475,19 @@ const LeadList = () => {
     const [searchParams, setSearchParams] = useSearchParams();
     const { user } = useAuth();
     const { showModal, showToast } = useUI();
+    const leadListViewKey = `${location.pathname}${location.search}`;
+    const initialLeadListViewState = typeof window !== 'undefined'
+        ? readLeadListViewState(leadListViewKey)
+        : null;
 
-    const [loading, setLoading] = useState(true);
-    const [statuses, setStatuses] = useState([]);
+    const [loading, setLoading] = useState(() => !(initialLeadListViewState?.leads?.length > 0));
+    const [statuses, setStatuses] = useState(() => initialLeadListViewState?.statuses || []);
     const [staffs, setStaffs] = useState([]);
     const [tagRules, setTagRules] = useState([]);
-    const [tags, setTags] = useState([]);
-    const [leads, setLeads] = useState([]);
-    const [pagination, setPagination] = useState({ current_page: 1, last_page: 1, per_page: 20, total: 0 });
-    const [latestId, setLatestId] = useState(0);
+    const [tags, setTags] = useState(() => initialLeadListViewState?.tags || []);
+    const [leads, setLeads] = useState(() => initialLeadListViewState?.leads || []);
+    const [pagination, setPagination] = useState(() => initialLeadListViewState?.pagination || { current_page: 1, last_page: 1, per_page: 20, total: 0 });
+    const [latestId, setLatestId] = useState(() => Number(initialLeadListViewState?.latestId || 0));
     const [filtersOpen, setFiltersOpen] = useState(false);
     const [columnPanelOpen, setColumnPanelOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1319,6 +1513,7 @@ const LeadList = () => {
     const [highlightedLeadId, setHighlightedLeadId] = useState(null);
     const [pendingFocusLeadId, setPendingFocusLeadId] = useState(null);
     const [expandedBundleIds, setExpandedBundleIds] = useState(() => new Set());
+    const [copiedCellId, setCopiedCellId] = useState(null);
 
     const {
         availableColumns,
@@ -1345,12 +1540,14 @@ const LeadList = () => {
     const fetchSeqRef = useRef(0);
     const abortControllerRef = useRef(null);
     const highlightTimeoutRef = useRef(null);
+    const copyFeedbackTimeoutRef = useRef(null);
     const audioElementRef = useRef(null);
     const audioContextRef = useRef(null);
     const notificationSoundQueuedRef = useRef(false);
     const notificationInteractionReadyRef = useRef(false);
     const realtimeRequestInFlightRef = useRef(false);
     const browserNotificationRef = useRef(null);
+    const hydratedFromCacheRef = useRef(Boolean(initialLeadListViewState?.leads?.length));
 
     const totalAcrossStatuses = useMemo(
         () => statuses.reduce((sum, status) => sum + Number(status.count || 0), 0),
@@ -1397,6 +1594,53 @@ const LeadList = () => {
     useEffect(() => { latestIdRef.current = latestId; }, [latestId]);
 
     useEffect(() => {
+        if (loading && leads.length === 0) return;
+
+        writeLeadListViewState(leadListViewKey, {
+            leads,
+            pagination,
+            statuses,
+            tags,
+            latestId,
+        });
+    }, [leadListViewKey, latestId, leads, loading, pagination, statuses, tags]);
+
+    useEffect(() => {
+        const returnHint = consumeLeadListReturnHint(leadListViewKey);
+        if (!returnHint?.leadId) return;
+
+        const previousLead = leadsRef.current.find((lead) => Number(lead?.id) === Number(returnHint.leadId)) || null;
+        const nextStatuses = patchStatusCountsForTransition(
+            statuses,
+            previousLead,
+            previousLead ? patchLeadFromReturnHint(previousLead, returnHint, statuses) : null
+        );
+
+        if (nextStatuses !== statuses) {
+            setStatuses(nextStatuses);
+        }
+
+        setLeads((prev) => patchLeadCollectionFromReturnHint(
+            prev,
+            returnHint,
+            nextStatuses,
+            filtersRef.current,
+            searchRef.current
+        ));
+        const shouldReduceUnreadCount = notificationItemsRef.current.some(
+            (item) => Number(item?.id) === Number(returnHint.leadId) && !item?.notification_is_read
+        );
+
+        setNotificationItems((prev) => markNotificationItemsAsRead(
+            prev.map((item) => patchLeadFromReturnHint(item, returnHint, nextStatuses)),
+            [returnHint.leadId]
+        ));
+        if (shouldReduceUnreadCount) {
+            setNotificationUnreadCount((prev) => Math.max(0, prev - 1));
+        }
+    }, [leadListViewKey, statuses]);
+
+    useEffect(() => {
         const nextParams = buildQueryParams(page, filters, debouncedQuickSearch);
         const nextSearchString = nextParams.toString();
         const currentSearchString = location.search.startsWith('?') ? location.search.slice(1) : location.search;
@@ -1421,6 +1665,39 @@ const LeadList = () => {
 
         return true;
     }, []);
+
+    const handleCopyCellValue = useCallback(async (value, label, event, copyId) => {
+        event?.stopPropagation?.();
+
+        const normalizedValue = String(value ?? '').trim();
+        if (!normalizedValue) return;
+
+        try {
+            await copyTextToClipboard(normalizedValue);
+            setCopiedCellId(copyId || normalizedValue);
+
+            if (copyFeedbackTimeoutRef.current) {
+                window.clearTimeout(copyFeedbackTimeoutRef.current);
+            }
+
+            copyFeedbackTimeoutRef.current = window.setTimeout(() => {
+                setCopiedCellId((prev) => (prev === (copyId || normalizedValue) ? null : prev));
+            }, LEAD_LIST_COPY_RESET_MS);
+
+            showToast({
+                message: `Đã sao chép ${label}.`,
+                type: 'success',
+                duration: 1200,
+            });
+        } catch (error) {
+            console.error('Failed to copy lead cell value', error);
+            showModal({
+                title: 'Lỗi',
+                content: `Không thể sao chép ${label}.`,
+                type: 'error',
+            });
+        }
+    }, [showModal, showToast]);
 
     const requestBrowserNotificationPermission = useCallback(async (interactive = false) => {
         if (typeof window === 'undefined' || !('Notification' in window)) {
@@ -1797,12 +2074,13 @@ const LeadList = () => {
     const fetchLeads = useCallback(async (targetPage = pageRef.current, options = {}) => {
         const { silent = false, replaceData = true } = options;
         const requestId = ++fetchSeqRef.current;
+        const shouldShowLoadingState = !silent && leadsRef.current.length === 0;
 
         if (abortControllerRef.current) abortControllerRef.current.abort();
         const controller = new AbortController();
         abortControllerRef.current = controller;
 
-        if (!silent) setLoading(true);
+        if (shouldShowLoadingState) setLoading(true);
 
         try {
             const response = await leadApi.getAll({
@@ -1835,7 +2113,7 @@ const LeadList = () => {
             if (!silent) showModal({ title: 'Lỗi', content: 'Không thể tải danh sách lead.', type: 'error' });
             return null;
         } finally {
-            if (!silent) setLoading(false);
+            if (shouldShowLoadingState) setLoading(false);
         }
     }, [showModal]);
 
@@ -1843,7 +2121,9 @@ const LeadList = () => {
         let isMounted = true;
 
         const loadLeads = async () => {
-            await fetchLeads(page, { silent: false, replaceData: true });
+            const useSilentRefresh = hydratedFromCacheRef.current && leadsRef.current.length > 0;
+            await fetchLeads(page, { silent: useSilentRefresh, replaceData: true });
+            hydratedFromCacheRef.current = false;
             if (isMounted) setRealtimeReady(true);
         };
 
@@ -1973,6 +2253,7 @@ const LeadList = () => {
     useEffect(() => () => {
         if (abortControllerRef.current) abortControllerRef.current.abort();
         if (highlightTimeoutRef.current) window.clearTimeout(highlightTimeoutRef.current);
+        if (copyFeedbackTimeoutRef.current) window.clearTimeout(copyFeedbackTimeoutRef.current);
         browserNotificationRef.current?.close?.();
         audioElementRef.current?.pause?.();
     }, []);
@@ -2029,6 +2310,14 @@ const LeadList = () => {
             showModal({ title: 'Không thể tạo đơn', content: 'Trạng thái hiện tại của lead đang chặn thao tác tạo đơn.', type: 'warning' });
             return;
         }
+
+        writeLeadListViewState(`${location.pathname}${location.search}`, {
+            leads: leadsRef.current,
+            pagination: paginationRef.current,
+            statuses,
+            tags,
+            latestId: latestIdRef.current,
+        });
 
         const returnTo = encodeURIComponent(`${location.pathname}${location.search}`);
         void markLeadNotificationsRead({ leadIds: [lead.id], silent: true });
@@ -2162,6 +2451,7 @@ const LeadList = () => {
     ]), [statuses, totalAcrossStatuses]);
 
     const renderLeadTableCell = useCallback((lead, columnId) => {
+        const statusLabel = formatStatusLabel(lead.status_config?.name || lead.status, lead.status_config?.code);
         switch (columnId) {
         case 'placed_at':
             return (
@@ -2223,6 +2513,155 @@ const LeadList = () => {
         }
     }, [expandedBundleIds, statuses]);
 
+    const renderLeadTableCellContent = useCallback((lead, columnId) => {
+        const statusLabel = formatStatusLabel(lead.status_config?.name || lead.status, lead.status_config?.code);
+
+        switch (columnId) {
+        case 'placed_at':
+            return (
+                <LeadCopyableCell
+                    copyValue={[lead.placed_date, lead.placed_time, lead.order_number].filter(Boolean).join(' ')}
+                    copyId={`${lead.id}-placed_at`}
+                    copyLabel="thời gian đặt"
+                    copiedCellId={copiedCellId}
+                    onCopy={handleCopyCellValue}
+                >
+                    <div className="text-[13px] text-[#0F172A]">
+                        <div>{lead.placed_date || '-'}</div>
+                        <div className="mt-1 font-semibold text-primary/60">{lead.placed_time || '-'}</div>
+                        {lead.order_number ? (
+                            <div className="mt-2 truncate text-[11px] font-bold text-primary/45" title={lead.order_number}>{lead.order_number}</div>
+                        ) : null}
+                    </div>
+                </LeadCopyableCell>
+            );
+        case 'product':
+            return (
+                <LeadCopyableCell
+                    copyValue={buildProductTooltip(lead) || getLeadProductSummary(lead) || lead.product_summary}
+                    copyId={`${lead.id}-product`}
+                    copyLabel="sản phẩm"
+                    copiedCellId={copiedCellId}
+                    onCopy={handleCopyCellValue}
+                >
+                    <CompactProductCell lead={lead} expandedBundleIds={expandedBundleIds} onToggleBundle={handleToggleBundle} />
+                </LeadCopyableCell>
+            );
+        case 'customer_name':
+            return (
+                <LeadCopyableCell
+                    copyValue={lead.customer_name}
+                    copyId={`${lead.id}-customer_name`}
+                    copyLabel="tên khách hàng"
+                    copiedCellId={copiedCellId}
+                    onCopy={handleCopyCellValue}
+                >
+                    <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.customer_name || 'Khách chưa có tên'}>{lead.customer_name || 'Khách chưa có tên'}</div>
+                </LeadCopyableCell>
+            );
+        case 'phone':
+            return (
+                <LeadCopyableCell
+                    copyValue={lead.phone}
+                    copyId={`${lead.id}-phone`}
+                    copyLabel="số điện thoại"
+                    copiedCellId={copiedCellId}
+                    onCopy={handleCopyCellValue}
+                >
+                    <div className="truncate text-[13px] font-semibold text-[#0F172A]" title={lead.phone || '-'}>{lead.phone || '-'}</div>
+                </LeadCopyableCell>
+            );
+        case 'address':
+            return (
+                <LeadCopyableCell
+                    copyValue={lead.address}
+                    copyId={`${lead.id}-address`}
+                    copyLabel="địa chỉ"
+                    copiedCellId={copiedCellId}
+                    onCopy={handleCopyCellValue}
+                >
+                    <div className="text-[13px] leading-5 text-[#0F172A]" title={lead.address || '-'}>{lead.address || '-'}</div>
+                </LeadCopyableCell>
+            );
+        case 'tag':
+            return (
+                <LeadCopyableCell
+                    copyValue={lead.tag || 'Website'}
+                    copyId={`${lead.id}-tag`}
+                    copyLabel="tag"
+                    copiedCellId={copiedCellId}
+                    onCopy={handleCopyCellValue}
+                >
+                    <span className="inline-flex rounded-full border border-primary/10 bg-primary/[0.04] px-3 py-1 text-[11px] font-bold text-primary">{lead.tag || 'Website'}</span>
+                </LeadCopyableCell>
+            );
+        case 'status':
+            return (
+                <LeadCopyableCell
+                    copyValue={statusLabel}
+                    copyId={`${lead.id}-status`}
+                    copyLabel="trạng thái đơn"
+                    copiedCellId={copiedCellId}
+                    onCopy={handleCopyCellValue}
+                    iconTopClassName="top-2.5"
+                >
+                    <select
+                        value={lead.status_config?.id || ''}
+                        title={statusLabel}
+                        onChange={(event) => handleLeadStatusChange(lead, event.target.value)}
+                        className={`${inputClassName} w-full min-w-0 max-w-full pr-9`}
+                    >
+                        {statuses.map((status) => (
+                            <option key={status.id} value={status.id}>{formatStatusLabel(status.name, status.code)}</option>
+                        ))}
+                    </select>
+                </LeadCopyableCell>
+            );
+        case 'notes':
+            return (
+                <LeadCopyableCell
+                    copyValue={lead.latest_note_excerpt}
+                    copyId={`${lead.id}-notes`}
+                    copyLabel="ghi chú"
+                    copiedCellId={copiedCellId}
+                    onCopy={handleCopyCellValue}
+                >
+                    <button type="button" onClick={() => setNotesLead(lead)} className="w-full text-left">
+                        <div className="text-[12px] font-bold text-primary">Chi tiết</div>
+                        <div className="mt-1 truncate text-[13px] text-primary/60" title={lead.latest_note_excerpt || 'Chưa có ghi chú'}>
+                            {lead.latest_note_excerpt || 'Chưa có ghi chú'}
+                        </div>
+                    </button>
+                </LeadCopyableCell>
+            );
+        case 'link':
+            return (
+                <LeadCopyableCell
+                    copyValue={lead.link_url}
+                    copyId={`${lead.id}-link`}
+                    copyLabel="link"
+                    copiedCellId={copiedCellId}
+                    onCopy={handleCopyCellValue}
+                >
+                    {lead.link_url ? (
+                        <a
+                            href={lead.link_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[12px] font-bold text-primary transition-all hover:text-brick"
+                            title="Mở link"
+                        >
+                            Mở
+                            <span className="material-symbols-outlined text-[17px]">open_in_new</span>
+                        </a>
+                    ) : <span className="text-[13px] text-primary/40">Không có link</span>}
+                </LeadCopyableCell>
+            );
+        default:
+            return renderLeadTableCell(lead, columnId);
+        }
+    }, [copiedCellId, expandedBundleIds, handleCopyCellValue, handleToggleBundle, renderLeadTableCell, statuses]);
+
     const renderLeadTable = () => (
         <div className="lead-table-scrollbar min-h-0 flex-1 overflow-auto">
             <table className="min-h-full table-fixed border-collapse" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
@@ -2279,23 +2718,23 @@ const LeadList = () => {
                             <React.Fragment key={lead.id}>
                                 <tr
                                     id={`lead-row-${lead.id}`}
-                                    className={`align-top transition-all ${highlightClass} ${isExpanded ? '' : 'border-b border-primary/10'}`}
+                                    className={`align-top transition-all ${highlightClass}`}
                                     onDoubleClick={() => handleOpenOrderForm(lead)}
                                 >
                                     {renderedColumns.map((column) => (
                                         <td
                                             key={`${lead.id}-${column.id}`}
-                                            className="overflow-hidden px-4 py-3 align-top text-[13px]"
+                                            className="group/cell overflow-hidden border border-primary/10 px-4 py-3 align-top text-[13px]"
                                             style={{ width: columnWidths[column.id] || column.minWidth, minWidth: columnWidths[column.id] || column.minWidth, maxWidth: columnWidths[column.id] || column.minWidth }}
                                         >
-                                            {renderLeadTableCell(lead, column.id)}
+                                            {renderLeadTableCellContent(lead, column.id)}
                                         </td>
                                     ))}
                                 </tr>
 
                                 {isExpanded && hasExpandableProductDetails(lead) ? (
-                                    <tr className={`border-b border-primary/10 ${highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-[#FCFDFE]'}`}>
-                                        <td id={`lead-product-details-${lead.id}`} colSpan={renderedColumns.length || 1} className="px-4 pb-4 pt-0">
+                                    <tr className={highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-[#FCFDFE]'}>
+                                        <td id={`lead-product-details-${lead.id}`} colSpan={renderedColumns.length || 1} className="border border-primary/10 px-4 pb-4 pt-0">
                                             <LeadExpandedProductsPanel
                                                 lead={lead}
                                                 onCollapse={() => handleToggleBundle(detailKey)}

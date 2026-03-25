@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
 import SearchableSelect from '../../components/SearchableSelect';
+import { writeLeadListReturnHint } from '../../utils/leadListViewState';
 import { VN_REGIONS } from '../../data/regions';
 import {
     buildRegionPath,
@@ -1844,12 +1845,22 @@ const OrderForm = () => {
                 }
             };
 
-            if (isEdit) {
-                await orderApi.update(id, payload);
-            } else {
-                await orderApi.store(payload);
-            }
+            const response = isEdit
+                ? await orderApi.update(id, payload)
+                : await orderApi.store(payload);
+            const savedOrder = response?.data || null;
+
             if (!isEdit && (leadId || returnTo)) {
+                if (leadId && returnTo) {
+                    writeLeadListReturnHint(returnTo, {
+                        leadId: Number(leadId),
+                        orderId: savedOrder?.id || null,
+                        orderNumber: savedOrder?.order_number || '',
+                        latestNoteExcerpt: savedOrder?.order_number ? `Đã tạo đơn hàng ${savedOrder.order_number}` : '',
+                        nextStatusCode: 'da-tao-don',
+                        updatedAt: new Date().toISOString(),
+                    });
+                }
                 navigateBackToLead();
             } else {
                 navigate('/admin/orders');

@@ -1,9 +1,10 @@
-﻿"use client";
+"use client";
 
 import { useMemo, useState } from 'react';
 
 const EMPTY_TITLE = 'Hệ thống cửa hàng đang cập nhật';
-const EMPTY_DESCRIPTION = 'Thông tin showroom và chi nhánh sẽ hiển thị tại đây ngay sau khi được cập nhật trong Cài đặt web.';
+const EMPTY_DESCRIPTION =
+  'Thông tin showroom và chi nhánh sẽ hiển thị tại đây ngay sau khi được cập nhật trong Cài đặt web.';
 
 const asText = (value) => String(value || '').trim();
 
@@ -26,6 +27,10 @@ const buildMapExternalUrl = (store) => {
   return query ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}` : '';
 };
 
+const buildRegionLabel = (store) => [store.city, store.tag].filter(Boolean).join(' - ');
+
+const getPrimaryPhone = (store) => asText(store.phone || store.hotline);
+
 const normalizeStores = (stores) => {
   if (!Array.isArray(stores)) {
     return [];
@@ -45,10 +50,9 @@ const normalizeStores = (stores) => {
         email: asText(item.email),
         openingHours: asText(item.opening_hours || item.hours),
         googleMapsLink: asText(item.google_maps_link || item.mapLink),
-        imageUrl: asText(item.image_url || item.imageUrl),
         note: asText(item.note),
         isActive: item.is_active === undefined ? true : Boolean(item.is_active),
-        order: Number(item.order ?? item.sort_order ?? (index + 1)) || (index + 1),
+        order: Number(item.order ?? item.sort_order ?? index + 1) || index + 1,
       };
 
       return {
@@ -60,6 +64,18 @@ const normalizeStores = (stores) => {
     .filter((store) => store.isActive && (store.name || store.address))
     .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, 'vi'));
 };
+
+function InfoRow({ icon, label, children }) {
+  return (
+    <div className="stores-info-row">
+      <span className="material-symbols-outlined stores-info-row-icon">{icon}</span>
+      <div className="stores-info-row-body">
+        <span className="stores-info-row-label">{label}</span>
+        <div className="stores-info-row-content">{children}</div>
+      </div>
+    </div>
+  );
+}
 
 export default function StoresClient({ stores = [] }) {
   const normalizedStores = useMemo(() => normalizeStores(stores), [stores]);
@@ -73,7 +89,7 @@ export default function StoresClient({ stores = [] }) {
     }
 
     return normalizedStores.filter((store) =>
-      [store.name, store.city, store.address, store.tag, store.phone, store.hotline, store.email]
+      [store.name, store.city, store.address, store.tag, store.phone, store.hotline, store.email, store.note]
         .filter(Boolean)
         .some((value) => value.toLowerCase().includes(keyword))
     );
@@ -93,372 +109,613 @@ export default function StoresClient({ stores = [] }) {
   );
 
   const supportHotline = useMemo(
-    () => normalizedStores.find((store) => store.hotline)?.hotline || normalizedStores.find((store) => store.phone)?.phone || '',
+    () =>
+      normalizedStores.find((store) => store.hotline)?.hotline ||
+      normalizedStores.find((store) => store.phone)?.phone ||
+      '',
     [normalizedStores]
   );
 
   const hasConfiguredStores = normalizedStores.length > 0;
   const hasSearchResults = filteredStores.length > 0;
+  const resultsLabel = `${filteredStores.length} địa chỉ`;
+  const activeRegionLabel = activeStore ? buildRegionLabel(activeStore) : '';
+  const activePhone = activeStore ? getPrimaryPhone(activeStore) : '';
+
   return (
     <div className="stores-page">
-      <aside className="stores-sidebar">
-        <div className="stores-sidebar-header">
-          <p className="stores-sidebar-eyebrow">SHOWROOM & CHI NHÁNH</p>
-          <h1 className="stores-sidebar-title">Hệ thống cửa hàng</h1>
-
-          <div className="stores-search-wrap">
-            <span className="material-symbols-outlined stores-search-icon">search</span>
-            <input
-              className="stores-search-input"
-              type="text"
-              placeholder={hasConfiguredStores ? 'Tìm theo tên, thành phố, địa chỉ...' : 'Chưa có dữ liệu cửa hàng'}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              disabled={!hasConfiguredStores}
-            />
-            {search ? (
-              <button
-                type="button"
-                className="stores-search-clear"
-                onClick={() => setSearch('')}
-                aria-label="Xóa từ khóa tìm kiếm"
-              >
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="stores-list">
-          {!hasConfiguredStores ? (
-            <div className="stores-empty">
-              <span className="material-symbols-outlined">storefront</span>
-              <h2>{EMPTY_TITLE}</h2>
-              <p>{EMPTY_DESCRIPTION}</p>
-            </div>
-          ) : !hasSearchResults ? (
-            <div className="stores-empty">
-              <span className="material-symbols-outlined">search_off</span>
-              <h2>Không tìm thấy cửa hàng phù hợp</h2>
-              <p>Thử đổi từ khóa tìm kiếm hoặc xóa bộ lọc để xem toàn bộ hệ thống cửa hàng.</p>
-              <button type="button" className="stores-empty-btn" onClick={() => setSearch('')}>
-                Xóa tìm kiếm
-              </button>
-            </div>
-          ) : (
-            filteredStores.map((store) => (
-              <div
-                key={store.id}
-                role="button"
-                tabIndex={0}
-                className={`stores-card${activeStore?.id === store.id ? ' stores-card--active' : ''}`}
-                onClick={() => setActiveId(store.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    setActiveId(store.id);
-                  }
-                }}
-              >
-                {store.imageUrl ? (
-                  <div className="stores-card-media">
-                    <img src={store.imageUrl} alt={store.name || 'Cửa hàng'} className="stores-card-thumb" />
-                  </div>
-                ) : null}
-
-                <div className="stores-card-body">
-                  <div className="stores-card-top">
-                    <div className="stores-card-headline">
-                      <h2 className="stores-card-name">{store.name}</h2>
-                      {store.city ? <p className="stores-card-city">{store.city}</p> : null}
-                    </div>
-                    {store.tag ? <span className="stores-card-tag">{store.tag}</span> : null}
-                  </div>
-
-                  <div className="stores-card-info">
-                    {store.address ? (
-                      <div className="stores-card-row">
-                        <span className="material-symbols-outlined">location_on</span>
-                        <p>{store.address}</p>
-                      </div>
-                    ) : null}
-                    {store.phone ? (
-                      <div className="stores-card-row">
-                        <span className="material-symbols-outlined">call</span>
-                        <a href={buildPhoneLink(store.phone)} onClick={(event) => event.stopPropagation()}>
-                          {store.phone}
-                        </a>
-                      </div>
-                    ) : null}
-                    {store.openingHours ? (
-                      <div className="stores-card-row">
-                        <span className="material-symbols-outlined">schedule</span>
-                        <p>{store.openingHours}</p>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {store.mapExternalUrl ? (
-                    <div className="stores-card-actions">
-                      <a
-                        href={store.mapExternalUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="stores-card-btn"
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <span className="material-symbols-outlined">directions</span>
-                        Chỉ đường
-                      </a>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-
-        <div className="stores-hotline">
-          <p className="stores-hotline-label">Hỗ trợ khách hàng</p>
-          {supportHotline ? (
-            <a href={buildPhoneLink(supportHotline)} className="stores-hotline-number">
-              <span className="material-symbols-outlined">headset_mic</span>
-              Hotline: {supportHotline}
-            </a>
-          ) : (
-            <p className="stores-hotline-number stores-hotline-number--muted">Đang cập nhật hotline</p>
-          )}
-        </div>
-      </aside>
-
-      <section className="stores-map">
-        {activeStore && hasSearchResults ? (
-          <>
-            <iframe
-              key={activeStore.id}
-              className="stores-map-iframe"
-              src={activeStore.mapEmbedUrl}
-              allowFullScreen=""
-              loading="lazy"
-              referrerPolicy="no-referrer-when-downgrade"
-              title={`Bản đồ ${activeStore.name}`}
-            />
-
-            <div className="stores-map-pin">
-              <div className="stores-map-popup">
-                <p className="stores-map-popup-label">Bạn đang xem</p>
-                <p className="stores-map-popup-name">{activeStore.name}</p>
-              </div>
-              <span className="material-symbols-outlined stores-map-pin-icon">location_on</span>
-            </div>
-
-            {activeStore.mapExternalUrl ? (
-              <div className="stores-map-controls">
-                <a
-                  href={activeStore.mapExternalUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="stores-map-ctrl stores-map-ctrl--location"
-                  title="Mở trong Google Maps"
-                >
-                  <span className="material-symbols-outlined">my_location</span>
-                </a>
-              </div>
-            ) : null}
-          </>
-        ) : (
-          <div className="stores-map-empty">
-            <span className="material-symbols-outlined">
-              {hasConfiguredStores ? 'travel_explore' : 'location_off'}
-            </span>
-            <h2>{hasConfiguredStores ? 'Không có kết quả phù hợp' : EMPTY_TITLE}</h2>
-            <p>
-              {hasConfiguredStores
-                ? 'Không tìm thấy cửa hàng trùng với từ khóa hiện tại. Hãy thử tên, địa chỉ hoặc thành phố khác.'
-                : EMPTY_DESCRIPTION}
+      <div className="stores-shell">
+        <section className="stores-hero">
+          <div className="stores-hero-copy">
+            <p className="stores-hero-eyebrow">Showroom & chi nhánh</p>
+            <h1 className="stores-hero-title">Hệ thống cửa hàng</h1>
+            <p className="stores-hero-description">
+              Tìm nhanh showroom gần bạn, xem địa chỉ rõ ràng, gọi điện thuận tiện và mở chỉ đường chỉ với một chạm.
             </p>
           </div>
-        )}
-      </section>
+
+          <div className="stores-hero-meta">
+            <div className="stores-hero-card">
+              <span className="material-symbols-outlined stores-hero-card-icon">storefront</span>
+              <div className="stores-hero-card-copy">
+                <strong>{normalizedStores.length}</strong>
+                <span>Cửa hàng đang hiển thị</span>
+              </div>
+            </div>
+
+            {supportHotline ? (
+              <a href={buildPhoneLink(supportHotline)} className="stores-hero-card stores-hero-card--link">
+                <span className="material-symbols-outlined stores-hero-card-icon">headset_mic</span>
+                <div className="stores-hero-card-copy">
+                  <strong>Hotline hỗ trợ</strong>
+                  <span>{supportHotline}</span>
+                </div>
+              </a>
+            ) : (
+              <div className="stores-hero-card stores-hero-card--muted">
+                <span className="material-symbols-outlined stores-hero-card-icon">support_agent</span>
+                <div className="stores-hero-card-copy">
+                  <strong>Hotline hỗ trợ</strong>
+                  <span>Đang cập nhật</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="stores-search-panel">
+            <label className="stores-search-label" htmlFor="stores-search-input">
+              Tìm cửa hàng gần bạn
+            </label>
+
+            <div className="stores-search-wrap">
+              <span className="material-symbols-outlined stores-search-icon">search</span>
+              <input
+                id="stores-search-input"
+                className="stores-search-input"
+                type="text"
+                placeholder={hasConfiguredStores ? 'Tên cửa hàng, khu vực hoặc địa chỉ...' : 'Chưa có dữ liệu cửa hàng'}
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                disabled={!hasConfiguredStores}
+              />
+              {search ? (
+                <button
+                  type="button"
+                  className="stores-search-clear"
+                  onClick={() => setSearch('')}
+                  aria-label="Xóa từ khóa tìm kiếm"
+                >
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              ) : null}
+            </div>
+
+            <div className="stores-toolbar">
+              <p className="stores-toolbar-text">
+                {!hasConfiguredStores
+                  ? 'Chưa có dữ liệu cửa hàng để tìm kiếm.'
+                  : search
+                    ? `Kết quả cho "${search}".`
+                    : 'Tìm theo tên, khu vực hoặc địa chỉ để lọc nhanh hơn.'}
+              </p>
+              {hasConfiguredStores ? <span className="stores-results-badge">{resultsLabel}</span> : null}
+            </div>
+          </div>
+        </section>
+
+        <div className="stores-content">
+          <section className="stores-spotlight">
+            {activeStore && hasSearchResults ? (
+              <div className="stores-spotlight-card">
+                <div className="stores-spotlight-head">
+                  <div className="stores-spotlight-icon">
+                    <span className="material-symbols-outlined">location_on</span>
+                  </div>
+                  <div className="stores-spotlight-copy">
+                    <p className="stores-spotlight-kicker">Địa điểm đang chọn</p>
+                    <h2 className="stores-spotlight-title">{activeStore.name}</h2>
+                    <p className="stores-spotlight-subtitle">{activeRegionLabel || 'Thông tin khu vực đang cập nhật'}</p>
+                  </div>
+                </div>
+
+                <div className="stores-spotlight-info">
+                  {activeStore.address ? (
+                    <InfoRow icon="location_on" label="Địa chỉ">
+                      <p>{activeStore.address}</p>
+                    </InfoRow>
+                  ) : null}
+
+                  {activePhone ? (
+                    <InfoRow icon="call" label="Số điện thoại">
+                      <a href={buildPhoneLink(activePhone)}>{activePhone}</a>
+                    </InfoRow>
+                  ) : null}
+
+                  {activeStore.openingHours ? (
+                    <InfoRow icon="schedule" label="Giờ mở cửa">
+                      <p>{activeStore.openingHours}</p>
+                    </InfoRow>
+                  ) : null}
+
+                  {activeStore.email ? (
+                    <InfoRow icon="mail" label="Email">
+                      <a href={buildMailLink(activeStore.email)}>{activeStore.email}</a>
+                    </InfoRow>
+                  ) : null}
+
+                  {activeStore.note ? (
+                    <InfoRow icon="info" label="Ghi chú">
+                      <p>{activeStore.note}</p>
+                    </InfoRow>
+                  ) : null}
+                </div>
+
+                <div className="stores-spotlight-actions">
+                  {activePhone ? (
+                    <a href={buildPhoneLink(activePhone)} className="stores-action-btn stores-action-btn--ghost">
+                      <span className="material-symbols-outlined">call</span>
+                      Gọi cửa hàng
+                    </a>
+                  ) : null}
+
+                  {activeStore.mapExternalUrl ? (
+                    <a
+                      href={activeStore.mapExternalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="stores-action-btn"
+                    >
+                      <span className="material-symbols-outlined">directions</span>
+                      Chỉ đường
+                    </a>
+                  ) : null}
+                </div>
+
+                <div className="stores-map-card">
+                  {activeStore.mapEmbedUrl ? (
+                    <iframe
+                      key={activeStore.id}
+                      className="stores-map-iframe"
+                      src={activeStore.mapEmbedUrl}
+                      allowFullScreen=""
+                      loading="lazy"
+                      referrerPolicy="no-referrer-when-downgrade"
+                      title={`Bản đồ ${activeStore.name}`}
+                    />
+                  ) : (
+                    <div className="stores-map-empty">
+                      <span className="material-symbols-outlined">map</span>
+                      <h3>Chưa có bản đồ nhúng</h3>
+                      <p>Vẫn có thể dùng nút chỉ đường phía trên để mở Google Maps.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="stores-spotlight-empty">
+                <span className="material-symbols-outlined">
+                  {hasConfiguredStores ? 'travel_explore' : 'location_off'}
+                </span>
+                <h2>{hasConfiguredStores ? 'Không có kết quả phù hợp' : EMPTY_TITLE}</h2>
+                <p>
+                  {hasConfiguredStores
+                    ? 'Không tìm thấy cửa hàng trùng với từ khóa hiện tại. Hãy thử tên, khu vực hoặc địa chỉ khác.'
+                    : EMPTY_DESCRIPTION}
+                </p>
+                {search ? (
+                  <button type="button" className="stores-reset-btn" onClick={() => setSearch('')}>
+                    Xóa tìm kiếm
+                  </button>
+                ) : null}
+              </div>
+            )}
+          </section>
+
+          <section className="stores-list-panel">
+            <div className="stores-list-header">
+              <div>
+                <p className="stores-list-eyebrow">Danh sách cửa hàng</p>
+                <h2 className="stores-list-title">Chạm vào từng địa điểm để xem nhanh thông tin</h2>
+              </div>
+              {hasConfiguredStores ? (
+                <span className="stores-results-badge stores-results-badge--secondary">{resultsLabel}</span>
+              ) : null}
+            </div>
+
+            <div className="stores-list">
+              {!hasConfiguredStores ? (
+                <div className="stores-empty">
+                  <span className="material-symbols-outlined">storefront</span>
+                  <h2>{EMPTY_TITLE}</h2>
+                  <p>{EMPTY_DESCRIPTION}</p>
+                </div>
+              ) : !hasSearchResults ? (
+                <div className="stores-empty">
+                  <span className="material-symbols-outlined">search_off</span>
+                  <h2>Không tìm thấy cửa hàng phù hợp</h2>
+                  <p>Thử đổi từ khóa tìm kiếm hoặc xóa bộ lọc để xem toàn bộ hệ thống cửa hàng.</p>
+                  <button type="button" className="stores-reset-btn" onClick={() => setSearch('')}>
+                    Xóa tìm kiếm
+                  </button>
+                </div>
+              ) : (
+                filteredStores.map((store) => {
+                  const isActive = activeStore?.id === store.id;
+                  const phone = getPrimaryPhone(store);
+
+                  return (
+                    <div
+                      key={store.id}
+                      role="button"
+                      tabIndex={0}
+                      className={`stores-card${isActive ? ' stores-card--active' : ''}`}
+                      onClick={() => setActiveId(store.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          setActiveId(store.id);
+                        }
+                      }}
+                    >
+                      <div className="stores-card-heading">
+                        <span className="material-symbols-outlined stores-card-icon">storefront</span>
+                        <div className="stores-card-heading-copy">
+                          <div className="stores-card-badges">
+                            {store.city ? <span className="stores-card-region">{store.city}</span> : null}
+                            {store.tag ? <span className="stores-card-tag">{store.tag}</span> : null}
+                            {isActive ? <span className="stores-card-status">Đang xem</span> : null}
+                          </div>
+                          <h3 className="stores-card-name">{store.name}</h3>
+                        </div>
+                        <span className="material-symbols-outlined stores-card-arrow">
+                          {isActive ? 'radio_button_checked' : 'arrow_outward'}
+                        </span>
+                      </div>
+
+                      <div className="stores-card-info">
+                        {store.address ? (
+                          <InfoRow icon="location_on" label="Địa chỉ">
+                            <p>{store.address}</p>
+                          </InfoRow>
+                        ) : null}
+
+                        {phone ? (
+                          <InfoRow icon="call" label="Số điện thoại">
+                            <a href={buildPhoneLink(phone)} onClick={(event) => event.stopPropagation()}>
+                              {phone}
+                            </a>
+                          </InfoRow>
+                        ) : null}
+
+                        {store.openingHours ? (
+                          <InfoRow icon="schedule" label="Giờ mở cửa">
+                            <p>{store.openingHours}</p>
+                          </InfoRow>
+                        ) : null}
+                      </div>
+
+                      <div className="stores-card-actions">
+                        {phone ? (
+                          <a
+                            href={buildPhoneLink(phone)}
+                            className="stores-action-btn stores-action-btn--ghost"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <span className="material-symbols-outlined">call</span>
+                            Gọi ngay
+                          </a>
+                        ) : null}
+
+                        {store.mapExternalUrl ? (
+                          <a
+                            href={store.mapExternalUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="stores-action-btn"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <span className="material-symbols-outlined">directions</span>
+                            Chỉ đường
+                          </a>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </section>
+        </div>
+      </div>
 
       <style>{`
         .stores-page {
-          --stores-card-name-size: 1rem;
-          --stores-title-size: calc(var(--stores-card-name-size) * 1.2);
-          display: grid;
-          grid-template-columns: minmax(320px, 384px) minmax(0, 1fr);
-          min-height: calc(100vh - 84px);
-          background: #f7f1e8;
-          font-family: 'Noto Serif', serif;
+          background:
+            radial-gradient(circle at top, rgba(197, 160, 101, 0.14), transparent 34%),
+            linear-gradient(180deg, #fdfbf7 0%, #f4ece2 100%);
         }
 
-        .stores-sidebar {
+        .stores-shell {
+          width: min(100%, 1160px);
+          margin: 0 auto;
+          padding: 0.95rem 0.85rem 5.5rem;
           display: flex;
           flex-direction: column;
-          min-width: 0;
-          background: linear-gradient(180deg, #fbf6ef 0%, #f4ece2 100%);
-          border-right: 1px solid rgba(197, 160, 101, 0.2);
-          box-shadow: 14px 0 34px rgba(27, 54, 93, 0.08);
-          z-index: 2;
+          gap: 1rem;
         }
 
-        .stores-sidebar-header {
-          padding: 1.35rem;
-          border-bottom: 1px solid rgba(197, 160, 101, 0.16);
+        .stores-hero,
+        .stores-list-panel,
+        .stores-spotlight-card,
+        .stores-spotlight-empty {
+          border: 1px solid rgba(27, 54, 93, 0.08);
+          border-radius: 28px;
+          background: rgba(255, 255, 255, 0.78);
+          box-shadow: 0 18px 40px rgba(27, 54, 93, 0.08);
+          backdrop-filter: blur(10px);
         }
 
-        .stores-sidebar-eyebrow {
-          margin: 0 0 0.42rem;
-          font-size: 0.66rem;
-          font-weight: 800;
-          letter-spacing: 0.24em;
-          color: rgba(27, 54, 93, 0.55);
+        .stores-hero {
+          padding: 1.1rem;
+          background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(247, 241, 232, 0.98)),
+            rgba(255, 255, 255, 0.72);
+        }
+
+        .stores-hero-eyebrow,
+        .stores-list-eyebrow,
+        .stores-spotlight-kicker,
+        .stores-search-label,
+        .stores-info-row-label {
+          font-family: var(--font-sans);
+          font-size: 0.72rem;
+          font-weight: 700;
+          letter-spacing: 0.16em;
           text-transform: uppercase;
         }
 
-        .stores-sidebar-title {
-          margin: 0;
-          font-family: 'Playfair Display', serif;
-          font-size: var(--stores-title-size);
-          line-height: 1.2;
-          color: #1b365d;
+        .stores-hero-eyebrow,
+        .stores-list-eyebrow,
+        .stores-spotlight-kicker {
+          color: rgba(27, 54, 93, 0.58);
+        }
+
+        .stores-hero-title,
+        .stores-list-title,
+        .stores-spotlight-title,
+        .stores-empty h2,
+        .stores-map-empty h3,
+        .stores-spotlight-empty h2 {
+          font-family: var(--font-display);
+          color: var(--primary);
+        }
+
+        .stores-hero-title {
+          margin: 0.35rem 0 0;
+          font-size: clamp(2rem, 8vw, 2.8rem);
+          line-height: 1.02;
+        }
+
+        .stores-hero-description {
+          margin: 0.75rem 0 0;
+          max-width: 42rem;
+          color: rgba(27, 54, 93, 0.78);
+          font-size: 1rem;
+          line-height: 1.68;
+        }
+
+        .stores-hero-meta {
+          margin-top: 1rem;
+          display: grid;
+          grid-template-columns: repeat(1, minmax(0, 1fr));
+          gap: 0.75rem;
+        }
+
+        .stores-hero-card {
+          display: flex;
+          align-items: center;
+          gap: 0.85rem;
+          min-height: 66px;
+          padding: 0.85rem 0.95rem;
+          border: 1px solid rgba(27, 54, 93, 0.08);
+          border-radius: 22px;
+          background: rgba(255, 255, 255, 0.82);
+          color: var(--primary);
+        }
+
+        .stores-hero-card--link {
+          text-decoration: none;
+          transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+        }
+
+        .stores-hero-card--link:hover {
+          transform: translateY(-1px);
+          border-color: rgba(197, 160, 101, 0.4);
+          box-shadow: 0 14px 26px rgba(27, 54, 93, 0.1);
+        }
+
+        .stores-hero-card--muted {
+          color: rgba(27, 54, 93, 0.62);
+        }
+
+        .stores-hero-card-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 44px;
+          height: 44px;
+          border-radius: 16px;
+          background: rgba(27, 54, 93, 0.08);
+          color: var(--accent);
+          font-size: 1.35rem;
+          flex-shrink: 0;
+        }
+
+        .stores-hero-card-copy {
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
+        }
+
+        .stores-hero-card-copy strong {
+          font-family: var(--font-display);
+          font-size: 1.08rem;
+          line-height: 1.1;
+        }
+
+        .stores-hero-card-copy span {
+          margin-top: 0.18rem;
+          font-family: var(--font-sans);
+          font-size: 0.78rem;
+          color: rgba(27, 54, 93, 0.7);
+        }
+
+        .stores-search-panel {
+          margin-top: 1rem;
+          padding: 0.95rem;
+          border: 1px solid rgba(27, 54, 93, 0.08);
+          border-radius: 24px;
+          background: rgba(255, 255, 255, 0.9);
+        }
+
+        .stores-search-label {
+          display: block;
+          margin-bottom: 0.65rem;
+          color: rgba(27, 54, 93, 0.62);
         }
 
         .stores-search-wrap {
           position: relative;
-          margin-top: 0.7rem;
         }
 
         .stores-search-icon {
           position: absolute;
-          left: 0.85rem;
+          left: 0.95rem;
           top: 50%;
           transform: translateY(-50%);
-          color: #c5a065;
-          font-size: 1.1rem;
+          color: var(--accent);
+          font-size: 1.2rem;
         }
 
         .stores-search-input {
           width: 100%;
-          height: 44px;
-          padding: 0 2.75rem 0 2.7rem;
-          border: 1px solid rgba(27, 54, 93, 0.14);
-          border-radius: 14px;
-          background: rgba(255, 255, 255, 0.95);
-          color: #1b365d;
-          font-size: 0.88rem;
+          height: 52px;
+          padding: 0 3rem 0 2.9rem;
+          border: 1px solid rgba(27, 54, 93, 0.12);
+          border-radius: 18px;
+          background: #fff;
+          color: var(--primary);
+          font-family: var(--font-sans);
+          font-size: 0.95rem;
           outline: none;
-          transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+          transition: border-color 0.2s ease, box-shadow 0.2s ease;
         }
 
         .stores-search-input:focus {
-          border-color: rgba(27, 54, 93, 0.45);
+          border-color: rgba(27, 54, 93, 0.34);
           box-shadow: 0 0 0 4px rgba(27, 54, 93, 0.08);
         }
 
         .stores-search-input:disabled {
           cursor: not-allowed;
-          color: rgba(27, 54, 93, 0.4);
-          background: rgba(255, 255, 255, 0.6);
+          color: rgba(27, 54, 93, 0.42);
+          background: rgba(255, 255, 255, 0.72);
         }
 
         .stores-search-input::placeholder {
-          color: rgba(27, 54, 93, 0.38);
+          color: rgba(27, 54, 93, 0.42);
         }
 
         .stores-search-clear {
           position: absolute;
-          right: 0.65rem;
+          right: 0.55rem;
           top: 50%;
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          width: 30px;
-          height: 30px;
+          width: 40px;
+          height: 40px;
           transform: translateY(-50%);
           border: none;
+          border-radius: 14px;
           background: transparent;
-          color: rgba(27, 54, 93, 0.42);
+          color: rgba(27, 54, 93, 0.5);
           cursor: pointer;
+        }
+
+        .stores-search-clear:hover {
+          background: rgba(27, 54, 93, 0.06);
+        }
+
+        .stores-toolbar,
+        .stores-list-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 0.75rem;
+          flex-wrap: wrap;
+        }
+
+        .stores-toolbar {
+          margin-top: 0.75rem;
+        }
+
+        .stores-toolbar-text {
+          flex: 1;
+          min-width: 12rem;
+          color: rgba(27, 54, 93, 0.72);
+          font-size: 0.92rem;
+          line-height: 1.55;
+        }
+
+        .stores-results-badge {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 32px;
+          padding: 0.2rem 0.75rem;
+          border-radius: 999px;
+          background: rgba(197, 160, 101, 0.16);
+          color: var(--primary);
+          font-family: var(--font-sans);
+          font-size: 0.74rem;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          white-space: nowrap;
+        }
+
+        .stores-results-badge--secondary {
+          background: rgba(27, 54, 93, 0.08);
+        }
+
+        .stores-content {
+          display: grid;
+          gap: 1rem;
+        }
+
+        .stores-list-panel {
+          padding: 1rem;
+        }
+
+        .stores-list-title {
+          margin: 0.35rem 0 0;
+          font-size: 1.55rem;
+          line-height: 1.1;
         }
 
         .stores-list {
-          flex: 1;
-          min-height: 0;
-          overflow-y: auto;
-          padding: 1rem;
-          display: flex;
-          flex-direction: column;
-          gap: 0.82rem;
-        }
-
-        .stores-list::-webkit-scrollbar {
-          width: 6px;
-        }
-
-        .stores-list::-webkit-scrollbar-thumb {
-          background: rgba(197, 160, 101, 0.6);
-          border-radius: 999px;
-        }
-
-        .stores-empty {
-          min-height: 240px;
-          border: 1px dashed rgba(27, 54, 93, 0.16);
-          border-radius: 24px;
-          background: rgba(255, 255, 255, 0.58);
-          padding: 2rem 1.5rem;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          text-align: center;
-          color: rgba(27, 54, 93, 0.72);
-        }
-
-        .stores-empty .material-symbols-outlined {
-          font-size: 2.9rem;
-          color: #c5a065;
-        }
-
-        .stores-empty h2 {
-          margin: 0.9rem 0 0.45rem;
-          font-family: 'Playfair Display', serif;
-          font-size: 1.35rem;
-          color: #1b365d;
-        }
-
-        .stores-empty p {
-          margin: 0;
-          max-width: 28rem;
-          line-height: 1.7;
-        }
-
-        .stores-empty-btn {
           margin-top: 1rem;
-          height: 40px;
-          padding: 0 1rem;
-          border: 1px solid rgba(27, 54, 93, 0.16);
-          border-radius: 999px;
-          background: #1b365d;
-          color: #fff;
-          font-size: 0.78rem;
-          font-weight: 800;
-          letter-spacing: 0.14em;
-          text-transform: uppercase;
-          cursor: pointer;
+          display: flex;
+          flex-direction: column;
+          gap: 0.9rem;
         }
 
         .stores-card {
-          width: 100%;
           border: 1px solid rgba(27, 54, 93, 0.08);
-          border-radius: 20px;
-          background: rgba(255, 255, 255, 0.95);
-          box-shadow: 0 12px 28px rgba(27, 54, 93, 0.06);
-          padding: 0.9rem;
-          display: grid;
-          grid-template-columns: auto minmax(0, 1fr);
-          gap: 0.95rem;
-          text-align: left;
+          border-radius: 24px;
+          background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 241, 232, 0.92));
+          box-shadow: 0 14px 30px rgba(27, 54, 93, 0.06);
+          padding: 1rem;
           cursor: pointer;
           transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
         }
@@ -466,348 +723,409 @@ export default function StoresClient({ stores = [] }) {
         .stores-card:hover,
         .stores-card--active {
           transform: translateY(-1px);
-          border-color: rgba(197, 160, 101, 0.48);
-          box-shadow: 0 16px 36px rgba(27, 54, 93, 0.12);
+          border-color: rgba(197, 160, 101, 0.42);
+          box-shadow: 0 18px 36px rgba(27, 54, 93, 0.1);
         }
 
         .stores-card:focus-visible {
-          outline: 3px solid rgba(197, 160, 101, 0.38);
+          outline: 3px solid rgba(197, 160, 101, 0.32);
           outline-offset: 3px;
         }
 
-        .stores-card-media {
-          width: 88px;
-          height: 88px;
-          border-radius: 16px;
-          overflow: hidden;
-          background: #efe7db;
+        .stores-card-heading {
+          display: flex;
+          align-items: flex-start;
+          gap: 0.8rem;
+        }
+
+        .stores-card-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 46px;
+          height: 46px;
+          border-radius: 17px;
+          background: rgba(27, 54, 93, 0.08);
+          color: var(--accent);
+          font-size: 1.35rem;
           flex-shrink: 0;
         }
 
-        .stores-card-thumb {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
+        .stores-card-heading-copy {
+          flex: 1;
+          min-width: 0;
         }
 
-        .stores-card-body {
-          min-width: 0;
+        .stores-card-badges {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.45rem;
+        }
+
+        .stores-card-region,
+        .stores-card-tag,
+        .stores-card-status {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 28px;
+          padding: 0.18rem 0.7rem;
+          border-radius: 999px;
+          font-family: var(--font-sans);
+          font-size: 0.68rem;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+
+        .stores-card-region {
+          background: rgba(27, 54, 93, 0.08);
+          color: rgba(27, 54, 93, 0.8);
+        }
+
+        .stores-card-tag {
+          background: rgba(197, 160, 101, 0.18);
+          color: var(--primary);
+        }
+
+        .stores-card-status {
+          background: rgba(27, 54, 93, 0.92);
+          color: #fff;
+        }
+
+        .stores-card-name {
+          margin: 0.55rem 0 0;
+          font-size: 1.32rem;
+          line-height: 1.14;
+          color: var(--primary);
+        }
+
+        .stores-card-arrow {
+          color: rgba(27, 54, 93, 0.48);
+          font-size: 1.25rem;
+          flex-shrink: 0;
+        }
+
+        .stores-card-info,
+        .stores-spotlight-info {
+          margin-top: 0.95rem;
           display: flex;
           flex-direction: column;
           gap: 0.8rem;
         }
 
-        .stores-card-top {
+        .stores-info-row {
           display: flex;
           align-items: flex-start;
-          justify-content: space-between;
-          gap: 0.75rem;
+          gap: 0.7rem;
         }
 
-        .stores-card-headline {
-          min-width: 0;
-        }
-
-        .stores-card-name {
-          margin: 0;
-          font-family: 'Playfair Display', serif;
-          font-size: var(--stores-card-name-size);
-          line-height: 1.3;
-          color: #1b365d;
-        }
-
-        .stores-card-city {
-          margin: 0.25rem 0 0;
-          font-size: 0.78rem;
-          font-weight: 700;
-          color: rgba(27, 54, 93, 0.62);
-          text-transform: uppercase;
-          letter-spacing: 0.14em;
-        }
-
-        .stores-card-tag {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          min-height: 28px;
-          padding: 0.16rem 0.62rem;
-          border-radius: 999px;
-          background: rgba(197, 160, 101, 0.16);
-          color: #1b365d;
-          font-size: 0.64rem;
-          font-weight: 800;
-          letter-spacing: 0.14em;
-          text-transform: uppercase;
-          white-space: nowrap;
-        }
-
-        .stores-card-info {
-          display: flex;
-          flex-direction: column;
-          gap: 0.45rem;
-        }
-
-        .stores-card-row {
-          display: flex;
-          align-items: flex-start;
-          gap: 0.55rem;
-          font-size: 0.84rem;
-          line-height: 1.55;
-          color: rgba(27, 54, 93, 0.76);
-        }
-
-        .stores-card-row .material-symbols-outlined {
-          margin-top: 0.12rem;
-          font-size: 1rem;
-          color: #c5a065;
+        .stores-info-row-icon {
+          margin-top: 0.08rem;
+          color: var(--accent);
+          font-size: 1.08rem;
           flex-shrink: 0;
         }
 
-        .stores-card-row p,
-        .stores-card-row a {
+        .stores-info-row-body {
+          min-width: 0;
+        }
+
+        .stores-info-row-label {
+          color: rgba(27, 54, 93, 0.48);
+        }
+
+        .stores-info-row-content {
+          margin-top: 0.18rem;
+          color: rgba(27, 54, 93, 0.82);
+          font-size: 0.98rem;
+          line-height: 1.55;
+        }
+
+        .stores-info-row-content p,
+        .stores-info-row-content a {
           margin: 0;
           color: inherit;
           text-decoration: none;
         }
 
-        .stores-card-row a:hover {
-          color: #1b365d;
+        .stores-info-row-content a:hover {
+          color: var(--primary);
           text-decoration: underline;
         }
 
-        .stores-card-actions {
-          padding-top: 0.1rem;
+        .stores-card-actions,
+        .stores-spotlight-actions {
+          margin-top: 1rem;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.65rem;
         }
 
-        .stores-card-btn {
+        .stores-action-btn,
+        .stores-reset-btn {
           display: inline-flex;
           align-items: center;
-          gap: 0.35rem;
-          min-height: 36px;
-          padding: 0 0.82rem;
-          border-radius: 999px;
-          background: #1b365d;
+          justify-content: center;
+          gap: 0.45rem;
+          min-height: 46px;
+          padding: 0 1rem;
+          border: 1px solid transparent;
+          border-radius: 16px;
+          background: var(--primary);
           color: #fff;
-          font-size: 0.7rem;
-          font-weight: 800;
+          font-family: var(--font-sans);
+          font-size: 0.76rem;
+          font-weight: 700;
           letter-spacing: 0.12em;
           text-transform: uppercase;
           text-decoration: none;
-          transition: background 0.2s ease, transform 0.2s ease;
+          cursor: pointer;
+          transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease, border-color 0.2s ease;
         }
 
-        .stores-card-btn:hover {
-          background: #c5a065;
+        .stores-action-btn:hover,
+        .stores-reset-btn:hover {
           transform: translateY(-1px);
+          box-shadow: 0 14px 26px rgba(27, 54, 93, 0.16);
         }
 
-        .stores-hotline {
-          padding: 0.95rem 1.2rem 1.15rem;
-          background: #1b365d;
+        .stores-action-btn--ghost {
+          background: rgba(27, 54, 93, 0.04);
+          border-color: rgba(27, 54, 93, 0.12);
+          color: var(--primary);
         }
 
-        .stores-hotline-label {
-          margin: 0 0 0.35rem;
-          font-size: 0.64rem;
-          font-weight: 800;
-          letter-spacing: 0.2em;
-          text-transform: uppercase;
-          color: rgba(249, 245, 240, 0.62);
+        .stores-action-btn--ghost:hover {
+          background: rgba(27, 54, 93, 0.08);
         }
 
-        .stores-hotline-number {
-          margin: 0;
+        .stores-spotlight {
+          order: 1;
+        }
+
+        .stores-spotlight-card,
+        .stores-spotlight-empty {
+          padding: 1rem;
+        }
+
+        .stores-spotlight-head {
+          display: flex;
+          align-items: flex-start;
+          gap: 0.85rem;
+        }
+
+        .stores-spotlight-icon {
           display: inline-flex;
           align-items: center;
-          gap: 0.45rem;
-          color: #fff;
-          text-decoration: none;
-          font-family: 'Playfair Display', serif;
-          font-size: 0.94rem;
-          line-height: 1.4;
-          transition: opacity 0.2s ease;
+          justify-content: center;
+          width: 52px;
+          height: 52px;
+          border-radius: 18px;
+          background: rgba(27, 54, 93, 0.08);
+          color: var(--accent);
+          flex-shrink: 0;
         }
 
-        .stores-hotline-number:hover {
-          opacity: 0.85;
-        }
-
-        .stores-hotline-number--muted {
-          color: rgba(249, 245, 240, 0.7);
-        }
-
-        .stores-map {
-          position: relative;
+        .stores-spotlight-copy {
           min-width: 0;
-          background: linear-gradient(135deg, #e8dece 0%, #d9cdbb 100%);
-          overflow: hidden;
         }
 
-        .stores-map-iframe,
-        .stores-map-empty {
-          position: absolute;
-          inset: 0;
-          width: 100%;
-          height: 100%;
+        .stores-spotlight-title {
+          margin: 0.35rem 0 0;
+          font-size: 1.65rem;
+          line-height: 1.08;
+        }
+
+        .stores-spotlight-subtitle {
+          margin: 0.38rem 0 0;
+          color: rgba(27, 54, 93, 0.66);
+          font-size: 0.95rem;
+          line-height: 1.5;
+        }
+
+        .stores-map-card {
+          margin-top: 1rem;
+          min-height: 220px;
+          border-radius: 24px;
+          overflow: hidden;
+          border: 1px solid rgba(27, 54, 93, 0.08);
+          background: linear-gradient(135deg, #e8dece 0%, #d9cdbb 100%);
         }
 
         .stores-map-iframe {
+          display: block;
+          width: 100%;
+          height: 100%;
+          min-height: 220px;
           border: none;
-          filter: saturate(0.88) contrast(1.04);
+          filter: saturate(0.9) contrast(1.03);
         }
 
-        .stores-map-pin {
-          position: absolute;
-          top: 15%;
-          left: 50%;
-          z-index: 3;
+        .stores-map-empty,
+        .stores-empty,
+        .stores-spotlight-empty {
           display: flex;
           flex-direction: column;
           align-items: center;
-          transform: translateX(-50%);
-          pointer-events: none;
-        }
-
-        .stores-map-popup {
-          padding: 0.62rem 0.9rem;
-          border-radius: 16px;
-          background: rgba(255, 255, 255, 0.96);
-          box-shadow: 0 18px 32px rgba(27, 54, 93, 0.18);
-          text-align: center;
-          white-space: nowrap;
-        }
-
-        .stores-map-popup-label {
-          margin: 0 0 0.16rem;
-          color: rgba(27, 54, 93, 0.5);
-          font-size: 0.62rem;
-          font-weight: 800;
-          letter-spacing: 0.16em;
-          text-transform: uppercase;
-        }
-
-        .stores-map-popup-name {
-          margin: 0;
-          color: #1b365d;
-          font-family: 'Playfair Display', serif;
-          font-size: 0.9rem;
-          font-weight: 700;
-        }
-
-        .stores-map-pin-icon {
-          margin-top: -0.1rem;
-          font-size: 2.6rem;
-          color: #1b365d;
-          filter: drop-shadow(0 12px 18px rgba(27, 54, 93, 0.24));
-        }
-
-        .stores-map-controls {
-          position: absolute;
-          top: 1.25rem;
-          right: 1.25rem;
-          z-index: 3;
-        }
-
-        .stores-map-ctrl {
-          display: inline-flex;
-          align-items: center;
           justify-content: center;
-          width: 44px;
-          height: 44px;
-          border-radius: 14px;
-          background: rgba(27, 54, 93, 0.95);
-          color: #fff;
-          text-decoration: none;
-          box-shadow: 0 12px 30px rgba(27, 54, 93, 0.22);
-          transition: background 0.2s ease, transform 0.2s ease;
-        }
-
-        .stores-map-ctrl:hover {
-          background: #c5a065;
-          transform: translateY(-1px);
+          text-align: center;
         }
 
         .stores-map-empty {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          text-align: center;
-          padding: 2rem;
+          height: 100%;
+          min-height: 220px;
+          padding: 1.5rem;
           color: rgba(27, 54, 93, 0.72);
         }
 
         .stores-map-empty .material-symbols-outlined {
-          font-size: 4rem;
-          color: #c5a065;
+          font-size: 2.4rem;
+          color: var(--accent);
         }
 
-        .stores-map-empty h2 {
-          margin: 1rem 0 0.5rem;
-          font-family: 'Playfair Display', serif;
-          font-size: 1.4rem;
-          color: #1b365d;
+        .stores-map-empty h3 {
+          margin: 0.85rem 0 0.4rem;
+          font-size: 1.35rem;
         }
 
         .stores-map-empty p {
-          max-width: 36rem;
           margin: 0;
-          line-height: 1.68;
+          line-height: 1.58;
         }
 
-        @media (max-width: 920px) {
-          .stores-page {
-            grid-template-columns: 1fr;
-            min-height: auto;
+        .stores-empty {
+          min-height: 280px;
+          padding: 1.75rem 1.2rem;
+          border: 1px dashed rgba(27, 54, 93, 0.16);
+          border-radius: 24px;
+          background: rgba(255, 255, 255, 0.6);
+          color: rgba(27, 54, 93, 0.72);
+        }
+
+        .stores-empty .material-symbols-outlined,
+        .stores-spotlight-empty .material-symbols-outlined {
+          font-size: 3rem;
+          color: var(--accent);
+        }
+
+        .stores-empty h2,
+        .stores-spotlight-empty h2 {
+          margin: 0.9rem 0 0.45rem;
+          font-size: 1.45rem;
+        }
+
+        .stores-empty p,
+        .stores-spotlight-empty p {
+          margin: 0;
+          max-width: 32rem;
+          line-height: 1.65;
+        }
+
+        .stores-spotlight-empty {
+          min-height: 320px;
+          gap: 0;
+        }
+
+        .stores-spotlight-empty .stores-reset-btn {
+          margin-top: 1rem;
+        }
+
+        @media (min-width: 700px) {
+          .stores-shell {
+            padding-left: 1.25rem;
+            padding-right: 1.25rem;
           }
 
-          .stores-sidebar {
-            box-shadow: none;
-            border-right: none;
-            border-bottom: 1px solid rgba(197, 160, 101, 0.18);
+          .stores-hero {
+            padding: 1.35rem;
           }
 
-          .stores-list {
-            max-height: 56vh;
+          .stores-hero-meta {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
           }
 
-          .stores-map {
-            min-height: 70vh;
+          .stores-map-card,
+          .stores-map-iframe,
+          .stores-map-empty {
+            min-height: 280px;
+          }
+        }
+
+        @media (min-width: 992px) {
+          .stores-content {
+            grid-template-columns: minmax(0, 1.05fr) minmax(340px, 410px);
+            align-items: start;
           }
 
-          .stores-map-pin {
-            display: none;
+          .stores-list-panel {
+            order: 1;
+            padding: 1.15rem;
+          }
+
+          .stores-spotlight {
+            order: 2;
+            position: sticky;
+            top: 1.5rem;
+          }
+
+          .stores-spotlight-card,
+          .stores-spotlight-empty {
+            padding: 1.15rem;
+          }
+
+          .stores-map-card,
+          .stores-map-iframe,
+          .stores-map-empty {
+            min-height: 360px;
           }
         }
 
         @media (max-width: 640px) {
-          .stores-sidebar-header,
-          .stores-list,
-          .stores-hotline {
-            padding-left: 1rem;
-            padding-right: 1rem;
+          .stores-shell {
+            padding: 0.8rem 0.75rem 5rem;
           }
 
-          .stores-card {
-            grid-template-columns: 1fr;
+          .stores-hero,
+          .stores-list-panel,
+          .stores-spotlight-card,
+          .stores-spotlight-empty {
+            border-radius: 24px;
           }
 
-          .stores-card-media {
-            width: 100%;
-            height: 160px;
+          .stores-hero-title {
+            font-size: 2rem;
           }
 
-          .stores-card-top {
+          .stores-list-title {
+            font-size: 1.35rem;
+          }
+
+          .stores-card,
+          .stores-list-panel,
+          .stores-spotlight-card,
+          .stores-spotlight-empty {
+            padding: 0.95rem;
+          }
+
+          .stores-card-name {
+            font-size: 1.18rem;
+          }
+
+          .stores-spotlight-title {
+            font-size: 1.45rem;
+          }
+
+          .stores-card-actions,
+          .stores-spotlight-actions {
             flex-direction: column;
-            align-items: flex-start;
           }
 
-          .stores-map {
-            min-height: 64vh;
+          .stores-action-btn,
+          .stores-reset-btn {
+            width: 100%;
           }
-        }
-      `}</style>
+        }`}</style>
     </div>
   );
 }
-

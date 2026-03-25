@@ -129,6 +129,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/orders/{id}/inventory-slips/{documentId}', [\App\Http\Controllers\Api\OrderController::class , 'destroyInventorySlip'])->whereNumber('id')->whereNumber('documentId');
     Route::get('/orders/{id}', [\App\Http\Controllers\Api\OrderController::class , 'show'])->whereNumber('id');
     Route::put('/orders/{id}/status', [\App\Http\Controllers\Api\OrderController::class , 'updateStatus'])->whereNumber('id');
+    Route::post('/orders/{id}/convert', [\App\Http\Controllers\Api\OrderController::class , 'convert'])->whereNumber('id');
     Route::put('/orders/{id}', [\App\Http\Controllers\Api\OrderController::class , 'update'])->whereNumber('id');
     Route::delete('/orders/{id}', [\App\Http\Controllers\Api\OrderController::class , 'destroy'])->whereNumber('id');
     Route::delete('/orders/{id}/force', [\App\Http\Controllers\Api\OrderController::class , 'forceDelete'])->whereNumber('id');
@@ -137,6 +138,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/bulk-update', [\App\Http\Controllers\Api\OrderController::class , 'bulkUpdate']);
     Route::post('/orders/bulk-delete', [\App\Http\Controllers\Api\OrderController::class , 'bulkDelete']);
     Route::post('/orders/bulk-restore', [\App\Http\Controllers\Api\OrderController::class , 'bulkRestore']);
+    Route::post('/orders/bulk-convert', [\App\Http\Controllers\Api\OrderController::class , 'bulkConvert']);
     Route::post('/orders/bulk-duplicate', [\App\Http\Controllers\Api\OrderController::class , 'bulkDuplicate']);
 
     // Order Statuses

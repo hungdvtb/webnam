@@ -56,23 +56,443 @@ class OrderController extends Controller
     ) {
     }
 
-    private function generateOrderNumber($accountId = null)
+    private function normalizeOrderKind(?string $orderKind): string
     {
+        $normalized = Str::lower(trim((string) $orderKind));
+
+        return in_array($normalized, Order::KINDS, true)
+            ? $normalized
+            : self::ORDER_KIND_OFFICIAL;
+    }
+
+    private function shouldManageInventory(string $orderKind): bool
+    {
+        return $this->normalizeOrderKind($orderKind) === self::ORDER_KIND_OFFICIAL;
+    }
+
+    private function requiresOfficialValidation(string $orderKind): bool
+    {
+        return $this->normalizeOrderKind($orderKind) === self::ORDER_KIND_OFFICIAL;
+    }
+
+    private function generateOrderNumber($accountId = null, ?string $orderKind = null)
+    {
+        $orderKind = $this->normalizeOrderKind($orderKind);
+        $prefix = match ($orderKind) {
+            self::ORDER_KIND_TEMPLATE => 'TM',
+            self::ORDER_KIND_DRAFT => 'DR',
+            default => 'OR',
+        };
+
         $query = Order::withTrashed();
         if ($accountId) {
             $query->where('account_id', $accountId);
         }
         
-        $lastOrder = $query->where('order_number', 'LIKE', 'OR%A0')
+        $lastOrder = $query->where('order_number', 'LIKE', $prefix . '%A0')
             ->orderBy('id', 'desc')
             ->select('order_number')
             ->first();
 
         $nextNumber = 10000;
-        if ($lastOrder && isset($lastOrder->order_number) && preg_match('/OR(\d+)A0/', $lastOrder->order_number, $matches)) {
+        if ($lastOrder && isset($lastOrder->order_number) && preg_match('/' . preg_quote($prefix, '/') . '(\d+)A0/', $lastOrder->order_number, $matches)) {
             $nextNumber = intval($matches[1]) + 1;
         }
-        return "OR{$nextNumber}A0";
+
+        return "{$prefix}{$nextNumber}A0";
+    }
+
+    private function defaultStatusForKind(int $accountId, string $orderKind, ?string $currentStatus = null): string
+    {
+        if ($this->normalizeOrderKind($orderKind) !== self::ORDER_KIND_OFFICIAL) {
+            return $currentStatus ?: 'new';
+        }
+
+        return OrderStatus::query()
+            ->where('account_id', $accountId)
+            ->where('is_default', true)
+            ->value('code') ?: ($currentStatus ?: 'new');
+    }
+
+    private function validateOfficialOrderPayload(array $payload, string $regionType = 'new'): void
+    {
+        $province = trim((string) ($payload['province'] ?? ''));
+        $district = trim((string) ($payload['district'] ?? ''));
+        $ward = trim((string) ($payload['ward'] ?? ''));
+        $shippingAddress = trim((string) ($payload['shipping_address'] ?? ''));
+
+        if ($province === '' || $ward === '' || ($regionType === 'old' && $district === '')) {
+            throw ValidationException::withMessages([
+                'shipping_address' => 'Đơn chính thức phải có đầy đủ khu vực giao hàng.',
+            ]);
+        }
+
+        if ($shippingAddress === '') {
+            throw ValidationException::withMessages([
+                'shipping_address' => 'Đơn chính thức phải có địa chỉ giao hàng.',
+            ]);
+        }
+    }
+
+    private function collectRequestItems(Request $request): array
+    {
+        if ($request->has('items')) {
+            return collect($request->input('items', []))
+                ->map(fn ($item) => is_array($item) ? $item : [])
+                ->filter(fn ($item) => !empty($item['product_id']) && (int) ($item['quantity'] ?? 0) > 0)
+                ->values()
+                ->all();
+        }
+
+        $cart = Cart::with('items.product')->where('user_id', Auth::id())->first();
+        if (!$cart || !isset($cart->items) || $cart->items->isEmpty()) {
+            throw ValidationException::withMessages([
+                'items' => 'Đơn hàng chưa có sản phẩm.',
+            ]);
+        }
+
+        return $cart->items->map(function ($item) {
+            $product = $item->product;
+
+            return [
+                'product_id' => $item->product_id,
+                'quantity' => $item->quantity,
+                'price' => $product ? ($product->current_price ?? $item->price) : $item->price,
+                'cost_price' => $product?->cost_price ?? 0,
+                'options' => $item->options ?? null,
+            ];
+        })->all();
+    }
+
+    private function syncManualOrderItems(Order $order, array $rawItems): array
+    {
+        $normalizedItems = collect($rawItems)
+            ->map(fn ($item) => is_array($item) ? $item : [])
+            ->filter(fn ($item) => (int) ($item['quantity'] ?? 0) > 0 && !empty($item['product_id']))
+            ->values();
+
+        if ($normalizedItems->isEmpty()) {
+            throw ValidationException::withMessages([
+                'items' => 'Đơn hàng phải có ít nhất 1 sản phẩm.',
+            ]);
+        }
+
+        $productIds = $normalizedItems->pluck('product_id')
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        $products = Product::query()
+            ->whereIn('id', $productIds)
+            ->get()
+            ->keyBy('id');
+
+        if (count($productIds) !== $products->count()) {
+            throw ValidationException::withMessages([
+                'items' => 'Có sản phẩm không tồn tại hoặc không thuộc cửa hàng hiện tại.',
+            ]);
+        }
+
+        $createdItems = [];
+
+        foreach ($normalizedItems as $item) {
+            /** @var Product $product */
+            $product = $products->get((int) $item['product_id']);
+            $quantity = (int) $item['quantity'];
+            $price = round((float) ($item['price'] ?? $product->price ?? 0), 2);
+            $costPrice = round((float) ($item['cost_price'] ?? $product->cost_price ?? 0), 2);
+            $costTotal = round($costPrice * $quantity, 2);
+            $profitTotal = round(($price * $quantity) - $costTotal, 2);
+
+            $createdItems[] = $order->items()->create([
+                'account_id' => $order->account_id,
+                'product_id' => $product->id,
+                'product_name_snapshot' => $item['name'] ?? $product->name,
+                'product_sku_snapshot' => $item['sku'] ?? $product->sku,
+                'quantity' => $quantity,
+                'price' => $price,
+                'cost_price' => $costPrice,
+                'cost_total' => $costTotal,
+                'profit_total' => $profitTotal,
+                'options' => $item['options'] ?? null,
+            ]);
+        }
+
+        return [
+            'items' => $createdItems,
+            'total_price' => round(collect($createdItems)->sum(fn ($row) => (float) $row->price * (int) $row->quantity), 2),
+            'cost_total' => round(collect($createdItems)->sum(fn ($row) => (float) $row->cost_total), 2),
+            'profit_total' => round(collect($createdItems)->sum(fn ($row) => (float) $row->profit_total), 2),
+        ];
+    }
+
+    private function syncOrderItems(Order $order, array $rawItems, string $orderKind): array
+    {
+        if ($this->shouldManageInventory($orderKind)) {
+            return app(InventoryService::class)->attachInventoryToOrder($order, $rawItems);
+        }
+
+        return $this->syncManualOrderItems($order, $rawItems);
+    }
+
+    private function releaseInventoryIfNeeded(Order $order): void
+    {
+        if (!$this->shouldManageInventory((string) $order->order_kind)) {
+            return;
+        }
+
+        app(InventoryService::class)->releaseOrderInventory($order);
+    }
+
+    private function reserveInventoryIfNeeded(Order $order): array
+    {
+        if (!$this->shouldManageInventory((string) $order->order_kind)) {
+            return [
+                'items' => $order->items,
+                'total_price' => round((float) $order->items()->sum(DB::raw('price * quantity')), 2),
+                'cost_total' => round((float) $order->items()->sum('cost_total'), 2),
+                'profit_total' => round((float) $order->items()->sum('profit_total'), 2),
+            ];
+        }
+
+        return app(InventoryService::class)->reserveOrderInventory($order->fresh(['items']));
+    }
+
+    private function syncOrderAttributes(Order $order, array $customAttributes = []): void
+    {
+        if (empty($customAttributes)) {
+            return;
+        }
+
+        $attrCodes = array_keys($customAttributes);
+        $existingAttrs = \App\Models\Attribute::query()
+            ->where('account_id', $order->account_id)
+            ->whereIn('code', $attrCodes)
+            ->get()
+            ->keyBy('code');
+
+        foreach ($customAttributes as $attrCode => $value) {
+            $attribute = $existingAttrs->get($attrCode);
+
+            if (!$attribute) {
+                $attribute = \App\Models\Attribute::create([
+                    'account_id' => $order->account_id,
+                    'code' => $attrCode,
+                    'name' => ucwords(str_replace('_', ' ', $attrCode)),
+                    'frontend_type' => 'text',
+                ]);
+                $existingAttrs->put($attrCode, $attribute);
+            }
+
+            \App\Models\OrderAttributeValue::updateOrCreate(
+                [
+                    'order_id' => $order->id,
+                    'attribute_id' => $attribute->id,
+                ],
+                [
+                    'value' => is_array($value) ? json_encode($value) : $value,
+                ]
+            );
+        }
+    }
+
+    private function recalculateOrderTotals(Order $order, float $itemRevenue, float $costTotal): void
+    {
+        $finalTotal = round(
+            $itemRevenue + (float) ($order->shipping_fee ?? 0) - (float) ($order->discount ?? 0),
+            2
+        );
+
+        $order->forceFill([
+            'total_price' => $finalTotal,
+            'cost_total' => round($costTotal, 2),
+            'profit_total' => round($finalTotal - $costTotal, 2),
+        ])->save();
+    }
+
+    private function syncOfficialCustomerAndInvoice(Order $order, bool $syncCustomerStats = true): void
+    {
+        if (!$this->shouldManageInventory((string) $order->order_kind)) {
+            return;
+        }
+
+        $phone = trim((string) $order->customer_phone);
+        $customer = null;
+
+        if ($phone !== '') {
+            $customer = Customer::firstOrCreate(
+                ['account_id' => $order->account_id, 'phone' => $phone],
+                [
+                    'name' => $order->customer_name,
+                    'email' => $order->customer_email,
+                    'address' => $order->shipping_address,
+                ]
+            );
+
+            $customer->forceFill([
+                'name' => $order->customer_name ?: $customer->name,
+                'email' => $order->customer_email ?: $customer->email,
+                'address' => $order->shipping_address ?: $customer->address,
+            ])->save();
+        }
+
+        if ($customer && (int) $order->customer_id !== (int) $customer->id) {
+            $order->forceFill(['customer_id' => $customer->id])->save();
+        }
+
+        if ($customer && $syncCustomerStats) {
+            $customer->increment('total_orders');
+            $customer->increment('total_spent', (float) $order->total_price);
+        }
+
+        Invoice::updateOrCreate(
+            ['order_id' => $order->id],
+            [
+                'invoice_number' => Invoice::query()->where('order_id', $order->id)->value('invoice_number') ?: 'INV-' . strtoupper(Str::random(10)),
+                'amount' => $order->total_price,
+                'status' => 'pending',
+                'due_date' => now()->addDays(3),
+            ]
+        );
+    }
+
+    private function removeOfficialSideEffects(Order $order): void
+    {
+        Invoice::query()->where('order_id', $order->id)->delete();
+        $order->forceFill(['customer_id' => null])->save();
+    }
+
+    private function guardConvertOrderKind(Order $order, string $targetKind): void
+    {
+        $currentKind = $this->normalizeOrderKind((string) $order->order_kind);
+        $targetKind = $this->normalizeOrderKind($targetKind);
+
+        if ($currentKind === $targetKind) {
+            throw ValidationException::withMessages([
+                'order_kind' => 'Đơn hàng đã ở đúng nhóm được chọn.',
+            ]);
+        }
+
+        if ($targetKind !== self::ORDER_KIND_OFFICIAL && $order->shipments()->exists()) {
+            throw ValidationException::withMessages([
+                'order_kind' => 'Không thể chuyển đơn đã có vận đơn sang nhóm khác.',
+            ]);
+        }
+
+        if ($targetKind !== self::ORDER_KIND_OFFICIAL && $order->inventoryDocuments()->exists()) {
+            throw ValidationException::withMessages([
+                'order_kind' => 'Không thể chuyển đơn đã có phiếu kho sang nhóm khác.',
+            ]);
+        }
+    }
+
+    private function duplicateOrderToKind(Order $original, string $targetKind): Order
+    {
+        $targetKind = $this->normalizeOrderKind($targetKind);
+
+        return DB::transaction(function () use ($original, $targetKind) {
+            $newOrder = $original->replicate([
+                'order_number',
+                'customer_id',
+                'shipping_status',
+                'shipping_synced_at',
+                'shipping_status_source',
+                'shipping_carrier_code',
+                'shipping_carrier_name',
+                'shipping_tracking_code',
+                'shipping_dispatched_at',
+                'shipping_issue_code',
+                'shipping_issue_message',
+                'shipping_issue_detected_at',
+                'deleted_at',
+            ]);
+
+            $newOrder->order_number = $this->generateOrderNumber($original->account_id, $targetKind);
+            $newOrder->order_kind = $targetKind;
+            $newOrder->converted_from_order_id = $original->id;
+            $newOrder->converted_from_kind = $this->normalizeOrderKind((string) $original->order_kind);
+            $newOrder->customer_id = null;
+            $newOrder->status = $this->defaultStatusForKind($original->account_id, $targetKind, $original->status);
+            $newOrder->save();
+
+            $rawItems = $original->items->map(function (OrderItem $item) {
+                return [
+                    'product_id' => $item->product_id,
+                    'name' => $item->product_name_snapshot,
+                    'sku' => $item->product_sku_snapshot,
+                    'quantity' => $item->quantity,
+                    'price' => $item->price,
+                    'cost_price' => $item->cost_price,
+                    'options' => $item->options,
+                ];
+            })->all();
+
+            $summary = $this->syncOrderItems($newOrder, $rawItems, $targetKind);
+            $this->recalculateOrderTotals($newOrder, (float) ($summary['total_price'] ?? 0), (float) ($summary['cost_total'] ?? 0));
+
+            foreach ($original->attributeValues as $attributeValue) {
+                $newValue = $attributeValue->replicate();
+                $newValue->order_id = $newOrder->id;
+                $newValue->save();
+            }
+
+            if ($this->shouldManageInventory($targetKind)) {
+                $this->syncOfficialCustomerAndInvoice($newOrder, true);
+            }
+
+            return $newOrder->fresh(['items.product', 'customer', 'attributeValues.attribute']);
+        });
+    }
+
+    private function convertOrderToKind(Order $order, string $targetKind, array $payload = []): Order
+    {
+        $targetKind = $this->normalizeOrderKind($targetKind);
+        $currentKind = $this->normalizeOrderKind((string) $order->order_kind);
+
+        $this->guardConvertOrderKind($order, $targetKind);
+
+        if ($this->requiresOfficialValidation($targetKind)) {
+            $this->validateOfficialOrderPayload([
+                'province' => $payload['province'] ?? $order->province,
+                'district' => $payload['district'] ?? $order->district,
+                'ward' => $payload['ward'] ?? $order->ward,
+                'shipping_address' => $payload['shipping_address'] ?? $order->shipping_address,
+            ], (string) ($payload['region_type'] ?? 'new'));
+        }
+
+        return DB::transaction(function () use ($order, $targetKind, $currentKind) {
+            if ($this->shouldManageInventory($currentKind)) {
+                $this->releaseInventoryIfNeeded($order);
+                $this->removeOfficialSideEffects($order);
+            }
+
+            $order->forceFill([
+                'order_kind' => $targetKind,
+                'converted_from_order_id' => $order->converted_from_order_id ?: $order->id,
+                'converted_from_kind' => $currentKind,
+                'order_number' => $this->generateOrderNumber($order->account_id, $targetKind),
+                'status' => $this->defaultStatusForKind($order->account_id, $targetKind, $order->status),
+                'shipping_status' => null,
+                'shipping_synced_at' => null,
+                'shipping_status_source' => null,
+                'shipping_carrier_code' => null,
+                'shipping_carrier_name' => null,
+                'shipping_tracking_code' => null,
+                'shipping_dispatched_at' => null,
+                'shipping_issue_code' => null,
+                'shipping_issue_message' => null,
+                'shipping_issue_detected_at' => null,
+            ])->save();
+
+            if ($this->shouldManageInventory($targetKind)) {
+                $summary = $this->reserveInventoryIfNeeded($order);
+                $this->recalculateOrderTotals($order, (float) ($summary['total_price'] ?? 0), (float) ($summary['cost_total'] ?? 0));
+                $this->syncOfficialCustomerAndInvoice($order, false);
+            }
+
+            return $order->fresh(['items.product', 'customer', 'attributeValues.attribute']);
+        });
     }
 
     private function generateShipmentNumber(?int $accountId = null): string
@@ -256,6 +676,22 @@ class OrderController extends Controller
         return "orders:bootstrap:{$accountId}:{$mode}";
     }
 
+    private function loadOrderKindCounts(int $accountId): array
+    {
+        $baseCounts = Order::query()
+            ->where('account_id', $accountId)
+            ->selectRaw('COALESCE(order_kind, ?) as order_kind, COUNT(*) as aggregate', [self::ORDER_KIND_OFFICIAL])
+            ->groupBy('order_kind')
+            ->pluck('aggregate', 'order_kind');
+
+        return [
+            self::ORDER_KIND_OFFICIAL => (int) ($baseCounts[self::ORDER_KIND_OFFICIAL] ?? 0),
+            self::ORDER_KIND_TEMPLATE => (int) ($baseCounts[self::ORDER_KIND_TEMPLATE] ?? 0),
+            self::ORDER_KIND_DRAFT => (int) ($baseCounts[self::ORDER_KIND_DRAFT] ?? 0),
+            'trash' => (int) Order::onlyTrashed()->where('account_id', $accountId)->count(),
+        ];
+    }
+
     private function loadConnectedCarriers(int $accountId): array
     {
         return Cache::remember(
@@ -374,6 +810,7 @@ class OrderController extends Controller
                     'order_statuses' => $this->loadOrderStatuses($accountId),
                     'order_attributes' => $this->loadOrderAttributes('order'),
                     'connected_carriers' => $this->loadConnectedCarriers($accountId),
+                    'order_kind_counts' => $this->loadOrderKindCounts($accountId),
                 ];
             }
         );
@@ -391,7 +828,7 @@ class OrderController extends Controller
             ->select([
                 'id', 'order_number', 'total_price', 'status', 'customer_name', 
                 'customer_phone', 'shipping_address', 'province', 'district', 'ward', 'created_at', 'notes',
-                'type',
+                'type', 'order_kind', 'converted_from_order_id', 'converted_from_kind',
                 'shipping_status', 'shipping_carrier_code', 'shipping_carrier_name',
                 'shipping_tracking_code', 'shipping_dispatched_at',
                 'shipping_issue_code', 'shipping_issue_message', 'shipping_issue_detected_at',
@@ -407,6 +844,24 @@ class OrderController extends Controller
 
         if ($request->input('trashed') == '1') {
             $query->onlyTrashed();
+        }
+
+        $requestedKind = $this->normalizeOrderKind($request->input('order_kind'));
+        if ($request->input('trashed') != '1') {
+            $query->where(function ($kindQuery) use ($requestedKind) {
+                $kindQuery
+                    ->where('order_kind', $requestedKind)
+                    ->orWhere(function ($fallbackQuery) use ($requestedKind) {
+                        if ($requestedKind !== self::ORDER_KIND_OFFICIAL) {
+                            $fallbackQuery->whereRaw('1 = 0');
+                            return;
+                        }
+
+                        $fallbackQuery
+                            ->whereNull('order_kind')
+                            ->orWhere('order_kind', '');
+                    });
+            });
         }
         
         $query->when($request->filled('search'), function($q) use ($request) {
@@ -505,7 +960,10 @@ class OrderController extends Controller
             $this->transformOrderListItems(collect($paginator->items()), $accountId)
         );
 
-        return response()->json($paginator);
+        $response = $paginator->toArray();
+        $response['order_kind_counts'] = $this->loadOrderKindCounts($accountId);
+
+        return response()->json($response);
     }
 
     public function inventorySlips(Request $request, int $id)
@@ -540,6 +998,12 @@ class OrderController extends Controller
     {
         $order = $this->findScopedOrder($request, $id);
 
+        if (!$this->shouldManageInventory((string) $order->order_kind)) {
+            return response()->json([
+                'message' => 'Chỉ đơn hàng chính thức mới có phiếu kho.',
+            ], 422);
+        }
+
         $this->orderInventorySlipService->deleteSlip($order, $documentId);
 
         return response()->json([
@@ -549,34 +1013,24 @@ class OrderController extends Controller
 
     public function store(Request $request)
     {
-        $accountId = $request->header('X-Account-Id');
-        $request->validate([
+        $accountId = (int) $request->header('X-Account-Id');
+        $validated = $request->validate([
             'lead_id' => 'nullable|integer|exists:leads,id',
+            'order_kind' => 'nullable|string|in:official,template,draft',
+            'region_type' => 'nullable|string|in:new,old',
         ]);
 
-        $rawItems = [];
-        if ($request->has('items')) {
-            $rawItems = collect($request->items)
-                ->filter(fn ($item) => !empty($item['product_id']) && (int) ($item['quantity'] ?? 0) > 0)
-                ->values()
-                ->all();
-        } else {
-            $cart = Cart::with('items.product')->where('user_id', Auth::id())->first();
-            if (!$cart || !isset($cart->items) || $cart->items->isEmpty()) {
-                return response()->json(['message' => 'Cart is empty'], 400);
-            }
+        $orderKind = $this->normalizeOrderKind($validated['order_kind'] ?? null);
+        $regionType = (string) ($validated['region_type'] ?? 'new');
 
-            $rawItems = $cart->items->map(function ($item) {
-                $product = $item->product;
-                return [
-                    'product_id' => $item->product_id,
-                    'quantity' => $item->quantity,
-                    'price' => $product ? ($product->current_price ?? $item->price) : $item->price,
-                ];
-            })->all();
+        if ($this->requiresOfficialValidation($orderKind)) {
+            $this->validateOfficialOrderPayload($request->all(), $regionType);
         }
 
+        $rawItems = $this->collectRequestItems($request);
+
         return DB::transaction(function () use ($request, $accountId, $rawItems) {
+            $orderKind = $this->normalizeOrderKind($request->input('order_kind'));
             $lead = null;
             if ($request->filled('lead_id')) {
                 $lead = \App\Models\Lead::query()
@@ -585,21 +1039,14 @@ class OrderController extends Controller
                     ->findOrFail((int) $request->lead_id);
             }
 
-            // Customer creation/lookup optimized with index
-            $customer = Customer::firstOrCreate(
-                ['account_id' => $accountId, 'phone' => $request->customer_phone],
-                ['name' => $request->customer_name, 'email' => $request->customer_email, 'address' => $request->shipping_address]
-            );
-
-            // Create Order
             $order = Order::create([
                 'user_id' => Auth::id(),
                 'account_id' => $accountId,
-                'customer_id' => $customer->id,
                 'lead_id' => $lead?->id,
-                'order_number' => $this->generateOrderNumber($accountId),
+                'order_number' => $this->generateOrderNumber($accountId, $orderKind),
+                'order_kind' => $orderKind,
                 'total_price' => 0,
-                'status' => $request->status ?? (\App\Models\OrderStatus::where('account_id', $accountId)->where('is_default', true)->value('code') ?: 'new'),
+                'status' => $request->status ?? $this->defaultStatusForKind($accountId, $orderKind),
                 'customer_name' => $request->customer_name,
                 'customer_email' => $request->customer_email,
                 'customer_phone' => $request->customer_phone,
@@ -617,62 +1064,19 @@ class OrderController extends Controller
                 'profit_total' => 0,
             ]);
 
-            $inventorySummary = app(InventoryService::class)->attachInventoryToOrder($order, $rawItems);
-            $finalTotal = round(
-                $inventorySummary['total_price']
-                + (float) ($request->shipping_fee ?? 0)
-                - (float) ($request->discount ?? 0),
-                2
-            );
+            $summary = $this->syncOrderItems($order, $rawItems, $orderKind);
+            $this->recalculateOrderTotals($order, (float) ($summary['total_price'] ?? 0), (float) ($summary['cost_total'] ?? 0));
+            $this->syncOrderAttributes($order, (array) $request->input('custom_attributes', []));
 
-            $order->update([
-                'total_price' => $finalTotal,
-                'cost_total' => $inventorySummary['cost_total'],
-                'profit_total' => round($finalTotal - $inventorySummary['cost_total'], 2),
-            ]);
-
-            // Sync Order Attributes - optimized lookup
-            if ($request->has('custom_attributes') && !empty($request->custom_attributes)) {
-                $attrCodes = array_keys($request->custom_attributes);
-                $existingAttrs = \App\Models\Attribute::where('account_id', $accountId)->whereIn('code', $attrCodes)->get()->keyBy('code');
-
-                foreach ($request->custom_attributes as $attrCode => $val) {
-                    $attribute = $existingAttrs->get($attrCode);
-                    if (!$attribute) {
-                        $attribute = \App\Models\Attribute::create([
-                            'account_id' => $accountId,
-                            'code' => $attrCode,
-                            'name' => ucwords(str_replace('_', ' ', $attrCode)),
-                            'frontend_type' => 'text'
-                        ]);
-                    }
-
-                    \App\Models\OrderAttributeValue::create([
-                        'order_id' => $order->id,
-                        'attribute_id' => $attribute->id,
-                        'value' => is_array($val) ? json_encode($val) : $val
-                    ]);
-                }
+            if ($this->shouldManageInventory($orderKind)) {
+                $this->syncOfficialCustomerAndInvoice($order, true);
             }
-
-            // Customer stats update
-            $customer->increment('total_orders');
-            $customer->increment('total_spent', $finalTotal);
-
-            // One-off invoice creation
-            Invoice::create([
-                'order_id' => $order->id,
-                'invoice_number' => 'INV-' . strtoupper(Str::random(10)),
-                'amount' => $finalTotal,
-                'status' => 'pending',
-                'due_date' => now()->addDays(3),
-            ]);
 
             if (!$request->has('items')) {
                 Cart::where('user_id', Auth::id())->first()?->items()->delete();
             }
 
-            if ($lead) {
+            if ($lead && $this->shouldManageInventory($orderKind)) {
                 $createdStatus = \App\Models\LeadStatus::query()
                     ->where('account_id', $accountId)
                     ->where('code', 'da-tao-don')
@@ -699,7 +1103,7 @@ class OrderController extends Controller
                 ])->save();
             }
 
-            return response()->json($order->load(['items.product', 'customer', 'attributeValues.attribute']), 201);
+            return response()->json($order->fresh(['items.product', 'customer', 'attributeValues.attribute']), 201);
         });
     }
 
@@ -725,6 +1129,8 @@ class OrderController extends Controller
             'ward' => 'nullable|string',
             'notes' => 'nullable|string',
             'custom_attributes' => 'nullable|array',
+            'order_kind' => 'nullable|string|in:official,template,draft',
+            'region_type' => 'nullable|string|in:new,old',
         ]);
 
         if ($validator->fails()) {
@@ -752,6 +1158,18 @@ class OrderController extends Controller
         \Illuminate\Support\Facades\Log::info("Order Update Data for ID: $id", $request->all());
 
         return DB::transaction(function () use ($request, $order) {
+            $requestedKind = $this->normalizeOrderKind($request->input('order_kind', $order->order_kind));
+            $currentKind = $this->normalizeOrderKind((string) $order->order_kind);
+
+            if ($this->requiresOfficialValidation($requestedKind)) {
+                $this->validateOfficialOrderPayload([
+                    'province' => $request->input('province', $order->province),
+                    'district' => $request->input('district', $order->district),
+                    'ward' => $request->input('ward', $order->ward),
+                    'shipping_address' => $request->input('shipping_address', $order->shipping_address),
+                ], (string) $request->input('region_type', 'new'));
+            }
+
             $data = $request->only([
                 'order_number', 'customer_name', 'customer_email', 'customer_phone', 
                 'shipping_address', 'province', 'district', 'ward', 'notes', 'source', 
@@ -762,9 +1180,14 @@ class OrderController extends Controller
 
             // Sync items if provided
             if ($request->has('items')) {
-                app(InventoryService::class)->releaseOrderInventory($order);
+                if ($this->shouldManageInventory($currentKind)) {
+                    $this->releaseInventoryIfNeeded($order->forceFill(['order_kind' => $currentKind]));
+                }
                 $order->items()->delete();
-                $inventorySummary = app(InventoryService::class)->attachInventoryToOrder($order, $request->items);
+                $itemSyncKind = $this->shouldManageInventory($requestedKind) && !$this->shouldManageInventory($currentKind)
+                    ? $currentKind
+                    : $requestedKind;
+                $inventorySummary = $this->syncOrderItems($order, (array) $request->input('items', []), $itemSyncKind);
                 $itemRevenue = $inventorySummary['total_price'];
                 $costTotal = $inventorySummary['cost_total'];
             } else {
@@ -772,32 +1195,26 @@ class OrderController extends Controller
                 $costTotal = (float) $order->items()->sum('cost_total');
             }
 
-            $finalTotal = round($itemRevenue + (float) ($order->shipping_fee ?? 0) - (float) ($order->discount ?? 0), 2);
-            $order->update([
-                'total_price' => $finalTotal,
-                'cost_total' => round($costTotal, 2),
-                'profit_total' => round($finalTotal - $costTotal, 2),
-            ]);
+            $this->recalculateOrderTotals($order, (float) $itemRevenue, (float) $costTotal);
 
             // Sync Order EAV custom attributes
             if ($request->has('custom_attributes')) {
-                foreach ($request->custom_attributes as $attrCode => $val) {
-                    $attribute = \App\Models\Attribute::firstOrCreate(
-                        ['account_id' => $order->account_id, 'code' => $attrCode],
-                        [
-                            'name' => ucwords(str_replace('_', ' ', $attrCode)),
-                            'frontend_type' => 'text'
-                        ]
-                    );
-
-                    \App\Models\OrderAttributeValue::updateOrCreate(
-                        ['order_id' => $order->id, 'attribute_id' => $attribute->id],
-                        ['value' => is_array($val) ? json_encode($val) : $val]
-                    );
-                }
+                $this->syncOrderAttributes($order, (array) $request->input('custom_attributes', []));
             }
 
-            return response()->json($order->load(['items.product', 'customer', 'attributeValues.attribute']));
+            if ($currentKind !== $requestedKind) {
+                $order = $this->convertOrderToKind($order->fresh(['items', 'attributeValues']), $requestedKind, [
+                    'province' => $request->input('province', $order->province),
+                    'district' => $request->input('district', $order->district),
+                    'ward' => $request->input('ward', $order->ward),
+                    'shipping_address' => $request->input('shipping_address', $order->shipping_address),
+                    'region_type' => $request->input('region_type', 'new'),
+                ]);
+            } elseif ($this->shouldManageInventory($requestedKind)) {
+                $this->syncOfficialCustomerAndInvoice($order, false);
+            }
+
+            return response()->json($order->fresh(['items.product', 'customer', 'attributeValues.attribute']));
         });
     }
 
@@ -810,7 +1227,7 @@ class OrderController extends Controller
         }
 
         DB::transaction(function () use ($order) {
-            app(InventoryService::class)->releaseOrderInventory($order);
+            $this->releaseInventoryIfNeeded($order);
             $order->delete();
         });
 
@@ -823,7 +1240,7 @@ class OrderController extends Controller
 
         DB::transaction(function () use ($order) {
             if (!$order->trashed()) {
-                app(InventoryService::class)->releaseOrderInventory($order);
+                $this->releaseInventoryIfNeeded($order);
             }
 
             $order->forceDelete();
@@ -837,27 +1254,31 @@ class OrderController extends Controller
         $original = $this->scopedOrderQuery($request)
             ->with(['items', 'attributeValues'])
             ->findOrFail($id);
-        
-        return DB::transaction(function () use ($original) {
-            $new = $original->replicate();
-            $new->order_number = $this->generateOrderNumber($original->account_id);
-            $new->status = \App\Models\OrderStatus::where('account_id', $original->account_id)->where('is_default', true)->value('code') ?: 'new';
-            $new->save();
+        $targetKind = $this->normalizeOrderKind($request->input('target_kind', $original->order_kind));
 
-            foreach ($original->items as $item) {
-                $newItem = $item->replicate();
-                $newItem->order_id = $new->id;
-                $newItem->save();
-            }
+        return response()->json(
+            $this->duplicateOrderToKind($original, $targetKind)
+        );
+    }
 
-            foreach ($original->attributeValues as $val) {
-                $newVal = $val->replicate();
-                $newVal->order_id = $new->id;
-                $newVal->save();
-            }
+    public function convert(Request $request, $id)
+    {
+        $request->validate([
+            'target_kind' => 'required|string|in:official,template,draft',
+            'region_type' => 'nullable|string|in:new,old',
+            'province' => 'nullable|string',
+            'district' => 'nullable|string',
+            'ward' => 'nullable|string',
+            'shipping_address' => 'nullable|string',
+        ]);
 
-            return response()->json($new->load(['items.product', 'customer', 'attributeValues.attribute']));
-        });
+        $order = $this->scopedOrderQuery($request)
+            ->with(['items', 'attributeValues', 'shipments', 'inventoryDocuments'])
+            ->findOrFail($id);
+
+        return response()->json(
+            $this->convertOrderToKind($order, (string) $request->input('target_kind'), $request->all())
+        );
     }
 
     public function updateStatus(Request $request, $id)
@@ -867,6 +1288,13 @@ class OrderController extends Controller
             
             return DB::transaction(function () use ($request, $id) {
                 $order = $this->findScopedOrder($request, (int) $id);
+
+                if (!$this->shouldManageInventory((string) $order->order_kind)) {
+                    return response()->json([
+                        'message' => 'Đơn mẫu và đơn nháp không dùng cập nhật trạng thái giao hàng.',
+                    ], 422);
+                }
+
                 $newStatus = $request->status;
                 $oldStatus = $order->status;
 
@@ -930,14 +1358,13 @@ class OrderController extends Controller
 
         DB::transaction(function () use ($order) {
             $order->restore();
-            $inventorySummary = app(InventoryService::class)->reserveOrderInventory(
-                $order->fresh(['items'])
-            );
+            $inventorySummary = $this->reserveInventoryIfNeeded($order->fresh(['items']));
 
-            $order->forceFill([
-                'cost_total' => round((float) ($inventorySummary['cost_total'] ?? 0), 2),
-                'profit_total' => round((float) (($order->total_price ?? 0) - ($inventorySummary['cost_total'] ?? 0)), 2),
-            ])->save();
+            $this->recalculateOrderTotals(
+                $order,
+                (float) ($inventorySummary['total_price'] ?? 0),
+                (float) ($inventorySummary['cost_total'] ?? 0)
+            );
         });
 
         return response()->json(['message' => 'Order restored successfully']);
@@ -967,12 +1394,10 @@ class OrderController extends Controller
         $forceDelete = $request->boolean('force');
 
         DB::transaction(function () use ($orders, $forceDelete) {
-            $inventoryService = app(InventoryService::class);
-
             foreach ($orders as $order) {
                 if ($forceDelete) {
                     if (!$order->trashed()) {
-                        $inventoryService->releaseOrderInventory($order);
+                        $this->releaseInventoryIfNeeded($order);
                     }
 
                     $order->forceDelete();
@@ -983,7 +1408,7 @@ class OrderController extends Controller
                     continue;
                 }
 
-                $inventoryService->releaseOrderInventory($order);
+                $this->releaseInventoryIfNeeded($order);
                 $order->delete();
             }
         });
@@ -1017,20 +1442,18 @@ class OrderController extends Controller
         }
 
         DB::transaction(function () use ($orders) {
-            $inventoryService = app(InventoryService::class);
-
             foreach ($orders as $order) {
                 if (!$order->trashed()) {
                     continue;
                 }
 
                 $order->restore();
-                $inventorySummary = $inventoryService->reserveOrderInventory($order->fresh(['items']));
-
-                $order->forceFill([
-                    'cost_total' => round((float) ($inventorySummary['cost_total'] ?? 0), 2),
-                    'profit_total' => round((float) (($order->total_price ?? 0) - ($inventorySummary['cost_total'] ?? 0)), 2),
-                ])->save();
+                $inventorySummary = $this->reserveInventoryIfNeeded($order->fresh(['items']));
+                $this->recalculateOrderTotals(
+                    $order,
+                    (float) ($inventorySummary['total_price'] ?? 0),
+                    (float) ($inventorySummary['cost_total'] ?? 0)
+                );
             }
         });
 
@@ -1060,28 +1483,55 @@ class OrderController extends Controller
                     continue;
                 }
 
-                $new = $original->replicate();
-                $new->order_number = $this->generateOrderNumber($original->account_id);
-                $new->status = \App\Models\OrderStatus::where('account_id', $original->account_id)->where('is_default', true)->value('code') ?: 'new';
-                $new->save();
-
-                foreach ($original->items as $item) {
-                    $newItem = $item->replicate();
-                    $newItem->order_id = $new->id;
-                    $newItem->save();
-                }
-
-                foreach ($original->attributeValues as $val) {
-                    $newVal = $val->replicate();
-                    $newVal->order_id = $new->id;
-                    $newVal->save();
-                }
+                $targetKind = $this->normalizeOrderKind($request->input('target_kind', $original->order_kind));
+                $this->duplicateOrderToKind($original, $targetKind);
 
                 $duplicatedCount++;
             }
         });
 
         return response()->json(['message' => $duplicatedCount . ' orders duplicated successfully']);
+    }
+
+    public function bulkConvert(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer',
+            'target_kind' => 'required|string|in:official,template,draft',
+            'region_type' => 'nullable|string|in:new,old',
+            'province' => 'nullable|string',
+            'district' => 'nullable|string',
+            'ward' => 'nullable|string',
+            'shipping_address' => 'nullable|string',
+        ]);
+
+        $ids = collect($validated['ids'])
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
+
+        $orders = $this->scopedOrderQuery($request)
+            ->whereIn('id', $ids->all())
+            ->with(['items', 'attributeValues', 'shipments', 'inventoryDocuments'])
+            ->get();
+
+        if ($orders->isEmpty()) {
+            return response()->json(['message' => 'No orders found for the selected IDs.'], 404);
+        }
+
+        $convertedCount = 0;
+        DB::transaction(function () use ($orders, $validated, &$convertedCount) {
+            foreach ($orders as $order) {
+                $this->convertOrderToKind($order, $validated['target_kind'], $validated);
+                $convertedCount++;
+            }
+        });
+
+        return response()->json([
+            'message' => $convertedCount . ' orders converted successfully',
+        ]);
     }
 
     public function bulkUpdate(Request $request)
@@ -1134,6 +1584,12 @@ class OrderController extends Controller
 
         $orders = $this->scopedOrderQuery($request)
             ->whereIn('id', $validated['order_ids'])
+            ->where(function ($query) {
+                $query
+                    ->where('order_kind', self::ORDER_KIND_OFFICIAL)
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
+            })
             ->with(['items.product'])
             ->get();
 
@@ -1157,6 +1613,12 @@ class OrderController extends Controller
 
         $orders = $this->scopedOrderQuery($request)
             ->whereIn('id', $validated['order_ids'])
+            ->where(function ($query) {
+                $query
+                    ->where('order_kind', self::ORDER_KIND_OFFICIAL)
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
+            })
             ->with(['items.product'])
             ->get();
 
@@ -1203,6 +1665,12 @@ class OrderController extends Controller
 
         $orders = $this->scopedOrderQuery($request)
             ->whereIn('id', $shipmentsPayload->pluck('order_id')->unique()->values())
+            ->where(function ($query) {
+                $query
+                    ->where('order_kind', self::ORDER_KIND_OFFICIAL)
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
+            })
             ->with(['items.product', 'activeShipment'])
             ->get()
             ->keyBy('id');

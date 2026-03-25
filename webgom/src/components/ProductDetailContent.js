@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/context/CartContext';
 import { flyToCart } from '@/utils/flyToCart';
-import { resolveImageObjectUrl } from '@/lib/media';
+import { resolveImageObjectUrl, resolveVideoEmbedUrl } from '@/lib/media';
 import SimpleProductView from './product/SimpleProductView';
 import ConfigurableProductView from './product/ConfigurableProductView';
 import GroupedProductView from './product/GroupedProductView';
@@ -252,7 +252,24 @@ export default function ProductDetailContent({ product }) {
       ? currentProduct.images
       : (product.images || []);
 
-    const validImages = sourceImages.filter((image, index, collection) => {
+    const orderedImages = [...sourceImages].sort((left, right) => {
+      const primaryDelta = Number(Boolean(right?.is_primary)) - Number(Boolean(left?.is_primary));
+
+      if (primaryDelta !== 0) {
+        return primaryDelta;
+      }
+
+      const leftSort = Number.isFinite(Number(left?.sort_order)) ? Number(left.sort_order) : Number.MAX_SAFE_INTEGER;
+      const rightSort = Number.isFinite(Number(right?.sort_order)) ? Number(right.sort_order) : Number.MAX_SAFE_INTEGER;
+
+      if (leftSort !== rightSort) {
+        return leftSort - rightSort;
+      }
+
+      return Number(left?.id || 0) - Number(right?.id || 0);
+    });
+
+    const validImages = orderedImages.filter((image, index, collection) => {
       const resolvedUrl = resolveImageObjectUrl(image, '');
 
       if (!resolvedUrl) {
@@ -264,10 +281,30 @@ export default function ProductDetailContent({ product }) {
       )) === index;
     });
 
-    return validImages.length > 0 ? validImages : sourceImages;
+    return validImages.length > 0 ? validImages : orderedImages;
   }, [currentProduct, product.images]);
+  const galleryVideoUrl = currentProduct?.video_url || product.video_url || '';
+  const hasGalleryVideo = Boolean(resolveVideoEmbedUrl(galleryVideoUrl));
 
   const getImageUrl = (img) => resolveImageObjectUrl(img, FALLBACK_PRODUCT_IMAGE);
+
+  useEffect(() => {
+    setActiveIndex((previous) => {
+      if (images.length === 0) {
+        return hasGalleryVideo ? -1 : 0;
+      }
+
+      if (previous === -1 && hasGalleryVideo) {
+        return -1;
+      }
+
+      if (previous >= 0 && previous < images.length) {
+        return previous;
+      }
+
+      return 0;
+    });
+  }, [images, hasGalleryVideo]);
 
   const formatPrice = (price) => {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
@@ -524,7 +561,7 @@ export default function ProductDetailContent({ product }) {
     formatPrice,
     getImageUrl,
     images,
-    videoUrl: currentProduct?.video_url || product.video_url,
+    videoUrl: galleryVideoUrl,
     activeIndex,
     setActiveIndex,
     quantity,

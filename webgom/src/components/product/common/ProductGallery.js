@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import styles from '../../../app/product/[slug]/product.module.css';
-import { resolveVideoEmbedUrl } from '@/lib/media';
+import { resolveVideoEmbedUrl, resolveVideoThumbnailUrl } from '@/lib/media';
 
 export default function ProductGallery({
   images,
@@ -11,23 +11,32 @@ export default function ProductGallery({
   getImageUrl,
   productName,
   videoUrl,
-  showSingleThumbnail = false
+  showSingleThumbnail = false,
 }) {
-  const activeImage = images[activeIndex] || images[0];
   const embedUrl = resolveVideoEmbedUrl(videoUrl);
+  const videoThumbnailUrl = resolveVideoThumbnailUrl(videoUrl);
   const hasVideo = Boolean(embedUrl);
-  const hasSingleVisual = images.length === 1 && !hasVideo;
-  const showThumbnailStrip = images.length > 0 && (showSingleThumbnail || images.length > 1 || hasVideo);
+  const activeImage = activeIndex >= 0 ? (images[activeIndex] || images[0]) : images[0];
+  const totalMediaItems = images.length + (hasVideo ? 1 : 0);
+  const showThumbnailStrip = totalMediaItems > 1 || (showSingleThumbnail && totalMediaItems === 1);
+  const isShowingVideo = hasVideo && (activeIndex === -1 || images.length === 0);
+  const mediaSummary = isShowingVideo
+    ? 'Video YouTube'
+    : images.length > 0
+      ? `Ảnh ${Math.min(activeIndex + 1, images.length)} / ${images.length}`
+      : 'Media sản phẩm';
 
   return (
-    <div className={styles.galleryContainer}>
-      <div className={`${styles.mainImage} ${activeIndex === -1 && hasVideo ? styles.mainImageVideo : ''}`}>
-        {activeIndex === -1 && hasVideo ? (
-          <div className={styles.videoEmbedShell}>
+    <div className={styles.productMediaGallery}>
+      <div className={`${styles.productMediaStage} ${isShowingVideo ? styles.productMediaStageVideo : ''}`}>
+        <div className={styles.productMediaBadge}>{mediaSummary}</div>
+
+        {isShowingVideo ? (
+          <div className={styles.productMediaVideoShell}>
             <iframe
               src={embedUrl}
-              title={productName}
-              className={styles.videoEmbedFrame}
+              title={`${productName} video`}
+              className={styles.productMediaVideoFrame}
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen; web-share"
               allowFullScreen
               loading="lazy"
@@ -35,59 +44,85 @@ export default function ProductGallery({
             />
           </div>
         ) : activeImage ? (
-          <Image
-            src={getImageUrl(activeImage)}
-            alt={productName}
-            fill
-            sizes="(max-width: 768px) 100vw, 50vw"
-            className={styles.galleryImage}
-            priority
-            unoptimized
-          />
+          <div className={styles.productMediaVisual}>
+            <Image
+              src={getImageUrl(activeImage)}
+              alt={productName}
+              fill
+              sizes="(max-width: 767px) 100vw, (max-width: 1279px) 52vw, 620px"
+              className={styles.productMediaImage}
+              priority
+              unoptimized
+            />
+          </div>
         ) : (
-          <div className={styles.imagePlaceholder}>
-            <span className="material-symbols-outlined" style={{ fontSize: '64px', color: '#ccc' }}>image</span>
+          <div className={styles.productMediaPlaceholder}>
+            <span className="material-symbols-outlined" aria-hidden="true">image</span>
+            <p>Đang cập nhật media sản phẩm</p>
           </div>
         )}
       </div>
 
       {showThumbnailStrip ? (
-        <div
-          className={styles.thumbnails}
-          data-single-thumbnail={showSingleThumbnail && hasSingleVisual ? 'true' : undefined}
-        >
-          {hasVideo && (
+        <div className={styles.productMediaRail} role="tablist" aria-label="Thư viện media sản phẩm">
+          {hasVideo ? (
             <button
-              className={`${styles.thumbBtn} ${activeIndex === -1 ? styles.thumbActive : ''} ${styles.videoThumbBtn}`}
+              type="button"
+              className={`${styles.productMediaThumb} ${styles.productMediaThumbVideo} ${isShowingVideo ? styles.productMediaThumbActive : ''}`}
               onClick={() => setActiveIndex(-1)}
-              type="button"
-              aria-label="Xem video sản phẩm"
+              aria-pressed={isShowingVideo}
+              aria-label="Xem video YouTube"
             >
-              <div className={styles.videoThumbContent}>
-                <span className="material-symbols-outlined">play_circle</span>
-                <span>Video</span>
-              </div>
-            </button>
-          )}
+              {videoThumbnailUrl ? (
+                <div className={styles.productMediaThumbPoster}>
+                  <Image
+                    src={videoThumbnailUrl}
+                    alt={`${productName} video thumbnail`}
+                    fill
+                    sizes="88px"
+                    className={styles.productMediaThumbImage}
+                    unoptimized
+                  />
+                </div>
+              ) : (
+                <div className={styles.productMediaThumbFallback}>
+                  <span className="material-symbols-outlined" aria-hidden="true">smart_display</span>
+                </div>
+              )}
 
-          {images.map((img, idx) => (
-            <button
-              key={img.id || idx}
-              className={`${styles.thumbBtn} ${idx === activeIndex ? styles.thumbActive : ''}`}
-              onClick={() => setActiveIndex(idx)}
-              type="button"
-              aria-label={`Xem ảnh ${idx + 1}`}
-            >
-              <Image
-                src={getImageUrl(img)}
-                alt={`${productName} thumb ${idx}`}
-                fill
-                sizes="100px"
-                className={styles.thumbImage}
-                unoptimized
-              />
+              <span className={styles.productMediaThumbVideoOverlay}>
+                <span className="material-symbols-outlined" aria-hidden="true">play_circle</span>
+              </span>
+              <span className={styles.productMediaThumbLabel}>Video</span>
             </button>
-          ))}
+          ) : null}
+
+          {images.map((image, index) => {
+            const isActive = index === activeIndex;
+
+            return (
+              <button
+                key={image.id || `${getImageUrl(image)}-${index}`}
+                type="button"
+                className={`${styles.productMediaThumb} ${isActive ? styles.productMediaThumbActive : ''}`}
+                onClick={() => setActiveIndex(index)}
+                aria-pressed={isActive}
+                aria-label={`Xem ảnh ${index + 1}`}
+              >
+                <div className={styles.productMediaThumbPoster}>
+                  <Image
+                    src={getImageUrl(image)}
+                    alt={`${productName} ảnh ${index + 1}`}
+                    fill
+                    sizes="88px"
+                    className={styles.productMediaThumbImage}
+                    unoptimized
+                  />
+                </div>
+                <span className={styles.productMediaThumbLabel}>Ảnh {index + 1}</span>
+              </button>
+            );
+          })}
         </div>
       ) : null}
     </div>

@@ -913,6 +913,23 @@ const ProductForm = () => {
         });
     }, []);
 
+    const normalizeMoneyValue = (value) => {
+        if (value === null || value === undefined || value === '') {
+            return '';
+        }
+
+        const parsedValue = Number(value);
+        return Number.isFinite(parsedValue) ? Math.floor(parsedValue) : '';
+    };
+
+    const resolveDuplicateSafeCost = (primaryValue, fallbackValue = null) => {
+        if (isDuplicate) {
+            return '';
+        }
+
+        return normalizeMoneyValue(primaryValue ?? fallbackValue);
+    };
+
     const localSkuValidation = useMemo(() => {
         const parentSku = normalizeSkuDraft(formData.sku);
         const errors = {
@@ -1612,10 +1629,10 @@ const ProductForm = () => {
                 name: data.name,
                 category_id: data.category_id || '',
                 category_ids: data.categories ? data.categories.map(c => c.id) : [],
-                price: data.price ? Math.floor(data.price) : '',
+                price: normalizeMoneyValue(data.price),
                 price_type: data.price_type || 'fixed',
-                expected_cost: data.expected_cost ? Math.floor(data.expected_cost) : '',
-                cost_price: data.cost_price ? Math.floor(data.cost_price) : '',
+                expected_cost: normalizeMoneyValue(data.expected_cost),
+                cost_price: resolveDuplicateSafeCost(data.cost_price),
                 weight: data.weight || '',
                 inventory_unit_id: data.inventory_unit_id ? String(data.inventory_unit_id) : '',
                 supplier_ids: Array.isArray(data.supplier_ids)
@@ -1652,7 +1669,7 @@ const ProductForm = () => {
                 is_featured: !!data.is_featured,
                 is_new: !!data.is_new,
                 status: data.hasOwnProperty('status') ? !!data.status : true,
-                stock_quantity: data.stock_quantity || 0,
+                stock_quantity: data.stock_quantity ?? 0,
                 sku: data.sku || '',
                 meta_title: data.meta_title || '',
                 meta_description: data.meta_description || '',
@@ -1662,9 +1679,9 @@ const ProductForm = () => {
                     id: item.id,
                     name: item.name,
                     sku: item.sku,
-                    price: item.pivot?.price || item.price,
-                    cost_price: item.pivot?.cost_price || item.cost_price,
-                    quantity: item.pivot?.quantity || 1,
+                    price: normalizeMoneyValue(item.pivot?.price ?? item.price),
+                    cost_price: resolveDuplicateSafeCost(item.pivot?.cost_price, item.cost_price),
+                    quantity: item.pivot?.quantity ?? 1,
                     is_required: !!(item.pivot?.is_required),
                     option_title: item.pivot?.option_title || '',
                     is_default: !!(item.pivot?.is_default),
@@ -1724,9 +1741,9 @@ const ProductForm = () => {
                         id: item.id,
                         name: item.name,
                         sku: item.sku,
-                        price: item.pivot?.price || item.price,
-                        cost_price: item.pivot?.cost_price || item.cost_price,
-                        quantity: item.pivot?.quantity || 1,
+                        price: normalizeMoneyValue(item.pivot?.price ?? item.price),
+                        cost_price: resolveDuplicateSafeCost(item.pivot?.cost_price, item.cost_price),
+                        quantity: item.pivot?.quantity ?? 1,
                         is_required: !!item.pivot?.is_required,
                         is_default: !!item.pivot?.is_default,
                         image_url: (item.images?.find(img => img.is_primary) || item.images?.[0])?.image_url,
@@ -1778,9 +1795,9 @@ const ProductForm = () => {
                     const primaryImage = v.images?.find(img => img.is_primary) || v.images?.[0];
                     return {
                         ...v,
-                        price: Math.floor(v.price),
-                        expected_cost: Math.floor(v.expected_cost || 0),
-                        current_cost: Math.floor(v.cost_price || 0),
+                        price: normalizeMoneyValue(v.price),
+                        expected_cost: normalizeMoneyValue(v.expected_cost),
+                        current_cost: resolveDuplicateSafeCost(v.cost_price),
                         weight: v.weight ?? '',
                         inventory_unit_id: v.inventory_unit_id ? String(v.inventory_unit_id) : (data.inventory_unit_id ? String(data.inventory_unit_id) : ''),
                         stock: v.stock_quantity ?? 0,
@@ -2498,7 +2515,7 @@ const ProductForm = () => {
                 name: product.name,
                 sku: product.sku,
                 price: product.price,
-                cost_price: product.cost_price,
+                cost_price: isDuplicate ? '' : normalizeMoneyValue(product.cost_price),
                 quantity: 1,
                 is_required: true,
                 is_default: o.items.length === 0,
@@ -2563,7 +2580,7 @@ const ProductForm = () => {
                         variant_label: selectedVariant.name || (selectedVariant.attribute_values || []).map(av => av.value).join(' / '),
                         sku: selectedVariant.sku,
                         price: selectedVariant.price,
-                        cost_price: selectedVariant.cost_price,
+                        cost_price: isDuplicate ? '' : normalizeMoneyValue(selectedVariant.cost_price),
                         image_url: (selectedVariant.images?.find(img => img.is_primary) || selectedVariant.images?.[0])?.image_url || it.image_url
                     };
                 })
@@ -2611,7 +2628,7 @@ const ProductForm = () => {
                     // Root product price
                     updatedItemsMap[pId] = {
                         price: product.price,
-                        cost_price: product.cost_price,
+                        cost_price: isDuplicate ? '' : normalizeMoneyValue(product.cost_price),
                         sku: product.sku
                     };
 
@@ -2621,7 +2638,7 @@ const ProductForm = () => {
                         variants.forEach(v => {
                             updatedItemsMap[`${pId}_${v.id}`] = {
                                 price: v.price,
-                                cost_price: v.cost_price,
+                                cost_price: isDuplicate ? '' : normalizeMoneyValue(v.cost_price),
                                 sku: v.sku
                             };
                         });

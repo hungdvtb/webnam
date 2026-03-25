@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+﻿import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { orderApi, shipmentApi, warehouseApi } from '../../services/api';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
 import Pagination from '../../components/Pagination';
@@ -176,7 +176,7 @@ const OrderProductsPortal = ({
                                     {price ? (
                                         <span className="text-[15px] text-brick font-black tracking-tighter">{price}</span>
                                     ) : (
-                                        <span className="text-[12px] text-primary/30 italic">Liên hệ</span>
+                                        <span className="text-[12px] text-primary/30 italic">Li?n h?</span>
                                     )}
                                 </div>
                             </div>
@@ -186,9 +186,9 @@ const OrderProductsPortal = ({
 
                 {/* Footer */}
                 <div className="px-6 py-3 border-t border-primary/10 bg-primary/5 flex justify-between items-center rounded-b-sm">
-                    <span className="text-[10px] text-primary/40 font-black uppercase tracking-[0.1em]">Nhấn ESC hoặc Click vùng xám để đóng</span>
+                    <span className="text-[10px] text-primary/40 font-black uppercase tracking-[0.1em]">Nh?n ESC ho?c click v?ng x?m ?? ??ng</span>
                     <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-primary/40 font-black uppercase">Tổng sản phẩm:</span>
+                        <span className="text-[10px] text-primary/40 font-black uppercase">T?ng s?n ph?m:</span>
                         <span className="text-[13px] text-primary font-black px-2 py-0.5 bg-white border border-primary/20 rounded-sm">{items.length}</span>
                     </div>
                 </div>
@@ -254,6 +254,41 @@ const formatDateTime = (value) => {
         second: '2-digit',
     })}`;
 };
+
+const ORDER_KIND_META = {
+    official: {
+        label: 'Đơn hàng chính',
+        shortLabel: 'Đơn hàng',
+        icon: 'shopping_cart',
+        badgeClassName: 'border-primary/20 bg-primary/[0.06] text-primary',
+        createTitle: 'Tạo đơn hàng chính thức',
+        listTitle: 'Quản lý đơn hàng',
+        emptyTitle: 'Không tìm thấy đơn hàng nào',
+        emptyDescription: 'Thử thay đổi bộ lọc hoặc từ khóa tìm kiếm',
+    },
+    template: {
+        label: 'Đơn hàng mẫu',
+        shortLabel: 'Đơn mẫu',
+        icon: 'library_books',
+        badgeClassName: 'border-amber-200 bg-amber-50 text-amber-700',
+        createTitle: 'Tạo đơn hàng mẫu',
+        listTitle: 'Đơn hàng mẫu',
+        emptyTitle: 'Chưa có đơn hàng mẫu',
+        emptyDescription: 'Tạo sẵn các bộ báo giá mẫu để dùng lại nhanh',
+    },
+    draft: {
+        label: 'Đơn nháp',
+        shortLabel: 'Đơn nháp',
+        icon: 'draft_orders',
+        badgeClassName: 'border-sky-200 bg-sky-50 text-sky-700',
+        createTitle: 'Tạo đơn nháp',
+        listTitle: 'Đơn nháp',
+        emptyTitle: 'Chưa có đơn nháp',
+        emptyDescription: 'Lưu các đơn đang báo giá dở để mở lại và chốt sau',
+    },
+};
+
+const getOrderKindMeta = (orderKind) => ORDER_KIND_META[orderKind] || ORDER_KIND_META.official;
 
 const inventorySlipToneClasses = {
     emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
@@ -352,7 +387,7 @@ const ShippingDispatchModal = ({
             <div className="relative w-full max-w-4xl rounded-sm bg-white shadow-2xl border border-primary/10 overflow-hidden">
                 <div className="px-6 py-4 border-b border-primary/10 flex items-center justify-between gap-4 bg-primary/[0.02]">
                     <div>
-                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/40">Gửi đơn vị vận chuyển</p>
+                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/40">G?i ??n v? v?n chuy?n</p>
                         <h3 className="text-[18px] font-black text-primary mt-1">Chọn hãng và gửi hàng loạt</h3>
                     </div>
                     <button type="button" onClick={onClose} className="text-primary/30 hover:text-primary">
@@ -362,7 +397,7 @@ const ShippingDispatchModal = ({
                 <div className="p-6 space-y-5">
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                         <div>
-                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Đơn vị vận chuyển</label>
+                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">??n v? v?n chuy?n</label>
                             <div className="grid grid-cols-1 gap-3">
                                 {carriers.map((carrier) => (
                                     <button
@@ -428,11 +463,11 @@ const ShippingDispatchModal = ({
                             <div className="space-y-4">
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                     <div className="rounded-sm border border-green-200 bg-green-50 px-4 py-3">
-                                        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-green-700/60">Có thể gửi</p>
+                                        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-green-700/60">C? th? g?i</p>
                                         <p className="text-[20px] font-black text-green-700 mt-1">{preview.valid_count || 0}</p>
                                     </div>
                                     <div className="rounded-sm border border-red-200 bg-red-50 px-4 py-3">
-                                        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-red-700/60">Lỗi dữ liệu</p>
+                                        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-red-700/60">L?i d? li?u</p>
                                         <p className="text-[20px] font-black text-red-700 mt-1">{preview.invalid_count || 0}</p>
                                     </div>
                                     <div className="rounded-sm border border-primary/10 bg-white px-4 py-3">
@@ -443,11 +478,11 @@ const ShippingDispatchModal = ({
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                     <div className="rounded-sm border border-primary/10 bg-white">
                                         <div className="px-4 py-3 border-b border-primary/10">
-                                            <p className="text-[12px] font-black text-primary uppercase tracking-wide">Đơn hợp lệ</p>
+                                            <p className="text-[12px] font-black text-primary uppercase tracking-wide">??n h?p l?</p>
                                         </div>
                                         <div className="max-h-56 overflow-y-auto custom-scrollbar divide-y divide-primary/10">
                                             {(preview.valid_orders || []).length === 0 ? (
-                                                <div className="px-4 py-6 text-[13px] text-primary/40">Không có đơn hợp lệ.</div>
+                                                <div className="px-4 py-6 text-[13px] text-primary/40">Kh?ng c? ??n h?p l?.</div>
                                             ) : (
                                                 (preview.valid_orders || []).map((item) => (
                                                     <div key={item.id} className="px-4 py-3">
@@ -460,11 +495,11 @@ const ShippingDispatchModal = ({
                                     </div>
                                     <div className="rounded-sm border border-primary/10 bg-white">
                                         <div className="px-4 py-3 border-b border-primary/10">
-                                            <p className="text-[12px] font-black text-primary uppercase tracking-wide">Đơn chưa thể gửi</p>
+                                            <p className="text-[12px] font-black text-primary uppercase tracking-wide">??n ch?a th? g?i</p>
                                         </div>
                                         <div className="max-h-56 overflow-y-auto custom-scrollbar divide-y divide-primary/10">
                                             {(preview.invalid_orders || []).length === 0 ? (
-                                                <div className="px-4 py-6 text-[13px] text-primary/40">Tất cả đơn đã sẵn sàng.</div>
+                                                <div className="px-4 py-6 text-[13px] text-primary/40">T?t c? ??n ?? s?n s?ng.</div>
                                             ) : (
                                                 (preview.invalid_orders || []).map((item) => (
                                                     <div key={item.id} className="px-4 py-3">
@@ -478,7 +513,7 @@ const ShippingDispatchModal = ({
                                 </div>
                             </div>
                         ) : (
-                            <div className="py-10 text-center text-[13px] font-bold text-primary/40">Đang chuẩn bị danh sách đơn gửi vận chuyển...</div>
+                            <div className="py-10 text-center text-[13px] font-bold text-primary/40">?ang chu?n b? danh s?ch ??n g?i v?n chuy?n...</div>
                         )}
                     </div>
                 </div>
@@ -680,6 +715,7 @@ const QuickShipmentModal = ({
 const OrderList = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
+    const location = useLocation();
     const filterRef = useRef(null);
     const columnSettingsRef = useRef(null);
     const [orderStatuses, setOrderStatuses] = useState([]);
@@ -689,7 +725,18 @@ const OrderList = () => {
     const [selectedIds, setSelectedIds] = useState([]);
     const [showFilters, setShowFilters] = useState(false);
     const [showColumnSettings, setShowColumnSettings] = useState(false);
-    const [isTrashView, setIsTrashView] = useState(false);
+    const initialListParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+    const [activeOrderKind, setActiveOrderKind] = useState(() => {
+        const kind = initialListParams.get('kind');
+        return ['official', 'template', 'draft'].includes(kind) ? kind : 'official';
+    });
+    const [isTrashView, setIsTrashView] = useState(() => initialListParams.get('view') === 'trash');
+    const [orderKindCounts, setOrderKindCounts] = useState({
+        official: 0,
+        template: 0,
+        draft: 0,
+        trash: 0,
+    });
     const [copiedText, setCopiedText] = useState(null);
     const [statusMenuOrderId, setStatusMenuOrderId] = useState(null);
     const [productPopupOrderId, setProductPopupOrderId] = useState(null);
@@ -769,6 +816,8 @@ const OrderList = () => {
     } = useTableColumns('order_list', ORDER_TABLE_COLUMNS);
 
     const [hasLoadedOrdersOnce, setHasLoadedOrdersOnce] = useState(false);
+    const isOfficialView = !isTrashView && activeOrderKind === 'official';
+    const currentKindMeta = getOrderKindMeta(activeOrderKind);
     const statusMap = useMemo(
         () => new Map(orderStatuses.map((status) => [String(status.code), status])),
         [orderStatuses]
@@ -819,14 +868,14 @@ const OrderList = () => {
 
             return {
                 id,
-                order_number: order?.order_number || `Đơn #${id}`,
+                order_number: order?.order_number || `??n #${id}`,
                 customer_name: order?.customer_name || '',
                 tracking_number: row.tracking_number ?? '',
                 carrier_name: row.carrier_name ?? '',
                 shipping_cost: row.shipping_cost ?? '',
                 locked: Boolean(activeShipment),
                 locked_message: activeShipment
-                    ? `Đã có vận đơn ${activeShipment.shipment_number || activeShipment.carrier_tracking_code || ''}`.trim()
+                    ? `?? c? v?n ??n ${activeShipment.shipment_number || activeShipment.carrier_tracking_code || ''}`.trim()
                     : '',
             };
         }),
@@ -850,10 +899,17 @@ const OrderList = () => {
             const nextStatuses = bootstrap.order_statuses || [];
             const nextAttributes = bootstrap.order_attributes || [];
             const nextCarriers = bootstrap.connected_carriers || [];
+            const nextKindCounts = bootstrap.order_kind_counts || {};
 
             setOrderStatuses(nextStatuses);
             setAllAttributes(nextAttributes);
             setConnectedCarriers(nextCarriers);
+            setOrderKindCounts({
+                official: Number(nextKindCounts.official || 0),
+                template: Number(nextKindCounts.template || 0),
+                draft: Number(nextKindCounts.draft || 0),
+                trash: Number(nextKindCounts.trash || 0),
+            });
 
             const attrColumns = nextAttributes.map(attr => ({
                 id: `attr_${attr.id}`,
@@ -914,6 +970,7 @@ const OrderList = () => {
                 sort_by: currentSort.direction === 'none' ? 'created_at' : currentSort.key,
                 sort_order: currentSort.direction === 'none' ? 'desc' : currentSort.direction
             };
+            if (!isTrashView) params.order_kind = activeOrderKind;
 
             if (currentFilters.search?.trim()) params.search = currentFilters.search.trim();
             if (currentFilters.status?.length) params.status = currentFilters.status.join(',');
@@ -940,20 +997,37 @@ const OrderList = () => {
             if (controller.signal.aborted) return;
             setOrders(response.data.data);
             setPagination({ current_page: response.data.current_page, last_page: response.data.last_page, total: response.data.total, per_page: response.data.per_page });
+            setOrderKindCounts((previous) => ({
+                ...previous,
+                ...(response.data.order_kind_counts || {}),
+            }));
             setHasLoadedOrdersOnce(true);
         } catch (error) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
             console.error("Error fetching orders", error);
-            setNotification({ type: 'error', message: 'Không thể tải danh sách đơn hàng' });
+            setNotification({ type: 'error', message: 'Kh?ng th? t?i danh s?ch ??n h?ng' });
         } finally {
             if (orderRequestAbortRef.current === controller) {
                 orderRequestAbortRef.current = null;
                 setLoading(false);
             }
         }
-    }, [isTrashView, pagination.per_page, sortConfig, filters]);
+    }, [activeOrderKind, isTrashView, pagination.per_page, sortConfig, filters]);
 
     useEffect(() => { fetchInitialData(); }, []);
+
+    useEffect(() => {
+        const params = new URLSearchParams(location.search);
+        const nextTrashView = params.get('view') === 'trash';
+        const nextKind = params.get('kind');
+
+        setIsTrashView(nextTrashView);
+        if (!nextTrashView && ['official', 'template', 'draft'].includes(nextKind)) {
+            setActiveOrderKind(nextKind);
+        } else if (!nextTrashView && !['official', 'template', 'draft'].includes(nextKind)) {
+            setActiveOrderKind('official');
+        }
+    }, [location.search]);
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -975,9 +1049,9 @@ const OrderList = () => {
         setSelectedIds([]);
         setStatusMenuOrderId(null);
         setProductPopupOrderId(null);
-    }, [isTrashView]);
+    }, [activeOrderKind, isTrashView]);
 
-    useEffect(() => { fetchOrders(1); }, [isTrashView]);
+    useEffect(() => { fetchOrders(1); }, [activeOrderKind, isTrashView]);
 
     useEffect(() => {
         return () => {
@@ -1027,7 +1101,7 @@ const OrderList = () => {
                 playShippingNotificationSound(shippingSoundSettings);
                 setNotification({
                     type: 'error',
-                    message: `${newUnread.length} đơn có cảnh báo vận chuyển mới.`,
+                    message: `${newUnread.length} ??n c? c?nh b?o v?n chuy?n m?i.`,
                 });
             }
             previousUnreadRef.current = unread;
@@ -1068,7 +1142,7 @@ const OrderList = () => {
                 setDispatchPreview(null);
                 setNotification({
                     type: 'error',
-                    message: error.response?.data?.message || 'Không thể tải preview gửi vận chuyển.',
+                    message: error.response?.data?.message || 'Kh?ng th? t?i preview g?i v?n chuy?n.',
                 });
             } finally {
                 setDispatchPreviewLoading(false);
@@ -1155,7 +1229,7 @@ const OrderList = () => {
             setConnectedCarriers(carriers);
             setDispatchWarehouses(warehouses);
             if (!carriers.length) {
-                setNotification({ type: 'error', message: 'Chưa có đơn vị vận chuyển nào được kết nối API.' });
+                setNotification({ type: 'error', message: 'Ch?a c? ??n v? v?n chuy?n n?o ???c k?t n?i API.' });
                 return;
             }
             const fallbackCarrier = carriers.find((carrier) => carrier.carrier_code === selectedCarrierCode) || carriers[0];
@@ -1163,7 +1237,7 @@ const OrderList = () => {
             setSelectedWarehouseId(fallbackCarrier.default_warehouse_id ? String(fallbackCarrier.default_warehouse_id) : '');
             setDispatchModalOpen(true);
         } catch (error) {
-            setNotification({ type: 'error', message: error.response?.data?.message || 'Không thể tải danh sách đơn vị vận chuyển.' });
+            setNotification({ type: 'error', message: error.response?.data?.message || 'Kh?ng th? t?i danh s?ch ??n v? v?n chuy?n.' });
         }
     };
 
@@ -1187,14 +1261,14 @@ const OrderList = () => {
             const firstFailed = results.find((item) => item.success === false && item.message);
             setNotification({
                 type: failed_count > 0 ? 'error' : 'success',
-                message: `Đã gửi ${success_count} đơn sang vận chuyển${failed_count > 0 ? `, ${failed_count} đơn lỗi` : ''}.${firstFailed ? ` ${firstFailed.order_number}: ${firstFailed.message}` : ''}`,
+                message: `?? g?i ${success_count} ??n sang v?n chuy?n${failed_count > 0 ? `, ${failed_count} ??n l?i` : ''}.${firstFailed ? ` ${firstFailed.order_number}: ${firstFailed.message}` : ''}`,
             });
             setSelectedIds([]);
             closeDispatchModal();
             fetchOrders(pagination.current_page);
             fetchShippingAlerts();
         } catch (error) {
-            setNotification({ type: 'error', message: error.response?.data?.message || 'Không thể gửi đơn sang đơn vị vận chuyển.' });
+            setNotification({ type: 'error', message: error.response?.data?.message || 'Kh?ng th? g?i ??n sang ??n v? v?n chuy?n.' });
         } finally {
             setDispatchSubmitting(false);
         }
@@ -1224,7 +1298,7 @@ const OrderList = () => {
         } catch (error) {
             setNotification({
                 type: 'error',
-                message: error.response?.data?.message || 'Không thể tải danh sách đơn vị vận chuyển gợi ý.',
+                message: error.response?.data?.message || 'Kh?ng th? t?i danh s?ch ??n v? v?n chuy?n g?i ?.',
             });
         } finally {
             setQuickDispatchModalOpen(true);
@@ -1257,7 +1331,7 @@ const OrderList = () => {
         if (invalidRow) {
             setNotification({
                 type: 'error',
-                message: 'Vui lòng nhập đầy đủ mã vận đơn, đơn vị vận chuyển và tiền ship hợp lệ cho từng đơn.',
+                message: 'Vui l?ng nh?p ??y ?? m? v?n ??n, ??n v? v?n chuy?n v? ti?n ship h?p l? cho t?ng ??n.',
             });
             return;
         }
@@ -1277,7 +1351,7 @@ const OrderList = () => {
 
             setNotification({
                 type: failedCount > 0 ? 'error' : 'success',
-                message: `Đã gửi vận chuyển nhanh ${successCount} đơn${failedCount > 0 ? `, ${failedCount} đơn lỗi` : ''}.${firstFailed ? ` ${firstFailed.order_number || `#${firstFailed.order_id}`}: ${firstFailed.message}` : ''}`,
+                message: `?? g?i v?n chuy?n nhanh ${successCount} ??n${failedCount > 0 ? `, ${failedCount} ??n l?i` : ''}.${firstFailed ? ` ${firstFailed.order_number || `#${firstFailed.order_id}`}: ${firstFailed.message}` : ''}`,
             });
 
             if (successCount > 0) {
@@ -1296,7 +1370,7 @@ const OrderList = () => {
         } catch (error) {
             setNotification({
                 type: 'error',
-                message: error.response?.data?.message || 'Không thể lưu gửi vận chuyển nhanh.',
+                message: error.response?.data?.message || 'Kh?ng th? l?u g?i v?n chuy?n nhanh.',
             });
         } finally {
             setQuickDispatchSubmitting(false);
@@ -1335,35 +1409,50 @@ const OrderList = () => {
             await orderApi.updateStatus(id, s);
             await fetchOrders(pagination.current_page || 1, filters, pagination.per_page, sortConfig);
             setStatusMenuOrderId(null);
-            setNotification({ type: 'success', message: 'Đã cập nhật trạng thái đơn hàng' });
+            setNotification({ type: 'success', message: '?? c?p nh?t tr?ng th?i ??n h?ng' });
         } catch (e) {
             console.error("Status update error", e);
-            const errorMsg = e.response?.data?.message || 'Lỗi cập nhật trạng thái';
+            const errorMsg = e.response?.data?.message || 'L?i c?p nh?t tr?ng th?i';
             setNotification({ type: 'error', message: errorMsg });
         }
     };
 
-    const handleBulkDuplicate = async () => {
+    const navigateToListView = useCallback((nextKind, options = {}) => {
+        const searchParams = new URLSearchParams();
+        if (options.trash) searchParams.set('view', 'trash');
+        else searchParams.set('kind', nextKind || 'official');
+        navigate(`/admin/orders?${searchParams.toString()}`);
+    }, [navigate]);
+
+    const handleCreateOrder = useCallback(() => {
+        navigate(`/admin/orders/new?kind=${activeOrderKind}`);
+    }, [activeOrderKind, navigate]);
+
+    const openOrderEditor = useCallback((orderId, orderKind = activeOrderKind) => {
+        navigate(`/admin/orders/edit/${orderId}?kind=${orderKind}`);
+    }, [activeOrderKind, navigate]);
+
+    const handleBulkDuplicate = async (targetKind = activeOrderKind) => {
         if (!selectedIds.length) return;
         try {
             setLoading(true);
-            await orderApi.bulkDuplicate(selectedIds);
-            setNotification({ type: 'success', message: `Đã nhân bản ${selectedIds.length} đơn` });
+            await orderApi.bulkDuplicate(selectedIds, targetKind);
+            setNotification({ type: 'success', message: `?? nh?n b?n ${selectedIds.length} ??n` });
             setSelectedIds([]);
             fetchOrders(1);
-        } catch (e) { setNotification({ type: 'error', message: 'Lỗi nhân bản' }); } finally { setLoading(false); }
+        } catch (e) { setNotification({ type: 'error', message: 'L?i nh?n b?n' }); } finally { setLoading(false); }
     };
 
     const handleBulkDelete = async () => {
         if (!selectedIds.length) return;
-        if (!window.confirm("Xóa đơn hàng đã chọn?")) return;
+        if (!window.confirm('X?a ??n h?ng ?? ch?n?')) return;
         try {
             setLoading(true);
             await orderApi.bulkDelete(selectedIds, false);
-            setNotification({ type: 'success', message: `Đã xóa ${selectedIds.length} đơn` });
+            setNotification({ type: 'success', message: `?? x?a ${selectedIds.length} ??n` });
             setSelectedIds([]);
             fetchOrders(1);
-        } catch (e) { setNotification({ type: 'error', message: 'Lỗi xóa' }); } finally { setLoading(false); }
+        } catch (e) { setNotification({ type: 'error', message: 'L?i x?a' }); } finally { setLoading(false); }
     };
 
     const handleBulkRestore = async () => {
@@ -1371,36 +1460,36 @@ const OrderList = () => {
         try {
             setLoading(true);
             await orderApi.bulkRestore(selectedIds);
-            setNotification({ type: 'success', message: `Đã khôi phục ${selectedIds.length} đơn` });
+            setNotification({ type: 'success', message: `?? kh?i ph?c ${selectedIds.length} ??n` });
             setSelectedIds([]);
             fetchOrders(1);
-        } catch (e) { setNotification({ type: 'error', message: 'Lỗi khôi phục' }); } finally { setLoading(false); }
+        } catch (e) { setNotification({ type: 'error', message: 'L?i kh?i ph?c' }); } finally { setLoading(false); }
     };
 
     const handleBulkForceDelete = async () => {
         if (!selectedIds.length) return;
-        if (!window.confirm("Xóa vĩnh viễn?")) return;
+        if (!window.confirm('X?a v?nh vi?n?')) return;
         try {
             setLoading(true);
             await orderApi.bulkDelete(selectedIds, true);
-            setNotification({ type: 'success', message: `Đã xóa vĩnh viễn ${selectedIds.length} đơn` });
+            setNotification({ type: 'success', message: `?? x?a v?nh vi?n ${selectedIds.length} ??n` });
             setSelectedIds([]);
             fetchOrders(1);
-        } catch (e) { setNotification({ type: 'error', message: 'Lỗi xóa' }); } finally { setLoading(false); }
+        } catch (e) { setNotification({ type: 'error', message: 'L?i x?a' }); } finally { setLoading(false); }
     };
 
     const handleMoveOrderToTrash = async (orderId, event) => {
         event?.stopPropagation();
-        if (!window.confirm('Chuyển đơn này vào thùng rác?')) return;
+        if (!window.confirm('Chuy?n ??n n?y v?o th?ng r?c?')) return;
 
         try {
             setLoading(true);
             await orderApi.destroy(orderId);
-            setNotification({ type: 'success', message: 'Đã chuyển đơn vào thùng rác' });
+            setNotification({ type: 'success', message: '?? chuy?n ??n v?o th?ng r?c' });
             setSelectedIds(prev => prev.filter(id => id !== orderId));
             fetchOrders(1);
         } catch (e) {
-            const errorMsg = e.response?.data?.message || 'Lỗi xóa đơn';
+            const errorMsg = e.response?.data?.message || 'L?i x?a ??n';
             setNotification({ type: 'error', message: errorMsg });
         } finally {
             setLoading(false);
@@ -1413,11 +1502,11 @@ const OrderList = () => {
         try {
             setLoading(true);
             await orderApi.restore(orderId);
-            setNotification({ type: 'success', message: 'Đã khôi phục đơn hàng' });
+            setNotification({ type: 'success', message: '?? kh?i ph?c ??n h?ng' });
             setSelectedIds(prev => prev.filter(id => id !== orderId));
             fetchOrders(1);
         } catch (e) {
-            const errorMsg = e.response?.data?.message || 'Lỗi khôi phục đơn';
+            const errorMsg = e.response?.data?.message || 'L?i kh?i ph?c ??n';
             setNotification({ type: 'error', message: errorMsg });
         } finally {
             setLoading(false);
@@ -1426,17 +1515,62 @@ const OrderList = () => {
 
     const handleForceDeleteOrder = async (orderId, event) => {
         event?.stopPropagation();
-        if (!window.confirm('Xóa vĩnh viễn đơn này?')) return;
+        if (!window.confirm('X?a v?nh vi?n ??n n?y?')) return;
 
         try {
             setLoading(true);
             await orderApi.forceDelete(orderId);
-            setNotification({ type: 'success', message: 'Đã xóa vĩnh viễn đơn hàng' });
+            setNotification({ type: 'success', message: '?? x?a v?nh vi?n ??n h?ng' });
             setSelectedIds(prev => prev.filter(id => id !== orderId));
             fetchOrders(1);
         } catch (e) {
-            const errorMsg = e.response?.data?.message || 'Lỗi xóa vĩnh viễn đơn';
+            const errorMsg = e.response?.data?.message || 'L?i x?a v?nh vi?n ??n';
             setNotification({ type: 'error', message: errorMsg });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleBulkConvert = async (targetKind) => {
+        if (!selectedIds.length) return;
+        try {
+            setLoading(true);
+            await orderApi.bulkConvert(selectedIds, targetKind);
+            setNotification({ type: 'success', message: `Đã chuyển ${selectedIds.length} đơn sang ${getOrderKindMeta(targetKind).shortLabel.toLowerCase()}` });
+            setSelectedIds([]);
+            fetchOrders(1);
+        } catch (e) {
+            setNotification({ type: 'error', message: e.response?.data?.message || 'Lỗi chuyển nhóm đơn' });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleDuplicateOrder = async (orderId, targetKind, event) => {
+        event?.stopPropagation();
+        try {
+            setLoading(true);
+            const response = await orderApi.duplicate(orderId, { target_kind: targetKind });
+            setNotification({ type: 'success', message: `Đã nhân bản sang ${getOrderKindMeta(targetKind).shortLabel.toLowerCase()}` });
+            if (response.data?.id) openOrderEditor(response.data.id, targetKind);
+            else fetchOrders(1);
+        } catch (error) {
+            setNotification({ type: 'error', message: error.response?.data?.message || 'Lỗi nhân bản đơn hàng' });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleConvertOrder = async (orderId, targetKind, event) => {
+        event?.stopPropagation();
+        try {
+            setLoading(true);
+            const response = await orderApi.convert(orderId, { target_kind: targetKind });
+            setNotification({ type: 'success', message: `Đã chuyển sang ${getOrderKindMeta(targetKind).shortLabel.toLowerCase()}` });
+            if (response.data?.id) openOrderEditor(response.data.id, targetKind);
+            else fetchOrders(1);
+        } catch (error) {
+            setNotification({ type: 'error', message: error.response?.data?.message || 'Lỗi chuyển nhóm đơn' });
         } finally {
             setLoading(false);
         }
@@ -1475,6 +1609,11 @@ const OrderList = () => {
         return c;
     };
 
+    const listTitle = isTrashView ? 'Thùng rác đơn hàng' : currentKindMeta.listTitle;
+    const emptyTitle = isTrashView ? 'Thùng rác đang trống' : currentKindMeta.emptyTitle;
+    const emptyDescription = isTrashView ? 'Các đơn đã chuyển vào thùng rác sẽ hiển thị tại đây' : currentKindMeta.emptyDescription;
+    const selectedLabel = isTrashView ? 'đơn trong thùng rác' : currentKindMeta.shortLabel.toLowerCase();
+
     return (
         <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full">
             <style>{`
@@ -1502,83 +1641,79 @@ const OrderList = () => {
             )}
 
             <div className="flex-none bg-[#F8FAFC] pb-4 space-y-2">
-                <div className="flex justify-between items-center"><h1 className="admin-header-title italic">{isTrashView ? 'Thùng rác đơn hàng' : 'Quản lý đơn hàng'}</h1><AccountSelector user={user} /></div>
+                <div className="flex justify-between items-center">
+                    <h1 className="admin-header-title italic">{listTitle}</h1>
+                    <AccountSelector user={user} />
+                </div>
 
                 <div className="bg-white border border-primary/10 p-2 shadow-sm rounded-sm flex items-center gap-2">
-                    <div className="flex gap-1 items-center flex-wrap">
-                        {!isTrashView ? (
+                    <div className="flex gap-2 items-center flex-wrap">
+                        {!isTrashView && (
+                            <button type="button" onClick={handleCreateOrder} title={currentKindMeta.createTitle} className="bg-brick text-white p-1.5 rounded-sm w-9 h-9 flex items-center justify-center transition-all hover:bg-umber">
+                                <span className="material-symbols-outlined text-[18px]">add</span>
+                            </button>
+                        )}
+
+                        <div className="flex items-center gap-1 rounded-sm border border-primary/10 bg-[#FCFEFF] p-1">
+                            <button type="button" onClick={() => navigateToListView('official')} title="Đơn hàng chính" className={`relative h-9 w-9 rounded-sm flex items-center justify-center transition-all ${!isTrashView && activeOrderKind === 'official' ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
+                                <span className="material-symbols-outlined text-[18px]">shopping_cart</span>
+                                {Number(orderKindCounts.official || 0) > 0 && <span className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${!isTrashView && activeOrderKind === 'official' ? 'bg-white text-primary' : 'bg-primary text-white'}`}>{orderKindCounts.official}</span>}
+                            </button>
+                            <button type="button" onClick={() => navigateToListView('template')} title="Đơn hàng mẫu" className={`relative h-9 w-9 rounded-sm flex items-center justify-center transition-all ${!isTrashView && activeOrderKind === 'template' ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
+                                <span className="material-symbols-outlined text-[18px]">library_books</span>
+                                {Number(orderKindCounts.template || 0) > 0 && <span className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${!isTrashView && activeOrderKind === 'template' ? 'bg-white text-primary' : 'bg-primary text-white'}`}>{orderKindCounts.template}</span>}
+                            </button>
+                            <button type="button" onClick={() => navigateToListView('draft')} title="Đơn nháp" className={`relative h-9 w-9 rounded-sm flex items-center justify-center transition-all ${!isTrashView && activeOrderKind === 'draft' ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
+                                <span className="material-symbols-outlined text-[18px]">draft_orders</span>
+                                {Number(orderKindCounts.draft || 0) > 0 && <span className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${!isTrashView && activeOrderKind === 'draft' ? 'bg-white text-primary' : 'bg-primary text-white'}`}>{orderKindCounts.draft}</span>}
+                            </button>
+                            <button type="button" onClick={() => navigateToListView('official', { trash: true })} title="Thùng rác" className={`relative h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isTrashView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
+                                <span className="material-symbols-outlined text-[18px]">delete</span>
+                                {Number(orderKindCounts.trash || 0) > 0 && <span className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${isTrashView ? 'bg-white text-primary' : 'bg-primary text-white'}`}>{orderKindCounts.trash}</span>}
+                            </button>
+                        </div>
+
+                        <div className="w-[1px] h-6 bg-primary/20 mx-1"></div>
+
+                        {isTrashView ? (
                             <>
-                                <button onClick={() => navigate('/admin/orders/new')} title="Tạo mới" className="bg-brick text-white p-1.5 rounded-sm w-9 h-9 flex items-center justify-center transition-all hover:bg-umber"><span className="material-symbols-outlined text-[18px]">add</span></button>
-                                <button onClick={handleBulkDuplicate} disabled={selectedIds.length === 0} title="Nhân bản" className={`p-1.5 rounded-sm w-9 h-9 flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary hover:bg-primary hover:text-white shadow-sm' : 'text-primary/30 grayscale opacity-50 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
-                                <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Xóa" className={`h-9 px-3 rounded-sm flex items-center justify-center gap-1.5 transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick hover:bg-brick hover:text-white shadow-sm' : 'text-primary/30 grayscale opacity-50 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete</span><span className="text-[11px] font-black uppercase tracking-wide">Xóa</span></button>
+                                <button onClick={handleBulkRestore} disabled={selectedIds.length === 0} title="Khôi phục" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-green-600/10 text-green-600 border-green-600/20 hover:bg-green-600 hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">restore_from_trash</span></button>
+                                <button onClick={handleBulkForceDelete} disabled={selectedIds.length === 0} title="Xóa vĩnh viễn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_forever</span></button>
                             </>
                         ) : (
                             <>
-                                <button onClick={() => setIsTrashView(false)} title="Về danh sách" className="bg-primary text-white h-9 px-3 rounded-sm flex items-center justify-center gap-1.5 transition-all hover:bg-primary-800"><span className="material-symbols-outlined text-[18px]">arrow_back</span><span className="text-[11px] font-black uppercase tracking-wide">Danh sách</span></button>
-                                <button onClick={handleBulkRestore} disabled={selectedIds.length === 0} title="Khôi phục" className={`h-9 px-3 rounded-sm flex items-center justify-center gap-1.5 transition-all ${selectedIds.length > 0 ? 'bg-green-600/10 text-green-600 hover:bg-green-600 hover:text-white shadow-sm' : 'text-primary/30 grayscale opacity-50 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">restore_from_trash</span><span className="text-[11px] font-black uppercase tracking-wide">Khôi phục</span></button>
-                                <button onClick={handleBulkForceDelete} disabled={selectedIds.length === 0} title="Xóa vĩnh viễn" className={`h-9 px-3 rounded-sm flex items-center justify-center gap-1.5 transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick hover:bg-brick hover:text-white shadow-sm' : 'text-primary/30 grayscale opacity-50 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_forever</span><span className="text-[11px] font-black uppercase tracking-wide">Xóa vĩnh viễn</span></button>
+                                {activeOrderKind === 'official' && <button onClick={() => handleBulkConvert('draft')} disabled={selectedIds.length === 0} title="Chuyển sang đơn nháp" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-700 hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">drive_file_move</span></button>}
+                                {activeOrderKind === 'template' && <>
+                                    <button onClick={() => handleBulkDuplicate('draft')} disabled={selectedIds.length === 0} title="Nhân bản sang đơn nháp" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-700 hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
+                                    <button onClick={() => handleBulkDuplicate('official')} disabled={selectedIds.length === 0} title="Nhân bản sang đơn chính" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary border-primary/20 hover:bg-primary hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">file_open</span></button>
+                                </>}
+                                {activeOrderKind === 'draft' && <button onClick={() => handleBulkConvert('official')} disabled={selectedIds.length === 0} title="Chuyển thành đơn chính" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary border-primary/20 hover:bg-primary hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>}
+                                <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Chuyển vào thùng rác" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete</span></button>
                             </>
                         )}
-                        <div className="w-[1px] h-6 bg-primary/20 mx-1"></div>
-                        {!isTrashView && (
+
+                        {isOfficialView && (
                             <div className="relative" ref={shippingAlertRef}>
-                                <button
-                                    type="button"
-                                    data-shipping-alert-btn
-                                    onClick={() => setShowShippingAlerts((current) => !current)}
-                                    className={`p-1.5 border rounded-sm w-9 h-9 flex items-center justify-center transition-all ${showShippingAlerts || shippingAlertUnread.length > 0 ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`}
-                                    title="Cảnh báo vận chuyển"
-                                >
+                                <button type="button" data-shipping-alert-btn onClick={() => setShowShippingAlerts((current) => !current)} className={`p-1.5 border rounded-sm w-9 h-9 flex items-center justify-center transition-all ${showShippingAlerts || shippingAlertUnread.length > 0 ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`} title="Cảnh báo vận chuyển">
                                     <span className="material-symbols-outlined text-[18px]">notifications_active</span>
-                                    {shippingAlertUnread.length > 0 && (
-                                        <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-brick text-white text-[10px] font-black flex items-center justify-center">
-                                            {shippingAlertUnread.length}
-                                        </span>
-                                    )}
+                                    {shippingAlertUnread.length > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-brick text-white text-[10px] font-black flex items-center justify-center">{shippingAlertUnread.length}</span>}
                                 </button>
-                                {showShippingAlerts && (
-                                    <ShippingAlertsPopover
-                                        alerts={shippingAlerts}
-                                        unreadCount={shippingAlertUnread.length}
-                                        onClose={() => setShowShippingAlerts(false)}
-                                        onOpenOrder={handleOpenShippingAlert}
-                                        onMarkAllSeen={() => markShippingAlertsSeen()}
-                                    />
-                                )}
+                                {showShippingAlerts && <ShippingAlertsPopover alerts={shippingAlerts} unreadCount={shippingAlertUnread.length} onClose={() => setShowShippingAlerts(false)} onOpenOrder={handleOpenShippingAlert} onMarkAllSeen={() => markShippingAlertsSeen()} />}
                             </div>
                         )}
+
                         <button data-filter-btn onClick={() => { if (!showFilters) setTempFilters({ ...filters }); setShowFilters(!showFilters); }} className={`p-1.5 border transition-all rounded-sm w-9 h-9 flex items-center justify-center ${showFilters || activeCount() > 0 ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`} title="Bộ lọc nâng cao"><span className="material-symbols-outlined text-[18px]">filter_alt</span></button>
                         <button onClick={handleRefresh} disabled={loading} title="Làm mới" className="bg-white text-primary border border-primary/20 p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center hover:bg-primary/5"><span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span></button>
                         <button data-column-settings-btn onClick={() => setShowColumnSettings(!showColumnSettings)} className={`p-1.5 border rounded-sm w-9 h-9 flex items-center justify-center transition-all ${showColumnSettings ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/30 hover:bg-primary/5'}`} title="Cấu hình hiển thị cột"><span className="material-symbols-outlined text-[18px]">settings_suggest</span></button>
-                        {!isTrashView && <button onClick={() => setIsTrashView(true)} title="Thùng rác" className="bg-white text-primary/70 border border-primary/20 h-9 px-3 rounded-sm transition-all flex items-center justify-center gap-1.5 hover:text-primary hover:border-primary"><span className="material-symbols-outlined text-[18px]">inventory_2</span><span className="text-[11px] font-black uppercase tracking-wide">Thùng rác</span></button>}
 
-                        {!isTrashView && (
-                            <button
-                                type="button"
-                                onClick={openDispatchModal}
-                                disabled={selectedIds.length === 0}
-                                title="Gửi đơn vị vận chuyển"
-                                className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary text-white border-primary hover:bg-primary/90' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}
-                            >
-                                <span className="material-symbols-outlined text-[18px]">local_shipping</span>
-                            </button>
-                        )}
-
-                        {!isTrashView && (
-                            <button
-                                type="button"
-                                onClick={openQuickDispatchModal}
-                                disabled={selectedIds.length === 0}
-                                title="Gửi vận chuyển nhanh (nhập tay)"
-                                className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}
-                            >
-                                <span className="material-symbols-outlined text-[18px]">flash_on</span>
-                            </button>
-                        )}
+                        {isOfficialView && <>
+                            <button type="button" onClick={openDispatchModal} disabled={selectedIds.length === 0} title="Gửi đơn vị vận chuyển" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary text-white border-primary hover:bg-primary/90' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">local_shipping</span></button>
+                            <button type="button" onClick={openQuickDispatchModal} disabled={selectedIds.length === 0} title="Gửi vận chuyển nhanh" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">flash_on</span></button>
+                        </>}
 
                         {selectedIds.length > 0 && (
                             <div className="flex items-center gap-1 ml-1 pl-2 border-l border-primary/10">
-                                <span className="text-[11px] font-bold text-primary/40 whitespace-nowrap">{selectedIds.length} chọn</span>
+                                <span className="text-[11px] font-bold text-primary/40 whitespace-nowrap">{selectedIds.length} {selectedLabel}</span>
                                 <button onClick={() => setSelectedIds([])} className="p-1 text-primary/40 hover:text-brick" title="Hủy chọn"><span className="material-symbols-outlined text-[16px]">close</span></button>
                             </div>
                         )}
@@ -1587,11 +1722,7 @@ const OrderList = () => {
                     <div className="flex-1 relative" ref={searchContainerRef}>
                         <span className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-primary/40 text-[16px] pointer-events-none z-10">search</span>
                         <input type="text" autoComplete="off" placeholder="Tìm tên, mã, SĐT khách..." className="w-full bg-primary/5 border border-primary/10 px-8 py-1.5 rounded-sm text-[14px] focus:outline-none focus:border-primary/30 transition-all relative z-0" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} onFocus={() => setShowSearchHistory(true)} onKeyDown={(e) => { if (e.key === 'Enter') { setShowSearchHistory(false); addToSearchHistory(filters.search); } }} />
-                        {filters.search && (
-                            <button onClick={() => { setFilters(prev => ({ ...prev, search: '' })); setShowSearchHistory(false); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors">
-                                <span className="material-symbols-outlined text-[16px]">cancel</span>
-                            </button>
-                        )}
+                        {filters.search && <button onClick={() => { setFilters(prev => ({ ...prev, search: '' })); setShowSearchHistory(false); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors"><span className="material-symbols-outlined text-[16px]">cancel</span></button>}
                         {showSearchHistory && searchHistory.length > 0 && (
                             <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[60] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
                                 <div className="flex justify-between items-center px-3 mb-2 border-b border-primary/10 pb-1"><span className="text-[10px] font-bold text-primary/40 uppercase tracking-widest">Tìm kiếm gần đây</span><button onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('order_search_history'); }} className="text-[10px] text-brick hover:underline font-bold">Xóa tất cả</button></div>
@@ -1606,7 +1737,6 @@ const OrderList = () => {
                             </div>
                         )}
                     </div>
-
                 </div>
             </div>
 
@@ -1705,7 +1835,7 @@ const OrderList = () => {
                     </div>
                     {allAttributes.length > 0 && (
                         <div className="mt-8 pt-6 border-t border-primary/10">
-                            <h5 className="text-[15px] font-bold text-[#0F172A] mb-4">Lọc theo thuộc tính</h5>
+                        <h5 className="text-[15px] font-bold text-[#0F172A] mb-4">Lọc theo thuộc tính</h5>
                             <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 border-t border-l border-primary/10 rounded-sm bg-primary/[0.02]">
                                 {allAttributes.map((a) => (
                                     <div key={a.id} className="p-4 space-y-2.5 border-r border-b border-primary/10 relative">
@@ -1740,7 +1870,7 @@ const OrderList = () => {
                                                                 }}
                                                             >
                                                                 <span className="material-symbols-outlined text-[16px]">backspace</span>
-                                                                Xóa các mục đã chọn
+                                    Xóa các mục đã chọn
                                                             </button>
                                                         )}
                                                         {a.options?.length > 0 ? (
@@ -1764,7 +1894,7 @@ const OrderList = () => {
                                                                 </label>
                                                             ))
                                                         ) : (
-                                                            <div className="px-4 py-6 text-center text-stone-400 italic text-[12px]">Không có dữ liệu</div>
+                        <div className="px-4 py-6 text-center text-stone-400 italic text-[12px]">Không có dữ liệu</div>
                                                         )}
                                                     </div>
                                                 </div>
@@ -1798,7 +1928,7 @@ const OrderList = () => {
                     {(filters.created_at_from || filters.created_at_to) && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">Ngày:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.created_at_from || '?'} → {filters.created_at_to || '?'}</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.created_at_from || '?'} â†’ {filters.created_at_to || '?'}</span>
                             <button onClick={() => removeFilter('date')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     )}
@@ -1819,7 +1949,7 @@ const OrderList = () => {
                     {(filters.shipping_dispatched_from || filters.shipping_dispatched_to) && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">Ngày gửi VC:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.shipping_dispatched_from || '?'} â†’ {filters.shipping_dispatched_to || '?'}</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.shipping_dispatched_from || '?'} → {filters.shipping_dispatched_to || '?'}</span>
                             <button onClick={() => removeFilter('shipping_date')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     )}
@@ -1834,7 +1964,7 @@ const OrderList = () => {
                             </div>
                         );
                     })}
-                    <button onClick={handleReset} className="ml-auto text-[13px] font-bold text-brick hover:underline px-2 pr-1 border-primary/20">Xóa tất cả bộ lọc</button>
+                    <button onClick={handleReset} className="ml-auto text-[13px] font-bold text-brick hover:underline px-2 pr-1 border-primary/20">X?a t?t c? b? l?c</button>
                 </div>
             )}
 
@@ -1864,14 +1994,14 @@ const OrderList = () => {
                                 <td colSpan={renderedColumns.length + 1} className="p-12 text-center">
                                     <div className="flex flex-col items-center gap-2 text-primary/40">
                                         <span className="material-symbols-outlined text-[48px]">inventory_2</span>
-                                        <p className="font-bold text-[15px]">{isTrashView ? 'Thùng rác đang trống' : 'Không tìm thấy đơn hàng nào'}</p>
-                                        <p className="text-[13px]">{isTrashView ? 'Các đơn đã chuyển vào thùng rác sẽ hiển thị tại đây' : 'Thử thay đổi bộ lọc hoặc từ khóa tìm kiếm'}</p>
+                                        <p className="font-bold text-[15px]">{emptyTitle}</p>
+                                        <p className="text-[13px]">{emptyDescription}</p>
                                     </div>
                                 </td>
                             </tr>
                         ) : (
                             orders.map(o => (
-                                <tr key={o.id} onDoubleClick={() => { if (!isTrashView) navigate(`/admin/orders/edit/${o.id}`); }} onClick={() => toggleSelectOrder(o.id)} className={`transition-all group cursor-pointer ${selectedIds.includes(o.id) ? 'bg-primary/10' : 'hover:bg-primary/5'}`}>
+                                <tr key={o.id} onDoubleClick={() => { if (!isTrashView) openOrderEditor(o.id, o.order_kind || activeOrderKind); }} onClick={() => toggleSelectOrder(o.id)} className={`transition-all group cursor-pointer ${selectedIds.includes(o.id) ? 'bg-primary/10' : 'hover:bg-primary/5'}`}>
                                     <td className="p-3 border border-primary/20 sticky-col-0 group-hover:bg-primary/5 transition-colors">
                                         <div className="flex items-center">
                                             <input
@@ -1880,7 +2010,7 @@ const OrderList = () => {
                                                 onClick={(e) => e.stopPropagation()}
                                                 onChange={() => toggleSelectOrder(o.id)}
                                                 className="size-4 accent-primary cursor-pointer"
-                                                aria-label={`Chọn đơn ${o.order_number}`}
+                                                aria-label={`Ch?n ??n ${o.order_number}`}
                                             />
                                         </div>
                                     </td>
@@ -1888,7 +2018,16 @@ const OrderList = () => {
                                         const cs = { width: columnWidths[c.id] || c.minWidth };
                                         if (c.id === 'order_number') return (
                                             <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 sticky-col-1 font-mono font-bold text-primary group transition-colors">
-                                                <div className="flex items-center justify-between"><span className="truncate">{o.order_number}</span><button onClick={(e) => handleCopy(o.order_number, e)} className={`opacity-0 group-hover:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === o.order_number ? 'text-green-500 opacity-100' : 'text-primary/20'}`}><span className="material-symbols-outlined text-[14px]">{copiedText === o.order_number ? 'check' : 'content_copy'}</span></button></div>
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="min-w-0 flex flex-col gap-1">
+                                                        <span className="truncate">{o.order_number}</span>
+                                                        <span className={`inline-flex w-fit items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] font-black ${getOrderKindMeta(o.order_kind || 'official').badgeClassName}`}>
+                                                            <span className="material-symbols-outlined text-[11px]">{getOrderKindMeta(o.order_kind || 'official').icon}</span>
+                                                            {getOrderKindMeta(o.order_kind || 'official').shortLabel}
+                                                        </span>
+                                                    </div>
+                                                    <button onClick={(e) => handleCopy(o.order_number, e)} className={`opacity-0 group-hover:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === o.order_number ? 'text-green-500 opacity-100' : 'text-primary/20'}`}><span className="material-symbols-outlined text-[14px]">{copiedText === o.order_number ? 'check' : 'content_copy'}</span></button>
+                                                </div>
                                             </td>
                                         );
                                         if (c.id === 'customer') return (
@@ -2018,6 +2157,18 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'inventory_slips') {
+                                            const normalizedOrderKind = o.order_kind || 'official';
+                                            if (normalizedOrderKind !== 'official') {
+                                                return (
+                                                    <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20">
+                                                        <span className="inline-flex items-center gap-1 rounded-sm border border-primary/10 bg-primary/[0.03] px-2 py-1 text-[11px] font-black text-primary/45">
+                                                            <span className="material-symbols-outlined text-[13px]">inventory_2</span>
+                                                            Không dùng phiếu kho
+                                                        </span>
+                                                    </td>
+                                                );
+                                            }
+
                                             const summary = o.inventory_slip_summary || {
                                                 label: 'Chưa tạo phiếu',
                                                 tone: 'slate',
@@ -2050,32 +2201,23 @@ const OrderList = () => {
                                                             <span className="text-[11px] font-black text-primary/65">
                                                                 {formatNumber(summary.exported_quantity || 0)}/{formatNumber(summary.required_quantity || 0)}
                                                             </span>
-                                                            {(summary.export_slip_count || 0) > 0 && (
-                                                                <span className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] font-black ${inventorySlipChipClasses.export}`}>
-                                                                    PX {formatNumber(summary.export_slip_count)}
-                                                                </span>
-                                                            )}
-                                                            {(summary.return_slip_count || 0) > 0 && (
-                                                                <span className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] font-black ${inventorySlipChipClasses.return}`}>
-                                                                    Hoàn {formatNumber(summary.return_slip_count)}
-                                                                </span>
-                                                            )}
-                                                            {(summary.damaged_slip_count || 0) > 0 && (
-                                                                <span className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] font-black ${inventorySlipChipClasses.damaged}`}>
-                                                                    Hỏng {formatNumber(summary.damaged_slip_count)}
-                                                                </span>
-                                                            )}
+                                                            {(summary.export_slip_count || 0) > 0 && <span className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] font-black ${inventorySlipChipClasses.export}`}>PX {formatNumber(summary.export_slip_count)}</span>}
+                                                            {(summary.return_slip_count || 0) > 0 && <span className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] font-black ${inventorySlipChipClasses.return}`}>Hoàn {formatNumber(summary.return_slip_count)}</span>}
+                                                            {(summary.damaged_slip_count || 0) > 0 && <span className={`inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] font-black ${inventorySlipChipClasses.damaged}`}>Hỏng {formatNumber(summary.damaged_slip_count)}</span>}
                                                         </div>
                                                     </button>
                                                 </td>
                                             );
                                         }
                                         if (c.id === 'status') {
-                                            const statusName = statusMap.get(String(o.status))?.name || o.status;
+                                            const normalizedOrderKind = o.order_kind || 'official';
+                                            const kindMeta = getOrderKindMeta(normalizedOrderKind);
+                                            const isOfficialOrderRow = normalizedOrderKind === 'official';
+                                            const statusName = isOfficialOrderRow ? (statusMap.get(String(o.status))?.name || o.status) : kindMeta.label;
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-left group/status relative">
                                                     <div className="flex items-center justify-start gap-1">
-                                                        {!isTrashView ? (
+                                                        {!isTrashView && isOfficialOrderRow ? (
                                                             <button
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
@@ -2090,10 +2232,8 @@ const OrderList = () => {
                                                                 <span className="material-symbols-outlined text-[16px] leading-none opacity-40 group-hover/status-btn:opacity-100 transition-opacity">expand_more</span>
                                                             </button>
                                                         ) : (
-                                                            <span
-                                                                className="px-2 py-1 rounded-sm text-[11px] font-black border inline-flex items-center gap-1.5 shadow-sm"
-                                                                style={getStatusStyle(o.status)}
-                                                            >
+                                                            <span className={`px-2 py-1 rounded-sm text-[11px] font-black border inline-flex items-center gap-1.5 shadow-sm ${isOfficialOrderRow ? '' : kindMeta.badgeClassName}`} style={isOfficialOrderRow ? getStatusStyle(o.status) : undefined}>
+                                                                {!isOfficialOrderRow && <span className="material-symbols-outlined text-[13px]">{kindMeta.icon}</span>}
                                                                 <span className="truncate">{statusName}</span>
                                                             </span>
                                                         )}
@@ -2105,6 +2245,10 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'shipping_carrier_name') {
+                                            const normalizedOrderKind = o.order_kind || 'official';
+                                            if (normalizedOrderKind !== 'official') {
+                                                return <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary/30 font-bold">-</td>;
+                                            }
                                             const issueMessage = o.shipping_issue_message || o.active_shipment?.problem_message;
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary font-bold">
@@ -2121,6 +2265,10 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'shipping_tracking_code') {
+                                            const normalizedOrderKind = o.order_kind || 'official';
+                                            if (normalizedOrderKind !== 'official') {
+                                                return <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary/30 font-mono font-bold">-</td>;
+                                            }
                                             const trackingCode = o.shipping_tracking_code || o.active_shipment?.carrier_tracking_code || '-';
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 font-mono text-primary font-bold group/tracking">
@@ -2136,6 +2284,10 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'shipping_dispatched_at') {
+                                            const normalizedOrderKind = o.order_kind || 'official';
+                                            if (normalizedOrderKind !== 'official') {
+                                                return <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary/30 font-bold">-</td>;
+                                            }
                                             const dispatchedAt = o.shipping_dispatched_at || o.active_shipment?.shipped_at || null;
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary font-bold">
@@ -2147,7 +2299,13 @@ const OrderList = () => {
                                             <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-right sticky right-0 bg-white group-hover:bg-primary/5"><div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
                                                 {!isTrashView ? (
                                                     <>
-                                                        <button onClick={(e) => { e.stopPropagation(); navigate(`/admin/orders/edit/${o.id}`); }} className="p-1 hover:text-primary" title="Sửa đơn"><span className="material-symbols-outlined text-[18px]">edit</span></button>
+                                                        <button onClick={(e) => { e.stopPropagation(); openOrderEditor(o.id, o.order_kind || activeOrderKind); }} className="p-1 hover:text-primary" title="Sửa đơn"><span className="material-symbols-outlined text-[18px]">edit</span></button>
+                                                        {(o.order_kind || 'official') === 'template' && <>
+                                                            <button onClick={(e) => handleDuplicateOrder(o.id, 'draft', e)} className="p-1 hover:text-sky-700" title="Nhân bản sang đơn nháp"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
+                                                            <button onClick={(e) => handleDuplicateOrder(o.id, 'official', e)} className="p-1 hover:text-primary" title="Nhân bản sang đơn chính"><span className="material-symbols-outlined text-[18px]">file_open</span></button>
+                                                        </>}
+                                                        {(o.order_kind || 'official') === 'draft' && <button onClick={(e) => handleConvertOrder(o.id, 'official', e)} className="p-1 hover:text-primary" title="Chuyển thành đơn chính"><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>}
+                                                        {(o.order_kind || 'official') === 'official' && <button onClick={(e) => handleConvertOrder(o.id, 'draft', e)} className="p-1 hover:text-sky-700" title="Chuyển sang đơn nháp"><span className="material-symbols-outlined text-[18px]">drive_file_move</span></button>}
                                                         <button onClick={(e) => handleMoveOrderToTrash(o.id, e)} className="p-1 hover:text-brick" title="Chuyển vào thùng rác"><span className="material-symbols-outlined text-[18px]">delete</span></button>
                                                     </>
                                                 ) : (

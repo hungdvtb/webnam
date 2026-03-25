@@ -41,7 +41,7 @@ class ProductController extends Controller
             'suppliers:id,name,code',
             'unit:id,name',
             'siteDomain:id,domain,is_active,is_default',
-            'images:id,product_id,image_url,is_primary,file_name,file_size',
+            'images:id,product_id,image_url,is_primary,sort_order,file_name,file_size',
             'superAttributes:id,name,code,frontend_type',
             'superAttributes.options:id,attribute_id,value,swatch_value,order',
             'attributeValues:id,product_id,attribute_id,value',
@@ -51,7 +51,7 @@ class ProductController extends Controller
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
                     ->with([
                         'unit:id,name',
-                        'images:id,product_id,image_url,is_primary',
+                        'images:id,product_id,image_url,is_primary,sort_order',
                         'attributeValues:id,product_id,attribute_id,value',
                         'attributeValues.attribute:id,name,code',
                     ]);
@@ -61,7 +61,7 @@ class ProductController extends Controller
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
-                        'images:id,product_id,image_url,is_primary',
+                        'images:id,product_id,image_url,is_primary,sort_order',
                         'attributeValues:id,product_id,attribute_id,value',
                     ]);
             },
@@ -70,7 +70,7 @@ class ProductController extends Controller
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
-                        'images:id,product_id,image_url,is_primary',
+                        'images:id,product_id,image_url,is_primary,sort_order',
                         'attributeValues:id,product_id,attribute_id,value',
                     ]);
             },
@@ -1255,6 +1255,93 @@ class ProductController extends Controller
         return response()->json($paginated);
     }
 
+    protected function normalizeVideoUrlCandidate(?string $value): string
+    {
+        $normalized = trim(html_entity_decode((string) $value, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+
+        if ($normalized === '') {
+            return '';
+        }
+
+        if (Str::startsWith($normalized, '//')) {
+            return 'https:' . $normalized;
+        }
+
+        if (preg_match('/^(?:www\.|m\.youtube\.com|youtube\.com|youtu\.be|youtube-nocookie\.com)/i', $normalized)) {
+            return 'https://' . ltrim($normalized, '/');
+        }
+
+        return $normalized;
+    }
+
+    protected function extractYouTubeVideoId(?string $value): ?string
+    {
+        $normalized = $this->normalizeVideoUrlCandidate($value);
+
+        if ($normalized === '') {
+            return null;
+        }
+
+        $fallbackMatch = [];
+        preg_match(
+            '/(?:youtube(?:-nocookie)?\.com\/(?:watch\?.*?v=|embed\/|live\/|shorts\/)|youtu\.be\/)([A-Za-z0-9_-]{6,})/i',
+            $normalized,
+            $fallbackMatch
+        );
+
+        $parts = parse_url($normalized);
+
+        if ($parts !== false) {
+            $host = Str::lower((string) ($parts['host'] ?? ''));
+            $path = trim((string) ($parts['path'] ?? ''), '/');
+
+            if (Str::contains($host, 'youtu.be') && $path !== '') {
+                $segments = explode('/', $path);
+
+                return $segments[0] ?: ($fallbackMatch[1] ?? null);
+            }
+
+            if (Str::contains($host, 'youtube.com') || Str::contains($host, 'youtube-nocookie.com')) {
+                if (!empty($parts['query'])) {
+                    parse_str($parts['query'], $queryParams);
+
+                    if (!empty($queryParams['v'])) {
+                        return (string) $queryParams['v'];
+                    }
+                }
+
+                $segments = array_values(array_filter(explode('/', $path)));
+                $embedIndex = array_search('embed', $segments, true);
+                $liveIndex = array_search('live', $segments, true);
+                $shortsIndex = array_search('shorts', $segments, true);
+                $targetIndex = $embedIndex !== false ? $embedIndex : ($liveIndex !== false ? $liveIndex : $shortsIndex);
+
+                if ($targetIndex !== false && !empty($segments[$targetIndex + 1])) {
+                    return $segments[$targetIndex + 1];
+                }
+            }
+        }
+
+        return $fallbackMatch[1] ?? null;
+    }
+
+    protected function normalizeVideoUrl(?string $value): ?string
+    {
+        $normalized = $this->normalizeVideoUrlCandidate($value);
+
+        if ($normalized === '') {
+            return null;
+        }
+
+        $videoId = $this->extractYouTubeVideoId($normalized);
+
+        if ($videoId) {
+            return 'https://www.youtube.com/watch?v=' . $videoId;
+        }
+
+        return $normalized;
+    }
+
 
     /**
      * Store a newly created resource in storage.
@@ -1285,7 +1372,7 @@ class ProductController extends Controller
             'meta_keywords' => 'nullable|string',
             'specifications' => 'nullable|string',
             'status' => 'nullable|boolean',
-            'video_url' => 'nullable|string',
+            'video_url' => 'nullable|string|max:2048',
             'slug' => 'nullable|string|max:255|unique:products,slug',
             'bundle_title' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
@@ -1331,6 +1418,7 @@ class ProductController extends Controller
         $validated['slug'] = $this->productSkuService->generateUniqueSlug(
             !empty($validated['slug']) ? $validated['slug'] : $validated['name']
         );
+        $validated['video_url'] = $this->normalizeVideoUrl($validated['video_url'] ?? null);
 
         $supplierIds = $this->normalizeSupplierIds($request, $validated);
         $validated['supplier_id'] = $supplierIds[0] ?? null;
@@ -1691,7 +1779,7 @@ class ProductController extends Controller
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
             'specifications' => 'nullable|string',
-            'video_url' => 'nullable|string',
+            'video_url' => 'nullable|string|max:2048',
             'slug' => 'nullable|string|max:255|unique:products,slug,' . $id,
             'bundle_title' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
@@ -1749,6 +1837,10 @@ class ProductController extends Controller
                 !empty($validated['slug']) ? $validated['slug'] : ($validated['name'] ?? $product->name),
                 $product->id
             );
+        }
+
+        if ($request->has('video_url') || array_key_exists('video_url', $validated)) {
+            $validated['video_url'] = $this->normalizeVideoUrl($validated['video_url'] ?? null);
         }
 
         try {
@@ -2069,6 +2161,7 @@ class ProductController extends Controller
                 $clone->slug = $this->productSkuService->generateUniqueSlug($clone->name);
                 $clone->status = false;
                 $clone->is_new = true;
+                $this->productSkuService->resetInventoryDerivedState($clone);
                 $clone->save();
 
                 $this->syncProductSuppliers($clone, $originalSupplierIds);
@@ -2104,7 +2197,7 @@ class ProductController extends Controller
                         'is_required' => $groupedItem->pivot->is_required ?? true,
                         'variant_id' => $groupedItem->pivot->variant_id ?? null,
                         'price' => $groupedItem->pivot->price ?? null,
-                        'cost_price' => $groupedItem->pivot->cost_price ?? null,
+                        'cost_price' => null,
                     ]);
                 }
 
@@ -2119,7 +2212,7 @@ class ProductController extends Controller
                         'is_default' => $bundleItem->pivot->is_default ?? false,
                         'variant_id' => $bundleItem->pivot->variant_id ?? null,
                         'price' => $bundleItem->pivot->price ?? null,
-                        'cost_price' => $bundleItem->pivot->cost_price ?? null,
+                        'cost_price' => null,
                     ]);
                 }
 

@@ -122,6 +122,7 @@ class ProductSkuService
         $newVariant->sku = $this->generateVariantSku((string) $parent->sku);
         $newVariant->slug = $this->generateUniqueSlug($sourceVariant->slug ?: $sourceVariant->name ?: $newVariant->sku);
         $newVariant->deleted_at = null;
+        $this->resetInventoryDerivedState($newVariant);
         $newVariant->save();
 
         $this->copyProductDecorators($sourceVariant, $newVariant);
@@ -136,6 +137,17 @@ class ProductSkuService
         }
 
         return $newVariant;
+    }
+
+    public function resetInventoryDerivedState(Product $product): Product
+    {
+        $product->forceFill([
+            'cost_price' => null,
+            'stock_quantity' => 0,
+            'damaged_quantity' => 0,
+        ]);
+
+        return $product;
     }
 
     public function copyProductDecorators(Product $source, Product $target): void

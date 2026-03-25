@@ -3,6 +3,7 @@ import config from './config';
 const ABSOLUTE_URL_PATTERN = /^(https?:)?\/\//i;
 const DATA_URL_PATTERN = /^data:image\//i;
 const BLOB_URL_PATTERN = /^blob:/i;
+const YOUTUBE_DIRECT_URL_PATTERN = /^(?:www\.|m\.youtube\.com|youtube\.com|youtu\.be|youtube-nocookie\.com)/i;
 
 const normalizeMediaCandidate = (value) => {
   const normalized = String(value || '').trim();
@@ -16,6 +17,24 @@ const normalizeMediaCandidate = (value) => {
     /^javascript:/i.test(normalized)
   ) {
     return '';
+  }
+
+  return normalized;
+};
+
+const normalizeVideoCandidate = (value) => {
+  const normalized = normalizeMediaCandidate(value).replace(/&amp;/gi, '&');
+
+  if (!normalized) {
+    return '';
+  }
+
+  if (normalized.startsWith('//')) {
+    return `https:${normalized}`;
+  }
+
+  if (YOUTUBE_DIRECT_URL_PATTERN.test(normalized)) {
+    return `https://${normalized.replace(/^\/+/, '')}`;
   }
 
   return normalized;
@@ -82,8 +101,55 @@ export const resolveImageObjectUrl = (image, fallback = '') => {
   return fallback;
 };
 
+export const resolveYouTubeVideoId = (value) => {
+  const normalized = normalizeVideoCandidate(value);
+
+  if (!normalized) {
+    return '';
+  }
+
+  const fallbackMatch = normalized.match(
+    /(?:youtube(?:-nocookie)?\.com\/(?:watch\?.*?v=|embed\/|live\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{6,})/i
+  );
+
+  try {
+    const parsedUrl = new URL(normalized);
+    const host = parsedUrl.hostname.toLowerCase();
+    const pathSegments = parsedUrl.pathname.split('/').filter(Boolean);
+
+    if (host.includes('youtu.be')) {
+      return pathSegments[0] || fallbackMatch?.[1] || '';
+    }
+
+    if (host.includes('youtube.com') || host.includes('youtube-nocookie.com')) {
+      if (parsedUrl.searchParams.has('v')) {
+        return parsedUrl.searchParams.get('v') || fallbackMatch?.[1] || '';
+      }
+
+      const embedIndex = pathSegments.findIndex((segment) => ['embed', 'live', 'shorts'].includes(segment));
+      if (embedIndex >= 0 && pathSegments[embedIndex + 1]) {
+        return pathSegments[embedIndex + 1];
+      }
+    }
+  } catch {
+    return fallbackMatch?.[1] || '';
+  }
+
+  return fallbackMatch?.[1] || '';
+};
+
+export const resolveVideoThumbnailUrl = (value) => {
+  const youtubeVideoId = resolveYouTubeVideoId(value);
+
+  if (!youtubeVideoId) {
+    return '';
+  }
+
+  return `https://i.ytimg.com/vi/${youtubeVideoId}/hqdefault.jpg`;
+};
+
 export const resolveVideoEmbedUrl = (value) => {
-  const normalized = normalizeMediaCandidate(value);
+  const normalized = normalizeVideoCandidate(value);
 
   if (!normalized) {
     return '';
@@ -117,17 +183,7 @@ export const resolveVideoEmbedUrl = (value) => {
     return appendPlayerParams(normalized);
   }
 
-  let youtubeVideoId = '';
-
-  if (/youtube\.com\/watch\?v=/i.test(normalized)) {
-    youtubeVideoId = normalized.split('v=')[1]?.split('&')[0] || '';
-  } else if (/youtu\.be\//i.test(normalized)) {
-    youtubeVideoId = normalized.split('youtu.be/')[1]?.split('?')[0] || '';
-  } else if (/youtube\.com\/live\//i.test(normalized)) {
-    youtubeVideoId = normalized.split('live/')[1]?.split('?')[0] || '';
-  } else if (/youtube\.com\/shorts\//i.test(normalized)) {
-    youtubeVideoId = normalized.split('shorts/')[1]?.split('?')[0] || '';
-  }
+  const youtubeVideoId = resolveYouTubeVideoId(normalized);
 
   if (youtubeVideoId) {
     return appendPlayerParams(`https://www.youtube.com/embed/${youtubeVideoId}`);

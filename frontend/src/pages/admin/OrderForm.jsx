@@ -234,6 +234,37 @@ const scoreProductSearchResult = (product, rawTerm) => {
 };
 const formatQuoteMoney = (value) => `${quoteCurrencyFormatter.format(Number(value) || 0)} đ`;
 const quoteCanvasPageWidth = 1200;
+const ORDER_KIND_META = {
+    official: {
+        label: 'Đơn hàng chính',
+        shortLabel: 'Đơn hàng',
+        icon: 'shopping_cart',
+        submitLabel: 'Lưu đơn hàng',
+        createTitle: 'Tạo đơn hàng mới',
+        editTitle: 'Chỉnh sửa đơn hàng',
+        listQuery: 'kind=official',
+    },
+    template: {
+        label: 'Đơn hàng mẫu',
+        shortLabel: 'Đơn mẫu',
+        icon: 'library_books',
+        submitLabel: 'Lưu đơn mẫu',
+        createTitle: 'Tạo đơn hàng mẫu',
+        editTitle: 'Chỉnh sửa đơn mẫu',
+        listQuery: 'kind=template',
+    },
+    draft: {
+        label: 'Đơn nháp',
+        shortLabel: 'Đơn nháp',
+        icon: 'draft_orders',
+        submitLabel: 'Lưu đơn nháp',
+        createTitle: 'Tạo đơn nháp',
+        editTitle: 'Chỉnh sửa đơn nháp',
+        listQuery: 'kind=draft',
+    },
+};
+
+const getOrderKindMeta = (orderKind) => ORDER_KIND_META[orderKind] || ORDER_KIND_META.official;
 
 const waitForNodeImages = async (node) => {
     if (!node) return;
@@ -515,6 +546,7 @@ const OrderForm = () => {
     const duplicateFromId = queryParams.get('duplicate_from');
     const leadId = queryParams.get('lead_id');
     const returnTo = queryParams.get('return_to');
+    const kindFromQuery = queryParams.get('kind');
     const isEdit = !!id;
     const navigate = useNavigate();
     const { user } = useAuth();
@@ -522,6 +554,8 @@ const OrderForm = () => {
 
     const [loading, setLoading] = useState(isEdit || !!duplicateFromId);
     const [saving, setSaving] = useState(false);
+    const [orderKind, setOrderKind] = useState(() => ['official', 'template', 'draft'].includes(kindFromQuery) ? kindFromQuery : 'official');
+    const orderKindMeta = getOrderKindMeta(orderKind);
     const [products, setProducts] = useState([]);
     const [attributes, setAttributes] = useState([]);
     const [orderStatuses, setOrderStatuses] = useState([]);
@@ -579,8 +613,8 @@ const OrderForm = () => {
             return;
         }
 
-        navigate('/admin/orders');
-    }, [leadId, navigate, returnTo]);
+        navigate(`/admin/orders?${orderKindMeta.listQuery}`);
+    }, [leadId, navigate, orderKindMeta.listQuery, returnTo]);
 
     const COLUMN_DEFS = {
         stt: { label: 'STT', width: 'w-12', align: 'center' },
@@ -651,7 +685,6 @@ const OrderForm = () => {
     const useNewAddress = regionType === 'new';
     const isWardsLoading = false;
     const isDistrictsLoading = false;
-
     useEffect(() => {
         if (productQuickFilterAttributes.length === 0) {
             return;
@@ -1111,6 +1144,7 @@ const OrderForm = () => {
             setLoading(true);
             const response = await orderApi.getOne(targetId);
             const order = response.data;
+            const nextOrderKind = ['official', 'template', 'draft'].includes(order.order_kind) ? order.order_kind : 'official';
 
             const customAttrValues = {};
             order.attribute_values?.forEach(av => {
@@ -1124,6 +1158,7 @@ const OrderForm = () => {
                 }
             });
 
+            setOrderKind(isDuplicating && ['official', 'template', 'draft'].includes(kindFromQuery) ? kindFromQuery : nextOrderKind);
             setRegionType(order.district ? 'old' : 'new');
             setFormData({
                 customer_name: order.customer_name || '',
@@ -1254,6 +1289,48 @@ const OrderForm = () => {
             setLoading(false);
         }
     }, [duplicateFromId, fetchInitialData, id, isEdit, leadId]);
+
+    const handleDuplicateCurrentOrder = useCallback(async (targetKind) => {
+        if (!id) return;
+
+        try {
+            setSaving(true);
+            const response = await orderApi.duplicate(id, { target_kind: targetKind });
+            const duplicatedOrder = response?.data;
+            if (duplicatedOrder?.id) {
+                navigate(`/admin/orders/edit/${duplicatedOrder.id}?kind=${targetKind}`);
+            }
+        } catch (error) {
+            alert(error.response?.data?.message || 'Không thể nhân bản đơn hiện tại.');
+        } finally {
+            setSaving(false);
+        }
+    }, [id, navigate]);
+
+    const handleConvertCurrentOrder = useCallback(async (targetKind) => {
+        if (!id) return;
+
+        try {
+            setSaving(true);
+            const response = await orderApi.convert(id, {
+                target_kind: targetKind,
+                region_type: regionType,
+                province: formData.province,
+                district: formData.district,
+                ward: formData.ward,
+                shipping_address: formData.shipping_address,
+            });
+            const convertedOrder = response?.data;
+            if (convertedOrder?.id) {
+                setOrderKind(targetKind);
+                navigate(`/admin/orders/edit/${convertedOrder.id}?kind=${targetKind}`);
+            }
+        } catch (error) {
+            alert(error.response?.data?.message || 'Không thể chuyển loại đơn hiện tại.');
+        } finally {
+            setSaving(false);
+        }
+    }, [formData.district, formData.province, formData.shipping_address, formData.ward, id, navigate, regionType]);
 
     const handleInputChange = (e) => {
         const { name, value } = e.target;
@@ -1790,13 +1867,13 @@ const OrderForm = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        
-        // Validate location
+        const isOfficialOrder = orderKind === 'official';
+
         const isLocValid = regionType === 'new'
             ? (formData.province && formData.ward)
             : (formData.province && formData.district && formData.ward);
 
-        if (!isLocValid) {
+        if (isOfficialOrder && !isLocValid) {
             alert(regionType === 'new' ? 'Vui lòng chọn Tỉnh/Thành phố và Phường/Xã.' : 'Vui lòng chọn đầy đủ Tỉnh, Quận và Phường.');
             return;
         }
@@ -1810,13 +1887,13 @@ const OrderForm = () => {
         });
         const effectiveAddressDetail = normalizedAddressDetail || formData.address_detail.trim() || formData.shipping_address.trim();
 
-        if (!effectiveAddressDetail) {
+        if (isOfficialOrder && !effectiveAddressDetail) {
             alert('Vui lòng nhập địa chỉ giao hàng.');
             return;
         }
 
         if (formData.customer_phone && !validateVietnamesePhone(formData.customer_phone)) {
-            alert('Số điện thoại không hợp lệ.');
+            alert('S? ?i?n tho?i kh?ng h?p l?.');
             return;
         }
 
@@ -1824,15 +1901,19 @@ const OrderForm = () => {
         try {
             const payload = {
                 ...formData,
+                order_kind: orderKind,
+                region_type: regionType,
                 lead_id: leadId ? Number(leadId) : undefined,
                 address_detail: effectiveAddressDetail,
-                shipping_address: buildShippingAddress({
-                    addressDetail: effectiveAddressDetail,
-                    ward: formData.ward,
-                    district: formData.district,
-                    province: formData.province,
-                    regionType
-                }),
+                shipping_address: isOfficialOrder
+                    ? buildShippingAddress({
+                        addressDetail: effectiveAddressDetail,
+                        ward: formData.ward,
+                        district: formData.district,
+                        province: formData.province,
+                        regionType
+                    })
+                    : (formData.shipping_address || effectiveAddressDetail || ''),
                 custom_attributes: {
                     ...formData.custom_attributes,
                     region_type: regionType === 'new' ? 'Địa giới mới' : 'Địa giới cũ',
@@ -1856,23 +1937,23 @@ const OrderForm = () => {
                         leadId: Number(leadId),
                         orderId: savedOrder?.id || null,
                         orderNumber: savedOrder?.order_number || '',
-                        latestNoteExcerpt: savedOrder?.order_number ? `Đã tạo đơn hàng ${savedOrder.order_number}` : '',
+                        latestNoteExcerpt: savedOrder?.order_number ? 'Đã tạo đơn hàng ' + savedOrder.order_number : '',
                         nextStatusCode: 'da-tao-don',
                         updatedAt: new Date().toISOString(),
                     });
                 }
                 navigateBackToLead();
             } else {
-                navigate('/admin/orders');
+                navigate('/admin/orders?' + orderKindMeta.listQuery);
             }
         } catch (error) {
-            console.error("Error saving order:", error);
+            console.error('Error saving order:', error);
             if (error.response?.data?.errors) {
                 console.table(error.response.data.errors);
                 const firstError = Object.values(error.response.data.errors)[0][0];
-                alert(`Lỗi: ${firstError}`);
+                alert('L?i: ' + firstError);
             } else {
-                alert("Có lỗi xảy ra khi lưu đơn hàng. Vui lòng kiểm tra console để biết chi tiết.");
+                alert('Có lỗi xảy ra khi lưu đơn hàng. Vui lòng kiểm tra console để biết chi tiết.');
             }
         } finally {
             setSaving(false);
@@ -1981,68 +2062,55 @@ const OrderForm = () => {
             )}
             <div className="flex-none bg-[#F8FAFC] pb-4 space-y-2">
                 <div className="flex justify-between items-center">
-                <div className="flex items-center gap-3">
-                    <button
-                        onClick={handleCancel}
-                        className="size-9 flex items-center justify-center bg-white border border-primary/10 text-primary/50 hover:text-brick hover:border-brick/20 rounded-sm shadow-sm transition-all"
-                        title="Quay lại"
-                    >
-                        <span className="material-symbols-outlined text-[18px]">arrow_back</span>
-                    </button>
-                    <div>
-                        <h1 className="admin-header-title italic">
-                            {isEdit ? "Chỉnh sửa đơn hàng" : "Tạo đơn hàng mới"}
-                        </h1>
-                        <p className="font-sans text-[12px] font-medium text-primary/40">Trang quản trị / Đơn hàng / {isEdit ? `Chi tiết #${id}` : "Thêm mới"}</p>
-                    </div>
-                </div>
-
-                {/* Close/Action buttons like OrderList */}
-                <div className="flex items-center gap-2">
-                     <button
-                        type="button"
-                        onClick={handleCancel}
-                        className="px-4 h-9 bg-white border border-primary/10 text-primary/60 hover:text-brick text-[12px] font-semibold rounded-sm transition-all"
-                    >
-                        Hủy thoát
-                    </button>
-                    <button
-                        type="submit"
-                        form="order-form"
-                        disabled={saving}
-                        className="bg-primary text-white px-4 h-9 rounded-sm text-[12px] font-semibold hover:bg-brick transition-all shadow-sm flex items-center gap-2"
-                    >
-                        <span className={`material-symbols-outlined text-base ${saving ? 'animate-spin' : ''}`}>
-                            {saving ? 'progress_activity' : 'save'}
-                        </span>
-                        {saving ? 'Đang lưu' : 'Lưu dữ liệu'}
-                    </button>
-                </div>
-            </div>
-
-                <div className="hidden bg-white border border-primary/10 p-2 shadow-sm rounded-sm flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                        <span className="material-symbols-outlined text-[18px] text-primary/40">receipt_long</span>
-                        <span className="text-[13px] font-bold text-primary">Biên tập đơn hàng</span>
-                    </div>
-                    <div className="flex lg:hidden items-center gap-2">
+                    <div className="flex items-center gap-3">
                         <button
-                            type="button"
                             onClick={handleCancel}
-                            className="px-3 h-9 bg-white border border-primary/10 text-primary/60 hover:text-brick text-[12px] font-semibold rounded-sm transition-all"
+                            className="size-9 flex items-center justify-center bg-white border border-primary/10 text-primary/50 hover:text-brick hover:border-brick/20 rounded-sm shadow-sm transition-all"
+                            title="Quay lại"
                         >
-                            Hủy
+                            <span className="material-symbols-outlined text-[18px]">arrow_back</span>
                         </button>
-                        <button
-                            type="submit"
-                            form="order-form"
-                            disabled={saving}
-                            className="bg-primary text-white px-3 h-9 rounded-sm text-[12px] font-semibold hover:bg-brick transition-all shadow-sm flex items-center gap-2"
-                        >
-                            <span className={`material-symbols-outlined text-[16px] ${saving ? 'animate-spin' : ''}`}>
+                        <div>
+                            <div className="flex items-center gap-2 mb-1.5">
+                                <h1 className="admin-header-title italic">{isEdit ? orderKindMeta.editTitle : orderKindMeta.createTitle}</h1>
+                                <span className="inline-flex items-center gap-1 rounded-sm border border-primary/15 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-primary/70 shadow-sm">
+                                    <span className="material-symbols-outlined text-[12px]">{orderKindMeta.icon}</span>
+                                    {orderKindMeta.shortLabel}
+                                </span>
+                            </div>
+                            <p className="font-sans text-[12px] font-medium text-primary/40">Trang quản trị / Đơn hàng / {isEdit ? ('Chi tiết #' + id) : orderKindMeta.shortLabel}</p>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap justify-end">
+                        {isEdit && orderKind === 'template' && (
+                            <>
+                                <button type="button" onClick={() => handleDuplicateCurrentOrder('draft')} className="px-3 h-9 bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-700 hover:text-white text-[12px] font-semibold rounded-sm transition-all">
+                                    Tạo đơn nháp
+                                </button>
+                                <button type="button" onClick={() => handleDuplicateCurrentOrder('official')} className="px-3 h-9 bg-white border border-primary/10 text-primary hover:bg-primary hover:text-white text-[12px] font-semibold rounded-sm transition-all">
+                                    Tạo đơn chính
+                                </button>
+                            </>
+                        )}
+                        {isEdit && orderKind === 'draft' && (
+                            <button type="button" onClick={() => handleConvertCurrentOrder('official')} className="px-3 h-9 bg-white border border-primary/10 text-primary hover:bg-primary hover:text-white text-[12px] font-semibold rounded-sm transition-all">
+                                Chốt thành đơn chính
+                            </button>
+                        )}
+                        {isEdit && orderKind === 'official' && (
+                            <button type="button" onClick={() => handleConvertCurrentOrder('draft')} className="px-3 h-9 bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-700 hover:text-white text-[12px] font-semibold rounded-sm transition-all">
+                                Chuyển sang đơn nháp
+                            </button>
+                        )}
+                        <button type="button" onClick={handleCancel} className="px-4 h-9 bg-white border border-primary/10 text-primary/60 hover:text-brick text-[12px] font-semibold rounded-sm transition-all">
+                            Hủy thoát
+                        </button>
+                        <button type="submit" form="order-form" disabled={saving} className="bg-primary text-white px-4 h-9 rounded-sm text-[12px] font-semibold hover:bg-brick transition-all shadow-sm flex items-center gap-2">
+                            <span className={`material-symbols-outlined text-base ${saving ? 'animate-spin' : ''}`}>
                                 {saving ? 'progress_activity' : 'save'}
                             </span>
-                            Lưu
+                            {saving ? 'Đang lưu' : orderKindMeta.submitLabel}
                         </button>
                     </div>
                 </div>

@@ -117,6 +117,115 @@ class ProductSkuIntegrityTest extends TestCase
         ], $cloneVariantSkus);
     }
 
+    public function test_duplicate_resets_inventory_derived_fields_for_parent_and_cloned_variants(): void
+    {
+        $account = $this->authenticate();
+
+        $product = $this->createProduct($account, [
+            'type' => 'configurable',
+            'name' => 'Bo am tra men hoa',
+            'sku' => 'AM-TRA-01',
+            'expected_cost' => 110000,
+            'cost_price' => 125000,
+            'stock_quantity' => 9,
+            'damaged_quantity' => 2,
+        ]);
+
+        $variantA = $this->createProduct($account, [
+            'name' => 'Bo am tra men hoa - Nho',
+            'sku' => 'AM-TRA-01-V1',
+            'expected_cost' => 45000,
+            'cost_price' => 51000,
+            'stock_quantity' => 5,
+            'damaged_quantity' => 1,
+        ]);
+
+        $variantB = $this->createProduct($account, [
+            'name' => 'Bo am tra men hoa - Lon',
+            'sku' => 'AM-TRA-01-V2',
+            'expected_cost' => 65000,
+            'cost_price' => 72000,
+            'stock_quantity' => 7,
+            'damaged_quantity' => 3,
+        ]);
+
+        $product->linkedProducts()->attach($variantA->id, ['link_type' => 'super_link', 'position' => 0]);
+        $product->linkedProducts()->attach($variantB->id, ['link_type' => 'super_link', 'position' => 1]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->post("/api/products/{$product->id}/duplicate");
+
+        $response->assertOk();
+
+        $payloadVariants = collect($response->json('data.linked_products', []))
+            ->filter(fn (array $item) => data_get($item, 'pivot.link_type') === 'super_link')
+            ->sortBy('sku')
+            ->values();
+
+        $clone = Product::withoutGlobalScopes()
+            ->with('variations')
+            ->findOrFail((int) ($response->json('data.id') ?? $response->json('id')));
+
+        $cloneVariations = $clone->variations->sortBy('sku')->values();
+
+        $this->assertNull($clone->cost_price);
+        $this->assertSame(0, (int) $clone->stock_quantity);
+        $this->assertSame(0, (int) ($clone->damaged_quantity ?? 0));
+        $this->assertSame(110000.0, (float) $clone->expected_cost);
+        $this->assertNull($response->json('data.cost_price'));
+
+        $this->assertCount(2, $cloneVariations);
+        $this->assertSame([45000.0, 65000.0], $cloneVariations->pluck('expected_cost')->map(fn ($value) => (float) $value)->all());
+        $this->assertSame([null, null], $cloneVariations->pluck('cost_price')->all());
+        $this->assertSame([0, 0], $cloneVariations->pluck('stock_quantity')->map(fn ($value) => (int) $value)->all());
+        $this->assertSame([0, 0], $cloneVariations->pluck('damaged_quantity')->map(fn ($value) => (int) ($value ?? 0))->all());
+        $this->assertCount(2, $payloadVariants);
+        $this->assertSame([null, null], $payloadVariants->pluck('cost_price')->all());
+    }
+
+    public function test_duplicate_resets_snapshot_cost_for_bundle_items(): void
+    {
+        $account = $this->authenticate();
+
+        $product = $this->createProduct($account, [
+            'type' => 'bundle',
+            'name' => 'Set qua tang gom',
+            'sku' => 'BUNDLE-01',
+        ]);
+
+        $bundleItem = $this->createProduct($account, [
+            'name' => 'Chen su cao cap',
+            'sku' => 'CHEN-SU-01',
+            'cost_price' => 42000,
+        ]);
+
+        $product->bundleItems()->attach($bundleItem->id, [
+            'link_type' => 'bundle',
+            'position' => 0,
+            'quantity' => 1,
+            'is_required' => true,
+            'option_title' => 'Mac dinh',
+            'is_default' => true,
+            'price' => 89000,
+            'cost_price' => 42000,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->post("/api/products/{$product->id}/duplicate");
+
+        $response->assertOk();
+
+        $clone = Product::withoutGlobalScopes()
+            ->with('bundleItems')
+            ->findOrFail((int) ($response->json('data.id') ?? $response->json('id')));
+
+        $this->assertCount(1, $clone->bundleItems);
+        $this->assertSame([null], $clone->bundleItems->pluck('pivot.cost_price')->all());
+        $this->assertNull(data_get($response->json('data.bundle_items.0'), 'pivot.cost_price'));
+    }
+
     public function test_repair_legacy_integrity_clones_shared_variants_for_each_parent(): void
     {
         $account = $this->authenticate();

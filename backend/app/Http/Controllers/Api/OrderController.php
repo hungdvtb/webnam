@@ -35,6 +35,7 @@ use Illuminate\Validation\ValidationException;
 class OrderController extends Controller
 {
     private const BOOTSTRAP_CACHE_TTL_SECONDS = 15;
+    private const SHIPPING_STATUS_SOURCE_MANUAL = 'manual';
     private const ORDER_KIND_OFFICIAL = Order::KIND_OFFICIAL;
     private const ORDER_KIND_TEMPLATE = Order::KIND_TEMPLATE;
     private const ORDER_KIND_DRAFT = Order::KIND_DRAFT;
@@ -54,6 +55,70 @@ class OrderController extends Controller
         protected RepeatCustomerPhoneService $repeatCustomerPhoneService,
         protected OrderInventorySlipService $orderInventorySlipService,
     ) {
+    }
+
+    private function freshShippingState(): array
+    {
+        return [
+            'shipping_status' => null,
+            'shipping_synced_at' => null,
+            'shipping_status_source' => self::SHIPPING_STATUS_SOURCE_MANUAL,
+            'shipping_carrier_code' => null,
+            'shipping_carrier_name' => null,
+            'shipping_tracking_code' => null,
+            'shipping_dispatched_at' => null,
+            'shipping_issue_code' => null,
+            'shipping_issue_message' => null,
+            'shipping_issue_detected_at' => null,
+        ];
+    }
+
+    private function orderDetailRelations(): array
+    {
+        return [
+            'items' => fn ($query) => $query
+                ->select([
+                    'id',
+                    'order_id',
+                    'account_id',
+                    'product_id',
+                    'product_name_snapshot',
+                    'product_sku_snapshot',
+                    'quantity',
+                    'price',
+                    'cost_price',
+                    'cost_total',
+                    'profit_total',
+                    'options',
+                ])
+                ->with([
+                    'product:id,name,sku,cost_price',
+                ]),
+            'attributeValues' => fn ($query) => $query
+                ->select(['id', 'order_id', 'attribute_id', 'value'])
+                ->with([
+                    'attribute:id,code,name',
+                ]),
+        ];
+    }
+
+    private function mutationResponsePayload(Order $order): array
+    {
+        $order->refresh();
+
+        return [
+            'id' => (int) $order->id,
+            'order_number' => $order->order_number,
+            'order_kind' => $this->normalizeOrderKind((string) $order->order_kind),
+            'status' => $order->status,
+            'customer_name' => $order->customer_name,
+            'customer_phone' => $order->customer_phone,
+            'total_price' => (float) $order->total_price,
+            'shipping_status_source' => $order->shipping_status_source ?: self::SHIPPING_STATUS_SOURCE_MANUAL,
+            'converted_from_order_id' => $order->converted_from_order_id,
+            'converted_from_kind' => $order->converted_from_kind,
+            'updated_at' => $order->updated_at?->toISOString(),
+        ];
     }
 
     private function normalizeOrderKind(?string $orderKind): string
@@ -414,6 +479,7 @@ class OrderController extends Controller
             $newOrder->converted_from_kind = $this->normalizeOrderKind((string) $original->order_kind);
             $newOrder->customer_id = null;
             $newOrder->status = $this->defaultStatusForKind($original->account_id, $targetKind, $original->status);
+            $newOrder->forceFill($this->freshShippingState());
             $newOrder->save();
 
             $rawItems = $original->items->map(function (OrderItem $item) {
@@ -441,7 +507,7 @@ class OrderController extends Controller
                 $this->syncOfficialCustomerAndInvoice($newOrder, true);
             }
 
-            return $newOrder->fresh(['items.product', 'customer', 'attributeValues.attribute']);
+            return $newOrder;
         });
     }
 
@@ -467,23 +533,13 @@ class OrderController extends Controller
                 $this->removeOfficialSideEffects($order);
             }
 
-            $order->forceFill([
+            $order->forceFill(array_merge([
                 'order_kind' => $targetKind,
                 'converted_from_order_id' => $order->converted_from_order_id ?: $order->id,
                 'converted_from_kind' => $currentKind,
                 'order_number' => $this->generateOrderNumber($order->account_id, $targetKind),
                 'status' => $this->defaultStatusForKind($order->account_id, $targetKind, $order->status),
-                'shipping_status' => null,
-                'shipping_synced_at' => null,
-                'shipping_status_source' => null,
-                'shipping_carrier_code' => null,
-                'shipping_carrier_name' => null,
-                'shipping_tracking_code' => null,
-                'shipping_dispatched_at' => null,
-                'shipping_issue_code' => null,
-                'shipping_issue_message' => null,
-                'shipping_issue_detected_at' => null,
-            ])->save();
+            ], $this->freshShippingState()))->save();
 
             if ($this->shouldManageInventory($targetKind)) {
                 $summary = $this->reserveInventoryIfNeeded($order);
@@ -491,7 +547,7 @@ class OrderController extends Controller
                 $this->syncOfficialCustomerAndInvoice($order, false);
             }
 
-            return $order->fresh(['items.product', 'customer', 'attributeValues.attribute']);
+            return $order;
         });
     }
 
@@ -1039,7 +1095,7 @@ class OrderController extends Controller
                     ->findOrFail((int) $request->lead_id);
             }
 
-            $order = Order::create([
+            $order = Order::create(array_merge([
                 'user_id' => Auth::id(),
                 'account_id' => $accountId,
                 'lead_id' => $lead?->id,
@@ -1062,7 +1118,7 @@ class OrderController extends Controller
                 'discount' => $request->discount ?? 0,
                 'cost_total' => 0,
                 'profit_total' => 0,
-            ]);
+            ], $this->freshShippingState()));
 
             $summary = $this->syncOrderItems($order, $rawItems, $orderKind);
             $this->recalculateOrderTotals($order, (float) ($summary['total_price'] ?? 0), (float) ($summary['cost_total'] ?? 0));
@@ -1103,7 +1159,7 @@ class OrderController extends Controller
                 ])->save();
             }
 
-            return response()->json($order->fresh(['items.product', 'customer', 'attributeValues.attribute']), 201);
+            return response()->json($this->mutationResponsePayload($order), 201);
         });
     }
 
@@ -1111,8 +1167,38 @@ class OrderController extends Controller
     public function show(Request $request, $id)
     {
         $order = $this->scopedOrderQuery($request)
-            ->with(['items.product', 'customer', 'shipments', 'payment', 'attributeValues.attribute', 'user'])
-            ->findOrFail($id);
+            ->select([
+                'id',
+                'user_id',
+                'account_id',
+                'lead_id',
+                'order_number',
+                'order_kind',
+                'converted_from_order_id',
+                'converted_from_kind',
+                'total_price',
+                'status',
+                'customer_name',
+                'customer_email',
+                'customer_phone',
+                'shipping_address',
+                'province',
+                'district',
+                'ward',
+                'notes',
+                'source',
+                'type',
+                'shipment_status',
+                'shipping_fee',
+                'discount',
+                'cost_total',
+                'profit_total',
+                'created_at',
+                'updated_at',
+            ])
+            ->with($this->orderDetailRelations())
+            ->findOrFail((int) $id);
+
         return response()->json($order);
     }
 
@@ -1155,8 +1241,6 @@ class OrderController extends Controller
             }
         }
 
-        \Illuminate\Support\Facades\Log::info("Order Update Data for ID: $id", $request->all());
-
         return DB::transaction(function () use ($request, $order) {
             $requestedKind = $this->normalizeOrderKind($request->input('order_kind', $order->order_kind));
             $currentKind = $this->normalizeOrderKind((string) $order->order_kind);
@@ -1175,6 +1259,12 @@ class OrderController extends Controller
                 'shipping_address', 'province', 'district', 'ward', 'notes', 'source', 
                 'type', 'shipment_status', 'shipping_fee', 'discount', 'status'
             ]);
+
+            if (!$this->shouldManageInventory($requestedKind)) {
+                $data = array_merge($data, $this->freshShippingState());
+            } elseif (!$order->hasActiveShipment() && blank($order->shipping_status_source)) {
+                $data['shipping_status_source'] = self::SHIPPING_STATUS_SOURCE_MANUAL;
+            }
             
             $order->update($data);
 
@@ -1214,7 +1304,7 @@ class OrderController extends Controller
                 $this->syncOfficialCustomerAndInvoice($order, false);
             }
 
-            return response()->json($order->fresh(['items.product', 'customer', 'attributeValues.attribute']));
+            return response()->json($this->mutationResponsePayload($order));
         });
     }
 
@@ -1257,7 +1347,9 @@ class OrderController extends Controller
         $targetKind = $this->normalizeOrderKind($request->input('target_kind', $original->order_kind));
 
         return response()->json(
-            $this->duplicateOrderToKind($original, $targetKind)
+            $this->mutationResponsePayload(
+                $this->duplicateOrderToKind($original, $targetKind)
+            )
         );
     }
 
@@ -1277,7 +1369,9 @@ class OrderController extends Controller
             ->findOrFail($id);
 
         return response()->json(
-            $this->convertOrderToKind($order, (string) $request->input('target_kind'), $request->all())
+            $this->mutationResponsePayload(
+                $this->convertOrderToKind($order, (string) $request->input('target_kind'), $request->all())
+            )
         );
     }
 

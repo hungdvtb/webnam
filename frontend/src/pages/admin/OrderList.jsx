@@ -728,7 +728,7 @@ const OrderList = () => {
     const initialListParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
     const [activeOrderKind, setActiveOrderKind] = useState(() => {
         const kind = initialListParams.get('kind');
-        return ['official', 'template', 'draft'].includes(kind) ? kind : 'official';
+        return ['official', 'template', 'draft'].includes(kind) ? kind : 'draft';
     });
     const [isTrashView, setIsTrashView] = useState(() => initialListParams.get('view') === 'trash');
     const [orderKindCounts, setOrderKindCounts] = useState({
@@ -947,6 +947,7 @@ const OrderList = () => {
             } else {
                 setVisibleColumns(allColumnIds);
             }
+            orderApi.preloadBootstrap({ mode: 'form' });
         } catch (error) { console.error("Error initial data", error); }
     };
 
@@ -1025,7 +1026,7 @@ const OrderList = () => {
         if (!nextTrashView && ['official', 'template', 'draft'].includes(nextKind)) {
             setActiveOrderKind(nextKind);
         } else if (!nextTrashView && !['official', 'template', 'draft'].includes(nextKind)) {
-            setActiveOrderKind('official');
+            setActiveOrderKind('draft');
         }
     }, [location.search]);
 
@@ -1420,17 +1421,26 @@ const OrderList = () => {
     const navigateToListView = useCallback((nextKind, options = {}) => {
         const searchParams = new URLSearchParams();
         if (options.trash) searchParams.set('view', 'trash');
-        else searchParams.set('kind', nextKind || 'official');
+        else searchParams.set('kind', nextKind || 'draft');
         navigate(`/admin/orders?${searchParams.toString()}`);
     }, [navigate]);
 
     const handleCreateOrder = useCallback(() => {
+        orderApi.preloadBootstrap({ mode: 'form' });
         navigate(`/admin/orders/new?kind=${activeOrderKind}`);
     }, [activeOrderKind, navigate]);
 
+    const warmOrderEditor = useCallback((orderId) => {
+        orderApi.preloadBootstrap({ mode: 'form' });
+        if (orderId) {
+            orderApi.preloadOne(orderId);
+        }
+    }, []);
+
     const openOrderEditor = useCallback((orderId, orderKind = activeOrderKind) => {
+        warmOrderEditor(orderId);
         navigate(`/admin/orders/edit/${orderId}?kind=${orderKind}`);
-    }, [activeOrderKind, navigate]);
+    }, [activeOrderKind, navigate, warmOrderEditor]);
 
     const handleBulkDuplicate = async (targetKind = activeOrderKind) => {
         if (!selectedIds.length) return;
@@ -1624,7 +1634,7 @@ const OrderList = () => {
                 .admin-text-13 { font-size: 13px !important; color: #0F172A !important; }
                 .admin-table-header { font-size: 11px !important; font-weight: 900 !important; color: #1B365D !important; text-transform: uppercase !important; letter-spacing: 0.15em !important; background-color: #F0F4F8 !important; }
                 .sticky-col-0 { position: sticky; left: 0; z-index: 10; background: #FCFEFF; border-right: 2px solid #E2E8F0 !important; }
-                .sticky-col-1 { position: sticky; left: 40px; z-index: 10; background: #FCFEFF; border-right: 1px solid #E2E8F0 !important; }
+                .sticky-col-1 { position: sticky; left: 48px; z-index: 10; background: #FCFEFF; border-right: 1px solid #E2E8F0 !important; }
                 tr:hover .sticky-col-0, tr:hover .sticky-col-1 { background-color: #F1F5F9 !important; }
                 tr.bg-primary\/5 .sticky-col-0, tr.bg-primary\/5 .sticky-col-1 { background-color: #E2E8F0 !important; }
                 .table-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -1655,14 +1665,6 @@ const OrderList = () => {
                         )}
 
                         <div className="flex items-center gap-1 rounded-sm border border-primary/10 bg-[#FCFEFF] p-1">
-                            <button type="button" onClick={() => navigateToListView('official')} title="Đơn hàng chính" className={`relative h-9 w-9 rounded-sm flex items-center justify-center transition-all ${!isTrashView && activeOrderKind === 'official' ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
-                                <span className="material-symbols-outlined text-[18px]">shopping_cart</span>
-                                {Number(orderKindCounts.official || 0) > 0 && <span className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${!isTrashView && activeOrderKind === 'official' ? 'bg-white text-primary' : 'bg-primary text-white'}`}>{orderKindCounts.official}</span>}
-                            </button>
-                            <button type="button" onClick={() => navigateToListView('template')} title="Đơn hàng mẫu" className={`relative h-9 w-9 rounded-sm flex items-center justify-center transition-all ${!isTrashView && activeOrderKind === 'template' ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
-                                <span className="material-symbols-outlined text-[18px]">library_books</span>
-                                {Number(orderKindCounts.template || 0) > 0 && <span className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${!isTrashView && activeOrderKind === 'template' ? 'bg-white text-primary' : 'bg-primary text-white'}`}>{orderKindCounts.template}</span>}
-                            </button>
                             <button type="button" onClick={() => navigateToListView('draft')} title="Đơn nháp" className={`relative h-9 w-9 rounded-sm flex items-center justify-center transition-all ${!isTrashView && activeOrderKind === 'draft' ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
                                 <span className="material-symbols-outlined text-[18px]">draft_orders</span>
                                 {Number(orderKindCounts.draft || 0) > 0 && <span className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${!isTrashView && activeOrderKind === 'draft' ? 'bg-white text-primary' : 'bg-primary text-white'}`}>{orderKindCounts.draft}</span>}
@@ -1974,10 +1976,9 @@ const OrderList = () => {
                 <table className="text-left border-collapse table-fixed min-w-full admin-text-13" style={{ width: `${totalTableWidth}px` }}>
                     <thead className="admin-table-header sticky top-0 z-20 shadow-sm border-b border-primary/10">
                         <tr>
-                            <th className="p-3 w-20 admin-table-header border border-primary/20 sticky-col-0">
-                                <label className="flex items-center gap-2 text-primary font-black">
-                                    <input type="checkbox" checked={orders.length > 0 && selectedIds.length === orders.length} onChange={toggleSelectAll} className="size-4 accent-primary" />
-                                    <span className="text-[10px] uppercase tracking-[0.14em]">Chọn</span>
+                            <th className="p-3 w-12 admin-table-header border border-primary/20 sticky-col-0">
+                                <label className="flex items-center justify-center text-primary font-black">
+                                    <input aria-label="Chọn tất cả đơn hàng" type="checkbox" checked={orders.length > 0 && selectedIds.length === orders.length} onChange={toggleSelectAll} className="size-4 accent-primary" />
                                 </label>
                             </th>
                             {renderedColumns.map((c, i) => (
@@ -2002,7 +2003,7 @@ const OrderList = () => {
                         ) : (
                             orders.map(o => (
                                 <tr key={o.id} onDoubleClick={() => { if (!isTrashView) openOrderEditor(o.id, o.order_kind || activeOrderKind); }} onClick={() => toggleSelectOrder(o.id)} className={`transition-all group cursor-pointer ${selectedIds.includes(o.id) ? 'bg-primary/10' : 'hover:bg-primary/5'}`}>
-                                    <td className="p-3 border border-primary/20 sticky-col-0 group-hover:bg-primary/5 transition-colors">
+                                    <td className="p-3 w-12 border border-primary/20 sticky-col-0 group-hover:bg-primary/5 transition-colors">
                                         <div className="flex items-center">
                                             <input
                                                 type="checkbox"
@@ -2299,7 +2300,7 @@ const OrderList = () => {
                                             <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-right sticky right-0 bg-white group-hover:bg-primary/5"><div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
                                                 {!isTrashView ? (
                                                     <>
-                                                        <button onClick={(e) => { e.stopPropagation(); openOrderEditor(o.id, o.order_kind || activeOrderKind); }} className="p-1 hover:text-primary" title="Sửa đơn"><span className="material-symbols-outlined text-[18px]">edit</span></button>
+                                                        <button onMouseEnter={() => warmOrderEditor(o.id)} onFocus={() => warmOrderEditor(o.id)} onClick={(e) => { e.stopPropagation(); openOrderEditor(o.id, o.order_kind || activeOrderKind); }} className="p-1 hover:text-primary" title="Sửa đơn"><span className="material-symbols-outlined text-[18px]">edit</span></button>
                                                         {(o.order_kind || 'official') === 'template' && <>
                                                             <button onClick={(e) => handleDuplicateOrder(o.id, 'draft', e)} className="p-1 hover:text-sky-700" title="Nhân bản sang đơn nháp"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                                             <button onClick={(e) => handleDuplicateOrder(o.id, 'official', e)} className="p-1 hover:text-primary" title="Nhân bản sang đơn chính"><span className="material-symbols-outlined text-[18px]">file_open</span></button>

@@ -35,6 +35,71 @@ const multipartConfig = (data) => (
         : undefined
 );
 
+const requestCache = {
+    orderBootstrap: new Map(),
+    orderDetail: new Map(),
+};
+
+const ORDER_BOOTSTRAP_CACHE_TTL_MS = 60 * 1000;
+const ORDER_DETAIL_CACHE_TTL_MS = 30 * 1000;
+
+const resolveActiveApiCacheNamespace = () => {
+    if (typeof window === 'undefined') return 'server';
+
+    const activeAccountId = window.localStorage.getItem('activeAccountId') || 'default';
+    const activeSiteCode = window.localStorage.getItem('activeSiteCode') || 'default';
+
+    return `${activeAccountId}::${activeSiteCode}`;
+};
+
+const readCachedResponse = (cache, key) => {
+    const entry = cache.get(key);
+    if (!entry) return null;
+    if (entry.expiresAt <= Date.now()) {
+        cache.delete(key);
+        return null;
+    }
+
+    if (entry.response) return Promise.resolve(entry.response);
+    return entry.promise || null;
+};
+
+const primeCachedRequest = (cache, key, loader, ttlMs) => {
+    const cached = readCachedResponse(cache, key);
+    if (cached) return cached;
+
+    const promise = loader();
+    const expiresAt = Date.now() + ttlMs;
+    cache.set(key, { promise, expiresAt });
+
+    promise
+        .then((response) => {
+            const currentEntry = cache.get(key);
+            if (currentEntry?.promise === promise) {
+                cache.set(key, { response, expiresAt: Date.now() + ttlMs });
+            }
+        })
+        .catch(() => {
+            const currentEntry = cache.get(key);
+            if (currentEntry?.promise === promise) {
+                cache.delete(key);
+            }
+        });
+
+    return promise;
+};
+
+const invalidateCachedResponse = (cache, key) => {
+    cache.delete(key);
+};
+
+const orderBootstrapCacheKey = (params = {}) => {
+    const mode = String(params?.mode || 'list').toLowerCase() === 'form' ? 'form' : 'list';
+    return `${resolveActiveApiCacheNamespace()}::${mode}`;
+};
+
+const orderDetailCacheKey = (id) => `${resolveActiveApiCacheNamespace()}::${id}`;
+
 export const productApi = {
     getAll: (params, signal) => api.get('/products', { params, signal }),
     getOne: (id) => api.get(`/products/${id}`),
@@ -101,19 +166,66 @@ export const warehouseApi = {
 
 export const orderApi = {
     getBootstrap: (params) => api.get('/orders/bootstrap', { params }),
+    getBootstrapCached: (params) => primeCachedRequest(
+        requestCache.orderBootstrap,
+        orderBootstrapCacheKey(params),
+        () => api.get('/orders/bootstrap', { params }),
+        ORDER_BOOTSTRAP_CACHE_TTL_MS
+    ),
+    preloadBootstrap: (params) => primeCachedRequest(
+        requestCache.orderBootstrap,
+        orderBootstrapCacheKey(params),
+        () => api.get('/orders/bootstrap', { params }),
+        ORDER_BOOTSTRAP_CACHE_TTL_MS
+    ).catch(() => null),
     getAll: (params, signal) => api.get('/orders', { params, signal }),
     getOne: (id) => api.get(`/orders/${id}`),
+    getOneCached: (id) => primeCachedRequest(
+        requestCache.orderDetail,
+        orderDetailCacheKey(id),
+        () => api.get(`/orders/${id}`),
+        ORDER_DETAIL_CACHE_TTL_MS
+    ),
+    preloadOne: (id) => {
+        if (!id) return Promise.resolve(null);
+
+        return primeCachedRequest(
+            requestCache.orderDetail,
+            orderDetailCacheKey(id),
+            () => api.get(`/orders/${id}`),
+            ORDER_DETAIL_CACHE_TTL_MS
+        ).catch(() => null);
+    },
+    invalidateOne: (id) => {
+        if (!id) return;
+        invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
+    },
     getInventorySlips: (id) => api.get(`/orders/${id}/inventory-slips`),
     createInventorySlip: (id, data) => api.post(`/orders/${id}/inventory-slips`, data),
     deleteInventorySlip: (id, documentId) => api.delete(`/orders/${id}/inventory-slips/${documentId}`),
     store: (data) => api.post('/orders', data),
-    update: (id, data) => api.put(`/orders/${id}`, data),
-    destroy: (id) => api.delete(`/orders/${id}`),
-    forceDelete: (id) => api.delete(`/orders/${id}/force`),
+    update: (id, data) => api.put(`/orders/${id}`, data).then((response) => {
+        invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
+        return response;
+    }),
+    destroy: (id) => api.delete(`/orders/${id}`).then((response) => {
+        invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
+        return response;
+    }),
+    forceDelete: (id) => api.delete(`/orders/${id}/force`).then((response) => {
+        invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
+        return response;
+    }),
     updateStatus: (id, status) => api.put(`/orders/${id}/status`, { status }),
     duplicate: (id, data = {}) => api.post(`/orders/${id}/duplicate`, data),
-    convert: (id, data) => api.post(`/orders/${id}/convert`, data),
-    restore: (id) => api.post(`/orders/${id}/restore`),
+    convert: (id, data) => api.post(`/orders/${id}/convert`, data).then((response) => {
+        invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
+        return response;
+    }),
+    restore: (id) => api.post(`/orders/${id}/restore`).then((response) => {
+        invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
+        return response;
+    }),
     bulkDelete: (ids, force = false) => api.post('/orders/bulk-delete', { ids, force: force ? 1 : 0 }),
     bulkRestore: (ids) => api.post('/orders/bulk-restore', { ids }),
     bulkDuplicate: (ids, targetKind = null) => api.post('/orders/bulk-duplicate', targetKind ? { ids, target_kind: targetKind } : { ids }),

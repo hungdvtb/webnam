@@ -1120,7 +1120,7 @@ const OrderForm = () => {
 
     const fetchInitialData = useCallback(async () => {
         try {
-            const response = await orderApi.getBootstrap({ mode: 'form' });
+            const response = await orderApi.getBootstrapCached({ mode: 'form' });
             const bootstrap = response.data || {};
 
             setOrderStatuses(bootstrap.order_statuses || []);
@@ -1142,7 +1142,7 @@ const OrderForm = () => {
     const fetchOrder = async (targetId, isDuplicating = false) => {
         try {
             setLoading(true);
-            const response = await orderApi.getOne(targetId);
+            const response = await orderApi.getOneCached(targetId);
             const order = response.data;
             const nextOrderKind = ['official', 'template', 'draft'].includes(order.order_kind) ? order.order_kind : 'official';
 

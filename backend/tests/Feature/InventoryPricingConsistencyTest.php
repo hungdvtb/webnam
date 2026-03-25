@@ -119,6 +119,86 @@ class InventoryPricingConsistencyTest extends TestCase
         $this->assertSame(260000.0, (float) $price->unit_cost);
     }
 
+    public function test_supplier_price_save_response_returns_numeric_money_values(): void
+    {
+        [$account] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham response gia',
+            'sku' => 'RESP-035',
+            'expected_cost' => 20,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson("/api/inventory/suppliers/{$supplier->id}/prices", [
+                'product_id' => $product->id,
+                'unit_cost' => 35,
+                'supplier_product_code' => 'NCC-035',
+            ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('unit_cost', 35.0)
+            ->assertJsonPath('supplier_unit_cost', 35.0)
+            ->assertJsonPath('expected_cost', 35.0)
+            ->assertJsonPath('product.expected_cost', 35.0);
+
+        $this->assertSame(35.0, $response->json('unit_cost'));
+        $this->assertIsFloat($response->json('unit_cost'));
+    }
+
+    public function test_product_update_keeps_existing_supplier_price_source_when_supplier_list_order_differs(): void
+    {
+        [$account] = $this->authenticate();
+        $primarySupplier = $this->createSupplier($account);
+        $secondarySupplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $secondarySupplier, [
+            'name' => 'San pham giu source supplier',
+            'sku' => 'SRC-KEEP-001',
+            'expected_cost' => 120000,
+            'supplier_id' => $secondarySupplier->id,
+        ]);
+
+        DB::table('product_suppliers')->insert([
+            'account_id' => $account->id,
+            'product_id' => $product->id,
+            'supplier_id' => $primarySupplier->id,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $primaryPrice = SupplierProductPrice::query()->create([
+            'account_id' => $account->id,
+            'supplier_id' => $primarySupplier->id,
+            'product_id' => $product->id,
+            'unit_cost' => 180000,
+        ]);
+
+        $secondaryPrice = SupplierProductPrice::query()->create([
+            'account_id' => $account->id,
+            'supplier_id' => $secondarySupplier->id,
+            'product_id' => $product->id,
+            'unit_cost' => 120000,
+        ]);
+
+        $this->withHeaders($this->headers($account))
+            ->putJson("/api/products/{$product->id}", [
+                'expected_cost' => 99000,
+                'supplier_ids' => [$primarySupplier->id, $secondarySupplier->id],
+            ])
+            ->assertOk();
+
+        $product->refresh();
+        $primaryPrice->refresh();
+        $secondaryPrice->refresh();
+
+        $this->assertSame($secondarySupplier->id, (int) $product->supplier_id);
+        $this->assertSame(99000.0, (float) $product->expected_cost);
+        $this->assertSame(180000.0, (float) $primaryPrice->unit_cost);
+        $this->assertSame(99000.0, (float) $secondaryPrice->unit_cost);
+    }
+
     public function test_delete_and_restore_import_recomputes_only_affected_product_aggregate(): void
     {
         [$account, $user] = $this->authenticate();

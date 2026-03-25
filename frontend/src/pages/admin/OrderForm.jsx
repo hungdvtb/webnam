@@ -259,6 +259,41 @@ const DRAFT_ORDER_KIND = 'draft';
 const isDraftOrderKind = (orderKind) => String(orderKind || MAIN_ORDER_KIND) === DRAFT_ORDER_KIND;
 const getNormalizedOrderKind = (orderKind) => (isDraftOrderKind(orderKind) ? DRAFT_ORDER_KIND : MAIN_ORDER_KIND);
 const buildOrderListUrl = (orderKind = MAIN_ORDER_KIND) => (isDraftOrderKind(orderKind) ? '/admin/orders?view=draft' : '/admin/orders');
+const parseMoneyNumber = (value, fallback = null) => {
+    if (value === null || value === undefined || value === '') {
+        return fallback;
+    }
+
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) ? numericValue : fallback;
+};
+const calculateItemsCostTotal = (items = []) => items.reduce(
+    (sum, item) => sum + ((parseMoneyNumber(item?.cost_price, 0) || 0) * (parseMoneyNumber(item?.quantity, 0) || 0)),
+    0
+);
+const resolveOrderItemCostPrice = (item, useCurrentProductCost = false) => {
+    const preferredValues = useCurrentProductCost
+        ? [
+            item?.current_cost_price,
+            item?.product?.cost_price,
+            item?.product?.expected_cost,
+            item?.cost_price,
+        ]
+        : [
+            item?.cost_price,
+            item?.product?.cost_price,
+            item?.product?.expected_cost,
+        ];
+
+    for (const value of preferredValues) {
+        const normalizedValue = parseMoneyNumber(value);
+        if (normalizedValue !== null) {
+            return normalizedValue;
+        }
+    }
+
+    return 0;
+};
 
 const waitForNodeImages = async (node) => {
     if (!node) return;
@@ -1153,6 +1188,18 @@ const OrderForm = () => {
 
             setOrderKind(isDuplicating ? MAIN_ORDER_KIND : nextOrderKind);
             setRegionType(order.district ? 'old' : 'new');
+            const shouldUseCurrentProductCost = (isDuplicating ? MAIN_ORDER_KIND : nextOrderKind) === MAIN_ORDER_KIND;
+            const mappedItems = order.items?.map(item => ({
+                product_id: item.product_id,
+                name: item.product?.name || item.product_name_snapshot || `Sáº£n pháº©m #${item.product_id}`,
+                sku: item.product?.sku || item.product_sku_snapshot || `N/A`,
+                quantity: parseMoneyNumber(item.quantity, 0) || 0,
+                price: parseMoneyNumber(item.price, 0) || 0,
+                cost_price: resolveOrderItemCostPrice(item, shouldUseCurrentProductCost)
+            })) || [];
+            const mappedCostTotal = shouldUseCurrentProductCost
+                ? (parseMoneyNumber(order.current_cost_total, calculateItemsCostTotal(mappedItems)) || 0)
+                : (parseMoneyNumber(order.cost_total, calculateItemsCostTotal(mappedItems)) || 0);
             setFormData({
                 customer_name: order.customer_name || '',
                 customer_email: order.customer_email || '',
@@ -1186,6 +1233,11 @@ const OrderForm = () => {
                 district: order.district || '',
                 ward: order.ward || ''
             });
+            setFormData((prev) => ({
+                ...prev,
+                items: mappedItems,
+                cost_total: mappedCostTotal,
+            }));
             setRegionType(order.district ? 'old' : 'new');
 
         } catch (error) {

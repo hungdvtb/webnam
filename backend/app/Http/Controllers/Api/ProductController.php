@@ -324,9 +324,16 @@ class ProductController extends Controller
             $syncData[$supplierId] = ['account_id' => $product->account_id];
         }
 
+        $resolvedSupplierId = null;
+        if ($product->supplier_id && in_array((int) $product->supplier_id, $supplierIds, true)) {
+            $resolvedSupplierId = (int) $product->supplier_id;
+        } elseif (!empty($supplierIds)) {
+            $resolvedSupplierId = $supplierIds[0];
+        }
+
         $product->suppliers()->sync($syncData);
         $product->forceFill([
-            'supplier_id' => $supplierIds[0] ?? null,
+            'supplier_id' => $resolvedSupplierId,
         ])->save();
 
         return $supplierIds;
@@ -1459,7 +1466,7 @@ class ProductController extends Controller
                 $this->productPricingService->syncExpectedCost(
                     $product,
                     $validated['expected_cost'] ?? null,
-                    $supplierIds[0] ?? null,
+                    $product->supplier_id,
                     auth()->id()
                 );
 
@@ -1592,7 +1599,7 @@ class ProductController extends Controller
                             'expected_cost' => $vData['expected_cost'] ?? null,
                             'weight' => $vData['weight'] ?? null,
                             'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
-                            'supplier_id' => $supplierIds[0] ?? $product->supplier_id,
+                            'supplier_id' => $product->supplier_id,
                             'stock_quantity' => $vData['stock_quantity'] ?? 0,
                             'category_id' => $product->category_id,
                             'status' => $product->status ?? true,
@@ -1601,7 +1608,7 @@ class ProductController extends Controller
                         $this->productPricingService->syncExpectedCost(
                             $variantProduct,
                             $vData['expected_cost'] ?? null,
-                            $supplierIds[0] ?? $product->supplier_id,
+                            $variantProduct->supplier_id,
                             auth()->id()
                         );
 
@@ -1864,7 +1871,9 @@ class ProductController extends Controller
             : $product->suppliers()->pluck('suppliers.id')->map(fn ($value) => (int) $value)->values()->all();
 
         if ($incomingSupplierIds) {
-            $validated['supplier_id'] = $supplierIds[0] ?? null;
+            $validated['supplier_id'] = ($product->supplier_id && in_array((int) $product->supplier_id, $supplierIds, true))
+                ? (int) $product->supplier_id
+                : ($supplierIds[0] ?? null);
         }
 
         unset($validated['supplier_ids'], $validated['clear_supplier_ids']);
@@ -1901,7 +1910,7 @@ class ProductController extends Controller
                     $this->productPricingService->syncExpectedCost(
                         $product,
                         $validated['expected_cost'] ?? $product->expected_cost,
-                        $supplierIds[0] ?? $product->supplier_id,
+                        $product->supplier_id,
                         auth()->id()
                     );
                     $product->refresh();
@@ -2049,7 +2058,7 @@ class ProductController extends Controller
                         'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
                         'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
-                        'supplier_id' => $supplierIds[0] ?? $product->supplier_id,
+                        'supplier_id' => $variant->supplier_id ?? $product->supplier_id,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                     ]);
 
@@ -2061,7 +2070,7 @@ class ProductController extends Controller
                         $this->productPricingService->syncExpectedCost(
                             $variant,
                             $vData['expected_cost'] ?? $variant->expected_cost,
-                            $supplierIds[0] ?? $product->supplier_id,
+                            $variant->supplier_id,
                             auth()->id()
                         );
                         $variant->refresh();
@@ -2125,7 +2134,7 @@ class ProductController extends Controller
                         'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
                         'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
-                        'supplier_id' => $supplierIds[0] ?? $product->supplier_id,
+                        'supplier_id' => $product->supplier_id,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                         'category_id' => $product->category_id,
                         'status' => $product->status ?? true,
@@ -2135,7 +2144,7 @@ class ProductController extends Controller
                     $this->productPricingService->syncExpectedCost(
                         $variant,
                         $vData['expected_cost'] ?? null,
-                        $supplierIds[0] ?? $product->supplier_id,
+                        $variant->supplier_id,
                         auth()->id()
                     );
 
@@ -2583,7 +2592,7 @@ class ProductController extends Controller
                     $this->productPricingService->syncExpectedCost(
                         $product,
                         $basicInfo['expected_cost'] ?? $product->expected_cost,
-                        $basicInfo['supplier_ids'][0] ?? $product->supplier_id,
+                        $product->supplier_id,
                         auth()->id()
                     );
                 }
@@ -2638,7 +2647,7 @@ class ProductController extends Controller
                 $this->productPricingService->syncExpectedCost(
                     $product,
                     $pData['basic']['expected_cost'] ?? $product->expected_cost,
-                    $pData['supplier_ids'][0] ?? $product->supplier_id,
+                    $product->supplier_id,
                     auth()->id()
                 );
             }

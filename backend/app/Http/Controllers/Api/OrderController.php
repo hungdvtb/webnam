@@ -127,6 +127,45 @@ class OrderController extends Controller
         ];
     }
 
+    private function resolveCurrentProductCost(?Product $product, mixed $fallback = null): float
+    {
+        return round((float) ($product?->cost_price ?? $product?->expected_cost ?? $fallback ?? 0), 2);
+    }
+
+    private function appendCurrentCostMetrics(Order $order): Order
+    {
+        if (!$order->relationLoaded('items')) {
+            return $order;
+        }
+
+        $itemRevenue = 0;
+        $currentCostTotal = 0;
+
+        $order->items->each(function (OrderItem $item) use (&$itemRevenue, &$currentCostTotal) {
+            $quantity = (int) ($item->quantity ?? 0);
+            $unitPrice = round((float) ($item->price ?? 0), 2);
+            $currentCostPrice = $this->resolveCurrentProductCost($item->product, $item->cost_price);
+            $currentCostLineTotal = round($currentCostPrice * $quantity, 2);
+
+            $item->setAttribute('current_cost_price', $currentCostPrice);
+            $item->setAttribute('current_cost_total', $currentCostLineTotal);
+            $item->setAttribute('current_profit_total', round(($unitPrice * $quantity) - $currentCostLineTotal, 2));
+
+            $itemRevenue += $unitPrice * $quantity;
+            $currentCostTotal += $currentCostLineTotal;
+        });
+
+        $finalTotal = round(
+            $itemRevenue + (float) ($order->shipping_fee ?? 0) - (float) ($order->discount ?? 0),
+            2
+        );
+
+        $order->setAttribute('current_cost_total', round($currentCostTotal, 2));
+        $order->setAttribute('current_profit_total', round($finalTotal - $currentCostTotal, 2));
+
+        return $order;
+    }
+
     private function mutationResponsePayload(Order $order): array
     {
         $order->refresh();
@@ -564,6 +603,15 @@ class OrderController extends Controller
     {
         $targetKind = $this->normalizeOrderKind($targetKind);
 
+        if ($this->requiresOfficialValidation($targetKind)) {
+            $this->validateOfficialOrderPayload([
+                'province' => $original->province,
+                'district' => $original->district,
+                'ward' => $original->ward,
+                'shipping_address' => $original->shipping_address,
+            ], filled($original->district) ? 'old' : 'new');
+        }
+
         return $this->runOrderNumberMutation($targetKind, function () use ($original, $targetKind) {
             return DB::transaction(function () use ($original, $targetKind) {
                 $newOrder = $original->replicate([
@@ -584,10 +632,13 @@ class OrderController extends Controller
 
                 $newOrder->order_number = $this->generateOrderNumber($targetKind);
                 $newOrder->order_kind = $targetKind;
+                $newOrder->user_id = Auth::id();
+                $newOrder->lead_id = null;
                 $newOrder->converted_from_order_id = $original->id;
                 $newOrder->converted_from_kind = $this->normalizeOrderKind((string) $original->order_kind);
                 $newOrder->customer_id = null;
-                $newOrder->status = $this->defaultStatusForKind($original->account_id, $targetKind, $original->status);
+                $newOrder->status = $this->defaultStatusForKind($original->account_id, $targetKind, 'new');
+                $newOrder->shipment_status = 'Chưa giao';
                 $newOrder->forceFill($this->freshShippingState());
                 $newOrder->save();
 
@@ -1379,6 +1430,8 @@ class OrderController extends Controller
             ->with($this->orderDetailRelations())
             ->findOrFail((int) $id);
 
+        $this->appendCurrentCostMetrics($order);
+
         return response()->json($order);
     }
 
@@ -1655,10 +1708,10 @@ class OrderController extends Controller
 
     public function duplicate(Request $request, $id)
     {
-        $original = $this->scopedOrderQuery($request)
+        $original = $this->scopedOrderQuery($request, true)
             ->with(['items', 'attributeValues'])
             ->findOrFail($id);
-        $targetKind = $this->normalizeOrderKind($request->input('target_kind', $original->order_kind));
+        $targetKind = $this->normalizeOrderKind($request->input('target_kind', self::ORDER_KIND_DRAFT));
 
         return response()->json(
             $this->mutationResponsePayload(
@@ -1883,7 +1936,7 @@ class OrderController extends Controller
         $duplicatedCount = 0;
         DB::transaction(function () use ($request, $ids, &$duplicatedCount) {
             foreach ($ids as $id) {
-                $original = $this->scopedOrderQuery($request)
+                $original = $this->scopedOrderQuery($request, true)
                     ->with(['items', 'attributeValues'])
                     ->find($id);
 
@@ -1891,7 +1944,7 @@ class OrderController extends Controller
                     continue;
                 }
 
-                $targetKind = $this->normalizeOrderKind($request->input('target_kind', $original->order_kind));
+                $targetKind = $this->normalizeOrderKind($request->input('target_kind', self::ORDER_KIND_DRAFT));
                 $this->duplicateOrderToKind($original, $targetKind);
 
                 $duplicatedCount++;

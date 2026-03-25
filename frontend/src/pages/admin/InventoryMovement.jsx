@@ -8,6 +8,7 @@ import useAiAvailability from '../../hooks/useAiAvailability';
 import { useTableColumns } from '../../hooks/useTableColumns';
 import { ACTIVE_PRODUCT_TYPE_OPTIONS } from '../../config/productTypes';
 import { aiApi, categoryApi, cmsApi, inventoryApi, orderApi, productApi } from '../../services/api';
+import { formatWholeMoneyInput, normalizeWholeMoneyDraft, normalizeWholeMoneyNumber, parseWholeMoneyValue } from '../../utils/money';
 
 const emptyPagination = { current_page: 1, last_page: 1, total: 0, per_page: 20 };
 const todayValue = new Date().toISOString().slice(0, 10);
@@ -269,22 +270,20 @@ const parseSupplierPasteLine = (line, mode = 'sku_price') => {
     if (mode === 'sku_supplier_code_price') {
         if (parts.length < 3) return null;
         const supplierProductCode = String(parts[1] || '').trim();
-        const unitCost = stripNumericValue(parts[2]);
+        const unitCost = normalizeWholeMoneyDraft(parts[2]);
         if (!supplierProductCode || !unitCost) return null;
         return { sku, supplier_product_code: supplierProductCode, unit_cost: unitCost };
     }
 
     if (parts.length < 2) return null;
-    const unitCost = stripNumericValue(parts[1]);
+    const unitCost = normalizeWholeMoneyDraft(parts[1]);
     return unitCost ? { sku, unit_cost: unitCost } : null;
 };
 const formatWholeNumberInput = (value) => {
-    const cleaned = stripNumericValue(value);
-    return cleaned ? formatNumber(cleaned) : '';
+    return formatWholeMoneyInput(value);
 };
 const parseWholeNumberInput = (value) => {
-    const cleaned = stripNumericValue(value);
-    return cleaned ? Number(cleaned) : null;
+    return parseWholeMoneyValue(value);
 };
 const roundCurrencyValue = (value) => Math.round(Number(value || 0) * 100) / 100;
 const formatCompactDecimal = (value) => {
@@ -765,7 +764,7 @@ const createSupplierPriceForm = (price = null) => ({
     product_name: price?.product?.name || '',
     product_sku: price?.product?.sku || '',
     supplier_product_code: price?.supplier_product_code || '',
-    unit_cost: price?.unit_cost != null ? stripNumericValue(Math.round(Number(price.unit_cost || 0))) : '',
+    unit_cost: price?.unit_cost != null ? normalizeWholeMoneyDraft(price.unit_cost) : '',
     notes: price?.notes || '',
 });
 
@@ -781,7 +780,7 @@ const mapSupplierCatalogEntry = (item) => ({
     parent_sku: item.parent_sku || null,
     category_name: item.category_name || null,
     price: item.price ?? null,
-    unit_cost: item.supplier_unit_cost ?? null,
+    unit_cost: normalizeWholeMoneyNumber(item.supplier_unit_cost),
     inventory_import_starred: Boolean(item.inventory_import_starred),
     current_cost: item.current_cost ?? item.expected_cost ?? null,
     notes: item.supplier_notes || '',
@@ -2175,7 +2174,7 @@ const ImportItemsEditorTable = ({
             if (readOnly) {
                 return <div className="text-right text-[12px] font-black text-primary">{formatCurrency(row.unit_cost || 0)}</div>;
             }
-            return <input value={formatWholeNumberInput(row.unit_cost)} onChange={(event) => onUpdateLine(row._row_index, 'unit_cost', stripNumericValue(event.target.value))} className={`w-full text-right ${importFieldClass}`} placeholder="0" />;
+            return <input value={formatWholeNumberInput(row.unit_cost)} onChange={(event) => onUpdateLine(row._row_index, 'unit_cost', normalizeWholeMoneyDraft(event.target.value))} className={`w-full text-right ${importFieldClass}`} placeholder="0" />;
         }
 
         if (columnId === 'line_total') {
@@ -4159,17 +4158,17 @@ const InventoryMovement = () => {
             return product;
         }));
     };
-    const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {}) => {
-        const nextUnitCost = Number(responseData?.unit_cost ?? responseData?.supplier_unit_cost ?? fallbackValues.unit_cost ?? row.unit_cost ?? 0);
+const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {}) => {
+        const nextUnitCost = normalizeWholeMoneyNumber(responseData?.unit_cost ?? responseData?.supplier_unit_cost ?? fallbackValues.unit_cost ?? row.unit_cost) ?? 0;
         const nextUpdatedAt = responseData?.updated_at ?? responseData?.supplier_price_updated_at ?? new Date().toISOString();
-        const nextExpectedCost = Number(responseData?.product?.expected_cost ?? responseData?.expected_cost ?? nextUnitCost);
+        const nextExpectedCost = normalizeWholeMoneyNumber(responseData?.product?.expected_cost ?? responseData?.expected_cost ?? nextUnitCost);
 
         return {
             supplier_price_id: responseData?.id ?? responseData?.supplier_price_id ?? row.supplier_price_id ?? null,
             supplier_product_code: String(responseData?.supplier_product_code ?? fallbackValues.supplier_product_code ?? row.supplier_product_code ?? '').trim(),
             unit_cost: nextUnitCost,
             supplier_unit_cost: nextUnitCost,
-            expected_cost: Number.isFinite(nextExpectedCost) ? nextExpectedCost : row.expected_cost,
+            expected_cost: nextExpectedCost ?? row.expected_cost,
             notes: responseData?.notes ?? fallbackValues.notes ?? row.notes ?? '',
             updated_at: nextUpdatedAt,
             updater_name: responseData?.updater?.name ?? responseData?.updater_name ?? row.updater_name ?? null,
@@ -4283,7 +4282,7 @@ const InventoryMovement = () => {
     };
 
     const applyBulkPrice = async () => {
-        const cleaned = stripNumericValue(bulkPrice);
+        const cleaned = normalizeWholeMoneyDraft(bulkPrice);
         if (!selectedSupplierId || !selectedIds.length || !cleaned) return showToast({ type: 'warning', message: 'Hãy chọn dòng và nhập giá.' });
         const success = await applyPriceToIds(selectedIds, cleaned);
         if (success) {
@@ -4292,7 +4291,7 @@ const InventoryMovement = () => {
     };
 
     const applyGroupPrice = async (groupId) => {
-        const cleaned = stripNumericValue(groupPriceDrafts[groupId] ?? bulkPrice);
+        const cleaned = normalizeWholeMoneyDraft(groupPriceDrafts[groupId] ?? bulkPrice);
         const ids = getVariantIdsByGroup(groupId);
         if (!ids.length || !cleaned) return showToast({ type: 'warning', message: 'Hãy nhập giá hàng loạt trước.' });
         setExpandedGroups((prev) => ({ ...prev, [groupId]: true }));
@@ -4363,8 +4362,8 @@ const InventoryMovement = () => {
         const hasUnitCostOverride = Object.prototype.hasOwnProperty.call(overrides, 'unit_cost');
         const hasSupplierCodeOverride = Object.prototype.hasOwnProperty.call(overrides, 'supplier_product_code');
         const rawValue = hasUnitCostOverride ? (overrides.unit_cost ?? '') : (row.unit_cost ?? '');
-        const cleaned = stripNumericValue(rawValue);
-        const numericValue = cleaned === '' ? Number(row.unit_cost || 0) : Number(cleaned);
+        const cleaned = normalizeWholeMoneyDraft(rawValue);
+        const numericValue = parseWholeNumberInput(rawValue) ?? (normalizeWholeMoneyNumber(row.unit_cost) ?? 0);
         const supplierProductCode = String(hasSupplierCodeOverride ? (overrides.supplier_product_code ?? '') : (row.supplier_product_code ?? '')).trim();
         const currentSupplierCode = String(row.supplier_product_code || '').trim();
         const productId = Number(row.product_id || row.id || 0);
@@ -4394,7 +4393,7 @@ const InventoryMovement = () => {
             const response = await inventoryApi.createSupplierPrice(selectedSupplierId, payload);
             const responseData = response.data || {};
             const nextCodeDraft = String(responseData.supplier_product_code ?? supplierProductCode).trim();
-            const nextPriceDraft = stripNumericValue(String(responseData.unit_cost ?? numericValue));
+            const nextPriceDraft = normalizeWholeMoneyDraft(responseData.unit_cost ?? numericValue);
             const savedRowUpdates = buildSavedSupplierPriceRowUpdates(row, responseData, {
                 supplier_product_code: nextCodeDraft,
                 unit_cost: nextPriceDraft,
@@ -4420,7 +4419,7 @@ const InventoryMovement = () => {
 
     const saveSingleSupplierPrice = async (row, explicitValue = null) => {
         const rawValue = explicitValue ?? priceDrafts[row.id] ?? row.unit_cost ?? '';
-        const cleaned = stripNumericValue(rawValue);
+        const cleaned = normalizeWholeMoneyDraft(rawValue);
         if (!selectedSupplierId || row.row_kind === 'group' || cleaned === '') return;
 
         await saveSupplierPriceRow(row, { unit_cost: cleaned });
@@ -5339,7 +5338,7 @@ const InventoryMovement = () => {
                     <div className="flex items-center gap-2">
                         <input
                             value={formatWholeNumberInput(groupPriceDrafts[row.id] ?? '')}
-                            onChange={(event) => setGroupPriceDrafts((prev) => ({ ...prev, [row.id]: stripNumericValue(event.target.value) }))}
+                            onChange={(event) => setGroupPriceDrafts((prev) => ({ ...prev, [row.id]: normalizeWholeMoneyDraft(event.target.value) }))}
                             placeholder="Giá nhóm"
                             className="h-8 w-full rounded-sm border border-primary/15 px-2 text-right text-[13px] outline-none focus:border-primary"
                         />
@@ -5429,7 +5428,7 @@ const InventoryMovement = () => {
             <div className="flex items-center gap-2">
                 <input
                     value={formatWholeNumberInput(priceDrafts[row.id] ?? (row.unit_cost ?? ''))}
-                    onChange={(event) => setPriceDrafts((prev) => ({ ...prev, [row.id]: stripNumericValue(event.target.value) }))}
+                    onChange={(event) => setPriceDrafts((prev) => ({ ...prev, [row.id]: normalizeWholeMoneyDraft(event.target.value) }))}
                     onBlur={() => saveSingleSupplierPrice(row)}
                     onKeyDown={(event) => {
                         if (event.key === 'Enter') {
@@ -5907,7 +5906,7 @@ const InventoryMovement = () => {
                                 className={`w-full pl-9 ${inputClass}`}
                             />
                         </div>
-                        <input value={formatWholeNumberInput(bulkPrice)} onChange={(event) => setBulkPrice(stripNumericValue(event.target.value))} placeholder="Giá áp chọn" disabled={!selectedSupplierId} className={`w-[125px] ${inputClass}`} />
+                        <input value={formatWholeNumberInput(bulkPrice)} onChange={(event) => setBulkPrice(normalizeWholeMoneyDraft(event.target.value))} placeholder="Giá áp chọn" disabled={!selectedSupplierId} className={`w-[125px] ${inputClass}`} />
                         <button type="button" onClick={() => setShowPasteBox((value) => !value)} disabled={!selectedSupplierId} className={ghostButton}>{showPasteBox ? 'Ẩn dán nhanh' : 'Dán nhanh'}</button>
                         <button type="button" onClick={applyBulkPrice} disabled={!selectedSupplierId || !selectedIds.length} className={ghostButton}>Áp giá chọn</button>
                         <button type="button" onClick={refreshSupplierCatalog} disabled={!selectedSupplierId || loading.supplierCatalog} className={ghostButton}><span className={`material-symbols-outlined text-[18px] ${loading.supplierCatalog ? 'animate-spin' : ''}`}>refresh</span>Làm mới</button>
@@ -6334,7 +6333,7 @@ const InventoryMovement = () => {
                                             className={`w-full pl-9 ${inputClass}`}
                                         />
                                     </div>
-                                    <input value={bulkPrice} onChange={(event) => setBulkPrice(event.target.value.replace(/[^0-9]/g, ''))} placeholder="Giá áp chọn" disabled={!selectedSupplierId} className={`w-[125px] ${inputClass}`} />
+                                    <input value={formatWholeNumberInput(bulkPrice)} onChange={(event) => setBulkPrice(normalizeWholeMoneyDraft(event.target.value))} placeholder="Giá áp chọn" disabled={!selectedSupplierId} className={`w-[125px] ${inputClass}`} />
                                     <button type="button" onClick={() => setShowPasteBox((value) => !value)} disabled={!selectedSupplierId} className={ghostButton}>{showPasteBox ? 'Ẩn dán nhanh' : 'Dán nhanh'}</button>
                                     <button type="button" onClick={applyBulkPrice} disabled={!selectedSupplierId || !selectedIds.length} className={ghostButton}>Áp giá chọn</button>
                                     {[
@@ -7175,7 +7174,7 @@ const InventoryMovement = () => {
                                                         <input value={item.quantity} onChange={(event) => updateLine(setExportModal, index, 'quantity', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} />
                                                     </td>
                                                     <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
-                                                        <input value={formatWholeNumberInput(item.unit_cost)} onChange={(event) => updateLine(setExportModal, index, 'unit_cost', stripNumericValue(event.target.value))} className={`w-full text-right ${inputClass}`} />
+                                                        <input value={formatWholeNumberInput(item.unit_cost)} onChange={(event) => updateLine(setExportModal, index, 'unit_cost', normalizeWholeMoneyDraft(event.target.value))} className={`w-full text-right ${inputClass}`} />
                                                     </td>
                                                     <td className="border-b border-r border-primary/10 px-3 py-2 align-top text-right text-[13px] font-black text-primary">
                                                         {formatCurrency(Number(item.quantity || 0) * Number(item.unit_cost || 0))}
@@ -7196,7 +7195,7 @@ const InventoryMovement = () => {
                     </div>
                 </div>
             </ModalShell>
-            <ModalShell open={documentModal.open} title={documentModal.form.id ? `Sửa ${documentTitleMap[documentModal.tabKey]}` : `Tạo ${documentTitleMap[documentModal.tabKey]}`} onClose={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} footer={<div className="flex items-center justify-between gap-3"><div className="text-[13px] font-black text-primary">{documentModal.tabKey === 'damaged' ? `Tổng số lượng: ${formatNumber(documentModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}` : `Tổng giá trị tạm tính: ${formatCurrency(documentLineTotal)}`}</div><div className="flex gap-2"><button type="button" onClick={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} className={ghostButton}>Hủy</button><button type="button" onClick={saveDocument} className={primaryButton} disabled={loading.saving}>{loading.saving ? 'Đang lưu' : 'Lưu phiếu'}</button></div></div>}><div className="space-y-4"><div className="grid gap-3 md:grid-cols-3"><input type="date" value={documentModal.form.document_date} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, document_date: event.target.value } }))} className={inputClass} /><select value={documentModal.form.supplier_id} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, supplier_id: event.target.value } }))} className={selectClass}><option value="">Không gắn nhà cung cấp</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select><div className="flex items-center rounded-sm border border-primary/15 px-3 text-[13px] font-semibold text-primary">{documentTitleMap[documentModal.tabKey]}</div></div><ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => { const index = documentModal.form.items.findIndex((item) => !item.product_id); const targetIndex = index >= 0 ? index : documentModal.form.items.length; if (index < 0) addLine(setDocumentModal); attachProductToLine(setDocumentModal, targetIndex, product); }} buttonLabel="Thêm vào phiếu" /><div className="overflow-hidden rounded-sm border border-primary/10"><table className="w-full border-collapse"><thead className="bg-[#f6f9fc]"><tr>{['Sản phẩm', 'Số lượng', documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? 'Giá vốn' : null, documentModal.tabKey === 'adjustments' ? 'Loại tồn' : null, documentModal.tabKey === 'adjustments' ? 'Hướng' : null, 'Ghi chú', 'Xóa'].filter(Boolean).map((label) => <th key={label} className="border-b border-r border-primary/10 px-3 py-2.5 text-center text-[12px] font-bold text-primary">{label}</th>)}</tr></thead><tbody>{documentModal.form.items.map((item, index) => <tr key={item.key}><td className="border-b border-r border-primary/10 px-3 py-2"><div className="space-y-2">{item.product_id ? <CellText primary={item.product_name || '-'} secondary={item.product_sku || '-'} /> : <div className="text-[12px] text-primary/45">Chưa chọn sản phẩm</div>}<ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => attachProductToLine(setDocumentModal, index, product)} placeholder="Đổi sản phẩm" buttonLabel="Chọn" /></div></td><td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.quantity} onChange={(event) => updateLine(setDocumentModal, index, 'quantity', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} /></td>{documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.unit_cost} onChange={(event) => updateLine(setDocumentModal, index, 'unit_cost', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} /></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.stock_bucket} onChange={(event) => updateLine(setDocumentModal, index, 'stock_bucket', event.target.value)} className={`w-full ${selectClass}`}><option value="sellable">Tồn bán được</option><option value="damaged">Tồn hỏng</option></select></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.direction} onChange={(event) => updateLine(setDocumentModal, index, 'direction', event.target.value)} className={`w-full ${selectClass}`}><option value="in">Cộng</option><option value="out">Trừ</option></select></td> : null}<td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.notes} onChange={(event) => updateLine(setDocumentModal, index, 'notes', event.target.value)} className={`w-full ${inputClass}`} placeholder="Ghi chú" /></td><td className="border-b border-primary/10 px-3 py-2 text-center"><button type="button" onClick={() => removeLine(setDocumentModal, index)} className={dangerButton}>Xóa</button></td></tr>)}</tbody></table></div><div className="flex justify-between gap-2"><button type="button" onClick={() => addLine(setDocumentModal)} className={ghostButton}>Thêm dòng</button><textarea value={documentModal.form.notes} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú phiếu kho" className="min-h-[96px] flex-1 rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary" /></div></div></ModalShell>
+            <ModalShell open={documentModal.open} title={documentModal.form.id ? `Sửa ${documentTitleMap[documentModal.tabKey]}` : `Tạo ${documentTitleMap[documentModal.tabKey]}`} onClose={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} footer={<div className="flex items-center justify-between gap-3"><div className="text-[13px] font-black text-primary">{documentModal.tabKey === 'damaged' ? `Tổng số lượng: ${formatNumber(documentModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}` : `Tổng giá trị tạm tính: ${formatCurrency(documentLineTotal)}`}</div><div className="flex gap-2"><button type="button" onClick={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} className={ghostButton}>Hủy</button><button type="button" onClick={saveDocument} className={primaryButton} disabled={loading.saving}>{loading.saving ? 'Đang lưu' : 'Lưu phiếu'}</button></div></div>}><div className="space-y-4"><div className="grid gap-3 md:grid-cols-3"><input type="date" value={documentModal.form.document_date} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, document_date: event.target.value } }))} className={inputClass} /><select value={documentModal.form.supplier_id} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, supplier_id: event.target.value } }))} className={selectClass}><option value="">Không gắn nhà cung cấp</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select><div className="flex items-center rounded-sm border border-primary/15 px-3 text-[13px] font-semibold text-primary">{documentTitleMap[documentModal.tabKey]}</div></div><ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => { const index = documentModal.form.items.findIndex((item) => !item.product_id); const targetIndex = index >= 0 ? index : documentModal.form.items.length; if (index < 0) addLine(setDocumentModal); attachProductToLine(setDocumentModal, targetIndex, product); }} buttonLabel="Thêm vào phiếu" /><div className="overflow-hidden rounded-sm border border-primary/10"><table className="w-full border-collapse"><thead className="bg-[#f6f9fc]"><tr>{['Sản phẩm', 'Số lượng', documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? 'Giá vốn' : null, documentModal.tabKey === 'adjustments' ? 'Loại tồn' : null, documentModal.tabKey === 'adjustments' ? 'Hướng' : null, 'Ghi chú', 'Xóa'].filter(Boolean).map((label) => <th key={label} className="border-b border-r border-primary/10 px-3 py-2.5 text-center text-[12px] font-bold text-primary">{label}</th>)}</tr></thead><tbody>{documentModal.form.items.map((item, index) => <tr key={item.key}><td className="border-b border-r border-primary/10 px-3 py-2"><div className="space-y-2">{item.product_id ? <CellText primary={item.product_name || '-'} secondary={item.product_sku || '-'} /> : <div className="text-[12px] text-primary/45">Chưa chọn sản phẩm</div>}<ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => attachProductToLine(setDocumentModal, index, product)} placeholder="Đổi sản phẩm" buttonLabel="Chọn" /></div></td><td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.quantity} onChange={(event) => updateLine(setDocumentModal, index, 'quantity', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} /></td>{documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><input value={formatWholeNumberInput(item.unit_cost)} onChange={(event) => updateLine(setDocumentModal, index, 'unit_cost', normalizeWholeMoneyDraft(event.target.value))} className={`w-full text-right ${inputClass}`} /></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.stock_bucket} onChange={(event) => updateLine(setDocumentModal, index, 'stock_bucket', event.target.value)} className={`w-full ${selectClass}`}><option value="sellable">Tồn bán được</option><option value="damaged">Tồn hỏng</option></select></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.direction} onChange={(event) => updateLine(setDocumentModal, index, 'direction', event.target.value)} className={`w-full ${selectClass}`}><option value="in">Cộng</option><option value="out">Trừ</option></select></td> : null}<td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.notes} onChange={(event) => updateLine(setDocumentModal, index, 'notes', event.target.value)} className={`w-full ${inputClass}`} placeholder="Ghi chú" /></td><td className="border-b border-primary/10 px-3 py-2 text-center"><button type="button" onClick={() => removeLine(setDocumentModal, index)} className={dangerButton}>Xóa</button></td></tr>)}</tbody></table></div><div className="flex justify-between gap-2"><button type="button" onClick={() => addLine(setDocumentModal)} className={ghostButton}>Thêm dòng</button><textarea value={documentModal.form.notes} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú phiếu kho" className="min-h-[96px] flex-1 rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary" /></div></div></ModalShell>
         </div>
     );
 };

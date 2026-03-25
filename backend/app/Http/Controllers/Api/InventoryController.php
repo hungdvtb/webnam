@@ -787,9 +787,9 @@ class InventoryController extends Controller
             ->where('product_id', $normalizedProductId)
             ->firstOrFail();
         $this->productPricingService->syncProductFromSupplierPrice($price, auth()->id());
-        $price = $price->fresh();
+        $price = $price->fresh(['product.category:id,name', 'updater:id,name']);
 
-        return response()->json($price->load(['product:id,sku,name,expected_cost,cost_price,stock_quantity,type,category_id', 'product.category:id,name', 'updater:id,name']), 201);
+        return response()->json($this->supplierPricePayload($price), 201);
     }
 
     public function updateSupplierPrice(Request $request, int $id, int $priceId)
@@ -819,9 +819,9 @@ class InventoryController extends Controller
             'updated_by' => auth()->id(),
         ])->save();
         $this->productPricingService->syncProductFromSupplierPrice($price, auth()->id());
-        $price = $price->fresh();
+        $price = $price->fresh(['product.category:id,name', 'updater:id,name']);
 
-        return response()->json($price->load(['product:id,sku,name,expected_cost,cost_price,stock_quantity,type,category_id', 'product.category:id,name', 'updater:id,name']));
+        return response()->json($this->supplierPricePayload($price));
     }
 
     public function destroySupplierPrice(int $id, int $priceId)
@@ -2771,6 +2771,36 @@ class InventoryController extends Controller
             'supplier_price_updated_at' => $supplierPrice?->updated_at,
             'deleted_at' => $product->deleted_at,
             'created_at' => $product->created_at,
+        ];
+    }
+
+    private function supplierPricePayload(SupplierProductPrice $price): array
+    {
+        $product = $price->relationLoaded('product')
+            ? $price->product
+            : $price->product()->with('category:id,name')->first();
+        $productPayload = $product ? $this->productPayload($product, $price) : null;
+        $unitCost = $price->unit_cost !== null ? (float) $price->unit_cost : null;
+
+        return [
+            'id' => (int) $price->id,
+            'supplier_id' => (int) $price->supplier_id,
+            'product_id' => (int) $price->product_id,
+            'supplier_product_code' => $price->supplier_product_code,
+            'unit_cost' => $unitCost,
+            'supplier_unit_cost' => $unitCost,
+            'notes' => $price->notes,
+            'updated_at' => $price->updated_at,
+            'updated_by' => $price->updated_by ? (int) $price->updated_by : null,
+            'updater' => $price->relationLoaded('updater') && $price->updater
+                ? [
+                    'id' => (int) $price->updater->id,
+                    'name' => $price->updater->name,
+                ]
+                : null,
+            'updater_name' => $price->relationLoaded('updater') ? $price->updater?->name : null,
+            'expected_cost' => $productPayload['expected_cost'] ?? null,
+            'product' => $productPayload,
         ];
     }
 

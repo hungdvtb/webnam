@@ -15,6 +15,7 @@ import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { PRODUCT_TYPE_FORM_META } from '../../config/productTypes';
 import { compressImage, formatBytes } from '../../utils/imageUtils';
+import { formatWholeMoneyInput, normalizeWholeMoneyDraft, normalizeWholeMoneyNumber } from '../../utils/money';
 
 const ItemType = {
     IMAGE: 'image',
@@ -399,10 +400,7 @@ const BundleOptionPostSelector = ({
 
 
 const formatNumberOutput = (num) => {
-    if (num === null || num === undefined || num === '') return '';
-    // Bỏ phần thập phân, giữ lại số nguyên
-    const intValue = Math.floor(Number(num));
-    return intValue.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+    return formatWholeMoneyInput(num);
 };
 
 const removeAccents = (str) => {
@@ -914,12 +912,8 @@ const ProductForm = () => {
     }, []);
 
     const normalizeMoneyValue = (value) => {
-        if (value === null || value === undefined || value === '') {
-            return '';
-        }
-
-        const parsedValue = Number(value);
-        return Number.isFinite(parsedValue) ? Math.floor(parsedValue) : '';
+        const parsedValue = normalizeWholeMoneyNumber(value);
+        return parsedValue ?? '';
     };
 
     const resolveDuplicateSafeCost = (primaryValue, fallbackValue = null) => {
@@ -2282,7 +2276,7 @@ const ProductForm = () => {
     };
 
     const handlePriceInputChange = (e, field) => {
-        const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
+        const raw = normalizeWholeMoneyDraft(e.target.value);
         setFormData(prev => ({ ...prev, [field]: raw }));
     };
 
@@ -2339,7 +2333,9 @@ const ProductForm = () => {
 
     const handleVariantChange = (index, field, value) => {
         const updated = [...variants];
-        if (field === 'price' || field === 'stock' || field === 'expected_cost' || field === 'weight') {
+        if (field === 'price' || field === 'expected_cost') {
+            value = normalizeWholeMoneyDraft(value);
+        } else if (field === 'stock' || field === 'weight') {
             value = value.toString().replace(/[^0-9]/g, '');
         }
         if (field === 'sku') {

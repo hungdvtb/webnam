@@ -1570,6 +1570,35 @@ const OrderList = () => {
         }
     };
 
+    const handleDuplicateOrder = async (orderId, event) => {
+        event?.stopPropagation();
+
+        let duplicatedOrderId = null;
+
+        try {
+            setLoading(true);
+            const response = await orderApi.duplicate(orderId, { target_kind: DRAFT_ORDER_KIND });
+            duplicatedOrderId = Number(response?.data?.id || 0);
+
+            if (!duplicatedOrderId) {
+                throw new Error('Không thể tạo bản sao đơn hàng.');
+            }
+
+            orderApi.preloadBootstrap({ mode: 'form' });
+            orderApi.preloadOne(duplicatedOrderId);
+        } catch (error) {
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || error.message || 'Lỗi sao chép đơn hàng',
+            });
+            return;
+        } finally {
+            setLoading(false);
+        }
+
+        navigate(`/admin/orders/edit/${duplicatedOrderId}`);
+    };
+
     const handleBulkConvert = async (targetKind) => {
         if (!selectedIds.length) return;
         try {
@@ -2311,6 +2340,7 @@ const OrderList = () => {
                                                 {!isTrashView ? (
                                                     <>
                                                         <button onMouseEnter={() => warmOrderEditor(o.id)} onFocus={() => warmOrderEditor(o.id)} onClick={(e) => { e.stopPropagation(); openOrderEditor(o.id); }} className="p-1 hover:text-primary" title="Sửa đơn"><span className="material-symbols-outlined text-[18px]">edit</span></button>
+                                                        <button onClick={(e) => handleDuplicateOrder(o.id, e)} className="p-1 hover:text-primary" title="Sao chép thành đơn nháp"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                                         {isDraftOrder(o.order_kind)
                                                             ? <button onClick={(e) => handleConvertOrder(o.id, MAIN_ORDER_KIND, e)} className="p-1 hover:text-primary" title="Chốt thành đơn chính"><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>
                                                             : <button onClick={(e) => handleConvertOrder(o.id, DRAFT_ORDER_KIND, e)} className="p-1 hover:text-sky-700" title="Chuyển sang đơn nháp"><span className="material-symbols-outlined text-[18px]">drive_file_move</span></button>}
@@ -2318,6 +2348,7 @@ const OrderList = () => {
                                                     </>
                                                 ) : (
                                                     <>
+                                                        <button onClick={(e) => handleDuplicateOrder(o.id, e)} className="p-1 hover:text-primary" title="Sao chép thành đơn nháp"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                                         <button onClick={(e) => handleRestoreOrder(o.id, e)} className="p-1 hover:text-green-600" title="Khôi phục"><span className="material-symbols-outlined text-[18px]">restore_from_trash</span></button>
                                                         <button onClick={(e) => handleForceDeleteOrder(o.id, e)} className="p-1 hover:text-brick" title="Xóa vĩnh viễn"><span className="material-symbols-outlined text-[18px]">delete_forever</span></button>
                                                     </>

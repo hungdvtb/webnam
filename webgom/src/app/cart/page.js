@@ -65,7 +65,7 @@ const getCartItemMeta = (item) => {
 };
 
 const CHECKOUT_PHONE_REGEX = /^(0)[0-9]{9}$/;
-const CHECKOUT_DRAFT_DELAY_MS = 60 * 1000;
+const CHECKOUT_DRAFT_DELAY_MS = 10 * 60 * 1000;
 const CHECKOUT_DRAFT_UPDATE_DELAY_MS = 2000;
 const CHECKOUT_DRAFT_STORAGE_KEY = `webgom_checkout_draft_${config.siteCode}`;
 

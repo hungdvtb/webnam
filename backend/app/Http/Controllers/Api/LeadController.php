@@ -20,6 +20,7 @@ class LeadController extends Controller
 {
     private const NOTIFICATION_SETTINGS_KEY_PREFIX = 'lead_notification_settings_user_';
     private const NOTIFICATION_ITEMS_LIMIT = 12;
+    protected array $draftStatusCache = [];
 
     public function __construct(
         protected LeadBundleResolver $bundleResolver
@@ -135,11 +136,138 @@ class LeadController extends Controller
             ->count();
     }
 
-    protected function transformNotificationLead(Lead $lead, ?LeadNotificationRead $notificationRead = null): array
+    protected function displayTimezone(): string
     {
-        return $this->transformLead($lead) + [
+        return (string) config('app.display_timezone', 'Asia/Ho_Chi_Minh');
+    }
+
+    protected function localizeDateTime(?Carbon $dateTime): ?Carbon
+    {
+        return $dateTime?->copy()->timezone($this->displayTimezone());
+    }
+
+    protected function isoDateTime(?Carbon $dateTime): ?string
+    {
+        return $this->localizeDateTime($dateTime)?->toIso8601String();
+    }
+
+    protected function dateLabel(?Carbon $dateTime): ?string
+    {
+        return $this->localizeDateTime($dateTime)?->format('Y-m-d');
+    }
+
+    protected function timeLabel(?Carbon $dateTime): ?string
+    {
+        return $this->localizeDateTime($dateTime)?->format('H:i:s');
+    }
+
+    protected function dateTimeLabel(?Carbon $dateTime): ?string
+    {
+        return $this->localizeDateTime($dateTime)?->format('Y-m-d H:i:s');
+    }
+
+    protected function draftStatusForAccount(int $accountId): ?LeadStatus
+    {
+        if ($accountId <= 0) {
+            return null;
+        }
+
+        if (!array_key_exists($accountId, $this->draftStatusCache)) {
+            $this->draftStatusCache[$accountId] = LeadStatus::ensureDefaultsForAccount($accountId)
+                ->firstWhere('code', 'don-nhap');
+        }
+
+        return $this->draftStatusCache[$accountId];
+    }
+
+    protected function leadUsesDraftStatus(Lead $lead, ?LeadStatus $draftStatus = null): bool
+    {
+        if ((bool) $lead->is_draft) {
+            return true;
+        }
+
+        $draftStatusId = (int) ($draftStatus?->id ?? 0);
+        if ($draftStatusId > 0 && (int) $lead->lead_status_id === $draftStatusId) {
+            return true;
+        }
+
+        $statusCode = trim((string) ($lead->statusConfig?->code ?? $lead->status ?? ''));
+
+        return $statusCode === 'don-nhap';
+    }
+
+    protected function resolvedLeadStatus(Lead $lead, ?LeadStatus $draftStatus = null): ?LeadStatus
+    {
+        if ($this->leadUsesDraftStatus($lead, $draftStatus)) {
+            return $draftStatus ?: $lead->statusConfig;
+        }
+
+        return $lead->statusConfig;
+    }
+
+    protected function isDraftStatusSelection(mixed $status, ?LeadStatus $draftStatus = null): bool
+    {
+        if ($status === null || $status === '') {
+            return false;
+        }
+
+        if (is_numeric($status) && $draftStatus) {
+            return (int) $status === (int) $draftStatus->id;
+        }
+
+        return trim((string) $status) === 'don-nhap';
+    }
+
+    protected function applyNormalizedStatusFilter(Builder $query, mixed $status, ?LeadStatus $draftStatus = null): void
+    {
+        $draftStatusId = (int) ($draftStatus?->id ?? 0);
+
+        if ($this->isDraftStatusSelection($status, $draftStatus)) {
+            $query->where(function (Builder $builder) use ($draftStatusId) {
+                $builder->where('is_draft', true)
+                    ->orWhere('status', 'don-nhap');
+
+                if ($draftStatusId > 0) {
+                    $builder->orWhere('lead_status_id', $draftStatusId);
+                }
+            });
+
+            return;
+        }
+
+        $query->where(function (Builder $builder) use ($status) {
+            if (is_numeric($status)) {
+                $builder->where('lead_status_id', (int) $status);
+                return;
+            }
+
+            $builder->where('status', $status)
+                ->orWhereHas('statusConfig', fn (Builder $statusQuery) => $statusQuery->where('code', $status));
+        });
+
+        $query->where(function (Builder $builder) use ($draftStatusId) {
+            $builder->where(function (Builder $draftBuilder) {
+                $draftBuilder->whereNull('is_draft')
+                    ->orWhere('is_draft', false);
+            })->where(function (Builder $statusBuilder) use ($draftStatusId) {
+                $statusBuilder->whereNull('status')
+                    ->orWhere('status', '!=', 'don-nhap');
+
+                if ($draftStatusId > 0) {
+                    $statusBuilder->where(function (Builder $draftStatusBuilder) use ($draftStatusId) {
+                        $draftStatusBuilder->whereNull('lead_status_id')
+                            ->orWhere('lead_status_id', '!=', $draftStatusId);
+                    });
+                }
+            });
+        });
+    }
+
+    protected function transformNotificationLead(Lead $lead, ?LeadNotificationRead $notificationRead = null, ?LeadStatus $draftStatus = null): array
+    {
+        return $this->transformLead($lead, $draftStatus) + [
             'notification_is_read' => (bool) $notificationRead,
-            'notification_read_at' => $notificationRead?->read_at?->toIso8601String(),
+            'notification_read_at' => $this->isoDateTime($notificationRead?->read_at),
         ];
     }
 
@@ -148,6 +276,7 @@ class LeadController extends Controller
         $accountId = $this->accountId($request);
         $userId = $this->userId($request);
         $limit = max(1, min($limit, 30));
+        $draftStatus = $this->draftStatusForAccount($accountId);
 
         $notifications = Lead::query()
             ->where('account_id', $accountId)
@@ -162,7 +291,7 @@ class LeadController extends Controller
 
         return [
             'items' => $notifications
-                ->map(fn (Lead $lead) => $this->transformNotificationLead($lead, $readMap[$lead->id] ?? null))
+                ->map(fn (Lead $lead) => $this->transformNotificationLead($lead, $readMap[$lead->id] ?? null, $draftStatus))
                 ->values(),
             'unread_count' => $this->unreadNotificationCount($accountId, $userId),
             'settings' => $this->notificationSettings($accountId, $userId),
@@ -254,23 +383,20 @@ class LeadController extends Controller
 
         if ($includeStatus && $request->filled('status')) {
             $status = $request->input('status');
-            $query->where(function (Builder $builder) use ($status) {
-                if (is_numeric($status)) {
-                    $builder->where('lead_status_id', (int) $status);
-                    return;
-                }
-
-                $builder->where('status', $status)
-                    ->orWhereHas('statusConfig', fn (Builder $statusQuery) => $statusQuery->where('code', $status));
-            });
+            $this->applyNormalizedStatusFilter(
+                $query,
+                $status,
+                $this->draftStatusForAccount($this->accountId($request))
+            );
         }
 
         return $query;
     }
 
-    protected function transformLead(Lead $lead): array
+    protected function transformLead(Lead $lead, ?LeadStatus $draftStatus = null): array
     {
-        $status = $lead->statusConfig;
+        $status = $this->resolvedLeadStatus($lead, $draftStatus);
+        $usesDraftStatus = $this->leadUsesDraftStatus($lead, $draftStatus);
         $resolvedItems = $lead->items->map(function ($item) use ($lead) {
             $resolved = $this->bundleResolver->resolveStoredLeadItem($item, $lead);
 
@@ -309,7 +435,7 @@ class LeadController extends Controller
         return [
             'id' => $lead->id,
             'lead_number' => $lead->lead_number,
-            'lead_status_id' => $lead->lead_status_id,
+            'lead_status_id' => $status?->id ?? $lead->lead_status_id,
             'customer_name' => $lead->customer_name,
             'phone' => $lead->phone,
             'email' => $lead->email,
@@ -319,18 +445,18 @@ class LeadController extends Controller
             'product_name' => $lead->product_name,
             'tag' => $lead->tag,
             'link_url' => $lead->link_url,
-            'status' => $lead->status,
-            'is_draft' => (bool) $lead->is_draft,
-            'placed_at' => optional($lead->placed_at)->toIso8601String(),
-            'placed_date' => optional($lead->placed_at)->format('Y-m-d'),
-            'placed_time' => optional($lead->placed_at)->format('H:i:s'),
-            'draft_captured_at' => optional($lead->draft_captured_at)->toIso8601String(),
-            'converted_at' => optional($lead->converted_at)->toIso8601String(),
+            'status' => $status?->code ?? ($usesDraftStatus ? 'don-nhap' : $lead->status),
+            'is_draft' => $usesDraftStatus,
+            'placed_at' => $this->isoDateTime($lead->placed_at),
+            'placed_date' => $this->dateLabel($lead->placed_at),
+            'placed_time' => $this->timeLabel($lead->placed_at),
+            'draft_captured_at' => $this->isoDateTime($lead->draft_captured_at),
+            'converted_at' => $this->isoDateTime($lead->converted_at),
             'total_amount' => (float) $lead->total_amount,
             'discount_amount' => (float) $lead->discount_amount,
             'message' => $lead->message,
             'latest_note_excerpt' => $lead->latest_note_excerpt,
-            'last_noted_at' => optional($lead->last_noted_at)->toIso8601String(),
+            'last_noted_at' => $this->isoDateTime($lead->last_noted_at),
             'order_id' => $lead->order_id,
             'order_number' => $lead->order?->order_number,
             'status_config' => $status ? [
@@ -350,6 +476,8 @@ class LeadController extends Controller
     {
         $accountId = $this->accountId($request);
         $statuses = LeadStatus::ensureDefaultsForAccount($accountId);
+        $draftStatus = $statuses->firstWhere('code', 'don-nhap');
+        $draftStatusId = (int) ($draftStatus?->id ?? 0);
 
         $query = Lead::query()
             ->with(['statusConfig', 'latestNote', 'items.product', 'order:id,order_number'])
@@ -369,10 +497,15 @@ class LeadController extends Controller
 
         $summaryQuery = Lead::query()->where('account_id', $accountId);
         $this->applyLeadFilters($summaryQuery, $request, false);
-        $summaryRows = $summaryQuery
-            ->selectRaw('lead_status_id, count(*) as total')
-            ->groupBy('lead_status_id')
-            ->pluck('total', 'lead_status_id');
+        $summaryRows = $draftStatusId > 0
+            ? $summaryQuery
+                ->selectRaw("CASE WHEN is_draft = true OR status = 'don-nhap' OR lead_status_id = {$draftStatusId} THEN {$draftStatusId} ELSE lead_status_id END as normalized_lead_status_id, count(*) as total")
+                ->groupBy('normalized_lead_status_id')
+                ->pluck('total', 'normalized_lead_status_id')
+            : $summaryQuery
+                ->selectRaw('lead_status_id, count(*) as total')
+                ->groupBy('lead_status_id')
+                ->pluck('total', 'lead_status_id');
 
         $tags = Lead::query()
             ->where('account_id', $accountId)
@@ -384,7 +517,7 @@ class LeadController extends Controller
             ->values();
 
         return response()->json([
-            'data' => collect($paginator->items())->map(fn (Lead $lead) => $this->transformLead($lead))->values(),
+            'data' => collect($paginator->items())->map(fn (Lead $lead) => $this->transformLead($lead, $draftStatus))->values(),
             'current_page' => $paginator->currentPage(),
             'last_page' => $paginator->lastPage(),
             'per_page' => $paginator->perPage(),
@@ -410,14 +543,15 @@ class LeadController extends Controller
             ->where('account_id', $this->accountId($request))
             ->with(['statusConfig', 'items.product', 'notesTimeline.user', 'order:id,order_number'])
             ->findOrFail($id);
+        $draftStatus = $this->draftStatusForAccount((int) $lead->account_id);
 
-        return response()->json($this->transformLead($lead) + [
+        return response()->json($this->transformLead($lead, $draftStatus) + [
             'notes_timeline' => $lead->notesTimeline->map(fn ($note) => [
                 'id' => $note->id,
                 'staff_name' => $note->staff_name,
                 'content' => $note->content,
-                'created_at' => $note->created_at?->toIso8601String(),
-                'created_label' => $note->created_at?->format('Y-m-d H:i:s'),
+                'created_at' => $this->isoDateTime($note->created_at),
+                'created_label' => $this->dateTimeLabel($note->created_at),
             ])->values(),
         ]);
     }
@@ -428,6 +562,8 @@ class LeadController extends Controller
             ->where('account_id', $this->accountId($request))
             ->with('statusConfig')
             ->findOrFail($id);
+        $draftStatus = $this->draftStatusForAccount((int) $lead->account_id);
+        $wasDraft = $this->leadUsesDraftStatus($lead, $draftStatus);
 
         $validated = $request->validate([
             'lead_status_id' => 'nullable|integer|exists:lead_statuses,id',
@@ -437,18 +573,31 @@ class LeadController extends Controller
             'link_url' => 'nullable|string',
         ]);
         $statusUpdated = array_key_exists('lead_status_id', $validated) || array_key_exists('status', $validated);
+        $resolvedStatus = null;
 
         if (!empty($validated['lead_status_id'])) {
-            $status = LeadStatus::query()->findOrFail((int) $validated['lead_status_id']);
-            $lead->lead_status_id = $status->id;
-            $lead->status = $status->code;
+            $resolvedStatus = LeadStatus::query()->findOrFail((int) $validated['lead_status_id']);
+            $lead->lead_status_id = $resolvedStatus->id;
+            $lead->status = $resolvedStatus->code;
             $lead->status_changed_at = now();
         } elseif (!empty($validated['status'])) {
-            $status = LeadStatus::query()->where('code', $validated['status'])->first();
-            if ($status) {
-                $lead->lead_status_id = $status->id;
-                $lead->status = $status->code;
+            $resolvedStatus = LeadStatus::query()->where('code', $validated['status'])->first();
+            if ($resolvedStatus) {
+                $lead->lead_status_id = $resolvedStatus->id;
+                $lead->status = $resolvedStatus->code;
                 $lead->status_changed_at = now();
+            }
+        }
+
+        if ($statusUpdated && $resolvedStatus) {
+            $isDraftStatus = $draftStatus && (int) $resolvedStatus->id === (int) $draftStatus->id;
+
+            if ($isDraftStatus) {
+                $lead->is_draft = true;
+                $lead->draft_captured_at = $lead->draft_captured_at ?: now();
+            } elseif ($wasDraft) {
+                $lead->is_draft = false;
+                $lead->converted_at = $lead->converted_at ?: now();
             }
         }
 
@@ -469,7 +618,7 @@ class LeadController extends Controller
         $userId = $this->userId($request);
         $readMap = $this->notificationReadMap($accountId, $userId, [$lead->id]);
 
-        return response()->json($this->transformNotificationLead($lead, $readMap[$lead->id] ?? null) + [
+        return response()->json($this->transformNotificationLead($lead, $readMap[$lead->id] ?? null, $draftStatus) + [
             'notification_unread_count' => $this->unreadNotificationCount($accountId, $userId),
         ]);
     }
@@ -497,8 +646,8 @@ class LeadController extends Controller
                 'id' => $note->id,
                 'staff_name' => $note->staff_name,
                 'content' => $note->content,
-                'created_at' => $note->created_at?->toIso8601String(),
-                'created_label' => $note->created_at?->format('Y-m-d H:i:s'),
+                'created_at' => $this->isoDateTime($note->created_at),
+                'created_label' => $this->dateTimeLabel($note->created_at),
             ])->values(),
         ]);
     }
@@ -532,8 +681,8 @@ class LeadController extends Controller
             'id' => $note->id,
             'staff_name' => $note->staff_name,
             'content' => $note->content,
-            'created_at' => $note->created_at?->toIso8601String(),
-            'created_label' => $note->created_at?->format('Y-m-d H:i:s'),
+            'created_at' => $this->isoDateTime($note->created_at),
+            'created_label' => $this->dateTimeLabel($note->created_at),
             'latest_note_excerpt' => $lead->latest_note_excerpt,
         ], 201);
     }
@@ -633,6 +782,7 @@ class LeadController extends Controller
             ->orderBy('id')
             ->limit(20)
             ->get();
+        $draftStatus = $this->draftStatusForAccount($accountId);
 
         $latestReturnedId = $items->last()?->id ?: $afterId;
         $readMap = $this->notificationReadMap(
@@ -646,7 +796,7 @@ class LeadController extends Controller
             'has_more' => $latestKnownId > $latestReturnedId,
             'unread_count' => $this->unreadNotificationCount($accountId, $userId),
             'items' => $items
-                ->map(fn (Lead $lead) => $this->transformNotificationLead($lead, $readMap[$lead->id] ?? null))
+                ->map(fn (Lead $lead) => $this->transformNotificationLead($lead, $readMap[$lead->id] ?? null, $draftStatus))
                 ->values(),
         ]);
     }

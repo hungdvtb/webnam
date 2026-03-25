@@ -12,7 +12,6 @@ const buttonClassName = 'inline-flex h-10 items-center gap-2 rounded-sm border b
 const iconButtonClassName = 'relative inline-flex size-10 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/70 shadow-sm transition-all hover:border-primary/30 hover:text-primary';
 const MAX_NOTIFICATION_ITEMS = 12;
 const emptyFilters = { status: '', tag: '', date_from: '', date_to: '' };
-const leadNotificationSettingsKey = 'lead_notification_sound_settings';
 const LEAD_COLUMNS = [
     { id: 'placed_at', label: 'Thời gian đặt', minWidth: '150px' },
     { id: 'product', label: 'Sản phẩm', minWidth: '280px' },
@@ -197,36 +196,101 @@ const mergeLeadCollections = (incoming, current, perPage = 20) => {
         .slice(0, perPage);
 };
 
+const createDefaultNotificationSettings = () => ({
+    enabled: true,
+    useDefault: true,
+    customAudioUrl: '',
+    customAudioName: '',
+    hasCustomAudio: false,
+});
+
+const normalizeNotificationSettings = (settings) => {
+    const customAudioUrl = typeof settings?.custom_audio_url === 'string'
+        ? settings.custom_audio_url
+        : typeof settings?.customAudioUrl === 'string'
+            ? settings.customAudioUrl
+            : '';
+    const customAudioName = typeof settings?.custom_audio_name === 'string'
+        ? settings.custom_audio_name
+        : typeof settings?.customAudioName === 'string'
+            ? settings.customAudioName
+            : '';
+    const hasCustomAudio = settings?.has_custom_audio === true
+        || settings?.hasCustomAudio === true
+        || Boolean(customAudioUrl);
+
+    return {
+        enabled: settings?.enabled !== false,
+        useDefault: hasCustomAudio ? settings?.use_default !== false && settings?.useDefault !== false : true,
+        customAudioUrl,
+        customAudioName,
+        hasCustomAudio,
+    };
+};
+
+const normalizeNotificationItem = (lead) => ({
+    ...lead,
+    notification_is_read: lead?.notification_is_read === true,
+    notification_read_at: lead?.notification_read_at || null,
+});
+
+const compareNotificationItems = (left, right) => {
+    const readDiff = Number(left?.notification_is_read === true) - Number(right?.notification_is_read === true);
+    if (readDiff !== 0) return readDiff;
+
+    const leftTime = new Date(left?.placed_at || left?.created_at || 0).getTime();
+    const rightTime = new Date(right?.placed_at || right?.created_at || 0).getTime();
+    if (leftTime === rightTime) return Number(right?.id || 0) - Number(left?.id || 0);
+    return rightTime - leftTime;
+};
+
 const mergeNotificationItems = (incoming, current) => {
     const map = new Map();
-    [...incoming, ...current].forEach((lead) => {
-        if (lead?.id) map.set(lead.id, lead);
+
+    [...current, ...incoming].forEach((lead) => {
+        if (!lead?.id) return;
+        map.set(lead.id, normalizeNotificationItem(lead));
     });
 
     return Array.from(map.values())
-        .sort((left, right) => Number(right?.id || 0) - Number(left?.id || 0))
+        .sort(compareNotificationItems)
         .slice(0, MAX_NOTIFICATION_ITEMS);
 };
 
-const getStoredNotificationSettings = () => {
-    if (typeof window === 'undefined') {
-        return { enabled: true, useDefault: true, customAudioDataUrl: '' };
-    }
+const replaceNotificationItems = (items) => mergeNotificationItems(items, []);
 
-    try {
-        const raw = window.localStorage.getItem(leadNotificationSettingsKey);
-        if (!raw) return { enabled: true, useDefault: true, customAudioDataUrl: '' };
+const markNotificationItemsAsRead = (items, leadIds = []) => {
+    if (!Array.isArray(leadIds) || leadIds.length === 0) return items;
 
-        const parsed = JSON.parse(raw);
-        return {
-            enabled: parsed?.enabled !== false,
-            useDefault: parsed?.useDefault !== false,
-            customAudioDataUrl: typeof parsed?.customAudioDataUrl === 'string' ? parsed.customAudioDataUrl : '',
-        };
-    } catch (error) {
-        console.error('Failed to read lead notification settings', error);
-        return { enabled: true, useDefault: true, customAudioDataUrl: '' };
-    }
+    const nowIso = new Date().toISOString();
+    const leadIdSet = new Set(leadIds.map((id) => Number(id)));
+
+    return items
+        .map((item) => (leadIdSet.has(Number(item?.id))
+            ? {
+                ...item,
+                notification_is_read: true,
+                notification_read_at: item?.notification_read_at || nowIso,
+            }
+            : item))
+        .sort(compareNotificationItems)
+        .slice(0, MAX_NOTIFICATION_ITEMS);
+};
+
+const getNotificationStatusMeta = (lead) => (
+    lead?.notification_is_read
+        ? { label: 'Đã xem', tone: 'bg-primary/10 text-primary/70' }
+        : { label: 'Chưa xem', tone: 'bg-brick/10 text-brick' }
+);
+
+const getNotificationPlacedAtLabel = (lead) => {
+    const placedDate = String(lead?.placed_date || '').trim();
+    const placedTime = String(lead?.placed_time || '').trim();
+
+    if (placedDate && placedTime) return `${placedDate} ${placedTime}`;
+    if (placedDate) return placedDate;
+    if (placedTime) return placedTime;
+    return 'Vừa xong';
 };
 
 const playDefaultNotificationSound = async (audioContextRef) => {
@@ -1236,8 +1300,16 @@ const LeadList = () => {
     const [notificationsOpen, setNotificationsOpen] = useState(false);
     const [soundSettingsOpen, setSoundSettingsOpen] = useState(false);
     const [notesLead, setNotesLead] = useState(null);
-    const [unreadNotifications, setUnreadNotifications] = useState([]);
-    const [soundSettings, setSoundSettings] = useState(() => getStoredNotificationSettings());
+    const [notificationItems, setNotificationItems] = useState([]);
+    const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+    const [notificationLoading, setNotificationLoading] = useState(true);
+    const [notificationActionBusy, setNotificationActionBusy] = useState(false);
+    const [soundSettings, setSoundSettings] = useState(() => createDefaultNotificationSettings());
+    const [browserNotificationPermission, setBrowserNotificationPermission] = useState(() => (
+        typeof window !== 'undefined' && 'Notification' in window
+            ? window.Notification.permission
+            : 'unsupported'
+    ));
     const [realtimeReady, setRealtimeReady] = useState(false);
     const [page, setPage] = useState(parsePageParam(searchParams.get('page')));
     const [filters, setFilters] = useState(() => buildFiltersFromParams(searchParams));
@@ -1269,6 +1341,7 @@ const LeadList = () => {
     const searchRef = useRef(debouncedQuickSearch);
     const paginationRef = useRef(pagination);
     const leadsRef = useRef(leads);
+    const notificationItemsRef = useRef(notificationItems);
     const fetchSeqRef = useRef(0);
     const abortControllerRef = useRef(null);
     const highlightTimeoutRef = useRef(null);
@@ -1277,12 +1350,15 @@ const LeadList = () => {
     const notificationSoundQueuedRef = useRef(false);
     const notificationInteractionReadyRef = useRef(false);
     const realtimeRequestInFlightRef = useRef(false);
+    const browserNotificationRef = useRef(null);
 
     const totalAcrossStatuses = useMemo(
         () => statuses.reduce((sum, status) => sum + Number(status.count || 0), 0),
         [statuses]
     );
-    const unreadNotificationCount = unreadNotifications.length;
+    const unreadNotificationCount = notificationUnreadCount;
+    const unreadNotifications = notificationItems;
+    const setUnreadNotifications = setNotificationItems;
     const leadTableWidth = useMemo(
         () => renderedColumns.reduce((total, column) => {
             const width = columnWidths[column.id] || column.minWidth || 0;
@@ -1317,12 +1393,8 @@ const LeadList = () => {
     useEffect(() => { searchRef.current = debouncedQuickSearch; }, [debouncedQuickSearch]);
     useEffect(() => { paginationRef.current = pagination; }, [pagination]);
     useEffect(() => { leadsRef.current = leads; }, [leads]);
+    useEffect(() => { notificationItemsRef.current = notificationItems; }, [notificationItems]);
     useEffect(() => { latestIdRef.current = latestId; }, [latestId]);
-
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-        window.localStorage.setItem(leadNotificationSettingsKey, JSON.stringify(soundSettings));
-    }, [soundSettings]);
 
     useEffect(() => {
         const nextParams = buildQueryParams(page, filters, debouncedQuickSearch);
@@ -1350,18 +1422,86 @@ const LeadList = () => {
         return true;
     }, []);
 
-    const primeLeadNotificationAudio = useCallback(async ({ userInitiated = false } = {}) => {
-        if (typeof window === 'undefined' || !soundSettings.enabled) return false;
+    const requestBrowserNotificationPermission = useCallback(async (interactive = false) => {
+        if (typeof window === 'undefined' || !('Notification' in window)) {
+            setBrowserNotificationPermission('unsupported');
+            return 'unsupported';
+        }
 
-        if (!soundSettings.useDefault && soundSettings.customAudioDataUrl) {
+        if (window.Notification.permission === 'granted') {
+            setBrowserNotificationPermission('granted');
+            return 'granted';
+        }
+
+        if (!interactive || window.Notification.permission === 'denied') {
+            setBrowserNotificationPermission(window.Notification.permission);
+            return window.Notification.permission;
+        }
+
+        try {
+            const permission = await window.Notification.requestPermission();
+            setBrowserNotificationPermission(permission);
+            return permission;
+        } catch (error) {
+            console.error('Failed to request browser notification permission', error);
+            setBrowserNotificationPermission(window.Notification.permission);
+            return window.Notification.permission;
+        }
+    }, []);
+
+    const showBrowserLeadNotifications = useCallback(async (items) => {
+        if (!Array.isArray(items) || items.length === 0) return;
+        if (typeof window === 'undefined') return;
+        if (!document.hidden && document.hasFocus()) return;
+
+        const permission = await requestBrowserNotificationPermission(false);
+        if (permission !== 'granted') return;
+
+        try {
+            browserNotificationRef.current?.close?.();
+            const title = items.length === 1 ? 'Có lead mới vừa vào' : `Có ${items.length} lead mới vừa vào`;
+            const lead = items[0];
+            const body = items.length === 1
+                ? `${lead.customer_name || 'Khách mới'} - ${getLeadProductSummary(lead) || lead.phone || 'Cần xử lý'}`
+                : items.map((item) => item.customer_name || item.phone || `Lead #${item.id}`).slice(0, 3).join(' | ');
+
+            const notification = new window.Notification(title, {
+                body,
+                tag: 'lead-processing-notifications',
+                renotify: true,
+            });
+
+            notification.onclick = () => {
+                window.focus();
+                setNotificationsOpen(true);
+                if (items[0]?.id) {
+                    setPendingFocusLeadId(items[0].id);
+                    setPage(1);
+                }
+                notification.close();
+            };
+
+            browserNotificationRef.current = notification;
+            window.setTimeout(() => {
+                notification.close();
+            }, 9000);
+        } catch (error) {
+            console.error('Failed to show browser notification', error);
+        }
+    }, [requestBrowserNotificationPermission]);
+
+    const primeLeadNotificationAudio = useCallback(async ({ userInitiated = false, force = false } = {}) => {
+        if (typeof window === 'undefined' || (!soundSettings.enabled && !force)) return false;
+
+        if (!soundSettings.useDefault && soundSettings.customAudioUrl) {
             if (!audioElementRef.current) {
                 audioElementRef.current = new Audio();
                 audioElementRef.current.preload = 'auto';
             }
 
             const audio = audioElementRef.current;
-            if (audio.src !== soundSettings.customAudioDataUrl) {
-                audio.src = soundSettings.customAudioDataUrl;
+            if (audio.src !== soundSettings.customAudioUrl) {
+                audio.src = soundSettings.customAudioUrl;
                 audio.load?.();
             }
 
@@ -1404,17 +1544,17 @@ const LeadList = () => {
             }
             return false;
         }
-    }, [soundSettings.enabled, soundSettings.useDefault, soundSettings.customAudioDataUrl]);
+    }, [soundSettings.enabled, soundSettings.useDefault, soundSettings.customAudioUrl]);
 
-    const playLeadNotificationSound = useCallback(async ({ allowQueue = true, userInitiated = false } = {}) => {
-        if (!soundSettings.enabled) {
+    const playLeadNotificationSound = useCallback(async ({ allowQueue = true, userInitiated = false, force = false } = {}) => {
+        if (!soundSettings.enabled && !force) {
             notificationSoundQueuedRef.current = false;
             return false;
         }
 
         if (userInitiated) {
             notificationInteractionReadyRef.current = true;
-            await primeLeadNotificationAudio({ userInitiated: true });
+            await primeLeadNotificationAudio({ userInitiated: true, force });
         }
 
         if (!userInitiated && !notificationInteractionReadyRef.current) {
@@ -1423,13 +1563,13 @@ const LeadList = () => {
         }
 
         try {
-            if (!soundSettings.useDefault && soundSettings.customAudioDataUrl) {
+            if (!soundSettings.useDefault && soundSettings.customAudioUrl) {
                 const audio = audioElementRef.current || new Audio();
                 audioElementRef.current = audio;
                 audio.preload = 'auto';
 
-                if (audio.src !== soundSettings.customAudioDataUrl) {
-                    audio.src = soundSettings.customAudioDataUrl;
+                if (audio.src !== soundSettings.customAudioUrl) {
+                    audio.src = soundSettings.customAudioUrl;
                     audio.load?.();
                 }
 
@@ -1439,7 +1579,7 @@ const LeadList = () => {
                 return true;
             }
 
-            const unlocked = await primeLeadNotificationAudio({ userInitiated });
+            const unlocked = await primeLeadNotificationAudio({ userInitiated, force });
             if (!unlocked) {
                 if (allowQueue) notificationSoundQueuedRef.current = true;
                 return false;
@@ -1457,7 +1597,7 @@ const LeadList = () => {
             console.error('Failed to play lead notification sound', error);
             return false;
         }
-    }, [primeLeadNotificationAudio, soundSettings.enabled, soundSettings.useDefault, soundSettings.customAudioDataUrl]);
+    }, [primeLeadNotificationAudio, soundSettings.enabled, soundSettings.useDefault, soundSettings.customAudioUrl]);
 
     useEffect(() => {
         if (!soundSettings.enabled) {
@@ -1511,6 +1651,148 @@ const LeadList = () => {
             console.error('Failed to reload lead settings', error);
         }
     }, []);
+
+    const applyNotificationCenterPayload = useCallback((payload, { mergeItems = false, syncSettings = true } = {}) => {
+        const nextItems = Array.isArray(payload?.items) ? payload.items : [];
+
+        setNotificationItems((prev) => (
+            mergeItems
+                ? mergeNotificationItems(nextItems, prev)
+                : replaceNotificationItems(nextItems)
+        ));
+
+        if (typeof payload?.unread_count !== 'undefined') {
+            setNotificationUnreadCount(Math.max(0, Number(payload.unread_count || 0)));
+        }
+
+        if (syncSettings && payload?.settings) {
+            setSoundSettings(normalizeNotificationSettings(payload.settings));
+        }
+    }, []);
+
+    const markNotificationsReadLocally = useCallback((leadIds = [], { markAll = false } = {}) => {
+        if (markAll) {
+            const unreadVisibleIds = notificationItemsRef.current
+                .filter((item) => !item?.notification_is_read)
+                .map((item) => Number(item.id))
+                .filter(Boolean);
+
+            if (unreadVisibleIds.length > 0) {
+                setNotificationItems((prev) => markNotificationItemsAsRead(prev, unreadVisibleIds));
+            }
+
+            setNotificationUnreadCount(0);
+            return unreadVisibleIds.length;
+        }
+
+        const normalizedIds = Array.from(new Set(
+            (Array.isArray(leadIds) ? leadIds : [])
+                .map((id) => Number(id))
+                .filter(Boolean)
+        ));
+
+        if (normalizedIds.length === 0) return 0;
+
+        const unreadIdSet = new Set(
+            notificationItemsRef.current
+                .filter((item) => !item?.notification_is_read)
+                .map((item) => Number(item.id))
+        );
+        const localDelta = normalizedIds.filter((id) => unreadIdSet.has(id)).length;
+
+        if (localDelta > 0) {
+            setNotificationUnreadCount((prev) => Math.max(0, prev - localDelta));
+        }
+
+        setNotificationItems((prev) => markNotificationItemsAsRead(prev, normalizedIds));
+        return localDelta;
+    }, []);
+
+    const fetchNotificationCenter = useCallback(async ({ silent = false } = {}) => {
+        if (!silent) setNotificationLoading(true);
+
+        try {
+            const response = await leadApi.getNotifications();
+            applyNotificationCenterPayload(response.data);
+            return response.data;
+        } catch (error) {
+            console.error('Failed to fetch notification center', error);
+            if (!silent) {
+                showModal({
+                    title: 'Lỗi',
+                    content: 'Không thể tải danh sách thông báo lead.',
+                    type: 'error',
+                });
+            }
+            return null;
+        } finally {
+            if (!silent) setNotificationLoading(false);
+        }
+    }, [applyNotificationCenterPayload, showModal]);
+
+    const markLeadNotificationsRead = useCallback(async ({ leadIds = [], markAll = false, silent = false } = {}) => {
+        const normalizedIds = Array.from(new Set(
+            (Array.isArray(leadIds) ? leadIds : [])
+                .map((id) => Number(id))
+                .filter(Boolean)
+        ));
+
+        if (!markAll && normalizedIds.length === 0) return null;
+
+        markNotificationsReadLocally(normalizedIds, { markAll });
+        setNotificationActionBusy(true);
+
+        try {
+            const response = await leadApi.markNotificationsRead(
+                markAll ? { all: true } : { lead_ids: normalizedIds }
+            );
+
+            applyNotificationCenterPayload(response.data);
+            return response.data;
+        } catch (error) {
+            console.error('Failed to mark lead notifications as read', error);
+            await fetchNotificationCenter({ silent: true });
+
+            if (!silent) {
+                showModal({
+                    title: 'Lỗi',
+                    content: 'Không thể cập nhật trạng thái đã xem của thông báo.',
+                    type: 'error',
+                });
+            }
+
+            return null;
+        } finally {
+            setNotificationActionBusy(false);
+        }
+    }, [applyNotificationCenterPayload, fetchNotificationCenter, markNotificationsReadLocally, showModal]);
+
+    const saveNotificationSettings = useCallback(async (data, { successMessage = '' } = {}) => {
+        setNotificationActionBusy(true);
+
+        try {
+            const response = await leadApi.updateNotificationSettings(data);
+            const nextSettings = normalizeNotificationSettings(response.data?.settings || createDefaultNotificationSettings());
+            setSoundSettings(nextSettings);
+
+            if (successMessage) {
+                showToast({ message: successMessage, type: 'success', duration: 1800 });
+            }
+
+            return nextSettings;
+        } catch (error) {
+            console.error('Failed to save lead notification settings', error);
+            showModal({
+                title: 'Lỗi',
+                content: 'Không thể lưu cài đặt âm thanh thông báo.',
+                type: 'error',
+            });
+            await fetchNotificationCenter({ silent: true });
+            return null;
+        } finally {
+            setNotificationActionBusy(false);
+        }
+    }, [fetchNotificationCenter, showModal, showToast]);
 
     const fetchLeads = useCallback(async (targetPage = pageRef.current, options = {}) => {
         const { silent = false, replaceData = true } = options;
@@ -1577,6 +1859,10 @@ const LeadList = () => {
     }, [reloadSettings]);
 
     useEffect(() => {
+        fetchNotificationCenter({ silent: false });
+    }, [fetchNotificationCenter, user?.id]);
+
+    useEffect(() => {
         const handleClickOutside = (event) => {
             if (notificationPanelRef.current && !notificationPanelRef.current.contains(event.target)) {
                 setNotificationsOpen(false);
@@ -1593,9 +1879,9 @@ const LeadList = () => {
         let isDisposed = false;
         let timeoutId = null;
 
-        const scheduleNextPoll = () => {
+        const scheduleNextPoll = (delay = 2000) => {
             if (isDisposed) return;
-            timeoutId = window.setTimeout(pollRealtime, 2000);
+            timeoutId = window.setTimeout(pollRealtime, delay);
         };
 
         const pollRealtime = async () => {
@@ -1605,14 +1891,22 @@ const LeadList = () => {
             }
 
             realtimeRequestInFlightRef.current = true;
+            let nextDelay = 2000;
 
             try {
                 const response = await leadApi.realtime({ after_id: latestIdRef.current || 0 });
                 if (isDisposed) return;
 
                 const payload = response.data || {};
-                const incoming = payload.items || [];
+                const incoming = Array.isArray(payload.items)
+                    ? payload.items.map(normalizeNotificationItem)
+                    : [];
                 const nextLatestId = payload.latest_id || latestIdRef.current || 0;
+                const hasMore = payload.has_more === true;
+
+                if (typeof payload.unread_count !== 'undefined') {
+                    setNotificationUnreadCount(Math.max(0, Number(payload.unread_count || 0)));
+                }
 
                 if (latestIdRef.current === 0) {
                     if (nextLatestId > 0) setLatestId(nextLatestId);
@@ -1620,13 +1914,14 @@ const LeadList = () => {
                 }
 
                 if (nextLatestId > latestIdRef.current) setLatestId(nextLatestId);
+                if (hasMore) nextDelay = 350;
                 if (!incoming.length) return;
 
                 let newlyQueued = [];
-                setUnreadNotifications((prev) => {
+                setNotificationItems((prev) => {
                     const prevIds = new Set(prev.map((lead) => lead.id));
                     newlyQueued = incoming.filter((lead) => !prevIds.has(lead.id));
-                    return mergeNotificationItems(newlyQueued, prev);
+                    return mergeNotificationItems(incoming, prev);
                 });
 
                 if (newlyQueued.length === 0) {
@@ -1634,6 +1929,7 @@ const LeadList = () => {
                 }
 
                 playLeadNotificationSound();
+                showBrowserLeadNotifications(newlyQueued);
                 showToast({
                     message: newlyQueued.length === 1
                         ? 'Có 1 lead mới vừa vào bảng xử lý.'
@@ -1656,7 +1952,7 @@ const LeadList = () => {
                 console.error('Lead realtime polling failed', error);
             } finally {
                 realtimeRequestInFlightRef.current = false;
-                scheduleNextPoll();
+                scheduleNextPoll(nextDelay);
             }
         };
 
@@ -1667,7 +1963,7 @@ const LeadList = () => {
             realtimeRequestInFlightRef.current = false;
             if (timeoutId) window.clearTimeout(timeoutId);
         };
-    }, [fetchLeads, playLeadNotificationSound, realtimeReady, showToast]);
+    }, [fetchLeads, playLeadNotificationSound, realtimeReady, showBrowserLeadNotifications, showToast]);
 
     useEffect(() => {
         if (!pendingFocusLeadId) return;
@@ -1677,6 +1973,8 @@ const LeadList = () => {
     useEffect(() => () => {
         if (abortControllerRef.current) abortControllerRef.current.abort();
         if (highlightTimeoutRef.current) window.clearTimeout(highlightTimeoutRef.current);
+        browserNotificationRef.current?.close?.();
+        audioElementRef.current?.pause?.();
     }, []);
 
     const handleApplyFilters = () => {
@@ -1699,15 +1997,26 @@ const LeadList = () => {
 
     const handleRefresh = () => {
         fetchLeads(pageRef.current, { silent: false, replaceData: true });
+        fetchNotificationCenter({ silent: true });
     };
 
     const handleLeadStatusChange = async (lead, nextStatusId) => {
         try {
             const response = await leadApi.update(lead.id, { lead_status_id: Number(nextStatusId) });
             const updatedLead = response.data;
+            const nextUnreadCount = Number(response.data?.notification_unread_count);
             setLeads((prev) => prev.map((item) => (item.id === lead.id ? updatedLead : item)));
-            setUnreadNotifications((prev) => prev.filter((item) => item.id !== lead.id));
+            setNotificationItems((prev) => markNotificationItemsAsRead(
+                prev.map((item) => (item.id === lead.id ? normalizeNotificationItem({ ...item, ...updatedLead }) : item)),
+                [lead.id]
+            ));
+            if (Number.isFinite(nextUnreadCount)) {
+                setNotificationUnreadCount(Math.max(0, nextUnreadCount));
+            } else {
+                markNotificationsReadLocally([lead.id]);
+            }
             fetchLeads(pageRef.current, { silent: true, replaceData: false });
+            fetchNotificationCenter({ silent: true });
             showToast({ message: 'Đã cập nhật trạng thái lead.', type: 'success', duration: 1500 });
         } catch (error) {
             console.error('Failed to update lead status', error);
@@ -1722,13 +2031,13 @@ const LeadList = () => {
         }
 
         const returnTo = encodeURIComponent(`${location.pathname}${location.search}`);
-        setUnreadNotifications((prev) => prev.filter((item) => item.id !== lead.id));
+        void markLeadNotificationsRead({ leadIds: [lead.id], silent: true });
         navigate(`/admin/orders/new?lead_id=${lead.id}&return_to=${returnTo}`);
     };
 
     const handleNotificationItemClick = (lead) => {
         setNotificationsOpen(false);
-        setUnreadNotifications((prev) => prev.filter((item) => item.id !== lead.id));
+        void markLeadNotificationsRead({ leadIds: [lead.id], silent: true });
 
         const existsInCurrentPage = leadsRef.current.some((item) => item.id === lead.id);
         if (pageRef.current !== 1 || !existsInCurrentPage) {
@@ -1738,6 +2047,92 @@ const LeadList = () => {
         }
 
         focusLeadRow(lead.id);
+    };
+
+    const handleNotificationBellToggle = async () => {
+        const nextOpen = !notificationsOpen;
+        setNotificationsOpen(nextOpen);
+
+        if (!nextOpen) return;
+
+        void fetchNotificationCenter({ silent: true });
+        await requestBrowserNotificationPermission(true);
+    };
+
+    const handleMarkAllNotificationsRead = async () => {
+        await markLeadNotificationsRead({ markAll: true });
+    };
+
+    const handleNotificationSoundToggle = async (enabled) => {
+        setSoundSettings((prev) => ({ ...prev, enabled }));
+        await saveNotificationSettings({
+            enabled: enabled ? 1 : 0,
+            use_default: soundSettings.useDefault ? 1 : 0,
+        });
+    };
+
+    const handleUseDefaultNotificationSound = async () => {
+        setSoundSettings((prev) => ({ ...prev, useDefault: true }));
+        await saveNotificationSettings({
+            enabled: soundSettings.enabled ? 1 : 0,
+            use_default: 1,
+        });
+    };
+
+    const handleUseSavedCustomNotificationSound = async () => {
+        if (!soundSettings.hasCustomAudio) return;
+
+        setSoundSettings((prev) => ({ ...prev, useDefault: false }));
+        await saveNotificationSettings({
+            enabled: soundSettings.enabled ? 1 : 0,
+            use_default: 0,
+        });
+    };
+
+    const handleRemoveCustomNotificationSound = async () => {
+        setSoundSettings((prev) => ({
+            ...prev,
+            useDefault: true,
+            customAudioUrl: '',
+            customAudioName: '',
+            hasCustomAudio: false,
+        }));
+
+        await saveNotificationSettings({
+            enabled: soundSettings.enabled ? 1 : 0,
+            use_default: 1,
+            remove_custom_audio: 1,
+        }, { successMessage: 'Đã xóa file âm thanh tùy chỉnh.' });
+    };
+
+    const handleUploadNotificationSound = async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('audio', file);
+        formData.append('enabled', '1');
+        formData.append('use_default', '0');
+
+        await saveNotificationSettings(formData, { successMessage: 'Đã lưu file âm thanh thông báo.' });
+        event.target.value = '';
+    };
+
+    const handlePreviewNotificationSound = async () => {
+        await requestBrowserNotificationPermission(true);
+        const played = await playLeadNotificationSound({
+            allowQueue: false,
+            userInitiated: true,
+            force: true,
+        });
+
+        if (!played) {
+            showToast({
+                message: 'Trình duyệt đang chặn autoplay. Chạm một lần vào trang rồi phát thử lại.',
+                type: 'warning',
+                duration: 2600,
+            });
+        }
     };
 
     const handleNoteSaved = (savedNote) => {
@@ -1960,7 +2355,7 @@ const LeadList = () => {
                             <div className="relative" ref={notificationPanelRef}>
                                 <button
                                     type="button"
-                                    onClick={() => setNotificationsOpen((prev) => !prev)}
+                                    onClick={handleNotificationBellToggle}
                                     className={iconButtonClassName}
                                     title="Thông báo lead mới"
                                 >
@@ -1973,28 +2368,198 @@ const LeadList = () => {
                                 </button>
 
                                 {notificationsOpen ? (
-                                    <div className="absolute left-0 top-[calc(100%+10px)] z-30 w-[380px] rounded-sm border border-primary/10 bg-white shadow-2xl">
+                                    <div className="absolute left-0 top-[calc(100%+10px)] z-30 w-[420px] max-w-[calc(100vw-32px)] overflow-hidden rounded-sm border border-primary/10 bg-white shadow-2xl">
+                                        <div className="flex items-start justify-between gap-3 border-b border-primary/10 px-4 py-3">
+                                            <div className="min-w-0">
+                                                <div className="text-[13px] font-black uppercase tracking-[0.08em] text-primary">Lead mới về</div>
+                                                <div className="mt-1 text-[12px] text-primary/55">
+                                                    {unreadNotificationCount > 0
+                                                        ? `${unreadNotificationCount} thông báo chưa xem`
+                                                        : 'Tất cả thông báo đã được xem'}
+                                                </div>
+                                            </div>
+
+                                            <button
+                                                type="button"
+                                                onClick={handleMarkAllNotificationsRead}
+                                                disabled={notificationActionBusy || unreadNotificationCount === 0}
+                                                className="text-[12px] font-bold text-primary transition-colors hover:text-brick disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                Đánh dấu tất cả
+                                            </button>
+                                        </div>
+
+                                        <div className="max-h-[360px] overflow-y-auto">
+                                            {notificationLoading ? (
+                                                <div className="px-4 py-6 text-center text-[13px] text-primary/55">Đang tải thông báo...</div>
+                                            ) : notificationItems.length === 0 ? (
+                                                <div className="px-4 py-6 text-center text-[13px] text-primary/55">Chưa có lead mới.</div>
+                                            ) : notificationItems.map((lead) => {
+                                                const statusMeta = getNotificationStatusMeta(lead);
+
+                                                return (
+                                                    <button
+                                                        key={`notification-center-${lead.id}`}
+                                                        type="button"
+                                                        onClick={() => handleNotificationItemClick(lead)}
+                                                        className={`flex w-full items-start gap-3 border-b border-primary/10 px-4 py-3 text-left transition-all last:border-b-0 hover:bg-primary/[0.04] ${
+                                                            lead.notification_is_read ? 'bg-white' : 'bg-brick/[0.03]'
+                                                        }`}
+                                                    >
+                                                        <span className={`mt-1.5 inline-flex size-2.5 rounded-full ${lead.notification_is_read ? 'bg-primary/20' : 'bg-brick'}`} />
+                                                        <div className="min-w-0 flex-1">
+                                                            <div className="flex items-start justify-between gap-3">
+                                                                <div className="min-w-0">
+                                                                    <div className="truncate text-[13px] font-bold text-[#0F172A]">{lead.customer_name || 'Khách chưa có tên'}</div>
+                                                                    <div className="mt-1 text-[12px] text-primary/60">{lead.phone || 'Chưa có số điện thoại'}</div>
+                                                                </div>
+                                                                <div className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-[0.08em] ${statusMeta.tone}`}>
+                                                                    {statusMeta.label}
+                                                                </div>
+                                                            </div>
+                                                            <div className="mt-2 truncate text-[12px] text-primary/50">{getLeadProductSummary(lead) || 'Không có sản phẩm'}</div>
+                                                            <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-primary/45">
+                                                                <span className="truncate">{lead.address || 'Chưa có địa chỉ'}</span>
+                                                                <span className="shrink-0 font-semibold">{getNotificationPlacedAtLabel(lead)}</span>
+                                                            </div>
+                                                        </div>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+
+                                        <div className="space-y-3 border-t border-primary/10 bg-[#F8FAFC] px-4 py-4">
+                                            <button
+                                                type="button"
+                                                onClick={() => setSoundSettingsOpen((prev) => !prev)}
+                                                className="flex w-full items-center justify-between text-left"
+                                            >
+                                                <div>
+                                                    <div className="text-[12px] font-black uppercase tracking-[0.08em] text-primary">Âm thanh thông báo</div>
+                                                    <div className="text-[12px] text-primary/55">
+                                                        {soundSettings.enabled
+                                                            ? (soundSettings.useDefault ? 'Đang dùng âm mặc định' : 'Đang dùng file âm thanh đã lưu')
+                                                            : 'Đang tắt chuông thông báo'}
+                                                    </div>
+                                                </div>
+                                                <span className="material-symbols-outlined text-[18px] text-primary/45">{soundSettingsOpen ? 'expand_less' : 'expand_more'}</span>
+                                            </button>
+
+                                            {soundSettingsOpen ? (
+                                                <div className="space-y-3">
+                                                    <div className="rounded-sm border border-primary/10 bg-white px-3 py-2 text-[12px] text-primary/65">
+                                                        {browserNotificationPermission === 'granted'
+                                                            ? 'Thông báo nền đã bật. Khi tab đang ẩn vẫn sẽ hiện popup hệ thống.'
+                                                            : browserNotificationPermission === 'denied'
+                                                                ? 'Trình duyệt đang chặn thông báo nền. Hãy mở quyền notification cho trang này.'
+                                                                : browserNotificationPermission === 'unsupported'
+                                                                    ? 'Trình duyệt hiện tại không hỗ trợ thông báo nền.'
+                                                                    : 'Bấm chuông hoặc nút Phát thử một lần để trình duyệt cấp quyền thông báo nền.'}
+                                                    </div>
+
+                                                    <label className="flex items-center gap-2 text-[13px] text-[#0F172A]">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={soundSettings.enabled}
+                                                            disabled={notificationActionBusy}
+                                                            onChange={(event) => handleNotificationSoundToggle(event.target.checked)}
+                                                        />
+                                                        Bật âm thanh khi có lead mới
+                                                    </label>
+
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={handleUseDefaultNotificationSound}
+                                                            disabled={notificationActionBusy}
+                                                            className={buttonClassName}
+                                                        >
+                                                            Dùng âm mặc định
+                                                        </button>
+
+                                                        {soundSettings.hasCustomAudio ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={handleUseSavedCustomNotificationSound}
+                                                                disabled={notificationActionBusy || !soundSettings.useDefault}
+                                                                className={buttonClassName}
+                                                            >
+                                                                Dùng file đã lưu
+                                                            </button>
+                                                        ) : null}
+
+                                                        <button
+                                                            type="button"
+                                                            onClick={handlePreviewNotificationSound}
+                                                            disabled={notificationActionBusy}
+                                                            className={buttonClassName}
+                                                        >
+                                                            Phát thử
+                                                        </button>
+
+                                                        {soundSettings.hasCustomAudio ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={handleRemoveCustomNotificationSound}
+                                                                disabled={notificationActionBusy}
+                                                                className={buttonClassName}
+                                                            >
+                                                                Xóa file
+                                                            </button>
+                                                        ) : null}
+                                                    </div>
+
+                                                    <label className="block">
+                                                        <span className="mb-1 block text-[11px] font-black uppercase tracking-[0.08em] text-primary/55">Chọn file âm thanh</span>
+                                                        <input
+                                                            type="file"
+                                                            accept="audio/*"
+                                                            className={`${inputClassName} h-auto py-2`}
+                                                            disabled={notificationActionBusy}
+                                                            onChange={handleUploadNotificationSound}
+                                                        />
+                                                        <span className="mt-2 block text-[12px] text-primary/55">
+                                                            {soundSettings.hasCustomAudio
+                                                                ? `Đã lưu: ${soundSettings.customAudioName || 'Âm thanh tùy chỉnh'}`
+                                                                : 'Chưa lưu file âm thanh tùy chỉnh.'}
+                                                        </span>
+                                                    </label>
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    </div>
+                                ) : null}
+
+                                {false && notificationsOpen ? (
+                                    <div className="absolute left-0 top-[calc(100%+10px)] z-30 w-[420px] max-w-[calc(100vw-32px)] rounded-sm border border-primary/10 bg-white shadow-2xl">
                                         <div className="flex items-center justify-between border-b border-primary/10 px-4 py-3">
                                             <div>
                                                 <div className="text-[13px] font-black uppercase tracking-[0.08em] text-primary">Lead mới về</div>
                                                 <div className="text-[12px] text-primary/55">Badge sẽ tự xóa khi bạn đánh dấu đã xem.</div>
                                             </div>
-                                            <button type="button" onClick={() => setUnreadNotifications([])} className="text-[12px] font-bold text-primary hover:text-brick">
+                                            <button type="button" onClick={handleMarkAllNotificationsRead} disabled={notificationActionBusy || unreadNotificationCount === 0} className="text-[12px] font-bold text-primary hover:text-brick disabled:cursor-not-allowed disabled:opacity-50">
                                                 Đã xem
                                             </button>
                                         </div>
 
                                         <div className="max-h-[360px] overflow-y-auto">
-                                            {unreadNotifications.length === 0 ? (
+                                            {notificationLoading ? (
                                                 <div className="px-4 py-6 text-center text-[13px] text-primary/55">Chưa có lead mới.</div>
-                                            ) : unreadNotifications.map((lead) => (
+                                            ) : notificationItems.length === 0 ? (
+                                                <div className="px-4 py-6 text-center text-[13px] text-primary/55">Chưa có lead mới.</div>
+                                            ) : notificationItems.map((lead) => {
+                                                const statusMeta = getNotificationStatusMeta(lead);
+                                                return (
                                                 <button
                                                     key={lead.id}
                                                     type="button"
                                                     onClick={() => handleNotificationItemClick(lead)}
-                                                    className="flex w-full items-start justify-between gap-3 border-b border-primary/10 px-4 py-3 text-left transition-all last:border-b-0 hover:bg-primary/[0.04]"
+                                                    className={`flex w-full items-start gap-3 border-b border-primary/10 px-4 py-3 text-left transition-all last:border-b-0 hover:bg-primary/[0.04] ${
+                                                        lead.notification_is_read ? 'bg-white' : 'bg-brick/[0.03]'
+                                                    }`}
                                                 >
-                                                    <div className="min-w-0">
+                                                    <span className={`mt-1.5 inline-flex size-2.5 rounded-full ${lead.notification_is_read ? 'bg-primary/20' : 'bg-brick'}`} />
+                                                    <div className="min-w-0 flex-1">
                                                         <div className="truncate text-[13px] font-bold text-[#0F172A]">{lead.customer_name || 'Khách chưa có tên'}</div>
                                                         <div className="mt-1 text-[12px] text-primary/60">{lead.phone || 'Chưa có số điện thoại'}</div>
                                                         <div className="mt-1 truncate text-[12px] text-primary/50">{getLeadProductSummary(lead) || 'Không có sản phẩm'}</div>
@@ -2003,7 +2568,8 @@ const LeadList = () => {
                                                         {lead.placed_time || lead.placed_date || 'Mới'}
                                                     </div>
                                                 </button>
-                                            ))}
+                                                );
+                                            })}
                                         </div>
 
                                         <div className="space-y-3 border-t border-primary/10 bg-[#F8FAFC] px-4 py-4">

@@ -164,6 +164,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Leads / KhÃ¡ch liÃªn há»‡ tÆ° váº¥n
     Route::get('/leads', [\App\Http\Controllers\Api\LeadController::class , 'index']);
     Route::get('/leads/realtime', [\App\Http\Controllers\Api\LeadController::class , 'realtime']);
+    Route::get('/leads/notifications', [\App\Http\Controllers\Api\LeadController::class , 'notifications']);
+    Route::post('/leads/notifications/read', [\App\Http\Controllers\Api\LeadController::class , 'markNotificationsRead']);
+    Route::post('/leads/notification-settings', [\App\Http\Controllers\Api\LeadController::class , 'storeNotificationSettings']);
     Route::get('/leads/{id}', [\App\Http\Controllers\Api\LeadController::class , 'show']);
     Route::get('/leads/{id}/notes', [\App\Http\Controllers\Api\LeadController::class , 'notes']);
     Route::post('/leads/{id}/notes', [\App\Http\Controllers\Api\LeadController::class , 'storeNote']);

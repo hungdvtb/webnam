@@ -80,4 +80,9 @@ class Lead extends Model
     {
         return $this->belongsTo(Order::class);
     }
+
+    public function notificationReads()
+    {
+        return $this->hasMany(LeadNotificationRead::class);
+    }
 }

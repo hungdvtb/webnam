@@ -5,15 +5,22 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Lead;
 use App\Models\LeadNote;
+use App\Models\LeadNotificationRead;
 use App\Models\LeadStatus;
 use App\Models\Product;
+use App\Models\SiteSetting;
 use App\Services\Leads\LeadBundleResolver;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class LeadController extends Controller
 {
+    private const NOTIFICATION_SETTINGS_KEY_PREFIX = 'lead_notification_settings_user_';
+    private const NOTIFICATION_ITEMS_LIMIT = 12;
+
     public function __construct(
         protected LeadBundleResolver $bundleResolver
     ) {
@@ -22,6 +29,192 @@ class LeadController extends Controller
     protected function accountId(Request $request): int
     {
         return (int) $request->header('X-Account-Id');
+    }
+
+    protected function userId(Request $request): int
+    {
+        return (int) ($request->user()?->id ?? auth()->id() ?? 0);
+    }
+
+    protected function notificationSettingsKey(int $userId): string
+    {
+        return self::NOTIFICATION_SETTINGS_KEY_PREFIX . $userId;
+    }
+
+    protected function defaultNotificationSettings(): array
+    {
+        return [
+            'enabled' => true,
+            'use_default' => true,
+            'custom_audio_path' => null,
+            'custom_audio_name' => null,
+        ];
+    }
+
+    protected function notificationSettings(int $accountId, int $userId): array
+    {
+        if ($accountId <= 0 || $userId <= 0) {
+            return $this->formatNotificationSettings($this->defaultNotificationSettings());
+        }
+
+        $rawValue = SiteSetting::getValue($this->notificationSettingsKey($userId), $accountId);
+        $decoded = [];
+
+        if (is_string($rawValue) && trim($rawValue) !== '') {
+            $parsed = json_decode($rawValue, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($parsed)) {
+                $decoded = $parsed;
+            }
+        }
+
+        return $this->formatNotificationSettings(array_merge($this->defaultNotificationSettings(), $decoded));
+    }
+
+    protected function formatNotificationSettings(array $settings): array
+    {
+        $audioPath = is_string($settings['custom_audio_path'] ?? null) && trim((string) $settings['custom_audio_path']) !== ''
+            ? trim((string) $settings['custom_audio_path'])
+            : null;
+
+        return [
+            'enabled' => ($settings['enabled'] ?? true) !== false,
+            'use_default' => $audioPath ? (($settings['use_default'] ?? true) !== false) : true,
+            'custom_audio_name' => is_string($settings['custom_audio_name'] ?? null) && trim((string) $settings['custom_audio_name']) !== ''
+                ? trim((string) $settings['custom_audio_name'])
+                : null,
+            'custom_audio_path' => $audioPath,
+            'custom_audio_url' => $audioPath ? asset('storage/' . ltrim($audioPath, '/')) : null,
+            'has_custom_audio' => (bool) $audioPath,
+        ];
+    }
+
+    protected function persistNotificationSettings(int $accountId, int $userId, array $settings): array
+    {
+        $payload = [
+            'enabled' => ($settings['enabled'] ?? true) !== false,
+            'use_default' => ($settings['use_default'] ?? true) !== false,
+            'custom_audio_path' => $settings['custom_audio_path'] ?? null,
+            'custom_audio_name' => $settings['custom_audio_name'] ?? null,
+        ];
+
+        SiteSetting::setValue(
+            $this->notificationSettingsKey($userId),
+            json_encode($payload, JSON_UNESCAPED_UNICODE),
+            $accountId
+        );
+
+        return $this->formatNotificationSettings($payload);
+    }
+
+    protected function notificationReadMap(int $accountId, int $userId, array $leadIds): array
+    {
+        if ($accountId <= 0 || $userId <= 0 || empty($leadIds)) {
+            return [];
+        }
+
+        return LeadNotificationRead::query()
+            ->where('account_id', $accountId)
+            ->where('user_id', $userId)
+            ->whereIn('lead_id', $leadIds)
+            ->get()
+            ->keyBy('lead_id')
+            ->all();
+    }
+
+    protected function unreadNotificationCount(int $accountId, int $userId): int
+    {
+        if ($accountId <= 0 || $userId <= 0) {
+            return 0;
+        }
+
+        return Lead::query()
+            ->where('account_id', $accountId)
+            ->whereDoesntHave('notificationReads', function (Builder $builder) use ($userId) {
+                $builder->where('user_id', $userId);
+            })
+            ->count();
+    }
+
+    protected function transformNotificationLead(Lead $lead, ?LeadNotificationRead $notificationRead = null): array
+    {
+        return $this->transformLead($lead) + [
+            'notification_is_read' => (bool) $notificationRead,
+            'notification_read_at' => $notificationRead?->read_at?->toIso8601String(),
+        ];
+    }
+
+    protected function notificationCenterPayload(Request $request, int $limit = self::NOTIFICATION_ITEMS_LIMIT): array
+    {
+        $accountId = $this->accountId($request);
+        $userId = $this->userId($request);
+        $limit = max(1, min($limit, 30));
+
+        $notifications = Lead::query()
+            ->where('account_id', $accountId)
+            ->with(['statusConfig', 'items.product', 'order:id,order_number'])
+            ->orderByDesc('placed_at')
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->get();
+
+        $leadIds = $notifications->pluck('id')->filter()->map(fn ($id) => (int) $id)->all();
+        $readMap = $this->notificationReadMap($accountId, $userId, $leadIds);
+
+        return [
+            'items' => $notifications
+                ->map(fn (Lead $lead) => $this->transformNotificationLead($lead, $readMap[$lead->id] ?? null))
+                ->values(),
+            'unread_count' => $this->unreadNotificationCount($accountId, $userId),
+            'settings' => $this->notificationSettings($accountId, $userId),
+        ];
+    }
+
+    protected function markNotificationsAsRead(Request $request, array $leadIds = [], bool $markAll = false): array
+    {
+        $accountId = $this->accountId($request);
+        $userId = $this->userId($request);
+
+        if ($accountId <= 0 || $userId <= 0) {
+            return [];
+        }
+
+        $targetIds = $markAll
+            ? Lead::query()
+                ->where('account_id', $accountId)
+                ->whereDoesntHave('notificationReads', function (Builder $builder) use ($userId) {
+                    $builder->where('user_id', $userId);
+                })
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->all()
+            : Lead::query()
+                ->where('account_id', $accountId)
+                ->whereIn('id', array_values(array_unique(array_map('intval', $leadIds))))
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+
+        if (empty($targetIds)) {
+            return [];
+        }
+
+        $timestamp = now();
+        $rows = array_map(fn (int $leadId) => [
+            'account_id' => $accountId,
+            'lead_id' => $leadId,
+            'user_id' => $userId,
+            'read_at' => $timestamp,
+            'created_at' => $timestamp,
+            'updated_at' => $timestamp,
+        ], $targetIds);
+
+        LeadNotificationRead::query()->upsert(
+            $rows,
+            ['lead_id', 'user_id'],
+            ['account_id', 'read_at', 'updated_at']
+        );
+
+        return $targetIds;
     }
 
     protected function applyLeadFilters(Builder $query, Request $request, bool $includeStatus = true): Builder
@@ -239,6 +432,7 @@ class LeadController extends Controller
             'address' => 'nullable|string',
             'link_url' => 'nullable|string',
         ]);
+        $statusUpdated = array_key_exists('lead_status_id', $validated) || array_key_exists('status', $validated);
 
         if (!empty($validated['lead_status_id'])) {
             $status = LeadStatus::query()->findOrFail((int) $validated['lead_status_id']);
@@ -263,7 +457,17 @@ class LeadController extends Controller
         $lead->save();
         $lead->load(['statusConfig', 'items.product', 'order:id,order_number']);
 
-        return response()->json($this->transformLead($lead));
+        if ($statusUpdated) {
+            $this->markNotificationsAsRead($request, [$lead->id]);
+        }
+
+        $accountId = $this->accountId($request);
+        $userId = $this->userId($request);
+        $readMap = $this->notificationReadMap($accountId, $userId, [$lead->id]);
+
+        return response()->json($this->transformNotificationLead($lead, $readMap[$lead->id] ?? null) + [
+            'notification_unread_count' => $this->unreadNotificationCount($accountId, $userId),
+        ]);
     }
 
     public function destroy(Request $request, int $id)
@@ -330,9 +534,91 @@ class LeadController extends Controller
         ], 201);
     }
 
+    public function notifications(Request $request)
+    {
+        return response()->json($this->notificationCenterPayload($request));
+    }
+
+    public function markNotificationsRead(Request $request)
+    {
+        $validated = $request->validate([
+            'all' => 'nullable|boolean',
+            'lead_ids' => 'nullable|array',
+            'lead_ids.*' => 'integer',
+        ]);
+
+        $markedIds = $this->markNotificationsAsRead(
+            $request,
+            $validated['lead_ids'] ?? [],
+            (bool) ($validated['all'] ?? false)
+        );
+
+        return response()->json([
+            'marked_ids' => $markedIds,
+            ...$this->notificationCenterPayload($request),
+        ]);
+    }
+
+    public function storeNotificationSettings(Request $request)
+    {
+        $accountId = $this->accountId($request);
+        $userId = $this->userId($request);
+
+        $validated = $request->validate([
+            'enabled' => 'nullable|boolean',
+            'use_default' => 'nullable|boolean',
+            'remove_custom_audio' => 'nullable|boolean',
+            'audio' => 'nullable|file|mimes:mp3,wav,m4a,aac,ogg,webm|max:10240',
+        ]);
+
+        $settings = $this->notificationSettings($accountId, $userId);
+        $audioPath = $settings['custom_audio_path'] ?? null;
+        $audioName = $settings['custom_audio_name'] ?? null;
+
+        if (!empty($validated['remove_custom_audio']) && $audioPath) {
+            Storage::disk('public')->delete($audioPath);
+            $audioPath = null;
+            $audioName = null;
+        }
+
+        if ($request->hasFile('audio')) {
+            if ($audioPath) {
+                Storage::disk('public')->delete($audioPath);
+            }
+
+            $file = $request->file('audio');
+            $extension = Str::lower($file->getClientOriginalExtension() ?: 'mp3');
+            $filename = now()->format('YmdHis') . '_' . Str::random(10) . '.' . $extension;
+            $audioPath = $file->storeAs("uploads/lead-notifications/{$accountId}/{$userId}", $filename, 'public');
+            $audioName = $file->getClientOriginalName();
+            $settings['use_default'] = false;
+            $settings['enabled'] = true;
+        }
+
+        if (array_key_exists('enabled', $validated)) {
+            $settings['enabled'] = (bool) $validated['enabled'];
+        }
+
+        if (array_key_exists('use_default', $validated)) {
+            $settings['use_default'] = (bool) $validated['use_default'];
+        }
+
+        if (!$audioPath) {
+            $settings['use_default'] = true;
+        }
+
+        $settings['custom_audio_path'] = $audioPath;
+        $settings['custom_audio_name'] = $audioName;
+
+        return response()->json([
+            'settings' => $this->persistNotificationSettings($accountId, $userId, $settings),
+        ]);
+    }
+
     public function realtime(Request $request)
     {
         $accountId = $this->accountId($request);
+        $userId = $this->userId($request);
         $afterId = max((int) $request->input('after_id', 0), 0);
         $latestKnownId = Lead::query()->where('account_id', $accountId)->max('id') ?: $afterId;
 
@@ -345,11 +631,19 @@ class LeadController extends Controller
             ->get();
 
         $latestReturnedId = $items->last()?->id ?: $afterId;
+        $readMap = $this->notificationReadMap(
+            $accountId,
+            $userId,
+            $items->pluck('id')->filter()->map(fn ($id) => (int) $id)->all()
+        );
 
         return response()->json([
             'latest_id' => $items->isNotEmpty() ? $latestReturnedId : $latestKnownId,
             'has_more' => $latestKnownId > $latestReturnedId,
-            'items' => $items->map(fn (Lead $lead) => $this->transformLead($lead))->values(),
+            'unread_count' => $this->unreadNotificationCount($accountId, $userId),
+            'items' => $items
+                ->map(fn (Lead $lead) => $this->transformNotificationLead($lead, $readMap[$lead->id] ?? null))
+                ->values(),
         ]);
     }
 

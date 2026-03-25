@@ -115,6 +115,7 @@ export const orderApi = {
     bulkUpdate: (data) => api.post('/orders/bulk-update', data),
     dispatchPreview: (data) => api.post('/orders/dispatch/preview', data),
     dispatch: (data) => api.post('/orders/dispatch', data),
+    quickDispatch: (data) => api.post('/orders/quick-dispatch', data),
     getShippingAlerts: (params) => api.get('/orders/shipping-alerts', { params }),
     getConnectedCarriers: () => api.get('/orders/connected-carriers'),
 };

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { orderApi, warehouseApi } from '../../services/api';
+import { orderApi, shipmentApi, warehouseApi } from '../../services/api';
 import { useNavigate, Link } from 'react-router-dom';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
@@ -485,6 +485,175 @@ const ShippingDispatchModal = ({
     );
 };
 
+const QuickShipmentModal = ({
+    open,
+    rows,
+    blockedOrders,
+    carrierOptions,
+    submitting,
+    onFieldChange,
+    onClose,
+    onSubmit,
+}) => {
+    if (!open) return null;
+
+    const editableRows = rows.filter((row) => !row.locked);
+    const hasInvalidRow = editableRows.some((row) => (
+        !row.tracking_number?.trim()
+        || !row.carrier_name?.trim()
+        || row.shipping_cost === ''
+        || Number(row.shipping_cost) < 0
+    ));
+
+    return createPortal(
+        <div className="fixed inset-0 z-[130] flex items-center justify-center p-6">
+            <div className="absolute inset-0 bg-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+            <div className="relative w-full max-w-5xl rounded-sm bg-white shadow-2xl border border-primary/10 overflow-hidden">
+                <div className="px-6 py-4 border-b border-primary/10 flex items-center justify-between gap-4 bg-primary/[0.02]">
+                    <div className="flex items-center gap-4">
+                        <div className="w-11 h-11 rounded-sm bg-primary/5 border border-primary/10 flex items-center justify-center">
+                            <span className="material-symbols-outlined text-primary text-[22px]">bolt</span>
+                        </div>
+                        <div>
+                            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/40">Gửi vận chuyển nhanh</p>
+                            <h3 className="text-[18px] font-black text-primary mt-1">Nhập tay thông tin gửi hàng cho từng đơn</h3>
+                        </div>
+                    </div>
+                    <button type="button" onClick={onClose} className="text-primary/30 hover:text-primary">
+                        <span className="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+
+                <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto custom-scrollbar">
+                    <div className="flex flex-wrap items-center gap-3">
+                        <div className="rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-3">
+                            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Đơn được chọn</p>
+                            <p className="text-[20px] font-black text-primary mt-1">{rows.length + blockedOrders.length}</p>
+                        </div>
+                        <div className="rounded-sm border border-green-200 bg-green-50 px-4 py-3">
+                            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-green-700/60">Có thể gửi nhanh</p>
+                            <p className="text-[20px] font-black text-green-700 mt-1">{editableRows.length}</p>
+                        </div>
+                        <div className="rounded-sm border border-red-200 bg-red-50 px-4 py-3">
+                            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-red-700/60">Đã có vận đơn</p>
+                            <p className="text-[20px] font-black text-red-700 mt-1">{blockedOrders.length}</p>
+                        </div>
+                    </div>
+
+                    {blockedOrders.length > 0 && (
+                        <div className="rounded-sm border border-red-200 bg-red-50 px-4 py-4">
+                            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-red-700/70">Đơn đã có vận đơn nên bị khóa</p>
+                            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {blockedOrders.map((row) => (
+                                    <div key={row.id} className="rounded-sm border border-red-200 bg-white px-3 py-3">
+                                        <p className="text-[13px] font-black text-primary">{row.order_number}</p>
+                                        <p className="text-[12px] text-primary/60 mt-1">{row.customer_name || 'Chưa có tên khách'}</p>
+                                        <p className="text-[12px] text-red-600 font-semibold mt-2">
+                                            {row.locked_message || 'Đơn này đã được gửi vận chuyển trước đó.'}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="rounded-sm border border-primary/10 overflow-hidden">
+                        <div className="px-4 py-3 border-b border-primary/10 bg-[#fcfcfa] flex items-center justify-between gap-3">
+                            <div>
+                                <p className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/40">Danh sách nhập liệu</p>
+                                <p className="text-[12px] text-primary/55 mt-1">Nếu chọn nhiều đơn, mỗi đơn nhập mã vận đơn riêng. Đơn vị vận chuyển và phí ship có thể giống nhau hoặc khác nhau.</p>
+                            </div>
+                            <div className="text-[11px] font-bold text-primary/40 whitespace-nowrap">
+                                {editableRows.length} dòng cần nhập
+                            </div>
+                        </div>
+
+                        {editableRows.length === 0 ? (
+                            <div className="px-4 py-10 text-center text-[13px] font-bold text-primary/40">
+                                Không còn đơn hợp lệ để gửi vận chuyển nhanh.
+                            </div>
+                        ) : (
+                            <div className="divide-y divide-primary/10">
+                                {editableRows.map((row) => (
+                                    <div key={row.id} className="px-4 py-4 grid grid-cols-1 xl:grid-cols-[220px,1fr,240px,180px] gap-4 items-start">
+                                        <div className="rounded-sm border border-primary/10 bg-primary/[0.02] px-4 py-3">
+                                            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/35">Đơn hàng</p>
+                                            <p className="text-[14px] font-black text-primary mt-1">{row.order_number}</p>
+                                            <p className="text-[12px] text-primary/60 mt-1">{row.customer_name || 'Chưa có tên khách'}</p>
+                                        </div>
+
+                                        <div>
+                                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Mã vận đơn</label>
+                                            <input
+                                                type="text"
+                                                value={row.tracking_number}
+                                                onChange={(event) => onFieldChange(row.id, 'tracking_number', event.target.value)}
+                                                placeholder="Nhập mã vận đơn"
+                                                className="w-full h-11 rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Đơn vị vận chuyển</label>
+                                            <input
+                                                type="text"
+                                                list="quick-dispatch-carriers"
+                                                value={row.carrier_name}
+                                                onChange={(event) => onFieldChange(row.id, 'carrier_name', event.target.value)}
+                                                placeholder="Ví dụ: Giao Hàng Nhanh"
+                                                className="w-full h-11 rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary"
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Tiền ship</label>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                step="1000"
+                                                value={row.shipping_cost}
+                                                onChange={(event) => onFieldChange(row.id, 'shipping_cost', event.target.value)}
+                                                placeholder="0"
+                                                className="w-full h-11 rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary"
+                                            />
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <datalist id="quick-dispatch-carriers">
+                        {carrierOptions.map((carrier) => (
+                            <option key={carrier.id || carrier.code || carrier.name} value={carrier.name} />
+                        ))}
+                    </datalist>
+                </div>
+
+                <div className="px-6 py-4 border-t border-primary/10 bg-white flex items-center justify-between gap-3">
+                    <p className="text-[11px] text-primary/45 font-bold">
+                        Lưu xong hệ thống sẽ chuyển đơn sang trạng thái đang giao hàng và tạo vận đơn trong màn quản lý vận đơn.
+                    </p>
+                    <div className="flex items-center gap-3">
+                        <button type="button" onClick={onClose} className="h-10 px-4 rounded-sm border border-primary/20 text-primary text-[12px] font-black uppercase tracking-wide hover:bg-primary/5">
+                            Đóng
+                        </button>
+                        <button
+                            type="button"
+                            onClick={onSubmit}
+                            disabled={submitting || editableRows.length === 0 || hasInvalidRow}
+                            className="h-10 px-5 rounded-sm bg-primary text-white text-[12px] font-black uppercase tracking-wide hover:bg-primary/90 disabled:opacity-50"
+                        >
+                            {submitting ? 'Đang lưu...' : 'Lưu gửi vận chuyển nhanh'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>,
+        document.body
+    );
+};
+
 const OrderList = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
@@ -517,7 +686,11 @@ const OrderList = () => {
     const [dispatchPreview, setDispatchPreview] = useState(null);
     const [dispatchPreviewLoading, setDispatchPreviewLoading] = useState(false);
     const [dispatchSubmitting, setDispatchSubmitting] = useState(false);
+    const [quickDispatchModalOpen, setQuickDispatchModalOpen] = useState(false);
+    const [quickDispatchSubmitting, setQuickDispatchSubmitting] = useState(false);
+    const [quickDispatchRows, setQuickDispatchRows] = useState({});
     const [connectedCarriers, setConnectedCarriers] = useState([]);
+    const [manualCarrierOptions, setManualCarrierOptions] = useState([]);
     const [selectedCarrierCode, setSelectedCarrierCode] = useState('');
     const [dispatchWarehouses, setDispatchWarehouses] = useState([]);
     const [selectedWarehouseId, setSelectedWarehouseId] = useState('');
@@ -591,6 +764,59 @@ const OrderList = () => {
     const activeProductPopupOrder = useMemo(
         () => orders.find((order) => order.id === productPopupOrderId) || null,
         [orders, productPopupOrderId]
+    );
+    const selectedOrderMap = useMemo(
+        () => new Map(orders.map((order) => [String(order.id), order])),
+        [orders]
+    );
+
+    const buildQuickDispatchRows = useCallback((ids, existingRows = {}) => (
+        ids.reduce((accumulator, id) => {
+            const key = String(id);
+            const order = selectedOrderMap.get(key);
+            const previousRow = existingRows[key] || {};
+
+            accumulator[key] = {
+                tracking_number: previousRow.tracking_number ?? '',
+                carrier_name: previousRow.carrier_name ?? order?.shipping_carrier_name ?? '',
+                shipping_cost: previousRow.shipping_cost ?? '',
+            };
+
+            return accumulator;
+        }, {})
+    ), [selectedOrderMap]);
+
+    const quickDispatchOrderRows = useMemo(
+        () => selectedIds.map((id) => {
+            const key = String(id);
+            const order = selectedOrderMap.get(key);
+            const row = quickDispatchRows[key] || {};
+            const activeShipment = order?.active_shipment || null;
+
+            return {
+                id,
+                order_number: order?.order_number || `Đơn #${id}`,
+                customer_name: order?.customer_name || '',
+                tracking_number: row.tracking_number ?? '',
+                carrier_name: row.carrier_name ?? '',
+                shipping_cost: row.shipping_cost ?? '',
+                locked: Boolean(activeShipment),
+                locked_message: activeShipment
+                    ? `Đã có vận đơn ${activeShipment.shipment_number || activeShipment.carrier_tracking_code || ''}`.trim()
+                    : '',
+            };
+        }),
+        [quickDispatchRows, selectedIds, selectedOrderMap]
+    );
+
+    const quickDispatchBlockedOrders = useMemo(
+        () => quickDispatchOrderRows.filter((row) => row.locked),
+        [quickDispatchOrderRows]
+    );
+
+    const quickDispatchEditableRows = useMemo(
+        () => quickDispatchOrderRows.filter((row) => !row.locked),
+        [quickDispatchOrderRows]
     );
 
     const fetchInitialData = async () => {
@@ -936,6 +1162,109 @@ const OrderList = () => {
         }
     };
 
+    const handleQuickDispatchFieldChange = (orderId, field, value) => {
+        const key = String(orderId);
+        setQuickDispatchRows((previous) => ({
+            ...previous,
+            [key]: {
+                ...(previous[key] || {}),
+                [field]: value,
+            },
+        }));
+    };
+
+    const openQuickDispatchModal = async () => {
+        if (!selectedIds.length) return;
+
+        setQuickDispatchRows((previous) => buildQuickDispatchRows(selectedIds, previous));
+
+        try {
+            if (!manualCarrierOptions.length) {
+                const response = await shipmentApi.getCarriers();
+                setManualCarrierOptions(response.data || []);
+            }
+        } catch (error) {
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể tải danh sách đơn vị vận chuyển gợi ý.',
+            });
+        } finally {
+            setQuickDispatchModalOpen(true);
+        }
+    };
+
+    const closeQuickDispatchModal = () => {
+        setQuickDispatchModalOpen(false);
+        setQuickDispatchSubmitting(false);
+        setQuickDispatchRows({});
+    };
+
+    const handleQuickDispatchOrders = async () => {
+        if (!quickDispatchEditableRows.length) return;
+
+        const shipments = quickDispatchEditableRows.map((row) => ({
+            order_id: row.id,
+            tracking_number: row.tracking_number.trim(),
+            carrier_name: row.carrier_name.trim(),
+            shipping_cost: Number(row.shipping_cost),
+        }));
+
+        const invalidRow = shipments.find((row) => (
+            !row.tracking_number
+            || !row.carrier_name
+            || Number.isNaN(row.shipping_cost)
+            || row.shipping_cost < 0
+        ));
+
+        if (invalidRow) {
+            setNotification({
+                type: 'error',
+                message: 'Vui lòng nhập đầy đủ mã vận đơn, đơn vị vận chuyển và tiền ship hợp lệ cho từng đơn.',
+            });
+            return;
+        }
+
+        setQuickDispatchSubmitting(true);
+
+        try {
+            const response = await orderApi.quickDispatch({ shipments });
+            const {
+                success_count: successCount = 0,
+                failed_count: failedCount = 0,
+                results = [],
+            } = response.data || {};
+            const failedResults = results.filter((item) => item.success === false);
+            const failedIds = failedResults.map((item) => item.order_id);
+            const firstFailed = failedResults.find((item) => item.message);
+
+            setNotification({
+                type: failedCount > 0 ? 'error' : 'success',
+                message: `Đã gửi vận chuyển nhanh ${successCount} đơn${failedCount > 0 ? `, ${failedCount} đơn lỗi` : ''}.${firstFailed ? ` ${firstFailed.order_number || `#${firstFailed.order_id}`}: ${firstFailed.message}` : ''}`,
+            });
+
+            if (successCount > 0) {
+                fetchOrders(pagination.current_page);
+                fetchShippingAlerts();
+            }
+
+            if (failedIds.length > 0) {
+                setSelectedIds(failedIds);
+                setQuickDispatchRows((previous) => buildQuickDispatchRows(failedIds, previous));
+                return;
+            }
+
+            setSelectedIds([]);
+            closeQuickDispatchModal();
+        } catch (error) {
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể lưu gửi vận chuyển nhanh.',
+            });
+        } finally {
+            setQuickDispatchSubmitting(false);
+        }
+    };
+
     const handleOpenShippingAlert = (alert) => {
         markShippingAlertsSeen([alert]);
         setShowShippingAlerts(false);
@@ -1175,6 +1504,18 @@ const OrderList = () => {
                             </div>
                         )}
                     </div>
+
+                    {!isTrashView && (
+                        <button
+                            type="button"
+                            onClick={openQuickDispatchModal}
+                            disabled={selectedIds.length === 0}
+                            title="Gửi vận chuyển nhanh"
+                            className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all shrink-0 ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}
+                        >
+                            <span className="material-symbols-outlined text-[18px]">bolt</span>
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -1713,6 +2054,16 @@ const OrderList = () => {
                 submitting={dispatchSubmitting}
                 onClose={closeDispatchModal}
                 onSubmit={handleDispatchOrders}
+            />
+            <QuickShipmentModal
+                open={quickDispatchModalOpen}
+                rows={quickDispatchEditableRows}
+                blockedOrders={quickDispatchBlockedOrders}
+                carrierOptions={manualCarrierOptions}
+                submitting={quickDispatchSubmitting}
+                onFieldChange={handleQuickDispatchFieldChange}
+                onClose={closeQuickDispatchModal}
+                onSubmit={handleQuickDispatchOrders}
             />
         </div>
     );

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Attribute;
+use App\Models\Carrier;
 use App\Models\Cart;
 use App\Models\Order;
 use App\Models\OrderItem;
@@ -11,11 +12,15 @@ use App\Models\Customer;
 use App\Models\Invoice;
 use App\Models\OrderStatus;
 use App\Models\QuoteTemplate;
+use App\Models\Shipment;
+use App\Models\ShipmentItem;
+use App\Models\ShipmentStatusLog;
 use App\Models\ShippingIntegration;
 use App\Models\SiteSetting;
 use App\Services\Inventory\InventoryService;
 use App\Services\Shipping\ShipmentDispatchService;
 use App\Services\Shipping\ShippingAlertService;
+use App\Services\Shipping\ShipmentStatusSyncService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -49,6 +54,130 @@ class OrderController extends Controller
             $nextNumber = intval($matches[1]) + 1;
         }
         return "OR{$nextNumber}A0";
+    }
+
+    private function generateShipmentNumber(?int $accountId = null): string
+    {
+        $baseCount = Shipment::withoutGlobalScopes()
+            ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+            ->whereDate('created_at', today())
+            ->count();
+
+        do {
+            $baseCount++;
+            $shipmentNumber = 'VD-' . now()->format('Ymd') . '-' . str_pad((string) $baseCount, 4, '0', STR_PAD_LEFT);
+        } while (
+            Shipment::withoutGlobalScopes()
+                ->where('shipment_number', $shipmentNumber)
+                ->exists()
+        );
+
+        return $shipmentNumber;
+    }
+
+    private function resolveManualCarrierMeta(string $carrierName): array
+    {
+        $normalizedName = trim($carrierName);
+
+        if ($normalizedName === '') {
+            return ['code' => null, 'name' => null];
+        }
+
+        $carrier = Carrier::query()
+            ->where(function ($query) use ($normalizedName) {
+                $query
+                    ->where('code', $normalizedName)
+                    ->orWhereRaw('LOWER(name) = ?', [Str::lower($normalizedName)]);
+            })
+            ->first();
+
+        return [
+            'code' => $carrier?->code,
+            'name' => $carrier?->name ?: $normalizedName,
+        ];
+    }
+
+    private function createQuickShipmentForOrder(
+        Order $order,
+        array $shipmentInput,
+        ShipmentStatusSyncService $syncService
+    ): Shipment {
+        return DB::transaction(function () use ($order, $shipmentInput, $syncService) {
+            $activeShipment = $order->shipments()
+                ->whereNotIn('shipment_status', ['canceled'])
+                ->latest('id')
+                ->first();
+
+            if ($activeShipment) {
+                throw new \RuntimeException("Đơn đã có vận đơn {$activeShipment->shipment_number}.");
+            }
+
+            $carrierMeta = $this->resolveManualCarrierMeta((string) $shipmentInput['carrier_name']);
+            $trackingNumber = trim((string) $shipmentInput['tracking_number']);
+            $shippingCost = (float) $shipmentInput['shipping_cost'];
+            $codAmount = max(0, (float) ($order->total_price ?? 0));
+
+            $shipment = Shipment::create([
+                'account_id' => $order->account_id,
+                'order_id' => $order->id,
+                'order_code' => $order->order_number,
+                'shipment_number' => $this->generateShipmentNumber($order->account_id),
+                'tracking_number' => $trackingNumber,
+                'carrier_tracking_code' => $trackingNumber,
+                'carrier_code' => $carrierMeta['code'],
+                'carrier_name' => $carrierMeta['name'],
+                'channel' => 'manual',
+                'customer_id' => $order->customer_id,
+                'customer_name' => $order->customer_name,
+                'customer_phone' => $order->customer_phone,
+                'customer_address' => $order->shipping_address,
+                'customer_ward' => $order->ward,
+                'customer_district' => $order->district,
+                'customer_province' => $order->province,
+                'status' => 'out_for_delivery',
+                'shipment_status' => 'out_for_delivery',
+                'order_status_snapshot' => $order->status,
+                'cod_amount' => $codAmount,
+                'shipping_cost' => $shippingCost,
+                'service_fee' => 0,
+                'actual_received_amount' => max(0, $codAmount - $shippingCost),
+                'created_by' => auth()->id(),
+                'shipped_at' => now(),
+                'out_for_delivery_at' => now(),
+                'extra_data' => [
+                    'manual_quick_dispatch' => true,
+                    'manual_input' => [
+                        'tracking_number' => $trackingNumber,
+                        'carrier_name' => $carrierMeta['name'],
+                        'shipping_cost' => $shippingCost,
+                    ],
+                ],
+            ]);
+
+            OrderItem::query()
+                ->where('order_id', $order->id)
+                ->get()
+                ->each(function (OrderItem $item) use ($shipment) {
+                    ShipmentItem::create([
+                        'shipment_id' => $shipment->id,
+                        'order_item_id' => $item->id,
+                        'qty' => $item->quantity,
+                    ]);
+                });
+
+            ShipmentStatusLog::create([
+                'shipment_id' => $shipment->id,
+                'from_status' => null,
+                'to_status' => 'out_for_delivery',
+                'changed_by' => auth()->id(),
+                'change_source' => 'manual',
+                'reason' => 'Gửi vận chuyển nhanh từ quản lý đơn hàng',
+            ]);
+
+            $syncService->syncOrderFromShipment($shipment, 'manual_quick_dispatch', auth()->id());
+
+            return $shipment->fresh(['order', 'items.orderItem.product']);
+        });
     }
 
     private function resolveAccountId(Request $request): int
@@ -829,6 +958,88 @@ class OrderController extends Controller
                 $validated['warehouse_id'] ?? null
             )
         );
+    }
+
+    public function quickDispatch(Request $request, ShipmentStatusSyncService $syncService)
+    {
+        $validated = $request->validate([
+            'shipments' => 'required|array|min:1',
+            'shipments.*.order_id' => 'required|integer',
+            'shipments.*.tracking_number' => 'required|string|max:100',
+            'shipments.*.carrier_name' => 'required|string|max:255',
+            'shipments.*.shipping_cost' => 'required|numeric|min:0',
+        ]);
+
+        $shipmentsPayload = collect($validated['shipments'])
+            ->map(function (array $item) {
+                return [
+                    'order_id' => (int) $item['order_id'],
+                    'tracking_number' => trim((string) $item['tracking_number']),
+                    'carrier_name' => trim((string) $item['carrier_name']),
+                    'shipping_cost' => (float) $item['shipping_cost'],
+                ];
+            })
+            ->values();
+
+        if ($shipmentsPayload->contains(fn (array $item) => $item['tracking_number'] === '' || $item['carrier_name'] === '')) {
+            return response()->json([
+                'message' => 'Mã vận đơn và đơn vị vận chuyển không được để trống.',
+            ], 422);
+        }
+
+        $orders = Order::query()
+            ->whereIn('id', $shipmentsPayload->pluck('order_id')->unique()->values())
+            ->with(['items.product', 'activeShipment'])
+            ->get()
+            ->keyBy('id');
+
+        $results = [];
+        $successCount = 0;
+        $failedCount = 0;
+
+        foreach ($shipmentsPayload as $shipmentInput) {
+            $orderId = $shipmentInput['order_id'];
+            $order = $orders->get($orderId);
+
+            if (!$order) {
+                $failedCount++;
+                $results[] = [
+                    'order_id' => $orderId,
+                    'order_number' => null,
+                    'success' => false,
+                    'message' => 'Không tìm thấy đơn hàng để gửi vận chuyển.',
+                ];
+                continue;
+            }
+
+            try {
+                $shipment = $this->createQuickShipmentForOrder($order, $shipmentInput, $syncService);
+
+                $successCount++;
+                $results[] = [
+                    'order_id' => $order->id,
+                    'order_number' => $order->order_number,
+                    'success' => true,
+                    'shipment_id' => $shipment->id,
+                    'shipment_number' => $shipment->shipment_number,
+                    'tracking_number' => $shipment->carrier_tracking_code ?: $shipment->tracking_number,
+                ];
+            } catch (\Throwable $e) {
+                $failedCount++;
+                $results[] = [
+                    'order_id' => $order->id,
+                    'order_number' => $order->order_number,
+                    'success' => false,
+                    'message' => $e->getMessage(),
+                ];
+            }
+        }
+
+        return response()->json([
+            'success_count' => $successCount,
+            'failed_count' => $failedCount,
+            'results' => $results,
+        ], $successCount > 0 && $failedCount === 0 ? 201 : 200);
     }
 
     public function shippingAlerts(Request $request, ShippingAlertService $shippingAlertService)

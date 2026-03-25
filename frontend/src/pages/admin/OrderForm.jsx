@@ -1899,15 +1899,6 @@ const OrderForm = () => {
         const normalizedOrderKind = getNormalizedOrderKind(orderKind);
         const isMainOrder = !isDraftOrderKind(normalizedOrderKind);
 
-        const isLocValid = regionType === 'new'
-            ? (formData.province && formData.ward)
-            : (formData.province && formData.district && formData.ward);
-
-        if (isMainOrder && !isLocValid) {
-            alert(regionType === 'new' ? 'Vui lòng chọn Tỉnh/Thành phố và Phường/Xã.' : 'Vui lòng chọn đầy đủ Tỉnh, Quận và Phường.');
-            return;
-        }
-
         const normalizedAddressDetail = extractAddressDetail({
             shippingAddress: formData.shipping_address.trim(),
             ward: formData.ward,

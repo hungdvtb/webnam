@@ -1570,33 +1570,32 @@ const OrderList = () => {
         }
     };
 
-    const handleDuplicateOrder = async (orderId, event) => {
-        event?.stopPropagation();
-
-        let duplicatedOrderId = null;
+    const handleBulkDuplicate = async () => {
+        if (!selectedIds.length) return;
 
         try {
             setLoading(true);
-            const response = await orderApi.duplicate(orderId, { target_kind: DRAFT_ORDER_KIND });
-            duplicatedOrderId = Number(response?.data?.id || 0);
+            await orderApi.bulkDuplicate(selectedIds, DRAFT_ORDER_KIND);
+            setNotification({
+                type: 'success',
+                message: `Đã sao chép ${selectedIds.length} đơn thành đơn nháp mới`,
+            });
+            setSelectedIds([]);
 
-            if (!duplicatedOrderId) {
-                throw new Error('Không thể tạo bản sao đơn hàng.');
+            if (isDraftView) {
+                fetchOrders(1);
+                return;
             }
 
-            orderApi.preloadBootstrap({ mode: 'form' });
-            orderApi.preloadOne(duplicatedOrderId);
+            navigateToListView('draft');
         } catch (error) {
             setNotification({
                 type: 'error',
-                message: error.response?.data?.message || error.message || 'Lỗi sao chép đơn hàng',
+                message: error.response?.data?.message || 'Lỗi sao chép đơn hàng',
             });
-            return;
         } finally {
             setLoading(false);
         }
-
-        navigate(`/admin/orders/edit/${duplicatedOrderId}`);
     };
 
     const handleBulkConvert = async (targetKind) => {
@@ -1730,11 +1729,13 @@ const OrderList = () => {
 
                         {isTrashView ? (
                             <>
+                                <button onClick={handleBulkDuplicate} disabled={selectedIds.length === 0} title="Sao chép đơn hàng" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                 <button onClick={handleBulkRestore} disabled={selectedIds.length === 0} title="Khôi phục" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-green-600/10 text-green-600 border-green-600/20 hover:bg-green-600 hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">restore_from_trash</span></button>
                                 <button onClick={handleBulkForceDelete} disabled={selectedIds.length === 0} title="Xóa vĩnh viễn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_forever</span></button>
                             </>
                         ) : (
                             <>
+                                <button onClick={handleBulkDuplicate} disabled={selectedIds.length === 0} title="Sao chép đơn hàng" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                 {isDraftView
                                     ? <button onClick={() => handleBulkConvert(MAIN_ORDER_KIND)} disabled={selectedIds.length === 0} title="Chốt thành đơn chính" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary border-primary/20 hover:bg-primary hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>
                                     : <button onClick={() => handleBulkConvert(DRAFT_ORDER_KIND)} disabled={selectedIds.length === 0} title="Chuyển sang đơn nháp" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-700 hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">drive_file_move</span></button>}
@@ -2340,7 +2341,6 @@ const OrderList = () => {
                                                 {!isTrashView ? (
                                                     <>
                                                         <button onMouseEnter={() => warmOrderEditor(o.id)} onFocus={() => warmOrderEditor(o.id)} onClick={(e) => { e.stopPropagation(); openOrderEditor(o.id); }} className="p-1 hover:text-primary" title="Sửa đơn"><span className="material-symbols-outlined text-[18px]">edit</span></button>
-                                                        <button onClick={(e) => handleDuplicateOrder(o.id, e)} className="p-1 hover:text-primary" title="Sao chép thành đơn nháp"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                                         {isDraftOrder(o.order_kind)
                                                             ? <button onClick={(e) => handleConvertOrder(o.id, MAIN_ORDER_KIND, e)} className="p-1 hover:text-primary" title="Chốt thành đơn chính"><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>
                                                             : <button onClick={(e) => handleConvertOrder(o.id, DRAFT_ORDER_KIND, e)} className="p-1 hover:text-sky-700" title="Chuyển sang đơn nháp"><span className="material-symbols-outlined text-[18px]">drive_file_move</span></button>}
@@ -2348,7 +2348,6 @@ const OrderList = () => {
                                                     </>
                                                 ) : (
                                                     <>
-                                                        <button onClick={(e) => handleDuplicateOrder(o.id, e)} className="p-1 hover:text-primary" title="Sao chép thành đơn nháp"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                                         <button onClick={(e) => handleRestoreOrder(o.id, e)} className="p-1 hover:text-green-600" title="Khôi phục"><span className="material-symbols-outlined text-[18px]">restore_from_trash</span></button>
                                                         <button onClick={(e) => handleForceDeleteOrder(o.id, e)} className="p-1 hover:text-brick" title="Xóa vĩnh viễn"><span className="material-symbols-outlined text-[18px]">delete_forever</span></button>
                                                     </>

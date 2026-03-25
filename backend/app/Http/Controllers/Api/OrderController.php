@@ -328,16 +328,7 @@ class OrderController extends Controller
 
     private function validateOfficialOrderPayload(array $payload, string $regionType = 'new'): void
     {
-        $province = trim((string) ($payload['province'] ?? ''));
-        $district = trim((string) ($payload['district'] ?? ''));
-        $ward = trim((string) ($payload['ward'] ?? ''));
         $shippingAddress = trim((string) ($payload['shipping_address'] ?? ''));
-
-        if ($province === '' || $ward === '' || ($regionType === 'old' && $district === '')) {
-            throw ValidationException::withMessages([
-                'shipping_address' => 'Đơn chính thức phải có đầy đủ khu vực giao hàng.',
-            ]);
-        }
 
         if ($shippingAddress === '') {
             throw ValidationException::withMessages([

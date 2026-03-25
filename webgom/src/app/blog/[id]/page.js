@@ -1,19 +1,37 @@
 import Link from 'next/link';
 import { getBlogPost, getBlogPosts } from '@/lib/blogApi';
+import { buildBlogContentMarkup } from '@/lib/blogContent';
+import { resolveMediaUrl } from '@/lib/media';
+
+const FALLBACK_RELATED_POSTS = [
+  { title: 'Tâm hồn Việt trong chén trà Bát Tràng', date: 'Ngày 12 tháng 10, 2023' },
+  { title: 'Men chàm: Sắc lam vĩnh cửu của thời đại', date: 'Ngày 05 tháng 10, 2023' },
+  { title: 'Quy trình vẽ tay trên gốm sứ thủ công', date: 'Ngày 28 tháng 09, 2023' },
+];
 
 function formatDate(dateStr) {
   if (!dateStr) return '';
-  return new Date(dateStr).toLocaleDateString('vi-VN', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  return new Date(dateStr).toLocaleDateString('vi-VN', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
 }
 
 function getPostImage(post) {
-  return post?.image || post?.thumbnail || post?.featured_image || null;
+  return (
+    resolveMediaUrl(post?.image)
+    || resolveMediaUrl(post?.thumbnail)
+    || resolveMediaUrl(post?.featured_image)
+    || null
+  );
 }
 
-function extractPosts(res) {
-  if (Array.isArray(res)) return res;
-  if (Array.isArray(res?.data)) return res.data;
-  if (Array.isArray(res?.data?.data)) return res.data.data;
+function extractPosts(response) {
+  if (Array.isArray(response)) return response;
+  if (Array.isArray(response?.data)) return response.data;
+  if (Array.isArray(response?.data?.data)) return response.data.data;
   return [];
 }
 
@@ -23,6 +41,7 @@ export async function generateMetadata({ params }) {
 
   try {
     const post = await getBlogPost(slugOrId);
+
     if (!post) {
       return { title: 'Bài viết không tìm thấy' };
     }
@@ -54,13 +73,14 @@ export default async function BlogPostPage({ params }) {
     post = await getBlogPost(slugOrId);
 
     if (post) {
-      const res = await getBlogPosts({ per_page: 10 });
-      const all = extractPosts(res);
-      related = all
-        .filter((p) => String(p.id) !== String(post.id) && String(p.slug || '') !== String(post.slug || slugOrId))
+      const response = await getBlogPosts({ per_page: 10 });
+      const allPosts = extractPosts(response);
+
+      related = allPosts
+        .filter((item) => String(item.id) !== String(post.id) && String(item.slug || '') !== String(post.slug || slugOrId))
         .slice(0, 3);
     }
-  } catch (e) {
+  } catch {
     post = null;
     related = [];
   }
@@ -73,22 +93,41 @@ export default async function BlogPostPage({ params }) {
         <Link href="/blog">← Quay lại Blog</Link>
         <style>{`
           .bdt-not-found {
-            min-height: 60vh; display: flex; flex-direction: column;
-            align-items: center; justify-content: center; gap: 1rem;
-            font-family: 'EB Garamond', serif; color: #1B365D;
+            min-height: 60vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            font-family: 'EB Garamond', serif;
+            color: #1B365D;
             background: #F9F5F0;
           }
-          .bdt-nf-icon { font-size: 4rem; color: #C5A059; }
-          h1 { font-family: 'Playfair Display', serif; font-size: 2rem; }
-          a { color: #C5A059; font-weight: 700; }
+
+          .bdt-nf-icon {
+            font-size: 4rem;
+            color: #C5A059;
+          }
+
+          .bdt-not-found h1 {
+            font-family: 'Playfair Display', serif;
+            font-size: 2rem;
+            margin: 0;
+          }
+
+          .bdt-not-found a {
+            color: #C5A059;
+            font-weight: 700;
+          }
         `}</style>
       </main>
     );
   }
 
-  const heroImg = getPostImage(post);
-  const content = post.content || post.body || '';
-  const hasContent = content.trim().length > 50;
+  const heroImage = getPostImage(post);
+  const rawContent = post.content || post.body || '';
+  const contentMarkup = buildBlogContentMarkup(rawContent);
+  const hasContent = Boolean(contentMarkup.__html.trim());
 
   return (
     <main className="bdt-page">
@@ -103,55 +142,61 @@ export default async function BlogPostPage({ params }) {
 
         <article>
           <header className="bdt-article-header">
-            {(post.category?.name || post.category || post.tag) && (
+            {(post.category?.name || post.category || post.tag) ? (
               <div className="bdt-category-badge">{post.category?.name || post.category || post.tag}</div>
-            )}
+            ) : null}
+
             <h1 className="bdt-title">{post.title}</h1>
+
             <div className="bdt-meta">
-              {post.created_at && <span>{formatDate(post.created_at)}</span>}
-              {post.created_at && post.author && <span className="bdt-meta-dot" />}
-              {post.author && <span>Tác giả: {post.author}</span>}
+              {post.created_at ? <span>{formatDate(post.created_at)}</span> : null}
+              {post.created_at && post.author ? <span className="bdt-meta-dot" /> : null}
+              {post.author ? <span>Tác giả: {post.author}</span> : null}
             </div>
           </header>
 
-          {heroImg && (
+          {heroImage ? (
             <div className="bdt-hero-img-wrap">
               <div className="bdt-hero-img-inner">
-                <img src={heroImg} alt={post.title} className="bdt-hero-img" />
+                <img
+                  src={heroImage}
+                  alt={post.title}
+                  className="bdt-hero-img"
+                  loading="eager"
+                  decoding="async"
+                />
               </div>
-              {post.image_caption && (
+
+              {post.image_caption ? (
                 <div className="bdt-img-caption">{post.image_caption}</div>
-              )}
+              ) : null}
             </div>
-          )}
+          ) : null}
 
-          {post.excerpt && (
+          {post.excerpt ? (
             <p className="bdt-excerpt-dropcap">{post.excerpt}</p>
-          )}
+          ) : null}
 
-          {hasContent && (
-            <div
-              className="bdt-content"
-              dangerouslySetInnerHTML={{ __html: content }}
-            />
-          )}
+          {hasContent ? (
+            <div className="bdt-content" dangerouslySetInnerHTML={contentMarkup} />
+          ) : null}
 
-          {!hasContent && !post.excerpt && (
+          {!hasContent && !post.excerpt ? (
             <div className="bdt-content">
               <p>Nội dung bài viết đang được cập nhật...</p>
             </div>
-          )}
+          ) : null}
 
-          {post.tags && post.tags.length > 0 && (
+          {post.tags && post.tags.length > 0 ? (
             <div className="bdt-tags">
               <span className="bdt-tags-label">Thẻ:</span>
-              {post.tags.map((tag, i) => (
-                <span key={i} className="bdt-tag">
+              {post.tags.map((tag, index) => (
+                <span key={index} className="bdt-tag">
                   #{typeof tag === 'string' ? tag : tag.name}
                 </span>
               ))}
             </div>
-          )}
+          ) : null}
         </article>
 
         <div className="bdt-divider">
@@ -162,39 +207,38 @@ export default async function BlogPostPage({ params }) {
 
         <section className="bdt-related">
           <h3 className="bdt-related-title">Bài viết liên quan</h3>
+
           <div className="bdt-related-grid">
-            {related.length > 0 ? related.map((rel) => (
-              <Link key={rel.id} href={`/blog/${rel.slug || rel.id}`} className="bdt-related-card">
+            {related.length > 0 ? related.map((item) => (
+              <Link key={item.id} href={`/blog/${item.slug || item.id}`} className="bdt-related-card">
                 <div className="bdt-related-img">
-                  {getPostImage(rel)
-                    ? <img src={getPostImage(rel)} alt={rel.title} />
-                    : (
-                      <div className="bdt-related-placeholder">
-                        <span className="material-symbols-outlined">article</span>
-                      </div>
-                    )
-                  }
+                  {getPostImage(item) ? (
+                    <img
+                      src={getPostImage(item)}
+                      alt={item.title}
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  ) : (
+                    <div className="bdt-related-placeholder">
+                      <span className="material-symbols-outlined">article</span>
+                    </div>
+                  )}
                 </div>
-                <h4 className="bdt-related-name">{rel.title}</h4>
-                {rel.created_at && (
-                  <p className="bdt-related-date">{formatDate(rel.created_at)}</p>
-                )}
+                <h4 className="bdt-related-name">{item.title}</h4>
+                {item.created_at ? (
+                  <p className="bdt-related-date">{formatDate(item.created_at)}</p>
+                ) : null}
               </Link>
-            )) : (
-              [
-                { title: 'Tâm hồn Việt trong chén trà Bát Tràng', date: 'Ngày 12 tháng 10, 2023' },
-                { title: 'Men chàm: Sắc lam vĩnh cửu của thời đại', date: 'Ngày 05 tháng 10, 2023' },
-                { title: 'Quy trình vẽ tay trên gốm sứ thủ công', date: 'Ngày 28 tháng 09, 2023' },
-              ].map((item, i) => (
-                <div key={i} className="bdt-related-card">
-                  <div className="bdt-related-img bdt-related-placeholder-bg">
-                    <span className="material-symbols-outlined">article</span>
-                  </div>
-                  <h4 className="bdt-related-name">{item.title}</h4>
-                  <p className="bdt-related-date">{item.date}</p>
+            )) : FALLBACK_RELATED_POSTS.map((item) => (
+              <div key={item.title} className="bdt-related-card">
+                <div className="bdt-related-img bdt-related-placeholder-bg">
+                  <span className="material-symbols-outlined">article</span>
                 </div>
-              ))
-            )}
+                <h4 className="bdt-related-name">{item.title}</h4>
+                <p className="bdt-related-date">{item.date}</p>
+              </div>
+            ))}
           </div>
         </section>
 
@@ -214,6 +258,7 @@ export default async function BlogPostPage({ params }) {
           color: #1a1a1a;
           padding-bottom: 4rem;
         }
+
         .bdt-container {
           max-width: 960px;
           margin: 0 auto;
@@ -221,229 +266,493 @@ export default async function BlogPostPage({ params }) {
         }
 
         .bdt-breadcrumb {
-          display: flex; align-items: center; gap: 0.3rem;
-          font-size: 0.85rem; color: rgba(27,54,93,0.6);
-          font-style: italic; margin-bottom: 2.5rem; flex-wrap: wrap;
+          display: flex;
+          align-items: center;
+          gap: 0.3rem;
+          flex-wrap: wrap;
+          margin-bottom: 2.2rem;
+          color: rgba(27, 54, 93, 0.62);
+          font-size: 0.85rem;
+          font-style: italic;
         }
-        .bdt-breadcrumb a { color: rgba(27,54,93,0.7); transition: color 0.2s; }
-        .bdt-breadcrumb a:hover { color: #1B365D; }
-        .bdt-breadcrumb .material-symbols-outlined { font-size: 1rem; }
+
+        .bdt-breadcrumb a {
+          color: rgba(27, 54, 93, 0.74);
+          transition: color 0.2s ease;
+        }
+
+        .bdt-breadcrumb a:hover {
+          color: #1B365D;
+        }
+
+        .bdt-breadcrumb .material-symbols-outlined {
+          font-size: 1rem;
+        }
+
         .bdt-bc-current {
-          color: #1B365D; font-weight: 500;
-          max-width: 350px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+          max-width: 360px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          color: #1B365D;
+          font-weight: 500;
         }
 
         .bdt-article-header {
           text-align: center;
-          margin-bottom: 3rem;
+          margin-bottom: 2.6rem;
         }
+
         .bdt-category-badge {
           display: inline-block;
+          margin-bottom: 1.3rem;
+          padding: 0.32rem 1rem;
           border: 1px solid #C5A059;
           color: #C5A059;
-          font-size: 0.65rem; font-weight: 700;
-          letter-spacing: 0.3em; text-transform: uppercase;
-          padding: 0.3rem 1rem; margin-bottom: 1.5rem;
+          font-size: 0.68rem;
+          font-weight: 700;
           font-family: 'EB Garamond', serif;
+          letter-spacing: 0.28em;
+          text-transform: uppercase;
         }
+
         .bdt-title {
+          margin: 0 0 1.25rem;
+          color: #1B365D;
           font-family: 'Playfair Display', serif;
-          font-size: clamp(2rem, 7vw, 4.5rem);
-          font-weight: 900; color: #1B365D;
-          line-height: 1.1; margin: 0 0 1.5rem; font-style: italic;
+          font-size: clamp(2rem, 7vw, 4.25rem);
+          font-style: italic;
+          font-weight: 900;
+          line-height: 1.08;
         }
+
         .bdt-meta {
-          display: flex; align-items: center; justify-content: center;
-          gap: 1rem; color: rgba(27,54,93,0.7);
-          font-size: 1rem; font-style: italic; flex-wrap: wrap;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-wrap: wrap;
+          gap: 0.85rem;
+          color: rgba(27, 54, 93, 0.7);
+          font-size: 1rem;
+          font-style: italic;
         }
+
         .bdt-meta-dot {
-          width: 5px; height: 5px; border-radius: 50%;
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
           background: #C5A059;
         }
 
         .bdt-hero-img-wrap {
           position: relative;
-          padding: 0.5rem;
-          border: 2px solid rgba(197,160,89,0.35);
-          margin-bottom: 4rem;
+          margin-bottom: 3.4rem;
+          padding: 0.6rem;
+          border: 2px solid rgba(197, 160, 89, 0.35);
+          border-radius: 1.35rem;
+          background: rgba(255, 255, 255, 0.72);
+          box-shadow: 0 18px 38px rgba(27, 54, 93, 0.08);
         }
+
         .bdt-hero-img-inner {
-          padding: 3px;
-          border: 1px solid #C5A059;
+          padding: 4px;
+          border: 1px solid rgba(197, 160, 89, 0.8);
+          border-radius: 1rem;
+          overflow: hidden;
         }
+
         .bdt-hero-img {
-          display: block; width: 100%;
-          aspect-ratio: 16/9; object-fit: cover;
-          filter: grayscale(15%);
-          transition: filter 0.7s;
+          display: block;
+          width: 100%;
+          aspect-ratio: 16 / 9;
+          object-fit: cover;
+          object-position: center;
+          transition: transform 0.35s ease;
         }
-        .bdt-hero-img-wrap:hover .bdt-hero-img { filter: grayscale(0); }
+
+        .bdt-hero-img-wrap:hover .bdt-hero-img {
+          transform: scale(1.015);
+        }
+
         .bdt-img-caption {
           position: absolute;
-          bottom: -1.5rem; right: 1.5rem;
-          background: #F9F5F0;
+          right: 1.35rem;
+          bottom: -1.2rem;
+          max-width: min(70%, 420px);
+          padding: 0.55rem 0.95rem;
           border-left: 4px solid #C5A059;
-          padding: 0.5rem 1rem;
-          font-size: 0.85rem; font-style: italic;
-          color: rgba(27,54,93,0.8);
+          background: #F9F5F0;
+          color: rgba(27, 54, 93, 0.8);
+          font-size: 0.86rem;
+          font-style: italic;
         }
 
         .bdt-excerpt-dropcap {
-          font-size: 1.2rem; line-height: 1.85;
-          color: rgba(27,54,93,0.9); margin-bottom: 2.5rem;
+          margin-bottom: 2.4rem;
+          color: rgba(27, 54, 93, 0.9);
+          font-size: 1.2rem;
+          line-height: 1.85;
         }
+
         .bdt-excerpt-dropcap::first-letter {
           float: left;
-          font-size: 5rem; line-height: 4rem;
-          padding-top: 0.35rem; padding-right: 0.6rem;
+          padding-top: 0.35rem;
+          padding-right: 0.6rem;
+          color: #1B365D;
           font-family: 'Playfair Display', serif;
-          color: #1B365D; font-weight: 900;
+          font-size: 5rem;
+          font-weight: 900;
+          line-height: 4rem;
         }
 
         .bdt-content {
-          font-size: 1.1rem; line-height: 1.9;
-          color: rgba(27,54,93,0.9);
+          color: rgba(27, 54, 93, 0.92);
+          font-size: 1.1rem;
+          line-height: 1.9;
         }
-        .bdt-content p { margin: 0 0 1.4rem; }
+
+        .bdt-content > :first-child {
+          margin-top: 0;
+        }
+
+        .bdt-content p {
+          margin: 0 0 1.35rem;
+        }
+
         .bdt-content h2 {
-          font-family: 'Playfair Display', serif; font-size: 1.8rem;
-          color: #1B365D; font-style: italic; font-weight: 700;
-          margin: 3.5rem 0 1.25rem; display: flex; align-items: center; gap: 1rem;
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+          margin: 3.1rem 0 1.2rem;
+          color: #1B365D;
+          font-family: 'Playfair Display', serif;
+          font-size: 1.8rem;
+          font-style: italic;
+          font-weight: 700;
         }
+
         .bdt-content h2::after {
-          content: ''; flex: 1; height: 1px;
-          background: rgba(197,160,89,0.35);
+          content: '';
+          flex: 1;
+          height: 1px;
+          background: rgba(197, 160, 89, 0.35);
         }
+
         .bdt-content h3 {
-          font-family: 'Playfair Display', serif; font-size: 1.4rem;
-          color: #1B365D; font-weight: 700; margin: 2.5rem 0 1rem;
+          margin: 2.4rem 0 1rem;
+          color: #1B365D;
+          font-family: 'Playfair Display', serif;
+          font-size: 1.4rem;
+          font-weight: 700;
         }
+
         .bdt-content blockquote {
-          border-top: 1px solid rgba(197,160,89,0.4);
-          border-bottom: 1px solid rgba(197,160,89,0.4);
-          padding: 1.5rem 0; margin: 2.5rem 0;
-          font-size: 1.4rem; font-style: italic;
-          color: #1B365D; text-align: center; line-height: 1.6;
+          margin: 2.2rem 0;
+          padding: 1.45rem 0;
+          border-top: 1px solid rgba(197, 160, 89, 0.4);
+          border-bottom: 1px solid rgba(197, 160, 89, 0.4);
+          color: #1B365D;
+          font-size: 1.38rem;
+          font-style: italic;
+          line-height: 1.6;
+          text-align: center;
         }
-        .bdt-content img {
-          max-width: 100%; border: 1px solid rgba(197,160,89,0.25);
-          margin: 1.5rem 0;
+
+        .bdt-content ul,
+        .bdt-content ol {
+          margin: 1.25rem 0;
+          padding-left: 1.5rem;
         }
-        .bdt-content figure { margin: 2rem 0; }
+
+        .bdt-content li {
+          margin-bottom: 0.5rem;
+        }
+
+        .bdt-content a {
+          color: #C5A059;
+          text-decoration: underline;
+          word-break: break-word;
+        }
+
+        .bdt-content .bdt-inline-media,
+        .bdt-content .bdt-embedded-video {
+          margin: clamp(1.7rem, 3vw, 2.4rem) 0;
+          padding: clamp(0.38rem, 1vw, 0.6rem);
+          border-radius: 1.25rem;
+          background: linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(241, 234, 223, 0.92));
+          box-shadow: 0 16px 36px rgba(27, 54, 93, 0.08);
+        }
+
+        .bdt-content .bdt-inline-media-frame,
+        .bdt-content .bdt-video-frame {
+          overflow: hidden;
+          border-radius: 1rem;
+          background: #ece5d8;
+        }
+
+        .bdt-content .bdt-inline-media-link {
+          display: block;
+        }
+
+        .bdt-content .bdt-inline-image {
+          display: block;
+          width: 100%;
+          max-width: 100%;
+          height: auto;
+          max-height: clamp(280px, 62vw, 620px);
+          margin: 0 auto;
+          object-fit: cover;
+          object-position: center;
+          background: #f3eee5;
+        }
+
+        .bdt-content .bdt-video-frame {
+          position: relative;
+          width: 100%;
+          aspect-ratio: 16 / 9;
+          background: #0f172a;
+        }
+
+        .bdt-content .bdt-video-frame iframe {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          border: 0;
+          display: block;
+        }
+
+        .bdt-content figure {
+          margin: 2rem 0;
+        }
+
         .bdt-content figcaption {
-          font-size: 0.85rem; text-align: center; font-style: italic;
-          color: rgba(27,54,93,0.6); margin-top: 0.5rem;
+          margin-top: 0.55rem;
+          color: rgba(27, 54, 93, 0.65);
+          font-size: 0.85rem;
+          font-style: italic;
+          text-align: center;
         }
+
         .bdt-content .highlight-section {
-          background: rgba(27,54,93,0.05); padding: 2rem;
-          border-left: 6px solid #1B365D; margin: 2.5rem 0;
-          position: relative; overflow: hidden;
+          position: relative;
+          overflow: hidden;
+          margin: 2.5rem 0;
+          padding: 2rem;
+          border-left: 6px solid #1B365D;
+          background: rgba(27, 54, 93, 0.05);
         }
-        .bdt-content ul, .bdt-content ol {
-          padding-left: 1.5rem; margin: 1.25rem 0;
-        }
-        .bdt-content li { margin-bottom: 0.5rem; }
-        .bdt-content a { color: #C5A059; text-decoration: underline; }
+
         .bdt-content .grid-2 {
-          display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 2rem 0;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 1rem;
+          margin: 2rem 0;
         }
-        @media (max-width: 600px) { .bdt-content .grid-2 { grid-template-columns: 1fr; } }
 
         .bdt-tags {
-          display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
-          padding: 1.5rem 0; border-top: 1px solid rgba(197,160,89,0.2);
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 0.5rem;
           margin-top: 2rem;
+          padding: 1.5rem 0 0;
+          border-top: 1px solid rgba(197, 160, 89, 0.2);
         }
-        .bdt-tags-label { font-size: 0.85rem; color: #94a3b8; font-weight: 600; }
+
+        .bdt-tags-label {
+          color: #94a3b8;
+          font-size: 0.85rem;
+          font-weight: 600;
+        }
+
         .bdt-tag {
-          font-size: 0.8rem; color: #1B365D;
-          background: rgba(27,54,93,0.07); padding: 0.25rem 0.8rem;
-          border: 1px solid rgba(27,54,93,0.15); border-radius: 99px;
+          padding: 0.25rem 0.8rem;
+          border: 1px solid rgba(27, 54, 93, 0.15);
+          border-radius: 99px;
+          background: rgba(27, 54, 93, 0.07);
+          color: #1B365D;
+          font-size: 0.8rem;
         }
 
         .bdt-divider {
-          display: flex; align-items: center; justify-content: center;
-          gap: 0; margin: 4rem 0;
-        }
-        .bdt-divider-line { height: 1px; width: 6rem; background: #C5A059; }
-        .bdt-divider-icon {
-          color: #C5A059; padding: 0 1rem; font-size: 1.4rem;
-        }
-
-        .bdt-related { margin-bottom: 4rem; }
-        .bdt-related-title {
-          font-family: 'Playfair Display', serif;
-          font-size: 1.4rem; color: #1B365D; font-weight: 700; font-style: italic;
-          text-align: center; text-transform: uppercase; letter-spacing: 0.15em;
-          margin: 0 0 2.5rem;
-        }
-        .bdt-related-grid {
-          display: grid; gap: 1.25rem;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-        }
-        @media (max-width: 900px) {
-          .bdt-related-grid { grid-template-columns: 1fr; }
-        }
-        .bdt-related-card {
-          border: 1px solid rgba(197,160,89,0.25);
-          background: #fff;
-          text-decoration: none;
-          color: inherit;
-          display: block;
-          transition: transform 0.2s, box-shadow 0.2s;
-        }
-        .bdt-related-card:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 10px 22px rgba(27,54,93,0.12);
-        }
-        .bdt-related-img {
-          height: 140px;
-          background: rgba(27,54,93,0.08);
-          overflow: hidden;
           display: flex;
           align-items: center;
           justify-content: center;
+          gap: 0;
+          margin: 4rem 0;
         }
+
+        .bdt-divider-line {
+          width: 6rem;
+          height: 1px;
+          background: #C5A059;
+        }
+
+        .bdt-divider-icon {
+          padding: 0 1rem;
+          color: #C5A059;
+          font-size: 1.4rem;
+        }
+
+        .bdt-related {
+          margin-bottom: 4rem;
+        }
+
+        .bdt-related-title {
+          margin: 0 0 2.2rem;
+          color: #1B365D;
+          font-family: 'Playfair Display', serif;
+          font-size: 1.4rem;
+          font-style: italic;
+          font-weight: 700;
+          letter-spacing: 0.15em;
+          text-align: center;
+          text-transform: uppercase;
+        }
+
+        .bdt-related-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 1.25rem;
+        }
+
+        .bdt-related-card {
+          display: block;
+          border: 1px solid rgba(197, 160, 89, 0.25);
+          background: #fff;
+          color: inherit;
+          text-decoration: none;
+          transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .bdt-related-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 10px 22px rgba(27, 54, 93, 0.12);
+        }
+
+        .bdt-related-img {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 140px;
+          overflow: hidden;
+          background: rgba(27, 54, 93, 0.08);
+        }
+
         .bdt-related-img img {
           width: 100%;
           height: 100%;
           object-fit: cover;
         }
+
         .bdt-related-placeholder,
         .bdt-related-placeholder-bg {
-          width: 100%; height: 100%;
-          display: flex; align-items: center; justify-content: center;
-          color: rgba(27,54,93,0.4);
+          display: flex;
+          width: 100%;
+          height: 100%;
+          align-items: center;
+          justify-content: center;
+          color: rgba(27, 54, 93, 0.4);
         }
+
         .bdt-related-name {
-          margin: 0; padding: 0.85rem 0.9rem 0.45rem;
-          font-family: 'Playfair Display', serif;
+          margin: 0;
+          padding: 0.85rem 0.9rem 0.45rem;
           color: #1B365D;
+          font-family: 'Playfair Display', serif;
           font-size: 1rem;
           line-height: 1.4;
         }
+
         .bdt-related-date {
+          margin: 0;
           padding: 0 0.9rem 0.9rem;
-          font-size: 0.8rem; color: rgba(27,54,93,0.5); font-style: italic; margin: 0;
+          color: rgba(27, 54, 93, 0.5);
+          font-size: 0.8rem;
+          font-style: italic;
         }
 
-        .bdt-back-wrap { text-align: center; }
+        .bdt-back-wrap {
+          text-align: center;
+        }
+
         .bdt-back-btn {
-          display: inline-flex; align-items: center; gap: 0.5rem;
-          color: #1B365D;
-          text-decoration: none;
-          border: 1px solid rgba(197,160,89,0.35);
+          display: inline-flex;
+          align-items: center;
+          gap: 0.5rem;
           padding: 0.55rem 1rem;
+          border: 1px solid rgba(197, 160, 89, 0.35);
+          color: #1B365D;
           font-size: 0.85rem;
           font-weight: 700;
-          text-transform: uppercase;
           letter-spacing: 0.08em;
+          text-decoration: none;
+          text-transform: uppercase;
+          transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
         }
+
         .bdt-back-btn:hover {
+          border-color: #1B365D;
           background: #1B365D;
           color: #F9F5F0;
-          border-color: #1B365D;
+        }
+
+        @media (max-width: 900px) {
+          .bdt-related-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 700px) {
+          .bdt-container {
+            padding: 1.6rem 1rem 2.5rem;
+          }
+
+          .bdt-hero-img-wrap {
+            margin-bottom: 2.7rem;
+          }
+
+          .bdt-img-caption {
+            position: static;
+            max-width: none;
+            margin-top: 0.75rem;
+          }
+
+          .bdt-excerpt-dropcap::first-letter {
+            font-size: 4rem;
+            line-height: 3.1rem;
+          }
+        }
+
+        @media (max-width: 600px) {
+          .bdt-content .grid-2 {
+            grid-template-columns: 1fr;
+          }
+
+          .bdt-content {
+            font-size: 1.03rem;
+            line-height: 1.82;
+          }
+
+          .bdt-content h2 {
+            font-size: 1.55rem;
+          }
+
+          .bdt-content h3 {
+            font-size: 1.28rem;
+          }
+
+          .bdt-content .bdt-inline-media,
+          .bdt-content .bdt-embedded-video {
+            margin: 1.45rem 0 1.8rem;
+            border-radius: 1rem;
+          }
+
+          .bdt-content .bdt-inline-media-frame,
+          .bdt-content .bdt-video-frame {
+            border-radius: 0.82rem;
+          }
         }
       `}</style>
     </main>

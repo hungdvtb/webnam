@@ -11,6 +11,7 @@ use App\Models\OrderItem;
 use App\Models\Customer;
 use App\Models\Invoice;
 use App\Models\OrderStatus;
+use App\Models\Product;
 use App\Models\QuoteTemplate;
 use App\Models\Shipment;
 use App\Models\ShipmentItem;
@@ -29,10 +30,19 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class OrderController extends Controller
 {
     private const BOOTSTRAP_CACHE_TTL_SECONDS = 15;
+    private const ORDER_KIND_OFFICIAL = Order::KIND_OFFICIAL;
+    private const ORDER_KIND_TEMPLATE = Order::KIND_TEMPLATE;
+    private const ORDER_KIND_DRAFT = Order::KIND_DRAFT;
+    private const ORDER_KIND_LABELS = [
+        self::ORDER_KIND_OFFICIAL => 'Đơn hàng chính',
+        self::ORDER_KIND_TEMPLATE => 'Đơn hàng mẫu',
+        self::ORDER_KIND_DRAFT => 'Đơn nháp',
+    ];
     private const QUOTE_SETTING_KEYS = [
         'quote_logo_url',
         'quote_store_name',

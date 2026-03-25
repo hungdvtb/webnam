@@ -51,12 +51,7 @@ class BlogController extends Controller
 
         $search = trim((string) $request->query('search', ''));
         if ($search !== '') {
-            $query->where(function (Builder $subQuery) use ($search) {
-                $subQuery->where('title', 'like', '%' . $search . '%')
-                    ->orWhere('slug', 'like', '%' . $search . '%')
-                    ->orWhere('excerpt', 'like', '%' . $search . '%')
-                    ->orWhere('content', 'like', '%' . $search . '%');
-            });
+            $this->applySearchFilter($query, $search);
         }
 
         $seoKeyword = trim((string) $request->query('seo_keyword', ''));
@@ -959,6 +954,79 @@ class BlogController extends Controller
         return $keyword === '' ? null : $keyword;
     }
 
+    private function applySearchFilter(Builder $query, string $search): void
+    {
+        $needle = $this->normalizeSearchTerm($search);
+
+        if ($needle === '') {
+            return;
+        }
+
+        $likeValue = '%' . $needle . '%';
+
+        $query->where(function (Builder $subQuery) use ($likeValue) {
+            if ($this->hasSearchTextSupport()) {
+                $subQuery->whereRaw($this->accentInsensitiveLikeSql('posts.search_text'), [$likeValue]);
+            } else {
+                $subQuery->whereRaw($this->accentInsensitiveLikeSql('posts.title'), [$likeValue])
+                    ->orWhereRaw($this->accentInsensitiveLikeSql('posts.slug'), [$likeValue])
+                    ->orWhereRaw($this->accentInsensitiveLikeSql('posts.excerpt'), [$likeValue])
+                    ->orWhereRaw($this->accentInsensitiveLikeSql('posts.content'), [$likeValue]);
+            }
+
+            $subQuery->orWhereRaw($this->accentInsensitiveLikeSql('posts.seo_keyword'), [$likeValue]);
+
+            if ($this->hasBlogCategorySupport()) {
+                $subQuery->orWhereHas('category', function (Builder $categoryQuery) use ($likeValue) {
+                    $categoryQuery->whereRaw($this->accentInsensitiveLikeSql('blog_categories.name'), [$likeValue])
+                        ->orWhereRaw($this->accentInsensitiveLikeSql('blog_categories.slug'), [$likeValue]);
+                });
+            }
+        });
+    }
+
+    private function normalizeSearchTerm(?string $search): string
+    {
+        return Str::of((string) $search)
+            ->trim()
+            ->lower()
+            ->ascii()
+            ->replaceMatches('/\s+/u', ' ')
+            ->trim()
+            ->value();
+    }
+
+    private function accentInsensitiveLikeSql(string $expression): string
+    {
+        if ($this->supportsAccentInsensitiveSearch()) {
+            return 'immutable_unaccent(' . $expression . ') ILIKE ?';
+        }
+
+        return 'LOWER(COALESCE(' . $expression . ", '')) LIKE ?";
+    }
+
+    private function supportsAccentInsensitiveSearch(): bool
+    {
+        static $cache = null;
+
+        if ($cache !== null) {
+            return $cache;
+        }
+
+        try {
+            if (DB::getDriverName() !== 'pgsql') {
+                return $cache = false;
+            }
+
+            $result = DB::selectOne("SELECT to_regprocedure('immutable_unaccent(text)') AS procedure_name");
+            $row = (array) $result;
+
+            return $cache = !empty($row['procedure_name']);
+        } catch (Throwable) {
+            return $cache = false;
+        }
+    }
+
     private function ensureSeoKeywordExists(int $accountId, ?string $keyword): void
     {
         if ($keyword === null) {
@@ -1039,6 +1107,17 @@ class BlogController extends Controller
 
         if ($cache === null) {
             $cache = Schema::hasTable('post_seo_keywords');
+        }
+
+        return $cache;
+    }
+
+    private function hasSearchTextSupport(): bool
+    {
+        static $cache = null;
+
+        if ($cache === null) {
+            $cache = Schema::hasTable('posts') && Schema::hasColumn('posts', 'search_text');
         }
 
         return $cache;

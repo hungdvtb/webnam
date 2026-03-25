@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str;
 
 class Post extends Model
 {
@@ -22,6 +23,10 @@ class Post extends Model
         'published_at'
     ];
 
+    protected $hidden = [
+        'search_text',
+    ];
+
     protected $casts = [
         'blog_category_id' => 'integer',
         'is_system' => 'boolean',
@@ -37,6 +42,18 @@ class Post extends Model
         'is_starred' => false,
         'sort_order' => 0,
     ];
+
+    protected static function booted(): void
+    {
+        static::saving(function (Post $post) {
+            $post->search_text = self::buildSearchText(
+                $post->title,
+                $post->slug,
+                $post->excerpt,
+                $post->content
+            );
+        });
+    }
 
     public function scopePublished($query)
     {
@@ -55,5 +72,29 @@ class Post extends Model
     public function category()
     {
         return $this->belongsTo(BlogCategory::class, 'blog_category_id');
+    }
+
+    public static function buildSearchText(
+        ?string $title,
+        ?string $slug,
+        ?string $excerpt,
+        ?string $content
+    ): string {
+        $plainContent = html_entity_decode(strip_tags((string) $content), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+
+        $searchText = collect([
+            $title,
+            $slug,
+            $excerpt,
+            $plainContent,
+        ])
+            ->map(fn ($segment) => trim((string) $segment))
+            ->filter()
+            ->implode(' ');
+
+        return Str::of($searchText)
+            ->replaceMatches('/\s+/u', ' ')
+            ->trim()
+            ->value();
     }
 }

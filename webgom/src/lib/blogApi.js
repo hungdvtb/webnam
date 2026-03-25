@@ -8,22 +8,42 @@ export async function getBlogPosts(params = {}) {
     }
   });
   const query = urlParams.toString();
-  const res = await fetch(`${config.apiUrl}/blog${query ? `?${query}` : ''}`, {
-    headers: { 'Accept': 'application/json', 'X-Site-Code': config.siteCode },
-    next: { revalidate: 60 },
-  });
-  if (!res.ok) return { data: [], meta: null };
-  return res.json();
+  try {
+    const res = await fetch(`${config.apiUrl}/blog${query ? `?${query}` : ''}`, {
+      headers: { 'Accept': 'application/json', 'X-Site-Code': config.siteCode },
+      cache: 'no-store',
+    });
+
+    if (!res.ok) {
+      return { data: [], categories: [], meta: null, __ok: false };
+    }
+
+    const payload = await res.json();
+
+    if (payload && typeof payload === 'object') {
+      return { ...payload, __ok: true };
+    }
+
+    return { data: [], categories: [], meta: null, __ok: true };
+  } catch {
+    return { data: [], categories: [], meta: null, __ok: false };
+  }
 }
 
 export async function getBlogPost(id) {
   const slugOrId = encodeURIComponent(String(id ?? ''));
   if (!slugOrId) return null;
 
-  const res = await fetch(`${config.apiUrl}/blog/${slugOrId}`, {
-    headers: { 'Accept': 'application/json', 'X-Site-Code': config.siteCode },
-    next: { revalidate: 60 },
-  });
-  if (!res.ok) return null;
-  return res.json();
+  try {
+    const res = await fetch(`${config.apiUrl}/blog/${slugOrId}`, {
+      headers: { 'Accept': 'application/json', 'X-Site-Code': config.siteCode },
+      cache: 'no-store',
+    });
+
+    if (!res.ok) return null;
+
+    return res.json();
+  } catch {
+    return null;
+  }
 }

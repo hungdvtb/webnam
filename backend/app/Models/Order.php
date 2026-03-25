@@ -9,8 +9,18 @@ class Order extends Model
 {
     use \App\Traits\BelongsToAccount, SoftDeletes;
 
+    public const KIND_OFFICIAL = 'official';
+    public const KIND_TEMPLATE = 'template';
+    public const KIND_DRAFT = 'draft';
+
+    public const KINDS = [
+        self::KIND_OFFICIAL,
+        self::KIND_TEMPLATE,
+        self::KIND_DRAFT,
+    ];
+
     protected $fillable = [
-        'user_id', 'order_number', 'total_price', 'status', 
+        'user_id', 'lead_id', 'order_number', 'order_kind', 'converted_from_order_id', 'converted_from_kind', 'total_price', 'status', 
         'customer_name', 'customer_email', 'customer_phone', 
         'shipping_address', 'province', 'district', 'ward', 'notes', 'account_id',
         'source', 'type', 'shipment_status', 'shipping_fee', 'discount', 'cost_total', 'profit_total', 'customer_id',
@@ -97,5 +107,15 @@ class Order extends Model
     public function isShippingAutoSynced(): bool
     {
         return $this->shipping_status_source !== 'manual' && $this->hasActiveShipment();
+    }
+
+    public function isOfficial(): bool
+    {
+        return ($this->order_kind ?: self::KIND_OFFICIAL) === self::KIND_OFFICIAL;
+    }
+
+    public function managesInventory(): bool
+    {
+        return $this->isOfficial();
     }
 }

@@ -10,6 +10,7 @@ import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel'
 import SortIndicator from '../../components/SortIndicator';
 import { SHIPPING_SOUND_STORAGE_KEY, defaultSoundSettings, beep } from '../../components/admin/ShippingSettingsPanel';
 import OrderInventorySlipDrawer from '../../components/admin/OrderInventorySlipDrawer';
+import { printOrders } from '../../utils/orderPrint';
 
 const DEFAULT_COLUMNS = [
     { id: 'order_number', label: 'Mã Đơn', minWidth: '140px', fixed: true },
@@ -739,6 +740,7 @@ const OrderList = () => {
     const statusMenuRef = useRef(null);
 
     const [notification, setNotification] = useState(null);
+    const [printingOrders, setPrintingOrders] = useState(false);
     const [shippingAlerts, setShippingAlerts] = useState([]);
     const [showShippingAlerts, setShowShippingAlerts] = useState(false);
     const [shippingAlertUnread, setShippingAlertUnread] = useState([]);
@@ -1396,6 +1398,56 @@ const OrderList = () => {
         }
     };
 
+    const handleBulkPrint = async () => {
+        if (!selectedIds.length || printingOrders) return;
+
+        const ids = [...selectedIds];
+
+        try {
+            setPrintingOrders(true);
+
+            const response = await orderApi.getPrintData(ids);
+            const printableOrders = response?.data?.data || [];
+
+            if (!printableOrders.length) {
+                throw new Error('Không có đơn hàng hợp lệ để in.');
+            }
+
+            await printOrders(printableOrders);
+
+            const markResponse = await orderApi.markPrinted(ids);
+            const markSummary = markResponse?.data || {};
+            const updatedCount = Number(markSummary.updated_count || 0);
+            const preservedCount = Number(markSummary.preserved_count || 0);
+            const ignoredCount = Number(markSummary.ignored_count || 0);
+            const messageParts = [`Đã mở in ${printableOrders.length} đơn`];
+
+            if (updatedCount > 0) {
+                messageParts.push(`${updatedCount} đơn chuyển sang "Đã in"`);
+            }
+
+            if (preservedCount > 0) {
+                messageParts.push(`${preservedCount} đơn giữ nguyên trạng thái vì đang ở luồng giao hàng hoặc đã in`);
+            }
+
+            if (ignoredCount > 0) {
+                messageParts.push(`${ignoredCount} đơn nháp hoặc đơn mẫu không đổi trạng thái`);
+            }
+
+            await fetchOrders(pagination.current_page || 1, filters, pagination.per_page, sortConfig);
+            setSelectedIds([]);
+            setNotification({ type: 'success', message: messageParts.join('. ') });
+        } catch (error) {
+            console.error('Print orders error', error);
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || error.message || 'Không thể in đơn hàng.',
+            });
+        } finally {
+            setPrintingOrders(false);
+        }
+    };
+
     const currentListUrl = useMemo(() => buildOrderListUrl(currentView), [currentView]);
 
     const navigateToListView = useCallback((nextView = 'main') => {
@@ -1657,6 +1709,7 @@ const OrderList = () => {
                                 {isDraftView
                                     ? <button onClick={() => handleBulkConvert(MAIN_ORDER_KIND)} disabled={selectedIds.length === 0} title="Chốt thành đơn chính" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary border-primary/20 hover:bg-primary hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>
                                     : <button onClick={() => handleBulkConvert(DRAFT_ORDER_KIND)} disabled={selectedIds.length === 0} title="Chuyển sang đơn nháp" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-700 hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">drive_file_move</span></button>}
+                                <button onClick={handleBulkPrint} disabled={selectedIds.length === 0 || printingOrders} title="In đơn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !printingOrders ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${printingOrders ? 'animate-refresh-spin' : ''}`}>{printingOrders ? 'progress_activity' : 'local_printshop'}</span></button>
                                 <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Chuyển vào thùng rác" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete</span></button>
                             </>
                         )}

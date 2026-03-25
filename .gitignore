@@ -1,0 +1,11 @@
+# Workspace runtime artifacts
+*.log
+.tmp-appdata/
+
+# Local browser debug profiles
+webgom/.tmp-chrome-profile/
+webgom/.tmp-edge-cdp-profile/
+webgom/.tmp-edge-profile/
+
+# Local Codex backup files
+*.bak-codex-*

@@ -18,6 +18,7 @@ use App\Models\ShipmentItem;
 use App\Models\ShipmentStatusLog;
 use App\Models\ShippingIntegration;
 use App\Models\SiteSetting;
+use App\Support\OrderStatusCatalog;
 use App\Services\Inventory\InventoryService;
 use App\Services\OrderInventorySlipService;
 use App\Services\RepeatCustomerPhoneService;
@@ -102,6 +103,26 @@ class OrderController extends Controller
                 ->select(['id', 'order_id', 'attribute_id', 'value'])
                 ->with([
                     'attribute:id,code,name',
+                ]),
+        ];
+    }
+
+    private function orderPrintRelations(): array
+    {
+        return [
+            'items' => fn ($query) => $query
+                ->select([
+                    'id',
+                    'order_id',
+                    'account_id',
+                    'product_id',
+                    'product_name_snapshot',
+                    'product_sku_snapshot',
+                    'quantity',
+                    'price',
+                ])
+                ->with([
+                    'product:id,name,sku',
                 ]),
         ];
     }
@@ -900,12 +921,78 @@ class OrderController extends Controller
 
     private function loadOrderStatuses(int $accountId): array
     {
+        OrderStatusCatalog::ensurePrintedStatus($accountId);
+
         return OrderStatus::query()
             ->where('account_id', $accountId)
             ->orderBy('sort_order')
             ->orderBy('name')
             ->get()
             ->toArray();
+    }
+
+    private function buildPrintableAddress(Order $order): string
+    {
+        $parts = [];
+
+        foreach ([$order->shipping_address, $order->ward, $order->district, $order->province] as $rawPart) {
+            $part = trim((string) $rawPart);
+            if ($part === '') {
+                continue;
+            }
+
+            $exists = collect($parts)->contains(function (string $existing) use ($part) {
+                $existingLower = Str::lower($existing);
+                $partLower = Str::lower($part);
+
+                return $existingLower === $partLower
+                    || Str::contains($existingLower, $partLower)
+                    || Str::contains($partLower, $existingLower);
+            });
+
+            if (!$exists) {
+                $parts[] = $part;
+            }
+        }
+
+        return implode(', ', $parts);
+    }
+
+    private function transformPrintableOrders(Collection $orders): array
+    {
+        return $orders
+            ->map(function (Order $order) {
+                return [
+                    'id' => (int) $order->id,
+                    'order_number' => $order->order_number,
+                    'customer_name' => $order->customer_name,
+                    'customer_phone' => $order->customer_phone,
+                    'shipping_address' => $this->buildPrintableAddress($order),
+                    'notes' => trim((string) $order->notes),
+                    'total_payment' => (float) $order->total_price,
+                    'created_at' => $order->created_at?->toISOString(),
+                    'items' => $order->items
+                        ->map(function (OrderItem $item) {
+                            $productName = trim((string) ($item->product_name_snapshot ?: $item->product?->name ?: ('Sản phẩm #' . $item->product_id)));
+                            $productSku = trim((string) ($item->product_sku_snapshot ?: $item->product?->sku ?: ''));
+                            $quantity = (int) $item->quantity;
+                            $unitPrice = (float) $item->price;
+
+                            return [
+                                'id' => (int) $item->id,
+                                'name' => $productName,
+                                'sku' => $productSku !== '' ? $productSku : null,
+                                'quantity' => $quantity,
+                                'unit_price' => $unitPrice,
+                                'line_total' => round($quantity * $unitPrice, 2),
+                            ];
+                        })
+                        ->values()
+                        ->all(),
+                ];
+            })
+            ->values()
+            ->all();
     }
 
     private function loadQuoteSettings(int $accountId): array
@@ -1295,6 +1382,54 @@ class OrderController extends Controller
         return response()->json($order);
     }
 
+    public function printData(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer',
+        ]);
+
+        $ids = collect($validated['ids'])
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            return response()->json(['message' => 'Chưa chọn đơn hàng nào để in.'], 400);
+        }
+
+        $positions = $ids->flip();
+
+        $orders = $this->scopedOrderQuery($request)
+            ->whereIn('id', $ids->all())
+            ->select([
+                'id',
+                'order_number',
+                'customer_name',
+                'customer_phone',
+                'shipping_address',
+                'province',
+                'district',
+                'ward',
+                'notes',
+                'total_price',
+                'created_at',
+            ])
+            ->with($this->orderPrintRelations())
+            ->get()
+            ->sortBy(fn (Order $order) => $positions->get((int) $order->id, PHP_INT_MAX))
+            ->values();
+
+        if ($orders->isEmpty()) {
+            return response()->json(['message' => 'Không tìm thấy đơn hàng để in.'], 404);
+        }
+
+        return response()->json([
+            'data' => $this->transformPrintableOrders($orders),
+        ]);
+    }
+
     public function update(Request $request, $id)
     {
         $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
@@ -1399,6 +1534,92 @@ class OrderController extends Controller
 
             return response()->json($this->mutationResponsePayload($order));
         });
+    }
+
+    public function markPrinted(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer',
+        ]);
+
+        $ids = collect($validated['ids'])
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            return response()->json(['message' => 'Chưa chọn đơn hàng nào để cập nhật in đơn.'], 400);
+        }
+
+        $accountId = $this->resolveAccountId($request);
+        OrderStatusCatalog::ensurePrintedStatus($accountId);
+
+        $orders = $this->scopedOrderQuery($request)
+            ->whereIn('id', $ids->all())
+            ->select([
+                'id',
+                'status',
+                'order_kind',
+                'shipping_dispatched_at',
+            ])
+            ->with([
+                'activeShipment:id,order_id',
+            ])
+            ->get();
+
+        if ($orders->isEmpty()) {
+            return response()->json(['message' => 'Không tìm thấy đơn hàng để cập nhật trạng thái in.'], 404);
+        }
+
+        $updatedIds = [];
+        $keptIds = [];
+        $ignoredIds = [];
+
+        DB::transaction(function () use ($orders, &$updatedIds, &$keptIds, &$ignoredIds) {
+            foreach ($orders as $order) {
+                if (!$this->shouldManageInventory((string) $order->order_kind)) {
+                    $ignoredIds[] = (int) $order->id;
+                    continue;
+                }
+
+                if (
+                    $order->status === OrderStatusCatalog::PRINTED_CODE
+                    || OrderStatusCatalog::shouldKeepStatusWhenPrinting($order->status)
+                    || $order->shipping_dispatched_at
+                    || $order->activeShipment
+                ) {
+                    $keptIds[] = (int) $order->id;
+                    continue;
+                }
+
+                \App\Models\OrderStatusLog::create([
+                    'order_id' => $order->id,
+                    'from_status' => $order->status,
+                    'to_status' => OrderStatusCatalog::PRINTED_CODE,
+                    'source' => 'system',
+                    'changed_by' => auth()->id(),
+                    'reason' => 'Tự động cập nhật sau khi in đơn hàng',
+                ]);
+
+                $order->update([
+                    'status' => OrderStatusCatalog::PRINTED_CODE,
+                ]);
+
+                $updatedIds[] = (int) $order->id;
+            }
+        });
+
+        return response()->json([
+            'message' => 'Đã ghi nhận thao tác in đơn.',
+            'updated_count' => count($updatedIds),
+            'preserved_count' => count($keptIds),
+            'ignored_count' => count($ignoredIds),
+            'updated_ids' => $updatedIds,
+            'preserved_ids' => $keptIds,
+            'ignored_ids' => $ignoredIds,
+        ]);
     }
 
     public function destroy(Request $request, $id)

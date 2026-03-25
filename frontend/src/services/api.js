@@ -203,6 +203,8 @@ export const orderApi = {
     getInventorySlips: (id) => api.get(`/orders/${id}/inventory-slips`),
     createInventorySlip: (id, data) => api.post(`/orders/${id}/inventory-slips`, data),
     deleteInventorySlip: (id, documentId) => api.delete(`/orders/${id}/inventory-slips/${documentId}`),
+    getPrintData: (ids) => api.post('/orders/print-data', { ids }),
+    markPrinted: (ids) => api.post('/orders/mark-printed', { ids }),
     store: (data) => api.post('/orders', data),
     update: (id, data) => api.put(`/orders/${id}`, data).then((response) => {
         invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));

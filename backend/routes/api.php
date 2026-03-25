@@ -124,6 +124,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/dispatch/preview', [\App\Http\Controllers\Api\OrderController::class , 'dispatchPreview']);
     Route::post('/orders/dispatch', [\App\Http\Controllers\Api\OrderController::class , 'dispatch']);
     Route::post('/orders/quick-dispatch', [\App\Http\Controllers\Api\OrderController::class , 'quickDispatch']);
+    Route::post('/orders/print-data', [\App\Http\Controllers\Api\OrderController::class , 'printData']);
+    Route::post('/orders/mark-printed', [\App\Http\Controllers\Api\OrderController::class , 'markPrinted']);
     Route::get('/orders/{id}/inventory-slips', [\App\Http\Controllers\Api\OrderController::class , 'inventorySlips'])->whereNumber('id');
     Route::post('/orders/{id}/inventory-slips', [\App\Http\Controllers\Api\OrderController::class , 'storeInventorySlip'])->whereNumber('id');
     Route::delete('/orders/{id}/inventory-slips/{documentId}', [\App\Http\Controllers\Api\OrderController::class , 'destroyInventorySlip'])->whereNumber('id')->whereNumber('documentId');

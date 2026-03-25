@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\OrderStatus;
+use App\Support\OrderStatusCatalog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -11,7 +12,11 @@ class OrderStatusController extends Controller
 {
     public function index(Request $request)
     {
-        $accountId = $request->header('X-Account-Id');
+        $accountId = (int) $request->header('X-Account-Id');
+        if ($accountId > 0) {
+            OrderStatusCatalog::ensurePrintedStatus($accountId);
+        }
+
         $query = OrderStatus::where('account_id', $accountId);
 
         if ($request->has('active_only') && $request->active_only === 'true') {
@@ -24,9 +29,10 @@ class OrderStatusController extends Controller
 
     public function store(Request $request)
     {
+        $accountId = (int) $request->input('account_id');
         $validated = $request->validate([
             'account_id' => 'required|exists:accounts,id',
-            'code' => 'required|string|unique:order_statuses,code',
+            'code' => 'required|string|unique:order_statuses,code,NULL,id,account_id,' . $accountId,
             'name' => 'required|string',
             'color' => 'nullable|string',
             'sort_order' => 'nullable|integer',

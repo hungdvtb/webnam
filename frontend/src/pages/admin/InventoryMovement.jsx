@@ -5231,7 +5231,10 @@ const InventoryMovement = () => {
         if (columnId === 'sku') return <CellText primary={row.sku} secondary={row.is_variant && row.parent_name ? `Thuộc: ${row.parent_name}` : null} mono />;
         if (columnId === 'name') return <CellText primary={row.name} secondary={row.category_name || 'Chưa phân loại'} />;
         if (columnId === 'expected_cost') return row.expected_cost != null ? formatCurrency(row.expected_cost) : '-';
-        if (columnId === 'current_cost') return row.current_cost != null ? formatCurrency(row.current_cost) : '-';
+        if (columnId === 'current_cost') {
+            const effectiveCurrentCost = row.display_cost ?? row.current_cost ?? row.expected_cost ?? null;
+            return effectiveCurrentCost != null ? formatCurrency(effectiveCurrentCost) : '-';
+        }
         if (columnId === 'inventory_value') return formatCurrency(row.inventory_value);
         if (columnId === 'actions') return <div className="flex items-center justify-center gap-2"><button type="button" onClick={() => navigate(`/admin/products/edit/${row.id}`)} className={ghostButton}>Sửa</button><button type="button" onClick={() => removeProduct(row.id)} className={dangerButton}>Xóa</button></div>;
         return typeof row[columnId] === 'number' ? formatNumber(row[columnId]) : (row[columnId] || '-');
@@ -5344,7 +5347,10 @@ const InventoryMovement = () => {
                     </div>
                 );
             }
-            if (columnId === 'current_cost') return row.current_cost != null ? formatCurrency(row.current_cost) : '-';
+            if (columnId === 'current_cost') {
+                const effectiveCurrentCost = row.current_cost ?? row.display_cost ?? row.expected_cost ?? null;
+                return effectiveCurrentCost != null ? formatCurrency(effectiveCurrentCost) : '-';
+            }
             return '-';
         }
         if (columnId === 'select') {
@@ -5415,7 +5421,10 @@ const InventoryMovement = () => {
             );
         }
         if (columnId === 'price') return row.price != null ? formatCurrency(row.price) : '-';
-        if (columnId === 'current_cost') return row.current_cost != null ? formatCurrency(row.current_cost) : '-';
+        if (columnId === 'current_cost') {
+            const effectiveCurrentCost = row.current_cost ?? row.display_cost ?? row.expected_cost ?? null;
+            return effectiveCurrentCost != null ? formatCurrency(effectiveCurrentCost) : '-';
+        }
         if (columnId === 'unit_cost') return (
             <div className="flex items-center gap-2">
                 <input

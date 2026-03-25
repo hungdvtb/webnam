@@ -611,7 +611,14 @@ class InventoryService
     {
         $normalizedItems = collect($items)
             ->map(function ($item) {
-                $payload = is_array($item) ? $item : (array) $item;
+                if (is_array($item)) {
+                    $payload = $item;
+                } elseif ($item instanceof \Illuminate\Contracts\Support\Arrayable) {
+                    $payload = $item->toArray();
+                } else {
+                    $payload = get_object_vars($item);
+                }
+
                 $receivedQuantity = max(0, (int) ($payload['received_quantity'] ?? $payload['quantity'] ?? 0));
                 $unitCost = round((float) ($payload['unit_cost'] ?? 0), 2);
 
@@ -958,7 +965,7 @@ class InventoryService
         $normalizedName = $this->normalizeStatusText($status->name);
 
         return in_array($normalizedCode, ['hoan_thanh', 'completed', 'complete', 'done'], true)
-            || str_contains($normalizedName, 'hoan thanh')
+            || in_array($normalizedName, ['hoan thanh', 'completed', 'complete', 'done'], true)
             || str_contains($normalizedName, 'completed')
             || str_contains($normalizedName, 'complete');
     }
@@ -1701,7 +1708,6 @@ class InventoryService
     {
         $prefix = 'PNK' . now()->format('ymd');
         $lastImport = InventoryImport::withoutGlobalScopes()
-            ->where('account_id', $accountId)
             ->where('import_number', 'like', "{$prefix}%")
             ->orderByDesc('id')
             ->first();
@@ -1724,8 +1730,6 @@ class InventoryService
         } . now()->format('ymd');
 
         $lastDocument = InventoryDocument::withoutGlobalScopes()
-            ->where('account_id', $accountId)
-            ->where('type', $type)
             ->where('document_number', 'like', "{$prefix}%")
             ->orderByDesc('id')
             ->first();

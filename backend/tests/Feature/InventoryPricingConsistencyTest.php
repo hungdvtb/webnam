@@ -43,7 +43,7 @@ class InventoryPricingConsistencyTest extends TestCase
             ]],
         ], $account->id, $user->id);
 
-        $service->createImport([
+        $secondImport = $service->createImport([
             'supplier_id' => $supplier->id,
             'import_date' => now()->toDateString(),
             'items' => [[
@@ -54,6 +54,8 @@ class InventoryPricingConsistencyTest extends TestCase
                 'update_supplier_price' => true,
             ]],
         ], $account->id, $user->id);
+
+        $this->assertSame('hoan_thanh', $secondImport->fresh()->status);
 
         $product->refresh();
 
@@ -179,6 +181,153 @@ class InventoryPricingConsistencyTest extends TestCase
         $this->assertSame(300000.0, (float) $productA->fresh()->cost_price);
         $this->assertSame(1, (int) $productB->fresh()->imported_quantity_total);
         $this->assertSame(500000.0, (float) $productB->fresh()->cost_price);
+    }
+
+    public function test_updating_import_recomputes_weighted_average_for_only_the_affected_product(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham sua phieu nhap',
+            'sku' => 'UPD-IMP-001',
+            'expected_cost' => 200000,
+        ]);
+
+        $service = app(InventoryService::class);
+
+        $firstImport = $service->createImport([
+            'supplier_id' => $supplier->id,
+            'import_date' => now()->toDateString(),
+            'items' => [[
+                'product_id' => $product->id,
+                'quantity' => 2,
+                'received_quantity' => 2,
+                'unit_cost' => 350000,
+                'update_supplier_price' => true,
+            ]],
+        ], $account->id, $user->id);
+
+        $this->assertSame('hoan_thanh', $firstImport->fresh()->status);
+
+        $secondImport = $service->createImport([
+            'supplier_id' => $supplier->id,
+            'import_date' => now()->toDateString(),
+            'items' => [[
+                'product_id' => $product->id,
+                'quantity' => 2,
+                'received_quantity' => 2,
+                'unit_cost' => 450000,
+                'update_supplier_price' => true,
+            ]],
+        ], $account->id, $user->id);
+
+        $this->assertSame('hoan_thanh', $secondImport->fresh()->status);
+
+        $service->updateImport(
+            InventoryImport::query()->findOrFail($secondImport->id),
+            [
+                'supplier_id' => $supplier->id,
+                'import_date' => now()->toDateString(),
+                'items' => [[
+                    'product_id' => $product->id,
+                    'quantity' => 4,
+                    'received_quantity' => 4,
+                    'unit_cost' => 500000,
+                    'update_supplier_price' => true,
+                ]],
+            ],
+            $account->id,
+            $user->id
+        );
+
+        $product->refresh();
+
+        $this->assertSame(6, (int) $product->imported_quantity_total);
+        $this->assertSame(2700000.0, (float) $product->imported_value_total);
+        $this->assertSame(450000.0, (float) $product->cost_price);
+        $this->assertSame(6, (int) $product->stock_quantity);
+
+        $this->assertSame(
+            2,
+            InventoryImport::query()
+                ->whereHas('items', fn ($query) => $query->where('product_id', $product->id))
+                ->count()
+        );
+
+        $this->assertSame(350000.0, (float) $firstImport->fresh()->items()->first()->unit_cost);
+    }
+
+    public function test_inventory_product_payload_uses_expected_cost_as_display_fallback_without_imports(): void
+    {
+        [$account] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham chua nhap kho',
+            'sku' => 'NO-IMP-001',
+            'expected_cost' => 275000,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/inventory/products?per_page=20');
+
+        $response->assertOk();
+        $row = collect($response->json('data'))->firstWhere('id', $product->id);
+
+        $this->assertNotNull($row);
+        $this->assertNull($row['current_cost']);
+        $this->assertSame(275000.0, (float) ($row['expected_cost'] ?? 0));
+        $this->assertSame(275000.0, (float) ($row['display_cost'] ?? 0));
+        $this->assertSame('expected_cost', $row['cost_source']);
+    }
+
+    public function test_updating_secondary_supplier_price_switches_product_expected_cost_source(): void
+    {
+        [$account] = $this->authenticate();
+        $primarySupplier = $this->createSupplier($account);
+        $secondarySupplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $primarySupplier, [
+            'name' => 'San pham nhieu nha cung cap',
+            'sku' => 'MULTI-SUP-001',
+            'expected_cost' => 180000,
+        ]);
+
+        DB::table('product_suppliers')->insert([
+            'account_id' => $account->id,
+            'product_id' => $product->id,
+            'supplier_id' => $secondarySupplier->id,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $primaryPrice = SupplierProductPrice::query()->create([
+            'account_id' => $account->id,
+            'supplier_id' => $primarySupplier->id,
+            'product_id' => $product->id,
+            'unit_cost' => 180000,
+        ]);
+
+        $secondaryPrice = SupplierProductPrice::query()->create([
+            'account_id' => $account->id,
+            'supplier_id' => $secondarySupplier->id,
+            'product_id' => $product->id,
+            'unit_cost' => 220000,
+        ]);
+
+        $this->withHeaders($this->headers($account))
+            ->putJson("/api/inventory/suppliers/{$secondarySupplier->id}/prices/{$secondaryPrice->id}", [
+                'unit_cost' => 260000,
+                'supplier_product_code' => 'ALT-260',
+            ])
+            ->assertOk()
+            ->assertJsonPath('product.expected_cost', 260000.0);
+
+        $product->refresh();
+
+        $this->assertSame($secondarySupplier->id, (int) $product->supplier_id);
+        $this->assertSame(260000.0, (float) $product->expected_cost);
+        $this->assertSame(180000.0, (float) $primaryPrice->fresh()->unit_cost);
+        $this->assertSame(260000.0, (float) $secondaryPrice->fresh()->unit_cost);
     }
 
     private function authenticate(): array

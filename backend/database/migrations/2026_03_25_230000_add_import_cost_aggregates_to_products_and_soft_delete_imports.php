@@ -43,7 +43,7 @@ return new class extends Migration
                     ->select([
                         'imports.id',
                         DB::raw('COALESCE(imports.extra_charge_amount, 0) as extra_charge_amount'),
-                        DB::raw('COALESCE(inventory_import_statuses.affects_inventory, 0) as affects_inventory'),
+                        DB::raw('COALESCE(inventory_import_statuses.affects_inventory, FALSE) as affects_inventory'),
                     ])
                     ->orderBy('imports.id')
                     ->cursor() as $import

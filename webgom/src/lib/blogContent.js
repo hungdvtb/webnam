@@ -1,10 +1,18 @@
 import { resolveMediaUrl, resolveVideoEmbedUrl } from './media';
+import {
+  decodeGalleryPayload,
+  extractGalleryPayloadFromAttributes,
+  renderMediaGalleryMarkup,
+} from './blogMediaGallery';
 
 const STANDALONE_YOUTUBE_BLOCK_PATTERN = /<(p|div)\b[^>]*>\s*(?:<a\b[^>]*href=(["'])([^"']+)\2[^>]*>[\s\S]*?<\/a>|(((https?:)?\/\/|www\.)[^\s<]+|(?:youtube\.com|youtu\.be)\/[^\s<]+))\s*<\/\1>/gi;
 const YOUTUBE_IFRAME_PATTERN = /<iframe\b[^>]*src=(["'])([^"']+)\1[^>]*>(?:<\/iframe>)?/gi;
 const STANDALONE_IMAGE_PATTERN = /<p\b[^>]*>\s*((?:<a\b[^>]*>\s*)?<img\b[^>]*>(?:\s*<\/a>)?)\s*<\/p>/gi;
 const IMAGE_TAG_PATTERN = /<img\b([^>]*?)>/gi;
 const VIDEO_PLACEHOLDER_PATTERN = /__BLOG_VIDEO_EMBED_(\d+)__/g;
+const MEDIA_GALLERY_BLOCK_PATTERN = /<div\b([^>]*\bclass=(["'])[^"']*\bql-bdt-media-gallery\b[^"']*\2[^>]*)>[\s\S]*?<\/div>/gi;
+const MEDIA_GALLERY_PLACEHOLDER_PATTERN = /__BLOG_MEDIA_GALLERY_(\d+)__/g;
+const NON_BREAKING_SPACE_PATTERN = /(?:&nbsp;|&#160;|&#xa0;|\u00a0)/gi;
 
 function escapeAttribute(value) {
   return String(value || '')
@@ -16,6 +24,10 @@ function escapeAttribute(value) {
 
 function normalizeMediaLink(value) {
   return String(value || '').trim().replace(/&amp;/gi, '&');
+}
+
+function normalizeEditorWhitespace(html) {
+  return String(html || '').replace(NON_BREAKING_SPACE_PATTERN, ' ');
 }
 
 function upsertAttribute(tag, name, value) {
@@ -106,8 +118,25 @@ export function transformBlogContent(html) {
     return '';
   }
 
-  let output = String(html);
+  let output = normalizeEditorWhitespace(html);
   const videoEmbeds = [];
+  const mediaGalleryEmbeds = [];
+
+  output = output.replace(
+    MEDIA_GALLERY_BLOCK_PATTERN,
+    (_match, attributes) => {
+      const payload = extractGalleryPayloadFromAttributes(attributes);
+      const galleryMarkup = renderMediaGalleryMarkup(decodeGalleryPayload(payload), mediaGalleryEmbeds.length);
+
+      if (!galleryMarkup) {
+        return '';
+      }
+
+      mediaGalleryEmbeds.push(galleryMarkup);
+
+      return `__BLOG_MEDIA_GALLERY_${mediaGalleryEmbeds.length - 1}__`;
+    }
+  );
 
   output = output.replace(
     STANDALONE_YOUTUBE_BLOCK_PATTERN,
@@ -145,6 +174,7 @@ export function transformBlogContent(html) {
     return appendClass(safeLink, 'bdt-inline-media-link');
   });
   output = output.replace(VIDEO_PLACEHOLDER_PATTERN, (_match, index) => videoEmbeds[Number(index)] || '');
+  output = output.replace(MEDIA_GALLERY_PLACEHOLDER_PATTERN, (_match, index) => mediaGalleryEmbeds[Number(index)] || '');
 
   return output;
 }

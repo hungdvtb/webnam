@@ -8,6 +8,7 @@ use App\Models\Post;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\BulkUpdateLog;
+use App\Services\Inventory\ProductPricingService;
 use App\Services\ProductSkuService;
 use Illuminate\Http\Request;
 use Illuminate\Database\QueryException;
@@ -21,7 +22,10 @@ use Illuminate\Database\Eloquent\Builder;
 
 class ProductController extends Controller
 {
-    public function __construct(protected ProductSkuService $productSkuService)
+    public function __construct(
+        protected ProductSkuService $productSkuService,
+        protected ProductPricingService $productPricingService
+    )
     {
     }
 
@@ -266,6 +270,23 @@ class ProductController extends Controller
         }
 
         throw $exception;
+    }
+
+    protected function applyLegacyExpectedCostAlias(Request $request, array &$validated): void
+    {
+        if (array_key_exists('cost_price', $validated)) {
+            unset($validated['cost_price']);
+        }
+
+        if (array_key_exists('expected_cost', $validated)) {
+            return;
+        }
+
+        if (!array_key_exists('cost_price', $request->all())) {
+            return;
+        }
+
+        $validated['expected_cost'] = $request->input('cost_price');
     }
 
     protected function normalizeSupplierIds(Request $request, array $validated = []): array
@@ -835,7 +856,7 @@ class ProductController extends Controller
         $query->with([
             'images:id,product_id,image_url,is_primary,sort_order',
             'attributeValues:id,product_id,attribute_id,value',
-            'variations:id,sku,name,price,cost_price,type',
+            'variations:id,sku,name,price,cost_price,expected_cost,type',
             'variations.attributeValues:id,product_id,attribute_id,value',
         ]);
 
@@ -861,7 +882,7 @@ class ProductController extends Controller
                     'sku' => $product->sku,
                     'name' => $product->name,
                     'price' => (float) ($product->price ?? 0),
-                    'cost_price' => (float) ($product->cost_price ?? 0),
+                    'cost_price' => (float) ($product->cost_price ?? $product->expected_cost ?? 0),
                     'stock_quantity' => (float) ($product->stock_quantity ?? 0),
                     'type' => $product->type,
                     'main_image' => $primaryImage?->image_url,
@@ -878,7 +899,7 @@ class ProductController extends Controller
                             'sku' => $variation->sku,
                             'name' => $variation->name,
                             'price' => (float) ($variation->price ?? 0),
-                            'cost_price' => (float) ($variation->cost_price ?? 0),
+                            'cost_price' => (float) ($variation->cost_price ?? $variation->expected_cost ?? 0),
                             'type' => $variation->type,
                             'attribute_values' => $variation->attributeValues
                                 ->map(fn ($attributeValue) => [
@@ -1357,6 +1378,7 @@ class ProductController extends Controller
             'price' => 'required|numeric|min:0',
             'price_type' => 'nullable|string|in:fixed,sum',
             'expected_cost' => 'nullable|numeric|min:0',
+            'cost_price' => 'nullable|numeric|min:0',
             'special_price' => 'nullable|numeric|min:0',
             'special_price_from' => 'nullable|date',
             'special_price_to' => 'nullable|date',
@@ -1414,6 +1436,7 @@ class ProductController extends Controller
             'stock_quantity.integer' => 'Số lượng tồn kho phải là số nguyên.',
             'slug.unique' => 'Đường dẫn (slug) này đã tồn tại, vui lòng chọn tên khác.',
         ]);
+        $this->applyLegacyExpectedCostAlias($request, $validated);
 
         $validated['slug'] = $this->productSkuService->generateUniqueSlug(
             !empty($validated['slug']) ? $validated['slug'] : $validated['name']
@@ -1433,6 +1456,12 @@ class ProductController extends Controller
 
                 $product = Product::create(array_merge($validated, ['account_id' => $request->header('X-Account-Id')]));
                 $this->syncProductSuppliers($product, $supplierIds);
+                $this->productPricingService->syncExpectedCost(
+                    $product,
+                    $validated['expected_cost'] ?? null,
+                    $supplierIds[0] ?? null,
+                    auth()->id()
+                );
 
                 if ($request->has('category_ids')) {
                     $product->categories()->sync($request->category_ids);
@@ -1569,6 +1598,12 @@ class ProductController extends Controller
                             'status' => $product->status ?? true,
                         ]);
                         $this->syncProductSuppliers($variantProduct, $supplierIds);
+                        $this->productPricingService->syncExpectedCost(
+                            $variantProduct,
+                            $vData['expected_cost'] ?? null,
+                            $supplierIds[0] ?? $product->supplier_id,
+                            auth()->id()
+                        );
 
                         if ($request->hasFile("variants.{$idx}.image")) {
                             $imageFile = $request->file("variants.{$idx}.image");
@@ -1684,7 +1719,7 @@ class ProductController extends Controller
             ->values();
 
         $products = Product::withTrashed()
-            ->select(['id', 'sku', 'name', 'price', 'cost_price', 'status', 'deleted_at'])
+            ->select(['id', 'sku', 'name', 'price', 'cost_price', 'expected_cost', 'status', 'deleted_at'])
             ->whereIn('id', $requestedItems->pluck('product_id')->all())
             ->get()
             ->keyBy('id');
@@ -1713,7 +1748,7 @@ class ProductController extends Controller
                 'sku' => $product->sku,
                 'name' => $product->name,
                 'price' => (float) ($product->price ?? 0),
-                'cost_price' => (float) ($product->cost_price ?? 0),
+                'cost_price' => (float) ($product->cost_price ?? $product->expected_cost ?? 0),
                 'status' => (bool) $product->status,
                 'deleted' => $product->trashed(),
             ];
@@ -1764,6 +1799,7 @@ class ProductController extends Controller
             'price' => 'sometimes|required|numeric|min:0',
             'price_type' => 'nullable|string|in:fixed,sum',
             'expected_cost' => 'nullable|numeric|min:0',
+            'cost_price' => 'nullable|numeric|min:0',
             'special_price' => 'nullable|numeric|min:0',
             'special_price_from' => 'nullable|date',
             'special_price_to' => 'nullable|date',
@@ -1820,6 +1856,7 @@ class ProductController extends Controller
             'slug.unique' => 'Đường dẫn (slug) này đã tồn tại, vui lòng chọn tên khác.',
             'slug.regex' => 'Đường dẫn chỉ được chứa chữ cái thường, số và dấu gạch ngang (VD: san-pham-1).',
         ]);
+        $this->applyLegacyExpectedCostAlias($request, $validated);
 
         $incomingSupplierIds = $request->has('supplier_ids') || $request->has('supplier_id') || $request->boolean('clear_supplier_ids');
         $supplierIds = $incomingSupplierIds
@@ -1858,6 +1895,16 @@ class ProductController extends Controller
 
                 if ($incomingSupplierIds) {
                     $this->syncProductSuppliers($product, $supplierIds);
+                }
+
+                if ($incomingSupplierIds || array_key_exists('expected_cost', $validated)) {
+                    $this->productPricingService->syncExpectedCost(
+                        $product,
+                        $validated['expected_cost'] ?? $product->expected_cost,
+                        $supplierIds[0] ?? $product->supplier_id,
+                        auth()->id()
+                    );
+                    $product->refresh();
                 }
 
         // ─── Sync snapshots on all linked order_items (batch UPDATE) ────────────
@@ -2010,6 +2057,16 @@ class ProductController extends Controller
                         $this->syncProductSuppliers($variant, $supplierIds);
                     }
 
+                    if ($incomingSupplierIds || array_key_exists('expected_cost', $vData)) {
+                        $this->productPricingService->syncExpectedCost(
+                            $variant,
+                            $vData['expected_cost'] ?? $variant->expected_cost,
+                            $supplierIds[0] ?? $product->supplier_id,
+                            auth()->id()
+                        );
+                        $variant->refresh();
+                    }
+
                     // Handle variant image update/removal
                     if ($request->hasFile("variants.{$idx}.image")) {
                         $disk = 's3';
@@ -2075,6 +2132,12 @@ class ProductController extends Controller
                     ]);
 
                     $this->syncProductSuppliers($variant, $supplierIds);
+                    $this->productPricingService->syncExpectedCost(
+                        $variant,
+                        $vData['expected_cost'] ?? null,
+                        $supplierIds[0] ?? $product->supplier_id,
+                        auth()->id()
+                    );
 
                     if ($request->hasFile("variants.{$idx}.image")) {
                         $disk = 's3';
@@ -2428,6 +2491,7 @@ class ProductController extends Controller
             'ids.*' => 'exists:products,id',
             'basic_info' => 'nullable|array',
             'basic_info.cost_price' => 'nullable|numeric|min:0',
+            'basic_info.expected_cost' => 'nullable|numeric|min:0',
             'basic_info.supplier_id' => ['nullable', $this->supplierExistsRule($request)],
             'basic_info.supplier_ids' => 'nullable|array',
             'basic_info.supplier_ids.*' => ['nullable', $this->supplierExistsRule($request)],
@@ -2436,6 +2500,9 @@ class ProductController extends Controller
 
         $ids = $request->input('ids');
         $basicInfo = $request->input('basic_info', []);
+        if (!array_key_exists('expected_cost', $basicInfo) && array_key_exists('cost_price', $basicInfo)) {
+            $basicInfo['expected_cost'] = $basicInfo['cost_price'];
+        }
         $attributesData = $request->input('attributes', []);
 
         if (empty($basicInfo) && empty($attributesData)) {
@@ -2456,7 +2523,7 @@ class ProductController extends Controller
             ];
 
             // Store original basic fields that ARE being updated
-            foreach (['category_id', 'price', 'cost_price', 'expected_cost', 'stock_quantity', 'supplier_id', 'is_featured', 'is_new', 'status', 'type'] as $field) {
+            foreach (['category_id', 'price', 'expected_cost', 'stock_quantity', 'supplier_id', 'is_featured', 'is_new', 'status', 'type'] as $field) {
                 if (isset($basicInfo[$field]) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
                     $pData['basic'][$field] = $product->{ $field};
                 }
@@ -2492,7 +2559,7 @@ class ProductController extends Controller
             // 1. Update basic info (direct columns)
             if (!empty($basicInfo)) {
                 $toUpdate = [];
-                foreach (['category_id', 'price', 'cost_price', 'expected_cost', 'stock_quantity', 'supplier_id', 'is_featured', 'is_new', 'status', 'type'] as $field) {
+                foreach (['category_id', 'price', 'expected_cost', 'stock_quantity', 'supplier_id', 'is_featured', 'is_new', 'status', 'type'] as $field) {
                     if (isset($basicInfo[$field]) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
                         $toUpdate[$field] = $basicInfo[$field];
                     }
@@ -2507,6 +2574,18 @@ class ProductController extends Controller
                 if (array_key_exists('supplier_ids', $basicInfo) && is_array($basicInfo['supplier_ids'])) {
                     $this->syncProductSuppliers($product, $basicInfo['supplier_ids']);
                     $this->syncSuppliersToVariants($product, $basicInfo['supplier_ids']);
+                }
+
+                if (
+                    array_key_exists('expected_cost', $basicInfo)
+                    || (array_key_exists('supplier_ids', $basicInfo) && is_array($basicInfo['supplier_ids']))
+                ) {
+                    $this->productPricingService->syncExpectedCost(
+                        $product,
+                        $basicInfo['expected_cost'] ?? $product->expected_cost,
+                        $basicInfo['supplier_ids'][0] ?? $product->supplier_id,
+                        auth()->id()
+                    );
                 }
             }
 
@@ -2553,6 +2632,15 @@ class ProductController extends Controller
             if (array_key_exists('supplier_ids', $pData)) {
                 $this->syncProductSuppliers($product, $pData['supplier_ids'] ?? []);
                 $this->syncSuppliersToVariants($product, $pData['supplier_ids'] ?? []);
+            }
+
+            if (array_key_exists('expected_cost', $pData['basic'] ?? []) || array_key_exists('supplier_ids', $pData)) {
+                $this->productPricingService->syncExpectedCost(
+                    $product,
+                    $pData['basic']['expected_cost'] ?? $product->expected_cost,
+                    $pData['supplier_ids'][0] ?? $product->supplier_id,
+                    auth()->id()
+                );
             }
 
             // Restore category sync

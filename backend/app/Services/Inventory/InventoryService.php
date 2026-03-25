@@ -24,6 +24,11 @@ use Illuminate\Validation\ValidationException;
 
 class InventoryService
 {
+    public function __construct(
+        private readonly ProductPricingService $productPricingService
+    ) {
+    }
+
     public function createImport(array $payload, int $accountId, ?int $userId = null): InventoryImport
     {
         return DB::transaction(function () use ($payload, $accountId, $userId) {
@@ -133,7 +138,7 @@ class InventoryService
 
                 }
 
-                if ($supplier && ($shouldUpdateSupplierPrice || $supplierPrice === null || $priceChanged || array_key_exists('supplier_product_code', $item))) {
+                if ($supplier && ($shouldUpdateSupplierPrice || $supplierPrice === null || array_key_exists('supplier_product_code', $item))) {
                     $supplierPrice = $this->upsertSupplierPrice(
                         $supplier,
                         $product,
@@ -147,11 +152,20 @@ class InventoryService
                         'supplier_product_price_id' => $supplierPrice->id,
                         'supplier_product_code_snapshot' => $item['supplier_product_code'] ?? $supplierPrice->supplier_product_code,
                     ])->save();
+
+                    if ($shouldUpdateSupplierPrice) {
+                        $this->productPricingService->syncProductFromSupplierPrice($supplierPrice, $userId);
+                    }
                 }
 
                 $touchedProductIds[] = $product->id;
             }
 
+            if ($this->importAffectsInventory($status)) {
+                $this->applyImportAggregateDeltaMap(
+                    $this->buildImportAggregateMap($items, (float) $context['extra_charge_amount'])
+                );
+            }
             $this->syncImportAttachments($import, $payload, $accountId, $userId);
             $this->refreshProducts($touchedProductIds);
 
@@ -178,6 +192,7 @@ class InventoryService
             $context = $this->prepareImportContext($payload, $accountId);
             $status = $context['status'];
             $previousProductIds = $import->items()->pluck('product_id')->all();
+            $this->revertImportAggregate($import);
 
             $this->revertImportInventory($import);
             ImportItem::query()->where('import_id', $import->id)->delete();
@@ -207,6 +222,11 @@ class InventoryService
                 $this->syncImportItems($import, $context, $userId)
             );
 
+            if ($this->importAffectsInventory($status)) {
+                $this->applyImportAggregateDeltaMap(
+                    $this->buildImportAggregateMap($context['items'], (float) $context['extra_charge_amount'])
+                );
+            }
             $this->syncImportAttachments($import, $payload, $accountId, $userId);
             $this->refreshProducts($touchedProductIds);
 
@@ -219,14 +239,66 @@ class InventoryService
         DB::transaction(function () use ($import) {
             $productIds = $import->items()->pluck('product_id')->all();
             $this->ensureImportCanBeReverted($import);
+            $this->revertImportAggregate($import);
             $this->revertImportInventory($import);
-            InventoryImportAttachment::query()->where('import_id', $import->id)->delete();
-            InventoryInvoiceAnalysisLog::query()
-                ->where('import_id', $import->id)
-                ->update(['import_id' => null]);
-            ImportItem::query()->where('import_id', $import->id)->delete();
             $import->delete();
             $this->refreshProducts($productIds);
+        });
+    }
+
+    public function restoreImport(InventoryImport $import): InventoryImport
+    {
+        return DB::transaction(function () use ($import) {
+            if (!$import->trashed()) {
+                return $this->loadImportRelations($import->fresh());
+            }
+
+            $import->restore();
+
+            $status = $import->statusConfig()->first();
+            $items = $import->items()
+                ->with(['product:id,sku,name,inventory_unit_id', 'product.unit:id,name'])
+                ->orderBy('sort_order')
+                ->orderBy('id')
+                ->get();
+
+            $supplier = $import->supplier()->withTrashed()->first();
+            $supplierName = trim((string) ($supplier?->name ?? $import->supplier_name ?? ''));
+            $importDate = Carbon::parse($import->import_date ?? now());
+            $touchedProductIds = [];
+
+            foreach ($items as $index => $item) {
+                $receivedQuantity = max(0, (int) ($item->received_quantity ?? 0));
+                if ($this->importAffectsInventory($status) && $receivedQuantity > 0) {
+                    InventoryBatch::create([
+                        'account_id' => $import->account_id,
+                        'product_id' => $item->product_id,
+                        'import_id' => $import->id,
+                        'import_item_id' => $item->id,
+                        'source_type' => 'import',
+                        'source_id' => $import->id,
+                        'batch_number' => $this->generateLotNumber($import->import_number, $index + 1),
+                        'received_at' => $importDate->copy()->setTimeFrom(now()),
+                        'quantity' => $receivedQuantity,
+                        'remaining_quantity' => $receivedQuantity,
+                        'unit_cost' => round((float) $item->unit_cost, 2),
+                        'status' => 'open',
+                        'meta' => [
+                            'supplier_id' => $supplier?->id,
+                            'supplier_name' => $supplierName,
+                            'source_label' => $import->import_number,
+                            'source_name' => 'Phieu nhap',
+                        ],
+                    ]);
+                }
+
+                $touchedProductIds[] = (int) $item->product_id;
+            }
+
+            $this->applyStoredImportAggregate($import);
+            $this->refreshProducts($touchedProductIds);
+
+            return $this->loadImportRelations($import->fresh());
         });
     }
 
@@ -484,11 +556,157 @@ class InventoryService
             ->each(function (Product $product) use ($batches) {
                 $productBatches = $batches->get($product->id, collect());
                 $stock = (int) $productBatches->sum('remaining_quantity');
-                $nextBatch = $productBatches->first();
+                $importedQuantityTotal = max(0, (int) ($product->imported_quantity_total ?? 0));
+                $importedValueTotal = round((float) ($product->imported_value_total ?? 0), 2);
+                $currentCost = $importedQuantityTotal > 0
+                    ? round($importedValueTotal / $importedQuantityTotal, 2)
+                    : null;
 
                 $product->forceFill([
                     'stock_quantity' => $stock,
-                    'cost_price' => $nextBatch ? round((float) $nextBatch->unit_cost, 2) : null,
+                    'cost_price' => $currentCost,
+                ])->save();
+            });
+    }
+
+    private function revertImportAggregate(InventoryImport $import): void
+    {
+        $this->applyImportAggregateDeltaMap(
+            $this->buildStoredImportAggregateMap($import),
+            -1
+        );
+    }
+
+    private function applyStoredImportAggregate(InventoryImport $import): void
+    {
+        $this->applyImportAggregateDeltaMap(
+            $this->buildStoredImportAggregateMap($import)
+        );
+    }
+
+    private function buildStoredImportAggregateMap(InventoryImport $import): array
+    {
+        $status = $import->statusConfig()->first();
+        if (!$this->importAffectsInventory($status)) {
+            return [];
+        }
+
+        $items = $import->items()
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get([
+                'product_id',
+                'quantity',
+                'received_quantity',
+                'unit_cost',
+            ]);
+
+        return $this->buildImportAggregateMap(
+            $items,
+            round((float) ($import->extra_charge_amount ?? 0), 2)
+        );
+    }
+
+    private function buildImportAggregateMap($items, float $extraChargeAmount): array
+    {
+        $normalizedItems = collect($items)
+            ->map(function ($item) {
+                $payload = is_array($item) ? $item : (array) $item;
+                $receivedQuantity = max(0, (int) ($payload['received_quantity'] ?? $payload['quantity'] ?? 0));
+                $unitCost = round((float) ($payload['unit_cost'] ?? 0), 2);
+
+                return [
+                    'product_id' => (int) ($payload['product_id'] ?? 0),
+                    'received_quantity' => $receivedQuantity,
+                    'base_value' => round($receivedQuantity * $unitCost, 2),
+                ];
+            })
+            ->filter(fn ($row) => $row['product_id'] > 0 && $row['received_quantity'] > 0)
+            ->values();
+
+        if ($normalizedItems->isEmpty()) {
+            return [];
+        }
+
+        $receivedSubtotal = round((float) $normalizedItems->sum('base_value'), 2);
+        $remainingExtraCharge = round($extraChargeAmount, 2);
+        $lastIndex = $normalizedItems->count() - 1;
+        $aggregateMap = [];
+
+        foreach ($normalizedItems as $index => $row) {
+            if ($index === $lastIndex) {
+                $allocatedExtraCharge = $remainingExtraCharge;
+            } elseif ($receivedSubtotal > 0) {
+                $allocatedExtraCharge = round(
+                    ($row['base_value'] / $receivedSubtotal) * $extraChargeAmount,
+                    2
+                );
+                $remainingExtraCharge = round($remainingExtraCharge - $allocatedExtraCharge, 2);
+            } else {
+                $allocatedExtraCharge = 0.0;
+            }
+
+            $productId = (int) $row['product_id'];
+            if (!isset($aggregateMap[$productId])) {
+                $aggregateMap[$productId] = [
+                    'quantity' => 0,
+                    'value' => 0.0,
+                ];
+            }
+
+            $aggregateMap[$productId]['quantity'] += (int) $row['received_quantity'];
+            $aggregateMap[$productId]['value'] = round(
+                (float) $aggregateMap[$productId]['value'] + (float) $row['base_value'] + (float) $allocatedExtraCharge,
+                2
+            );
+        }
+
+        return $aggregateMap;
+    }
+
+    private function applyImportAggregateDeltaMap(array $aggregateMap, int $direction = 1): void
+    {
+        if (empty($aggregateMap)) {
+            return;
+        }
+
+        $productIds = collect(array_keys($aggregateMap))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        Product::query()
+            ->whereIn('id', $productIds)
+            ->lockForUpdate()
+            ->get()
+            ->each(function (Product $product) use ($aggregateMap, $direction) {
+                $row = $aggregateMap[$product->id] ?? null;
+                if (!$row) {
+                    return;
+                }
+
+                $nextQuantity = max(
+                    0,
+                    (int) ($product->imported_quantity_total ?? 0) + ($direction * (int) ($row['quantity'] ?? 0))
+                );
+                $nextValue = round(
+                    max(
+                        0,
+                        (float) ($product->imported_value_total ?? 0) + ($direction * (float) ($row['value'] ?? 0))
+                    ),
+                    2
+                );
+
+                if ($nextQuantity === 0) {
+                    $nextValue = 0.0;
+                }
+
+                $product->forceFill([
+                    'imported_quantity_total' => $nextQuantity,
+                    'imported_value_total' => $nextValue,
+                    'cost_price' => $nextQuantity > 0 ? round($nextValue / $nextQuantity, 2) : null,
                 ])->save();
             });
     }
@@ -805,7 +1023,7 @@ class InventoryService
                 'sort_order' => $index + 1,
             ]);
 
-            if ($supplier && ($shouldUpdateSupplierPrice || $supplierPrice === null || $priceChanged || array_key_exists('supplier_product_code', $item))) {
+            if ($supplier && ($shouldUpdateSupplierPrice || $supplierPrice === null || array_key_exists('supplier_product_code', $item))) {
                 $supplierPrice = $this->upsertSupplierPrice(
                     $supplier,
                     $product,
@@ -819,6 +1037,10 @@ class InventoryService
                     'supplier_product_price_id' => $supplierPrice->id,
                     'supplier_product_code_snapshot' => $item['supplier_product_code'] ?? $supplierPrice->supplier_product_code,
                 ])->save();
+
+                if ($shouldUpdateSupplierPrice) {
+                    $this->productPricingService->syncProductFromSupplierPrice($supplierPrice, $userId);
+                }
             }
 
             if ($this->importAffectsInventory($status) && $receivedQuantity > 0) {
@@ -1417,9 +1639,9 @@ class InventoryService
         return $supplierPrice;
     }
 
-    private function normalizeSupplierUnitCost(float $value): int
+    private function normalizeSupplierUnitCost(float $value): float
     {
-        return (int) round($value);
+        return round($value, 2);
     }
 
     private function allocateSellableBatches(int $accountId, Product $product, int $requestedQty): array

@@ -26,6 +26,7 @@ use App\Services\Shipping\ShippingAlertService;
 use App\Services\Shipping\ShipmentStatusSyncService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -35,6 +36,9 @@ use Illuminate\Validation\ValidationException;
 class OrderController extends Controller
 {
     private const BOOTSTRAP_CACHE_TTL_SECONDS = 15;
+    private const ORDER_NUMBER_SEQUENCE_START = 10000;
+    private const ORDER_NUMBER_LOCK_WAIT_SECONDS = 10;
+    private const ORDER_NUMBER_RETRY_ATTEMPTS = 5;
     private const SHIPPING_STATUS_SOURCE_MANUAL = 'manual';
     private const ORDER_KIND_OFFICIAL = Order::KIND_OFFICIAL;
     private const ORDER_KIND_TEMPLATE = Order::KIND_TEMPLATE;
@@ -92,7 +96,7 @@ class OrderController extends Controller
                     'options',
                 ])
                 ->with([
-                    'product:id,name,sku,cost_price',
+                    'product:id,name,sku,cost_price,expected_cost',
                 ]),
             'attributeValues' => fn ($query) => $query
                 ->select(['id', 'order_id', 'attribute_id', 'value'])
@@ -140,31 +144,114 @@ class OrderController extends Controller
         return $this->normalizeOrderKind($orderKind) === self::ORDER_KIND_OFFICIAL;
     }
 
-    private function generateOrderNumber($accountId = null, ?string $orderKind = null)
+    private function orderNumberPrefix(string $orderKind): string
     {
-        $orderKind = $this->normalizeOrderKind($orderKind);
-        $prefix = match ($orderKind) {
+        return match ($this->normalizeOrderKind($orderKind)) {
             self::ORDER_KIND_TEMPLATE => 'TM',
             self::ORDER_KIND_DRAFT => 'DR',
             default => 'OR',
         };
+    }
 
-        $query = Order::withTrashed();
-        if ($accountId) {
-            $query->where('account_id', $accountId);
+    private function withOrderNumberLock(string $orderKind, callable $callback)
+    {
+        $connection = DB::connection();
+        $lockName = 'orders:order-number:' . $this->orderNumberPrefix($orderKind);
+        $driver = $connection->getDriverName();
+
+        if ($driver === 'mysql') {
+            $row = $connection->selectOne('SELECT GET_LOCK(?, ?) AS acquired', [
+                $lockName,
+                self::ORDER_NUMBER_LOCK_WAIT_SECONDS,
+            ]);
+
+            if ((int) ($row->acquired ?? 0) !== 1) {
+                throw new \RuntimeException('Không thể khóa bộ sinh mã đơn hàng.');
+            }
+
+            try {
+                return $callback();
+            } finally {
+                $connection->select('SELECT RELEASE_LOCK(?)', [$lockName]);
+            }
         }
-        
-        $lastOrder = $query->where('order_number', 'LIKE', $prefix . '%A0')
-            ->orderBy('id', 'desc')
-            ->select('order_number')
-            ->first();
 
-        $nextNumber = 10000;
-        if ($lastOrder && isset($lastOrder->order_number) && preg_match('/' . preg_quote($prefix, '/') . '(\d+)A0/', $lastOrder->order_number, $matches)) {
-            $nextNumber = intval($matches[1]) + 1;
+        if ($driver === 'pgsql') {
+            $lockKey = abs((int) crc32($lockName));
+            $connection->statement('SELECT pg_advisory_lock(?)', [$lockKey]);
+
+            try {
+                return $callback();
+            } finally {
+                $connection->statement('SELECT pg_advisory_unlock(?)', [$lockKey]);
+            }
         }
 
-        return "{$prefix}{$nextNumber}A0";
+        return $callback();
+    }
+
+    private function isOrderNumberUniqueViolation(QueryException $exception): bool
+    {
+        $sqlState = (string) ($exception->errorInfo[0] ?? $exception->getCode());
+        $message = Str::lower($exception->getMessage());
+
+        if (!Str::contains($message, ['order_number', 'orders.order_number', 'orders_order_number_unique'])) {
+            return false;
+        }
+
+        return in_array($sqlState, ['23000', '23505', '19'], true)
+            || Str::contains($message, ['duplicate', 'unique', 'constraint']);
+    }
+
+    private function runOrderNumberMutation(string $orderKind, callable $callback)
+    {
+        $normalizedKind = $this->normalizeOrderKind($orderKind);
+
+        for ($attempt = 1; $attempt <= self::ORDER_NUMBER_RETRY_ATTEMPTS; $attempt++) {
+            try {
+                return $this->withOrderNumberLock($normalizedKind, $callback);
+            } catch (QueryException $exception) {
+                if ($attempt === self::ORDER_NUMBER_RETRY_ATTEMPTS || !$this->isOrderNumberUniqueViolation($exception)) {
+                    throw $exception;
+                }
+
+                usleep($attempt * 50000);
+            }
+        }
+
+        throw new \RuntimeException('Không thể sinh mã đơn hàng duy nhất.');
+    }
+
+    private function generateOrderNumber(?string $orderKind = null, ?int $ignoreOrderId = null): string
+    {
+        $orderKind = $this->normalizeOrderKind($orderKind);
+        $prefix = $this->orderNumberPrefix($orderKind);
+
+        $latestOrderNumber = Order::withTrashed()
+            ->where('order_number', 'LIKE', $prefix . '%A0')
+            ->orderByRaw('LENGTH(order_number) DESC')
+            ->orderBy('order_number', 'desc')
+            ->value('order_number');
+
+        $nextNumber = self::ORDER_NUMBER_SEQUENCE_START;
+        if (is_string($latestOrderNumber) && preg_match('/^' . preg_quote($prefix, '/') . '(\d+)A0$/', $latestOrderNumber, $matches)) {
+            $nextNumber = max(self::ORDER_NUMBER_SEQUENCE_START, ((int) $matches[1]) + 1);
+        }
+
+        while (true) {
+            $candidate = "{$prefix}{$nextNumber}A0";
+            $existsQuery = Order::withTrashed()->where('order_number', $candidate);
+
+            if ($ignoreOrderId) {
+                $existsQuery->where('id', '!=', $ignoreOrderId);
+            }
+
+            if (!$existsQuery->exists()) {
+                return $candidate;
+            }
+
+            $nextNumber++;
+        }
     }
 
     private function defaultStatusForKind(int $accountId, string $orderKind, ?string $currentStatus = null): string
@@ -223,7 +310,7 @@ class OrderController extends Controller
                 'product_id' => $item->product_id,
                 'quantity' => $item->quantity,
                 'price' => $product ? ($product->current_price ?? $item->price) : $item->price,
-                'cost_price' => $product?->cost_price ?? 0,
+                'cost_price' => $product?->cost_price ?? $product?->expected_cost ?? 0,
                 'options' => $item->options ?? null,
             ];
         })->all();
@@ -266,7 +353,7 @@ class OrderController extends Controller
             $product = $products->get((int) $item['product_id']);
             $quantity = (int) $item['quantity'];
             $price = round((float) ($item['price'] ?? $product->price ?? 0), 2);
-            $costPrice = round((float) ($item['cost_price'] ?? $product->cost_price ?? 0), 2);
+            $costPrice = round((float) ($item['cost_price'] ?? $product->cost_price ?? $product->expected_cost ?? 0), 2);
             $costTotal = round($costPrice * $quantity, 2);
             $profitTotal = round(($price * $quantity) - $costTotal, 2);
 
@@ -456,58 +543,60 @@ class OrderController extends Controller
     {
         $targetKind = $this->normalizeOrderKind($targetKind);
 
-        return DB::transaction(function () use ($original, $targetKind) {
-            $newOrder = $original->replicate([
-                'order_number',
-                'customer_id',
-                'shipping_status',
-                'shipping_synced_at',
-                'shipping_status_source',
-                'shipping_carrier_code',
-                'shipping_carrier_name',
-                'shipping_tracking_code',
-                'shipping_dispatched_at',
-                'shipping_issue_code',
-                'shipping_issue_message',
-                'shipping_issue_detected_at',
-                'deleted_at',
-            ]);
+        return $this->runOrderNumberMutation($targetKind, function () use ($original, $targetKind) {
+            return DB::transaction(function () use ($original, $targetKind) {
+                $newOrder = $original->replicate([
+                    'order_number',
+                    'customer_id',
+                    'shipping_status',
+                    'shipping_synced_at',
+                    'shipping_status_source',
+                    'shipping_carrier_code',
+                    'shipping_carrier_name',
+                    'shipping_tracking_code',
+                    'shipping_dispatched_at',
+                    'shipping_issue_code',
+                    'shipping_issue_message',
+                    'shipping_issue_detected_at',
+                    'deleted_at',
+                ]);
 
-            $newOrder->order_number = $this->generateOrderNumber($original->account_id, $targetKind);
-            $newOrder->order_kind = $targetKind;
-            $newOrder->converted_from_order_id = $original->id;
-            $newOrder->converted_from_kind = $this->normalizeOrderKind((string) $original->order_kind);
-            $newOrder->customer_id = null;
-            $newOrder->status = $this->defaultStatusForKind($original->account_id, $targetKind, $original->status);
-            $newOrder->forceFill($this->freshShippingState());
-            $newOrder->save();
+                $newOrder->order_number = $this->generateOrderNumber($targetKind);
+                $newOrder->order_kind = $targetKind;
+                $newOrder->converted_from_order_id = $original->id;
+                $newOrder->converted_from_kind = $this->normalizeOrderKind((string) $original->order_kind);
+                $newOrder->customer_id = null;
+                $newOrder->status = $this->defaultStatusForKind($original->account_id, $targetKind, $original->status);
+                $newOrder->forceFill($this->freshShippingState());
+                $newOrder->save();
 
-            $rawItems = $original->items->map(function (OrderItem $item) {
-                return [
-                    'product_id' => $item->product_id,
-                    'name' => $item->product_name_snapshot,
-                    'sku' => $item->product_sku_snapshot,
-                    'quantity' => $item->quantity,
-                    'price' => $item->price,
-                    'cost_price' => $item->cost_price,
-                    'options' => $item->options,
-                ];
-            })->all();
+                $rawItems = $original->items->map(function (OrderItem $item) {
+                    return [
+                        'product_id' => $item->product_id,
+                        'name' => $item->product_name_snapshot,
+                        'sku' => $item->product_sku_snapshot,
+                        'quantity' => $item->quantity,
+                        'price' => $item->price,
+                        'cost_price' => $item->cost_price,
+                        'options' => $item->options,
+                    ];
+                })->all();
 
-            $summary = $this->syncOrderItems($newOrder, $rawItems, $targetKind);
-            $this->recalculateOrderTotals($newOrder, (float) ($summary['total_price'] ?? 0), (float) ($summary['cost_total'] ?? 0));
+                $summary = $this->syncOrderItems($newOrder, $rawItems, $targetKind);
+                $this->recalculateOrderTotals($newOrder, (float) ($summary['total_price'] ?? 0), (float) ($summary['cost_total'] ?? 0));
 
-            foreach ($original->attributeValues as $attributeValue) {
-                $newValue = $attributeValue->replicate();
-                $newValue->order_id = $newOrder->id;
-                $newValue->save();
-            }
+                foreach ($original->attributeValues as $attributeValue) {
+                    $newValue = $attributeValue->replicate();
+                    $newValue->order_id = $newOrder->id;
+                    $newValue->save();
+                }
 
-            if ($this->shouldManageInventory($targetKind)) {
-                $this->syncOfficialCustomerAndInvoice($newOrder, true);
-            }
+                if ($this->shouldManageInventory($targetKind)) {
+                    $this->syncOfficialCustomerAndInvoice($newOrder, true);
+                }
 
-            return $newOrder;
+                return $newOrder;
+            });
         });
     }
 
@@ -527,27 +616,29 @@ class OrderController extends Controller
             ], (string) ($payload['region_type'] ?? 'new'));
         }
 
-        return DB::transaction(function () use ($order, $targetKind, $currentKind) {
-            if ($this->shouldManageInventory($currentKind)) {
-                $this->releaseInventoryIfNeeded($order);
-                $this->removeOfficialSideEffects($order);
-            }
+        return $this->runOrderNumberMutation($targetKind, function () use ($order, $targetKind, $currentKind) {
+            return DB::transaction(function () use ($order, $targetKind, $currentKind) {
+                if ($this->shouldManageInventory($currentKind)) {
+                    $this->releaseInventoryIfNeeded($order);
+                    $this->removeOfficialSideEffects($order);
+                }
 
-            $order->forceFill(array_merge([
-                'order_kind' => $targetKind,
-                'converted_from_order_id' => $order->converted_from_order_id ?: $order->id,
-                'converted_from_kind' => $currentKind,
-                'order_number' => $this->generateOrderNumber($order->account_id, $targetKind),
-                'status' => $this->defaultStatusForKind($order->account_id, $targetKind, $order->status),
-            ], $this->freshShippingState()))->save();
+                $order->forceFill(array_merge([
+                    'order_kind' => $targetKind,
+                    'converted_from_order_id' => $order->converted_from_order_id ?: $order->id,
+                    'converted_from_kind' => $currentKind,
+                    'order_number' => $this->generateOrderNumber($targetKind, $order->id),
+                    'status' => $this->defaultStatusForKind($order->account_id, $targetKind, $order->status),
+                ], $this->freshShippingState()))->save();
 
-            if ($this->shouldManageInventory($targetKind)) {
-                $summary = $this->reserveInventoryIfNeeded($order);
-                $this->recalculateOrderTotals($order, (float) ($summary['total_price'] ?? 0), (float) ($summary['cost_total'] ?? 0));
-                $this->syncOfficialCustomerAndInvoice($order, false);
-            }
+                if ($this->shouldManageInventory($targetKind)) {
+                    $summary = $this->reserveInventoryIfNeeded($order);
+                    $this->recalculateOrderTotals($order, (float) ($summary['total_price'] ?? 0), (float) ($summary['cost_total'] ?? 0));
+                    $this->syncOfficialCustomerAndInvoice($order, false);
+                }
 
-            return $order;
+                return $order;
+            });
         });
     }
 
@@ -1085,7 +1176,8 @@ class OrderController extends Controller
 
         $rawItems = $this->collectRequestItems($request);
 
-        return DB::transaction(function () use ($request, $accountId, $rawItems) {
+        return $this->runOrderNumberMutation($orderKind, function () use ($request, $accountId, $rawItems) {
+            return DB::transaction(function () use ($request, $accountId, $rawItems) {
             $orderKind = $this->normalizeOrderKind($request->input('order_kind'));
             $lead = null;
             if ($request->filled('lead_id')) {
@@ -1099,7 +1191,7 @@ class OrderController extends Controller
                 'user_id' => Auth::id(),
                 'account_id' => $accountId,
                 'lead_id' => $lead?->id,
-                'order_number' => $this->generateOrderNumber($accountId, $orderKind),
+                'order_number' => $this->generateOrderNumber($orderKind),
                 'order_kind' => $orderKind,
                 'total_price' => 0,
                 'status' => $request->status ?? $this->defaultStatusForKind($accountId, $orderKind),
@@ -1159,7 +1251,8 @@ class OrderController extends Controller
                 ])->save();
             }
 
-            return response()->json($this->mutationResponsePayload($order), 201);
+                return response()->json($this->mutationResponsePayload($order), 201);
+            });
         });
     }
 
@@ -1232,7 +1325,7 @@ class OrderController extends Controller
 
         // Check unique order_number if provided
         if ($request->has('order_number') && $request->order_number !== $order->order_number) {
-            $exists = Order::where('account_id', $accountId)
+            $exists = Order::withTrashed()
                 ->where('order_number', $request->order_number)
                 ->where('id', '!=', $id)
                 ->exists();

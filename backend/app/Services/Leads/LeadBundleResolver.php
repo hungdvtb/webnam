@@ -131,7 +131,7 @@ class LeadBundleResolver
                 'sku' => $item->product_sku,
                 'quantity' => (int) $item->quantity,
                 'price' => (float) $item->unit_price,
-                'cost_price' => (float) ($product?->cost_price ?? 0),
+                'cost_price' => (float) ($product?->cost_price ?? $product?->expected_cost ?? 0),
                 'options' => $item->options,
             ]];
         }

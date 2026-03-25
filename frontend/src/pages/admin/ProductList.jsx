@@ -126,7 +126,7 @@ const ProductList = () => {
         setEditingProductId(p.id);
         setEditForm({
             price: Math.floor(p.price || 0),
-            cost_price: Math.floor(p.cost_price || 0)
+            cost_price: Math.floor(p.expected_cost ?? p.cost_price ?? 0)
         });
     };
 
@@ -144,7 +144,7 @@ const ProductList = () => {
         try {
             const response = await productApi.update(editingProductId, {
                 price: editForm.price,
-                cost_price: editForm.cost_price
+                expected_cost: editForm.cost_price
             });
             
             // Update local state
@@ -1571,7 +1571,7 @@ const ProductList = () => {
                                     const pIsChild = isSubRow || p.parent_products?.length > 0;
                                     
                                     // Custom aggregate price display for parent products
-                                    let displayCostPrice = p.cost_price;
+                                    let displayCostPrice = p.cost_price ?? p.expected_cost ?? null;
                                     let displayPrice = p.price;
                                     const pVariants = p.variations || [];
                                     
@@ -1580,7 +1580,7 @@ const ProductList = () => {
                                             const components = p.grouped_items || [];
                                             if (components.length > 0) {
                                                 // Calculate sum of cost prices for Grouped Product
-                                                displayCostPrice = components.reduce((sum, item) => sum + (Number(item.cost_price || 0) * (item.pivot?.quantity || 1)), 0);
+                                                displayCostPrice = components.reduce((sum, item) => sum + (Number(item.cost_price ?? item.expected_cost ?? 0) * (item.pivot?.quantity || 1)), 0);
                                                 
                                                 // Calculate sum of selling prices (if price_type is 'sum')
                                                 if (p.price_type === 'sum') {
@@ -1589,7 +1589,7 @@ const ProductList = () => {
                                             }
                                         } else if (pVariants.length > 0) {
                                             // Existing logic for Configurable products
-                                            const vCostPrices = pVariants.map(v => v.cost_price);
+                                            const vCostPrices = pVariants.map(v => v.cost_price ?? v.expected_cost);
                                             const firstCost = vCostPrices[0];
                                             const allCostSame = vCostPrices.every(cp => cp !== null && cp !== undefined && Number(cp) === Number(firstCost));
                                             displayCostPrice = allCostSame ? firstCost : null;

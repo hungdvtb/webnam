@@ -17,11 +17,13 @@ use App\Models\Supplier;
 use App\Models\SupplierProductPrice;
 use App\Services\Inventory\InvoiceAnalysisService;
 use App\Services\Inventory\InventoryService;
+use App\Services\Inventory\ProductPricingService;
 use App\Services\ProductSkuService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -32,6 +34,7 @@ class InventoryController extends Controller
     public function __construct(
         private readonly InventoryService $inventoryService,
         private readonly InvoiceAnalysisService $invoiceAnalysisService,
+        private readonly ProductPricingService $productPricingService,
         private readonly ProductSkuService $productSkuService,
     )
     {
@@ -267,8 +270,10 @@ class InventoryController extends Controller
             'name' => 'required|string|max:255',
             'price' => 'nullable|numeric|min:0',
             'expected_cost' => 'nullable|numeric|min:0',
+            'cost_price' => 'nullable|numeric|min:0',
             'status' => 'nullable|boolean',
         ]);
+        $this->applyLegacyExpectedCostAlias($request, $validated);
 
         $validated['sku'] = $this->productSkuService->normalize($validated['sku']);
         if ($validated['sku'] === null) {
@@ -311,8 +316,10 @@ class InventoryController extends Controller
             'name' => 'sometimes|required|string|max:255',
             'price' => 'nullable|numeric|min:0',
             'expected_cost' => 'nullable|numeric|min:0',
+            'cost_price' => 'nullable|numeric|min:0',
             'status' => 'nullable|boolean',
         ]);
+        $this->applyLegacyExpectedCostAlias($request, $validated);
 
         if (array_key_exists('sku', $validated)) {
             $validated['sku'] = $this->productSkuService->normalize($validated['sku']);
@@ -330,8 +337,19 @@ class InventoryController extends Controller
         }
 
         try {
-            $product->fill($validated);
-            $product->save();
+            DB::transaction(function () use ($product, $validated) {
+                $product->fill($validated);
+                $product->save();
+
+                if (array_key_exists('expected_cost', $validated)) {
+                    $this->productPricingService->syncExpectedCost(
+                        $product->fresh(),
+                        $validated['expected_cost'],
+                        null,
+                        auth()->id()
+                    );
+                }
+            });
         } catch (QueryException $exception) {
             $this->throwProductSkuValidation($exception, 'Mã SKU này đã được sử dụng bởi một sản phẩm khác.');
         }
@@ -768,6 +786,8 @@ class InventoryController extends Controller
             ->where('supplier_id', $supplier->id)
             ->where('product_id', $normalizedProductId)
             ->firstOrFail();
+        $this->productPricingService->syncProductFromSupplierPrice($price, auth()->id());
+        $price = $price->fresh();
 
         return response()->json($price->load(['product:id,sku,name,expected_cost,cost_price,stock_quantity,type,category_id', 'product.category:id,name', 'updater:id,name']), 201);
     }
@@ -798,6 +818,8 @@ class InventoryController extends Controller
             'notes' => $validated['notes'] ?? null,
             'updated_by' => auth()->id(),
         ])->save();
+        $this->productPricingService->syncProductFromSupplierPrice($price, auth()->id());
+        $price = $price->fresh();
 
         return response()->json($price->load(['product:id,sku,name,expected_cost,cost_price,stock_quantity,type,category_id', 'product.category:id,name', 'updater:id,name']));
     }
@@ -891,6 +913,16 @@ class InventoryController extends Controller
             ->unique()
             ->values()
             ->all();
+
+        $syncedPrices = SupplierProductPrice::withoutGlobalScopes()
+            ->where('supplier_id', $supplier->id)
+            ->whereIn('product_id', $savedProductIds)
+            ->orderBy('id')
+            ->get();
+
+        foreach ($syncedPrices as $syncedPrice) {
+            $this->productPricingService->syncProductFromSupplierPrice($syncedPrice, auth()->id());
+        }
 
         $prices = SupplierProductPrice::withoutGlobalScopes()
             ->where('supplier_id', $supplier->id)
@@ -1116,6 +1148,10 @@ class InventoryController extends Controller
             ->withSum('items as lines_total_amount', 'line_total')
             ->withSum('items as total_received_quantity', 'received_quantity');
 
+        if ($request->boolean('trash')) {
+            $query->onlyTrashed();
+        }
+
         if ($request->filled('search')) {
             $search = trim((string) $request->input('search'));
             $query->where(function ($builder) use ($search) {
@@ -1319,6 +1355,15 @@ class InventoryController extends Controller
         $this->inventoryService->deleteImport($import);
 
         return response()->json(['message' => 'Đã xóa phiếu nhập.']);
+    }
+
+    public function restoreImport(int $id)
+    {
+        $import = InventoryImport::withTrashed()->findOrFail($id);
+
+        return response()->json(
+            $this->inventoryService->restoreImport($import)
+        );
     }
 
     public function bulkDestroyImports(Request $request)
@@ -2113,8 +2158,17 @@ class InventoryController extends Controller
 
         $importQtySub = \App\Models\ImportItem::query()
             ->join('imports', 'imports.id', '=', 'import_items.import_id')
-            ->selectRaw('COALESCE(SUM(import_items.quantity), 0)')
+            ->leftJoin('inventory_import_statuses', 'inventory_import_statuses.id', '=', 'imports.inventory_import_status_id')
+            ->selectRaw('COALESCE(SUM(import_items.received_quantity), 0)')
             ->whereColumn('import_items.product_id', 'products.id');
+        if (Schema::hasColumn('imports', 'deleted_at')) {
+            $importQtySub->whereNull('imports.deleted_at');
+        }
+        $importQtySub->where(function ($builder) {
+            $builder
+                ->whereNull('inventory_import_statuses.id')
+                ->orWhere('inventory_import_statuses.affects_inventory', true);
+        });
         $this->applyDateRange($importQtySub, 'imports.import_date', $request);
 
         $exportQtySub = OrderItem::query()
@@ -2841,8 +2895,25 @@ class InventoryController extends Controller
         return 'một sản phẩm khác';
     }
 
-    private function normalizeSupplierUnitCost($value): int
+    private function normalizeSupplierUnitCost($value): float
     {
-        return (int) round((float) $value);
+        return round((float) $value, 2);
+    }
+
+    private function applyLegacyExpectedCostAlias(Request $request, array &$validated): void
+    {
+        if (array_key_exists('cost_price', $validated)) {
+            unset($validated['cost_price']);
+        }
+
+        if (array_key_exists('expected_cost', $validated)) {
+            return;
+        }
+
+        if (!array_key_exists('cost_price', $request->all())) {
+            return;
+        }
+
+        $validated['expected_cost'] = $request->input('cost_price');
     }
 }

@@ -255,40 +255,40 @@ const formatDateTime = (value) => {
     })}`;
 };
 
-const ORDER_KIND_META = {
-    official: {
-        label: 'Đơn hàng chính',
-        shortLabel: 'Đơn hàng',
-        icon: 'shopping_cart',
-        badgeClassName: 'border-primary/20 bg-primary/[0.06] text-primary',
-        createTitle: 'Tạo đơn hàng chính thức',
+const MAIN_ORDER_KIND = 'official';
+const DRAFT_ORDER_KIND = 'draft';
+
+const isDraftOrder = (orderKind) => String(orderKind || MAIN_ORDER_KIND) === DRAFT_ORDER_KIND;
+const getTargetListView = (orderKind) => (isDraftOrder(orderKind) ? 'draft' : 'main');
+const buildOrderListUrl = (view = 'main') => {
+    if (view === 'draft') return '/admin/orders?view=draft';
+    if (view === 'trash') return '/admin/orders?view=trash';
+    return '/admin/orders';
+};
+
+const LIST_VIEW_META = {
+    main: {
         listTitle: 'Quản lý đơn hàng',
         emptyTitle: 'Không tìm thấy đơn hàng nào',
         emptyDescription: 'Thử thay đổi bộ lọc hoặc từ khóa tìm kiếm',
-    },
-    template: {
-        label: 'Đơn hàng mẫu',
-        shortLabel: 'Đơn mẫu',
-        icon: 'library_books',
-        badgeClassName: 'border-amber-200 bg-amber-50 text-amber-700',
-        createTitle: 'Tạo đơn hàng mẫu',
-        listTitle: 'Đơn hàng mẫu',
-        emptyTitle: 'Chưa có đơn hàng mẫu',
-        emptyDescription: 'Tạo sẵn các bộ báo giá mẫu để dùng lại nhanh',
+        selectedLabel: 'đơn hàng',
+        createTitle: 'Tạo đơn hàng mới',
     },
     draft: {
-        label: 'Đơn nháp',
-        shortLabel: 'Đơn nháp',
-        icon: 'draft_orders',
-        badgeClassName: 'border-sky-200 bg-sky-50 text-sky-700',
-        createTitle: 'Tạo đơn nháp',
         listTitle: 'Đơn nháp',
         emptyTitle: 'Chưa có đơn nháp',
-        emptyDescription: 'Lưu các đơn đang báo giá dở để mở lại và chốt sau',
+        emptyDescription: 'Các đơn đã chuyển sang đơn nháp sẽ hiển thị tại đây',
+        selectedLabel: 'đơn nháp',
+        createTitle: 'Tạo đơn hàng mới',
+    },
+    trash: {
+        listTitle: 'Thùng rác đơn hàng',
+        emptyTitle: 'Thùng rác đang trống',
+        emptyDescription: 'Các đơn đã chuyển vào thùng rác sẽ hiển thị tại đây',
+        selectedLabel: 'đơn trong thùng rác',
+        createTitle: 'Tạo đơn hàng mới',
     },
 };
-
-const getOrderKindMeta = (orderKind) => ORDER_KIND_META[orderKind] || ORDER_KIND_META.official;
 
 const inventorySlipToneClasses = {
     emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
@@ -726,16 +726,9 @@ const OrderList = () => {
     const [showFilters, setShowFilters] = useState(false);
     const [showColumnSettings, setShowColumnSettings] = useState(false);
     const initialListParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
-    const [activeOrderKind, setActiveOrderKind] = useState(() => {
-        const kind = initialListParams.get('kind');
-        return ['official', 'template', 'draft'].includes(kind) ? kind : 'draft';
-    });
-    const [isTrashView, setIsTrashView] = useState(() => initialListParams.get('view') === 'trash');
-    const [orderKindCounts, setOrderKindCounts] = useState({
-        official: 0,
-        template: 0,
-        draft: 0,
-        trash: 0,
+    const [currentView, setCurrentView] = useState(() => {
+        const view = initialListParams.get('view');
+        return ['draft', 'trash'].includes(view) ? view : 'main';
     });
     const [copiedText, setCopiedText] = useState(null);
     const [statusMenuOrderId, setStatusMenuOrderId] = useState(null);
@@ -816,8 +809,10 @@ const OrderList = () => {
     } = useTableColumns('order_list', ORDER_TABLE_COLUMNS);
 
     const [hasLoadedOrdersOnce, setHasLoadedOrdersOnce] = useState(false);
-    const isOfficialView = !isTrashView && activeOrderKind === 'official';
-    const currentKindMeta = getOrderKindMeta(activeOrderKind);
+    const isTrashView = currentView === 'trash';
+    const isDraftView = currentView === 'draft';
+    const isMainView = currentView === 'main';
+    const currentViewMeta = LIST_VIEW_META[currentView] || LIST_VIEW_META.main;
     const statusMap = useMemo(
         () => new Map(orderStatuses.map((status) => [String(status.code), status])),
         [orderStatuses]
@@ -899,17 +894,10 @@ const OrderList = () => {
             const nextStatuses = bootstrap.order_statuses || [];
             const nextAttributes = bootstrap.order_attributes || [];
             const nextCarriers = bootstrap.connected_carriers || [];
-            const nextKindCounts = bootstrap.order_kind_counts || {};
 
             setOrderStatuses(nextStatuses);
             setAllAttributes(nextAttributes);
             setConnectedCarriers(nextCarriers);
-            setOrderKindCounts({
-                official: Number(nextKindCounts.official || 0),
-                template: Number(nextKindCounts.template || 0),
-                draft: Number(nextKindCounts.draft || 0),
-                trash: Number(nextKindCounts.trash || 0),
-            });
 
             const attrColumns = nextAttributes.map(attr => ({
                 id: `attr_${attr.id}`,
@@ -971,7 +959,7 @@ const OrderList = () => {
                 sort_by: currentSort.direction === 'none' ? 'created_at' : currentSort.key,
                 sort_order: currentSort.direction === 'none' ? 'desc' : currentSort.direction
             };
-            if (!isTrashView) params.order_kind = activeOrderKind;
+            if (isDraftView) params.order_kind = DRAFT_ORDER_KIND;
 
             if (currentFilters.search?.trim()) params.search = currentFilters.search.trim();
             if (currentFilters.status?.length) params.status = currentFilters.status.join(',');
@@ -998,10 +986,6 @@ const OrderList = () => {
             if (controller.signal.aborted) return;
             setOrders(response.data.data);
             setPagination({ current_page: response.data.current_page, last_page: response.data.last_page, total: response.data.total, per_page: response.data.per_page });
-            setOrderKindCounts((previous) => ({
-                ...previous,
-                ...(response.data.order_kind_counts || {}),
-            }));
             setHasLoadedOrdersOnce(true);
         } catch (error) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
@@ -1013,21 +997,14 @@ const OrderList = () => {
                 setLoading(false);
             }
         }
-    }, [activeOrderKind, isTrashView, pagination.per_page, sortConfig, filters]);
+    }, [filters, isDraftView, isTrashView, pagination.per_page, sortConfig]);
 
     useEffect(() => { fetchInitialData(); }, []);
 
     useEffect(() => {
         const params = new URLSearchParams(location.search);
-        const nextTrashView = params.get('view') === 'trash';
-        const nextKind = params.get('kind');
-
-        setIsTrashView(nextTrashView);
-        if (!nextTrashView && ['official', 'template', 'draft'].includes(nextKind)) {
-            setActiveOrderKind(nextKind);
-        } else if (!nextTrashView && !['official', 'template', 'draft'].includes(nextKind)) {
-            setActiveOrderKind('draft');
-        }
+        const nextView = params.get('view');
+        setCurrentView(['draft', 'trash'].includes(nextView) ? nextView : 'main');
     }, [location.search]);
 
     useEffect(() => {
@@ -1050,9 +1027,10 @@ const OrderList = () => {
         setSelectedIds([]);
         setStatusMenuOrderId(null);
         setProductPopupOrderId(null);
-    }, [activeOrderKind, isTrashView]);
+        setInventorySlipOrderId(null);
+    }, [currentView]);
 
-    useEffect(() => { fetchOrders(1); }, [activeOrderKind, isTrashView]);
+    useEffect(() => { fetchOrders(1); }, [currentView]);
 
     useEffect(() => {
         return () => {
@@ -1418,17 +1396,27 @@ const OrderList = () => {
         }
     };
 
-    const navigateToListView = useCallback((nextKind, options = {}) => {
-        const searchParams = new URLSearchParams();
-        if (options.trash) searchParams.set('view', 'trash');
-        else searchParams.set('kind', nextKind || 'draft');
-        navigate(`/admin/orders?${searchParams.toString()}`);
+    const currentListUrl = useMemo(() => buildOrderListUrl(currentView), [currentView]);
+
+    const navigateToListView = useCallback((nextView = 'main') => {
+        navigate(buildOrderListUrl(nextView));
+    }, [navigate]);
+
+    const exitSpecialListView = useCallback(() => {
+        setCurrentView('main');
+        setSelectedIds([]);
+        setStatusMenuOrderId(null);
+        setProductPopupOrderId(null);
+        setInventorySlipOrderId(null);
+        setShowFilters(false);
+        setShowColumnSettings(false);
+        navigate(buildOrderListUrl('main'));
     }, [navigate]);
 
     const handleCreateOrder = useCallback(() => {
         orderApi.preloadBootstrap({ mode: 'form' });
-        navigate(`/admin/orders/new?kind=${activeOrderKind}`);
-    }, [activeOrderKind, navigate]);
+        navigate(`/admin/orders/new?return_to=${encodeURIComponent(currentListUrl)}`);
+    }, [currentListUrl, navigate]);
 
     const warmOrderEditor = useCallback((orderId) => {
         orderApi.preloadBootstrap({ mode: 'form' });
@@ -1437,21 +1425,10 @@ const OrderList = () => {
         }
     }, []);
 
-    const openOrderEditor = useCallback((orderId, orderKind = activeOrderKind) => {
+    const openOrderEditor = useCallback((orderId) => {
         warmOrderEditor(orderId);
-        navigate(`/admin/orders/edit/${orderId}?kind=${orderKind}`);
-    }, [activeOrderKind, navigate, warmOrderEditor]);
-
-    const handleBulkDuplicate = async (targetKind = activeOrderKind) => {
-        if (!selectedIds.length) return;
-        try {
-            setLoading(true);
-            await orderApi.bulkDuplicate(selectedIds, targetKind);
-            setNotification({ type: 'success', message: `?? nh?n b?n ${selectedIds.length} ??n` });
-            setSelectedIds([]);
-            fetchOrders(1);
-        } catch (e) { setNotification({ type: 'error', message: 'L?i nh?n b?n' }); } finally { setLoading(false); }
-    };
+        navigate(`/admin/orders/edit/${orderId}?return_to=${encodeURIComponent(currentListUrl)}`);
+    }, [currentListUrl, navigate, warmOrderEditor]);
 
     const handleBulkDelete = async () => {
         if (!selectedIds.length) return;
@@ -1546,26 +1523,12 @@ const OrderList = () => {
         try {
             setLoading(true);
             await orderApi.bulkConvert(selectedIds, targetKind);
-            setNotification({ type: 'success', message: `Đã chuyển ${selectedIds.length} đơn sang ${getOrderKindMeta(targetKind).shortLabel.toLowerCase()}` });
+            const targetView = getTargetListView(targetKind);
+            setNotification({ type: 'success', message: targetView === 'draft' ? `Đã chuyển ${selectedIds.length} đơn sang đơn nháp` : `Đã chốt ${selectedIds.length} đơn thành đơn chính` });
             setSelectedIds([]);
-            fetchOrders(1);
+            navigateToListView(targetView);
         } catch (e) {
             setNotification({ type: 'error', message: e.response?.data?.message || 'Lỗi chuyển nhóm đơn' });
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleDuplicateOrder = async (orderId, targetKind, event) => {
-        event?.stopPropagation();
-        try {
-            setLoading(true);
-            const response = await orderApi.duplicate(orderId, { target_kind: targetKind });
-            setNotification({ type: 'success', message: `Đã nhân bản sang ${getOrderKindMeta(targetKind).shortLabel.toLowerCase()}` });
-            if (response.data?.id) openOrderEditor(response.data.id, targetKind);
-            else fetchOrders(1);
-        } catch (error) {
-            setNotification({ type: 'error', message: error.response?.data?.message || 'Lỗi nhân bản đơn hàng' });
         } finally {
             setLoading(false);
         }
@@ -1575,10 +1538,10 @@ const OrderList = () => {
         event?.stopPropagation();
         try {
             setLoading(true);
-            const response = await orderApi.convert(orderId, { target_kind: targetKind });
-            setNotification({ type: 'success', message: `Đã chuyển sang ${getOrderKindMeta(targetKind).shortLabel.toLowerCase()}` });
-            if (response.data?.id) openOrderEditor(response.data.id, targetKind);
-            else fetchOrders(1);
+            await orderApi.convert(orderId, { target_kind: targetKind });
+            const targetView = getTargetListView(targetKind);
+            setNotification({ type: 'success', message: targetView === 'draft' ? 'Đã chuyển đơn sang đơn nháp' : 'Đã chốt đơn thành đơn chính' });
+            navigateToListView(targetView);
         } catch (error) {
             setNotification({ type: 'error', message: error.response?.data?.message || 'Lỗi chuyển nhóm đơn' });
         } finally {
@@ -1619,10 +1582,7 @@ const OrderList = () => {
         return c;
     };
 
-    const listTitle = isTrashView ? 'Thùng rác đơn hàng' : currentKindMeta.listTitle;
-    const emptyTitle = isTrashView ? 'Thùng rác đang trống' : currentKindMeta.emptyTitle;
-    const emptyDescription = isTrashView ? 'Các đơn đã chuyển vào thùng rác sẽ hiển thị tại đây' : currentKindMeta.emptyDescription;
-    const selectedLabel = isTrashView ? 'đơn trong thùng rác' : currentKindMeta.shortLabel.toLowerCase();
+    const { listTitle, emptyTitle, emptyDescription, selectedLabel, createTitle } = currentViewMeta;
 
     return (
         <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full">
@@ -1659,19 +1619,29 @@ const OrderList = () => {
                 <div className="bg-white border border-primary/10 p-2 shadow-sm rounded-sm flex items-center gap-2">
                     <div className="flex gap-2 items-center flex-wrap">
                         {!isTrashView && (
-                            <button type="button" onClick={handleCreateOrder} title={currentKindMeta.createTitle} className="bg-brick text-white p-1.5 rounded-sm w-9 h-9 flex items-center justify-center transition-all hover:bg-umber">
+                            <button type="button" onClick={handleCreateOrder} title={createTitle} className="bg-brick text-white p-1.5 rounded-sm w-9 h-9 flex items-center justify-center transition-all hover:bg-umber">
                                 <span className="material-symbols-outlined text-[18px]">add</span>
                             </button>
                         )}
 
-                        <div className="flex items-center gap-1 rounded-sm border border-primary/10 bg-[#FCFEFF] p-1">
-                            <button type="button" onClick={() => navigateToListView('draft')} title="Đơn nháp" className={`relative h-9 w-9 rounded-sm flex items-center justify-center transition-all ${!isTrashView && activeOrderKind === 'draft' ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
-                                <span className="material-symbols-outlined text-[18px]">draft_orders</span>
-                                {Number(orderKindCounts.draft || 0) > 0 && <span className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${!isTrashView && activeOrderKind === 'draft' ? 'bg-white text-primary' : 'bg-primary text-white'}`}>{orderKindCounts.draft}</span>}
+                        {!isMainView && (
+                            <button
+                                type="button"
+                                onClick={exitSpecialListView}
+                                title="Quay lại bảng đơn hàng"
+                                className="h-9 px-3 rounded-sm border border-primary/15 bg-white text-primary flex items-center gap-1.5 transition-all hover:bg-primary hover:text-white shadow-sm"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+                                <span className="text-[12px] font-semibold whitespace-nowrap">Đơn hàng</span>
                             </button>
-                            <button type="button" onClick={() => navigateToListView('official', { trash: true })} title="Thùng rác" className={`relative h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isTrashView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
+                        )}
+
+                        <div className="flex items-center gap-1 rounded-sm border border-primary/10 bg-[#FCFEFF] p-1">
+                            <button type="button" onClick={() => navigateToListView('draft')} title="Đơn nháp" className={`h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isDraftView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
+                                <span className="material-symbols-outlined text-[18px]">draft_orders</span>
+                            </button>
+                            <button type="button" onClick={() => navigateToListView('trash')} title="Thùng rác" className={`h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isTrashView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
                                 <span className="material-symbols-outlined text-[18px]">delete</span>
-                                {Number(orderKindCounts.trash || 0) > 0 && <span className={`absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${isTrashView ? 'bg-white text-primary' : 'bg-primary text-white'}`}>{orderKindCounts.trash}</span>}
                             </button>
                         </div>
 
@@ -1684,17 +1654,14 @@ const OrderList = () => {
                             </>
                         ) : (
                             <>
-                                {activeOrderKind === 'official' && <button onClick={() => handleBulkConvert('draft')} disabled={selectedIds.length === 0} title="Chuyển sang đơn nháp" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-700 hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">drive_file_move</span></button>}
-                                {activeOrderKind === 'template' && <>
-                                    <button onClick={() => handleBulkDuplicate('draft')} disabled={selectedIds.length === 0} title="Nhân bản sang đơn nháp" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-700 hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
-                                    <button onClick={() => handleBulkDuplicate('official')} disabled={selectedIds.length === 0} title="Nhân bản sang đơn chính" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary border-primary/20 hover:bg-primary hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">file_open</span></button>
-                                </>}
-                                {activeOrderKind === 'draft' && <button onClick={() => handleBulkConvert('official')} disabled={selectedIds.length === 0} title="Chuyển thành đơn chính" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary border-primary/20 hover:bg-primary hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>}
+                                {isDraftView
+                                    ? <button onClick={() => handleBulkConvert(MAIN_ORDER_KIND)} disabled={selectedIds.length === 0} title="Chốt thành đơn chính" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary border-primary/20 hover:bg-primary hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>
+                                    : <button onClick={() => handleBulkConvert(DRAFT_ORDER_KIND)} disabled={selectedIds.length === 0} title="Chuyển sang đơn nháp" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-700 hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">drive_file_move</span></button>}
                                 <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Chuyển vào thùng rác" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete</span></button>
                             </>
                         )}
 
-                        {isOfficialView && (
+                        {isMainView && (
                             <div className="relative" ref={shippingAlertRef}>
                                 <button type="button" data-shipping-alert-btn onClick={() => setShowShippingAlerts((current) => !current)} className={`p-1.5 border rounded-sm w-9 h-9 flex items-center justify-center transition-all ${showShippingAlerts || shippingAlertUnread.length > 0 ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`} title="Cảnh báo vận chuyển">
                                     <span className="material-symbols-outlined text-[18px]">notifications_active</span>
@@ -1708,7 +1675,7 @@ const OrderList = () => {
                         <button onClick={handleRefresh} disabled={loading} title="Làm mới" className="bg-white text-primary border border-primary/20 p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center hover:bg-primary/5"><span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span></button>
                         <button data-column-settings-btn onClick={() => setShowColumnSettings(!showColumnSettings)} className={`p-1.5 border rounded-sm w-9 h-9 flex items-center justify-center transition-all ${showColumnSettings ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/30 hover:bg-primary/5'}`} title="Cấu hình hiển thị cột"><span className="material-symbols-outlined text-[18px]">settings_suggest</span></button>
 
-                        {isOfficialView && <>
+                        {isMainView && <>
                             <button type="button" onClick={openDispatchModal} disabled={selectedIds.length === 0} title="Gửi đơn vị vận chuyển" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary text-white border-primary hover:bg-primary/90' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">local_shipping</span></button>
                             <button type="button" onClick={openQuickDispatchModal} disabled={selectedIds.length === 0} title="Gửi vận chuyển nhanh" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">flash_on</span></button>
                         </>}
@@ -2002,7 +1969,7 @@ const OrderList = () => {
                             </tr>
                         ) : (
                             orders.map(o => (
-                                <tr key={o.id} onDoubleClick={() => { if (!isTrashView) openOrderEditor(o.id, o.order_kind || activeOrderKind); }} onClick={() => toggleSelectOrder(o.id)} className={`transition-all group cursor-pointer ${selectedIds.includes(o.id) ? 'bg-primary/10' : 'hover:bg-primary/5'}`}>
+                                <tr key={o.id} onDoubleClick={() => { if (!isTrashView) openOrderEditor(o.id); }} onClick={() => toggleSelectOrder(o.id)} className={`transition-all group cursor-pointer ${selectedIds.includes(o.id) ? 'bg-primary/10' : 'hover:bg-primary/5'}`}>
                                     <td className="p-3 w-12 border border-primary/20 sticky-col-0 group-hover:bg-primary/5 transition-colors">
                                         <div className="flex items-center">
                                             <input
@@ -2020,12 +1987,8 @@ const OrderList = () => {
                                         if (c.id === 'order_number') return (
                                             <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 sticky-col-1 font-mono font-bold text-primary group transition-colors">
                                                 <div className="flex items-center justify-between gap-2">
-                                                    <div className="min-w-0 flex flex-col gap-1">
+                                                    <div className="min-w-0 flex flex-col">
                                                         <span className="truncate">{o.order_number}</span>
-                                                        <span className={`inline-flex w-fit items-center gap-1 rounded-sm border px-1.5 py-0.5 text-[10px] font-black ${getOrderKindMeta(o.order_kind || 'official').badgeClassName}`}>
-                                                            <span className="material-symbols-outlined text-[11px]">{getOrderKindMeta(o.order_kind || 'official').icon}</span>
-                                                            {getOrderKindMeta(o.order_kind || 'official').shortLabel}
-                                                        </span>
                                                     </div>
                                                     <button onClick={(e) => handleCopy(o.order_number, e)} className={`opacity-0 group-hover:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === o.order_number ? 'text-green-500 opacity-100' : 'text-primary/20'}`}><span className="material-symbols-outlined text-[14px]">{copiedText === o.order_number ? 'check' : 'content_copy'}</span></button>
                                                 </div>
@@ -2158,8 +2121,8 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'inventory_slips') {
-                                            const normalizedOrderKind = o.order_kind || 'official';
-                                            if (normalizedOrderKind !== 'official') {
+                                            const isDraftRow = isDraftOrder(o.order_kind);
+                                            if (isDraftRow) {
                                                 return (
                                                     <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20">
                                                         <span className="inline-flex items-center gap-1 rounded-sm border border-primary/10 bg-primary/[0.03] px-2 py-1 text-[11px] font-black text-primary/45">
@@ -2211,14 +2174,12 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'status') {
-                                            const normalizedOrderKind = o.order_kind || 'official';
-                                            const kindMeta = getOrderKindMeta(normalizedOrderKind);
-                                            const isOfficialOrderRow = normalizedOrderKind === 'official';
-                                            const statusName = isOfficialOrderRow ? (statusMap.get(String(o.status))?.name || o.status) : kindMeta.label;
+                                            const isDraftRow = isDraftOrder(o.order_kind);
+                                            const statusName = isDraftRow ? 'Đơn nháp' : (statusMap.get(String(o.status))?.name || o.status);
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-left group/status relative">
                                                     <div className="flex items-center justify-start gap-1">
-                                                        {!isTrashView && isOfficialOrderRow ? (
+                                                        {!isTrashView && !isDraftRow ? (
                                                             <button
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
@@ -2233,8 +2194,7 @@ const OrderList = () => {
                                                                 <span className="material-symbols-outlined text-[16px] leading-none opacity-40 group-hover/status-btn:opacity-100 transition-opacity">expand_more</span>
                                                             </button>
                                                         ) : (
-                                                            <span className={`px-2 py-1 rounded-sm text-[11px] font-black border inline-flex items-center gap-1.5 shadow-sm ${isOfficialOrderRow ? '' : kindMeta.badgeClassName}`} style={isOfficialOrderRow ? getStatusStyle(o.status) : undefined}>
-                                                                {!isOfficialOrderRow && <span className="material-symbols-outlined text-[13px]">{kindMeta.icon}</span>}
+                                                            <span className={`px-2 py-1 rounded-sm text-[11px] font-black border inline-flex items-center gap-1.5 shadow-sm ${isDraftRow ? 'border-sky-200 bg-sky-50 text-sky-700' : ''}`} style={isDraftRow ? undefined : getStatusStyle(o.status)}>
                                                                 <span className="truncate">{statusName}</span>
                                                             </span>
                                                         )}
@@ -2246,8 +2206,7 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'shipping_carrier_name') {
-                                            const normalizedOrderKind = o.order_kind || 'official';
-                                            if (normalizedOrderKind !== 'official') {
+                                            if (isDraftOrder(o.order_kind)) {
                                                 return <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary/30 font-bold">-</td>;
                                             }
                                             const issueMessage = o.shipping_issue_message || o.active_shipment?.problem_message;
@@ -2266,8 +2225,7 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'shipping_tracking_code') {
-                                            const normalizedOrderKind = o.order_kind || 'official';
-                                            if (normalizedOrderKind !== 'official') {
+                                            if (isDraftOrder(o.order_kind)) {
                                                 return <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary/30 font-mono font-bold">-</td>;
                                             }
                                             const trackingCode = o.shipping_tracking_code || o.active_shipment?.carrier_tracking_code || '-';
@@ -2285,8 +2243,7 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'shipping_dispatched_at') {
-                                            const normalizedOrderKind = o.order_kind || 'official';
-                                            if (normalizedOrderKind !== 'official') {
+                                            if (isDraftOrder(o.order_kind)) {
                                                 return <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary/30 font-bold">-</td>;
                                             }
                                             const dispatchedAt = o.shipping_dispatched_at || o.active_shipment?.shipped_at || null;
@@ -2300,13 +2257,10 @@ const OrderList = () => {
                                             <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-right sticky right-0 bg-white group-hover:bg-primary/5"><div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
                                                 {!isTrashView ? (
                                                     <>
-                                                        <button onMouseEnter={() => warmOrderEditor(o.id)} onFocus={() => warmOrderEditor(o.id)} onClick={(e) => { e.stopPropagation(); openOrderEditor(o.id, o.order_kind || activeOrderKind); }} className="p-1 hover:text-primary" title="Sửa đơn"><span className="material-symbols-outlined text-[18px]">edit</span></button>
-                                                        {(o.order_kind || 'official') === 'template' && <>
-                                                            <button onClick={(e) => handleDuplicateOrder(o.id, 'draft', e)} className="p-1 hover:text-sky-700" title="Nhân bản sang đơn nháp"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
-                                                            <button onClick={(e) => handleDuplicateOrder(o.id, 'official', e)} className="p-1 hover:text-primary" title="Nhân bản sang đơn chính"><span className="material-symbols-outlined text-[18px]">file_open</span></button>
-                                                        </>}
-                                                        {(o.order_kind || 'official') === 'draft' && <button onClick={(e) => handleConvertOrder(o.id, 'official', e)} className="p-1 hover:text-primary" title="Chuyển thành đơn chính"><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>}
-                                                        {(o.order_kind || 'official') === 'official' && <button onClick={(e) => handleConvertOrder(o.id, 'draft', e)} className="p-1 hover:text-sky-700" title="Chuyển sang đơn nháp"><span className="material-symbols-outlined text-[18px]">drive_file_move</span></button>}
+                                                        <button onMouseEnter={() => warmOrderEditor(o.id)} onFocus={() => warmOrderEditor(o.id)} onClick={(e) => { e.stopPropagation(); openOrderEditor(o.id); }} className="p-1 hover:text-primary" title="Sửa đơn"><span className="material-symbols-outlined text-[18px]">edit</span></button>
+                                                        {isDraftOrder(o.order_kind)
+                                                            ? <button onClick={(e) => handleConvertOrder(o.id, MAIN_ORDER_KIND, e)} className="p-1 hover:text-primary" title="Chốt thành đơn chính"><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>
+                                                            : <button onClick={(e) => handleConvertOrder(o.id, DRAFT_ORDER_KIND, e)} className="p-1 hover:text-sky-700" title="Chuyển sang đơn nháp"><span className="material-symbols-outlined text-[18px]">drive_file_move</span></button>}
                                                         <button onClick={(e) => handleMoveOrderToTrash(o.id, e)} className="p-1 hover:text-brick" title="Chuyển vào thùng rác"><span className="material-symbols-outlined text-[18px]">delete</span></button>
                                                     </>
                                                 ) : (

@@ -4162,11 +4162,14 @@ const InventoryMovement = () => {
     const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {}) => {
         const nextUnitCost = Number(responseData?.unit_cost ?? responseData?.supplier_unit_cost ?? fallbackValues.unit_cost ?? row.unit_cost ?? 0);
         const nextUpdatedAt = responseData?.updated_at ?? responseData?.supplier_price_updated_at ?? new Date().toISOString();
+        const nextExpectedCost = Number(responseData?.product?.expected_cost ?? responseData?.expected_cost ?? nextUnitCost);
 
         return {
             supplier_price_id: responseData?.id ?? responseData?.supplier_price_id ?? row.supplier_price_id ?? null,
             supplier_product_code: String(responseData?.supplier_product_code ?? fallbackValues.supplier_product_code ?? row.supplier_product_code ?? '').trim(),
             unit_cost: nextUnitCost,
+            supplier_unit_cost: nextUnitCost,
+            expected_cost: Number.isFinite(nextExpectedCost) ? nextExpectedCost : row.expected_cost,
             notes: responseData?.notes ?? fallbackValues.notes ?? row.notes ?? '',
             updated_at: nextUpdatedAt,
             updater_name: responseData?.updater?.name ?? responseData?.updater_name ?? row.updater_name ?? null,

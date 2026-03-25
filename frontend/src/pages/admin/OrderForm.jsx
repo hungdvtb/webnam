@@ -236,35 +236,29 @@ const formatQuoteMoney = (value) => `${quoteCurrencyFormatter.format(Number(valu
 const quoteCanvasPageWidth = 1200;
 const ORDER_KIND_META = {
     official: {
-        label: 'Đơn hàng chính',
+        label: 'Đơn hàng',
         shortLabel: 'Đơn hàng',
         icon: 'shopping_cart',
         submitLabel: 'Lưu đơn hàng',
         createTitle: 'Tạo đơn hàng mới',
         editTitle: 'Chỉnh sửa đơn hàng',
-        listQuery: 'kind=official',
-    },
-    template: {
-        label: 'Đơn hàng mẫu',
-        shortLabel: 'Đơn mẫu',
-        icon: 'library_books',
-        submitLabel: 'Lưu đơn mẫu',
-        createTitle: 'Tạo đơn hàng mẫu',
-        editTitle: 'Chỉnh sửa đơn mẫu',
-        listQuery: 'kind=template',
     },
     draft: {
         label: 'Đơn nháp',
         shortLabel: 'Đơn nháp',
         icon: 'draft_orders',
         submitLabel: 'Lưu đơn nháp',
-        createTitle: 'Tạo đơn nháp',
+        createTitle: 'Tạo đơn hàng mới',
         editTitle: 'Chỉnh sửa đơn nháp',
-        listQuery: 'kind=draft',
     },
 };
 
 const getOrderKindMeta = (orderKind) => ORDER_KIND_META[orderKind] || ORDER_KIND_META.official;
+const MAIN_ORDER_KIND = 'official';
+const DRAFT_ORDER_KIND = 'draft';
+const isDraftOrderKind = (orderKind) => String(orderKind || MAIN_ORDER_KIND) === DRAFT_ORDER_KIND;
+const getNormalizedOrderKind = (orderKind) => (isDraftOrderKind(orderKind) ? DRAFT_ORDER_KIND : MAIN_ORDER_KIND);
+const buildOrderListUrl = (orderKind = MAIN_ORDER_KIND) => (isDraftOrderKind(orderKind) ? '/admin/orders?view=draft' : '/admin/orders');
 
 const waitForNodeImages = async (node) => {
     if (!node) return;
@@ -546,7 +540,6 @@ const OrderForm = () => {
     const duplicateFromId = queryParams.get('duplicate_from');
     const leadId = queryParams.get('lead_id');
     const returnTo = queryParams.get('return_to');
-    const kindFromQuery = queryParams.get('kind');
     const isEdit = !!id;
     const navigate = useNavigate();
     const { user } = useAuth();
@@ -554,7 +547,7 @@ const OrderForm = () => {
 
     const [loading, setLoading] = useState(isEdit || !!duplicateFromId);
     const [saving, setSaving] = useState(false);
-    const [orderKind, setOrderKind] = useState(() => ['official', 'template', 'draft'].includes(kindFromQuery) ? kindFromQuery : 'official');
+    const [orderKind, setOrderKind] = useState(MAIN_ORDER_KIND);
     const orderKindMeta = getOrderKindMeta(orderKind);
     const [products, setProducts] = useState([]);
     const [attributes, setAttributes] = useState([]);
@@ -602,7 +595,7 @@ const OrderForm = () => {
     const hasActiveProductQuickFilter = normalizedProductQuickFilterValues.length > 0;
     const shouldShowProductQuickFilterPanel = showSearchDropdown && showProductQuickFilterPanel && productQuickFilterAttributes.length > 0;
 
-    const navigateBackToLead = useCallback(() => {
+    const navigateBack = useCallback(() => {
         if (returnTo && returnTo.startsWith('/admin/')) {
             navigate(returnTo);
             return;
@@ -613,8 +606,8 @@ const OrderForm = () => {
             return;
         }
 
-        navigate(`/admin/orders?${orderKindMeta.listQuery}`);
-    }, [leadId, navigate, orderKindMeta.listQuery, returnTo]);
+        navigate(buildOrderListUrl(orderKind));
+    }, [leadId, navigate, orderKind, returnTo]);
 
     const COLUMN_DEFS = {
         stt: { label: 'STT', width: 'w-12', align: 'center' },
@@ -877,8 +870,8 @@ const OrderForm = () => {
     }, [syncShippingAddress]);
 
     const handleCancel = useCallback(() => {
-        navigateBackToLead();
-    }, [navigateBackToLead]);
+        navigateBack();
+    }, [navigateBack]);
 
     const closeProductSearchDropdown = useCallback(() => {
         setShowSearchDropdown(false);
@@ -1144,7 +1137,7 @@ const OrderForm = () => {
             setLoading(true);
             const response = await orderApi.getOneCached(targetId);
             const order = response.data;
-            const nextOrderKind = ['official', 'template', 'draft'].includes(order.order_kind) ? order.order_kind : 'official';
+            const nextOrderKind = getNormalizedOrderKind(order.order_kind);
 
             const customAttrValues = {};
             order.attribute_values?.forEach(av => {
@@ -1158,7 +1151,7 @@ const OrderForm = () => {
                 }
             });
 
-            setOrderKind(isDuplicating && ['official', 'template', 'draft'].includes(kindFromQuery) ? kindFromQuery : nextOrderKind);
+            setOrderKind(isDuplicating ? MAIN_ORDER_KIND : nextOrderKind);
             setRegionType(order.district ? 'old' : 'new');
             setFormData({
                 customer_name: order.customer_name || '',
@@ -1179,7 +1172,7 @@ const OrderForm = () => {
                     sku: item.product?.sku || item.product_sku_snapshot || `N/A`,
                     quantity: item.quantity,
                     price: item.price,
-                    cost_price: item.cost_price || item.product?.cost_price || 0
+                    cost_price: item.cost_price || item.product?.cost_price || item.product?.expected_cost || 0
                 })) || [],
                 custom_attributes: customAttrValues,
                 shipping_fee: order.shipping_fee || 0,
@@ -1220,7 +1213,7 @@ const OrderForm = () => {
                     content: 'Lead này đã ở trạng thái Đã tạo đơn nên không mở lại form tạo đơn.',
                     type: 'warning'
                 });
-                navigateBackToLead();
+                    navigateBack();
                 return;
             }
 
@@ -1271,7 +1264,7 @@ const OrderForm = () => {
                 content: 'Không thể tải dữ liệu lead để tạo đơn.',
                 type: 'error'
             });
-            navigateBackToLead();
+            navigateBack();
         } finally {
             setLoading(false);
         }
@@ -1290,30 +1283,14 @@ const OrderForm = () => {
         }
     }, [duplicateFromId, fetchInitialData, id, isEdit, leadId]);
 
-    const handleDuplicateCurrentOrder = useCallback(async (targetKind) => {
-        if (!id) return;
-
-        try {
-            setSaving(true);
-            const response = await orderApi.duplicate(id, { target_kind: targetKind });
-            const duplicatedOrder = response?.data;
-            if (duplicatedOrder?.id) {
-                navigate(`/admin/orders/edit/${duplicatedOrder.id}?kind=${targetKind}`);
-            }
-        } catch (error) {
-            alert(error.response?.data?.message || 'Không thể nhân bản đơn hiện tại.');
-        } finally {
-            setSaving(false);
-        }
-    }, [id, navigate]);
-
     const handleConvertCurrentOrder = useCallback(async (targetKind) => {
         if (!id) return;
 
         try {
             setSaving(true);
+            const normalizedTargetKind = getNormalizedOrderKind(targetKind);
             const response = await orderApi.convert(id, {
-                target_kind: targetKind,
+                target_kind: normalizedTargetKind,
                 region_type: regionType,
                 province: formData.province,
                 district: formData.district,
@@ -1322,8 +1299,8 @@ const OrderForm = () => {
             });
             const convertedOrder = response?.data;
             if (convertedOrder?.id) {
-                setOrderKind(targetKind);
-                navigate(`/admin/orders/edit/${convertedOrder.id}?kind=${targetKind}`);
+                setOrderKind(normalizedTargetKind);
+                navigate(buildOrderListUrl(normalizedTargetKind));
             }
         } catch (error) {
             alert(error.response?.data?.message || 'Không thể chuyển loại đơn hiện tại.');
@@ -1380,7 +1357,7 @@ const OrderForm = () => {
             sku: product.sku,
             quantity: 1,
             price: product.price,
-            cost_price: product.cost_price || 0
+            cost_price: product.cost_price ?? product.expected_cost ?? 0
         }];
 
         const costTotal = newItems.reduce((sum, item) => sum + (item.cost_price * item.quantity), 0);
@@ -1796,7 +1773,7 @@ const OrderForm = () => {
                         name: latest.name ?? item.name,
                         sku: latest.sku ?? item.sku,
                         price: Number(latest.price ?? 0),
-                        cost_price: Number(latest.cost_price ?? 0),
+                        cost_price: Number(latest.cost_price ?? latest.expected_cost ?? 0),
                     };
                 });
 
@@ -1821,7 +1798,7 @@ const OrderForm = () => {
                     sku: latest.sku ?? product.sku,
                     name: latest.name ?? product.name,
                     price: Number(latest.price ?? product.price ?? 0),
-                    cost_price: Number(latest.cost_price ?? product.cost_price ?? 0),
+                    cost_price: Number(latest.cost_price ?? latest.expected_cost ?? product.cost_price ?? product.expected_cost ?? 0),
                     status: latest.status ?? product.status,
                 };
             }));
@@ -1867,13 +1844,14 @@ const OrderForm = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        const isOfficialOrder = orderKind === 'official';
+        const normalizedOrderKind = getNormalizedOrderKind(orderKind);
+        const isMainOrder = !isDraftOrderKind(normalizedOrderKind);
 
         const isLocValid = regionType === 'new'
             ? (formData.province && formData.ward)
             : (formData.province && formData.district && formData.ward);
 
-        if (isOfficialOrder && !isLocValid) {
+        if (isMainOrder && !isLocValid) {
             alert(regionType === 'new' ? 'Vui lòng chọn Tỉnh/Thành phố và Phường/Xã.' : 'Vui lòng chọn đầy đủ Tỉnh, Quận và Phường.');
             return;
         }
@@ -1887,7 +1865,7 @@ const OrderForm = () => {
         });
         const effectiveAddressDetail = normalizedAddressDetail || formData.address_detail.trim() || formData.shipping_address.trim();
 
-        if (isOfficialOrder && !effectiveAddressDetail) {
+        if (isMainOrder && !effectiveAddressDetail) {
             alert('Vui lòng nhập địa chỉ giao hàng.');
             return;
         }
@@ -1901,11 +1879,11 @@ const OrderForm = () => {
         try {
             const payload = {
                 ...formData,
-                order_kind: orderKind,
+                order_kind: isEdit ? normalizedOrderKind : MAIN_ORDER_KIND,
                 region_type: regionType,
                 lead_id: leadId ? Number(leadId) : undefined,
                 address_detail: effectiveAddressDetail,
-                shipping_address: isOfficialOrder
+                shipping_address: isMainOrder
                     ? buildShippingAddress({
                         addressDetail: effectiveAddressDetail,
                         ward: formData.ward,
@@ -1930,8 +1908,9 @@ const OrderForm = () => {
                 ? await orderApi.update(id, payload)
                 : await orderApi.store(payload);
             const savedOrder = response?.data || null;
+            const savedOrderKind = getNormalizedOrderKind(savedOrder?.order_kind || payload.order_kind);
 
-            if (!isEdit && (leadId || returnTo)) {
+            if (leadId || returnTo) {
                 if (leadId && returnTo) {
                     writeLeadListReturnHint(returnTo, {
                         leadId: Number(leadId),
@@ -1942,9 +1921,9 @@ const OrderForm = () => {
                         updatedAt: new Date().toISOString(),
                     });
                 }
-                navigateBackToLead();
+                navigateBack();
             } else {
-                navigate('/admin/orders?' + orderKindMeta.listQuery);
+                navigate(buildOrderListUrl(savedOrderKind));
             }
         } catch (error) {
             console.error('Error saving order:', error);
@@ -2083,23 +2062,13 @@ const OrderForm = () => {
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap justify-end">
-                        {isEdit && orderKind === 'template' && (
-                            <>
-                                <button type="button" onClick={() => handleDuplicateCurrentOrder('draft')} className="px-3 h-9 bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-700 hover:text-white text-[12px] font-semibold rounded-sm transition-all">
-                                    Tạo đơn nháp
-                                </button>
-                                <button type="button" onClick={() => handleDuplicateCurrentOrder('official')} className="px-3 h-9 bg-white border border-primary/10 text-primary hover:bg-primary hover:text-white text-[12px] font-semibold rounded-sm transition-all">
-                                    Tạo đơn chính
-                                </button>
-                            </>
-                        )}
-                        {isEdit && orderKind === 'draft' && (
-                            <button type="button" onClick={() => handleConvertCurrentOrder('official')} className="px-3 h-9 bg-white border border-primary/10 text-primary hover:bg-primary hover:text-white text-[12px] font-semibold rounded-sm transition-all">
+                        {isEdit && isDraftOrderKind(orderKind) && (
+                            <button type="button" onClick={() => handleConvertCurrentOrder(MAIN_ORDER_KIND)} className="px-3 h-9 bg-white border border-primary/10 text-primary hover:bg-primary hover:text-white text-[12px] font-semibold rounded-sm transition-all">
                                 Chốt thành đơn chính
                             </button>
                         )}
-                        {isEdit && orderKind === 'official' && (
-                            <button type="button" onClick={() => handleConvertCurrentOrder('draft')} className="px-3 h-9 bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-700 hover:text-white text-[12px] font-semibold rounded-sm transition-all">
+                        {isEdit && !isDraftOrderKind(orderKind) && (
+                            <button type="button" onClick={() => handleConvertCurrentOrder(DRAFT_ORDER_KIND)} className="px-3 h-9 bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-700 hover:text-white text-[12px] font-semibold rounded-sm transition-all">
                                 Chuyển sang đơn nháp
                             </button>
                         )}

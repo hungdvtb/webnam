@@ -330,6 +330,7 @@ export const inventoryApi = {
         return api.put(`/inventory/imports/${id}`, data);
     },
     deleteImport: (id) => api.delete(`/inventory/imports/${id}`),
+    restoreImport: (id) => api.post(`/inventory/imports/${id}/restore`),
     bulkDeleteImports: (ids) => api.post('/inventory/imports/bulk-delete', { ids }),
     getImport: (id) => api.get(`/inventory/imports/${id}`),
     getDocuments: (type, params) => api.get(`/inventory/documents/${type}`, { params }),

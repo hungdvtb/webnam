@@ -11,7 +11,7 @@ class Product extends Model
 
     protected $fillable = [
         'type', 'name', 'slug', 'description', 'specifications', 'price', 'price_type', 'cost_price', 'expected_cost', 'special_price', 'special_price_from', 'special_price_to', 
-        'category_id', 'stock_quantity', 'damaged_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
+        'imported_quantity_total', 'imported_value_total', 'category_id', 'stock_quantity', 'damaged_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
         'meta_title', 'meta_description', 'meta_keywords', 'weight', 'inventory_unit_id', 'inventory_import_starred', 'supplier_id', 'video_url', 'additional_info', 'bundle_title', 'site_domain_id'
     ];
 
@@ -28,6 +28,8 @@ class Product extends Model
 
     protected $casts = [
         'inventory_import_starred' => 'boolean',
+        'imported_quantity_total' => 'integer',
+        'imported_value_total' => 'decimal:2',
     ];
 
     protected $appends = ['average_rating', 'current_price', 'main_image', 'primary_image', 'inventory_display_cost', 'inventory_cost_source'];
@@ -280,7 +282,7 @@ class Product extends Model
         $items = $this->groupedItems;
         $total = 0;
         foreach ($items as $item) {
-            $total += ($item->cost_price ?? 0) * $item->pivot->quantity;
+            $total += ($item->cost_price ?? $item->expected_cost ?? 0) * $item->pivot->quantity;
         }
         return $total;
     }

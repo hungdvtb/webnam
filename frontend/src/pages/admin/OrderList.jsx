@@ -512,11 +512,11 @@ const QuickShipmentModal = ({
                 <div className="px-6 py-4 border-b border-primary/10 flex items-center justify-between gap-4 bg-primary/[0.02]">
                     <div className="flex items-center gap-4">
                         <div className="w-11 h-11 rounded-sm bg-primary/5 border border-primary/10 flex items-center justify-center">
-                            <span className="material-symbols-outlined text-primary text-[22px]">bolt</span>
+                            <span className="material-symbols-outlined text-primary text-[22px]">flash_on</span>
                         </div>
                         <div>
                             <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/40">Gửi vận chuyển nhanh</p>
-                            <h3 className="text-[18px] font-black text-primary mt-1">Nhập tay thông tin gửi hàng cho từng đơn</h3>
+                            <h3 className="text-[18px] font-black text-primary mt-1">Nhập tay thông tin gửi hàng, không gọi API</h3>
                         </div>
                     </div>
                     <button type="button" onClick={onClose} className="text-primary/30 hover:text-primary">
@@ -538,6 +538,13 @@ const QuickShipmentModal = ({
                             <p className="text-[10px] font-black uppercase tracking-[0.16em] text-red-700/60">Đã có vận đơn</p>
                             <p className="text-[20px] font-black text-red-700 mt-1">{blockedOrders.length}</p>
                         </div>
+                    </div>
+
+                    <div className="rounded-sm border border-amber-200 bg-amber-50 px-4 py-3">
+                        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-amber-700/80">Luồng tạm thời</p>
+                        <p className="text-[12px] text-amber-800 font-semibold mt-1">
+                            Tính năng này chỉ lưu tay mã vận đơn, đơn vị vận chuyển và tiền ship để tạo vận đơn nội bộ, không gửi đơn sang API hãng vận chuyển.
+                        </p>
                     </div>
 
                     {blockedOrders.length > 0 && (
@@ -1474,6 +1481,18 @@ const OrderList = () => {
                             </button>
                         )}
 
+                        {!isTrashView && (
+                            <button
+                                type="button"
+                                onClick={openQuickDispatchModal}
+                                disabled={selectedIds.length === 0}
+                                title="Gửi vận chuyển nhanh (nhập tay)"
+                                className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}
+                            >
+                                <span className="material-symbols-outlined text-[18px]">flash_on</span>
+                            </button>
+                        )}
+
                         {selectedIds.length > 0 && (
                             <div className="flex items-center gap-1 ml-1 pl-2 border-l border-primary/10">
                                 <span className="text-[11px] font-bold text-primary/40 whitespace-nowrap">{selectedIds.length} chọn</span>
@@ -1505,17 +1524,6 @@ const OrderList = () => {
                         )}
                     </div>
 
-                    {!isTrashView && (
-                        <button
-                            type="button"
-                            onClick={openQuickDispatchModal}
-                            disabled={selectedIds.length === 0}
-                            title="Gửi vận chuyển nhanh"
-                            className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all shrink-0 ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}
-                        >
-                            <span className="material-symbols-outlined text-[18px]">bolt</span>
-                        </button>
-                    )}
                 </div>
             </div>
 

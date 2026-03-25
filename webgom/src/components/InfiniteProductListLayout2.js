@@ -17,7 +17,7 @@ export default function InfiniteProductListLayout2({ initialData }) {
         {products.map((product) => (
           <div key={product.id} className={styles.productCard}>
             <div className={styles.imageArea}>
-              <Link href={`/product/${product.slug || product.id}`}>
+              <Link href={`/product/${product.slug || product.id}`} className={styles.imageLink}>
                 {(() => {
                   const img = product.primary_image;
                   let src = 'https://placehold.co/400';
@@ -39,18 +39,20 @@ export default function InfiniteProductListLayout2({ initialData }) {
                       alt={product.name}
                       fill
                       className={styles.image}
-                      sizes="(max-width: 479px) 100vw, (max-width: 767px) 50vw, (max-width: 1200px) 50vw, 25vw"
+                      sizes="(max-width: 767px) 50vw, (max-width: 1200px) 50vw, 25vw"
                       unoptimized
                     />
                   );
                 })()}
               </Link>
+
               {product.is_new && <div className={styles.badge}>Bán chạy</div>}
             </div>
 
             <div className={styles.cardBody}>
               <span className={styles.categoryTag}>{product.category?.name || 'Gốm Sứ'}</span>
-              <Link href={`/product/${product.slug || product.id}`} style={{ textDecoration: 'none' }}>
+
+              <Link href={`/product/${product.slug || product.id}`} className={styles.productLink}>
                 <h3 className={styles.productName}>{product.name}</h3>
               </Link>
 
@@ -58,6 +60,7 @@ export default function InfiniteProductListLayout2({ initialData }) {
                 <p className={styles.price}>
                   {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(product.price)}
                 </p>
+
                 <div className={styles.actions}>
                   <button
                     className={styles.cartAction}
@@ -69,7 +72,7 @@ export default function InfiniteProductListLayout2({ initialData }) {
                       flyToCart(event, imgSrc);
                     }}
                   >
-                    <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>add_shopping_cart</span>
+                    <span className={`material-symbols-outlined ${styles.cartActionIcon}`}>add_shopping_cart</span>
                     Giỏ hàng
                   </button>
                 </div>
@@ -80,9 +83,9 @@ export default function InfiniteProductListLayout2({ initialData }) {
       </div>
 
       {products.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '5rem 2rem', opacity: 0.5 }}>
-          <span className="material-symbols-outlined" style={{ fontSize: '64px', marginBottom: '1rem' }}>search_off</span>
-          <p style={{ fontSize: '18px', fontFamily: 'Playfair Display, serif' }}>Không tìm thấy sản phẩm nào phù hợp.</p>
+        <div className={styles.emptyState}>
+          <span className={`material-symbols-outlined ${styles.emptyStateIcon}`}>search_off</span>
+          <p className={styles.emptyStateText}>Không tìm thấy sản phẩm nào phù hợp.</p>
         </div>
       )}
     </>

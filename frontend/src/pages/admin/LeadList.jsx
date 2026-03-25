@@ -101,6 +101,17 @@ const buildProductTooltip = (lead) => (
         : ''
 );
 
+const getLeadDetailKey = (leadId) => `lead-${leadId}`;
+
+const hasExpandableProductDetails = (lead) => (
+    Array.isArray(lead?.items)
+    && lead.items.length > 0
+    && (
+        lead.items.length > 1
+        || lead.items.some((item) => item?.is_bundle || (item?.bundle_items || []).length > 0)
+    )
+);
+
 const areFiltersEqual = (left, right) => (
     left.status === right.status
     && left.tag === right.tag
@@ -243,10 +254,119 @@ const playDefaultNotificationSound = async (audioContextRef) => {
     oscillator.stop(context.currentTime + 0.3);
 };
 
+const isAutoplayBlockedError = (error) => {
+    const signature = `${error?.name || ''} ${error?.message || ''}`.toLowerCase();
+    return signature.includes('notallowed')
+        || signature.includes('gesture')
+        || signature.includes('interaction')
+        || signature.includes('play() failed');
+};
+
+const LeadExpandedProductsPanel = ({ lead, onCollapse }) => {
+    if (!Array.isArray(lead?.items) || lead.items.length === 0) {
+        return null;
+    }
+
+    const totalQuantity = lead.items.reduce((sum, item) => sum + Number(item?.quantity || 0), 0);
+
+    return (
+        <div className="rounded-md border border-primary/10 bg-[#F8FAFC] p-4 shadow-[0_18px_50px_-28px_rgba(15,23,42,0.45)]">
+            <div className="mb-4 flex flex-col gap-3 border-b border-primary/10 pb-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                    <div className="text-[12px] font-black uppercase tracking-[0.08em] text-primary">Chi tiết sản phẩm</div>
+                    <div className="mt-1 text-[13px] font-semibold text-[#0F172A]">
+                        {lead.customer_name || 'Khách chưa có tên'}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-primary/55">
+                        <span>{lead.items.length} sản phẩm</span>
+                        <span>Tổng SL {totalQuantity}</span>
+                        {lead.order_number ? <span>{lead.order_number}</span> : null}
+                    </div>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={onCollapse}
+                    className="inline-flex h-9 items-center gap-1 rounded-sm border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.08em] text-primary transition-all hover:border-primary/30"
+                >
+                    <span className="material-symbols-outlined text-[16px]">expand_less</span>
+                    Thu gọn
+                </button>
+            </div>
+
+            <div className="grid gap-3 xl:grid-cols-2">
+                {lead.items.map((item, index) => {
+                    const itemKey = item.id || `${item.product_sku || 'item'}-${item.product_name || 'product'}-${index}`;
+                    const bundleChildren = Array.isArray(item.bundle_items) ? item.bundle_items : [];
+                    const itemTotal = item.bundle_subtotal || item.line_total || item.unit_price || 0;
+
+                    return (
+                        <div key={itemKey} className="rounded-md border border-primary/10 bg-white px-3 py-3 shadow-sm">
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                    <div className="text-[13px] font-bold leading-5 text-[#0F172A]">
+                                        {item.product_name || item.product_sku || 'Sản phẩm'}
+                                    </div>
+                                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold text-primary/55">
+                                        {item.product_sku ? <span>{item.product_sku}</span> : null}
+                                        <span>x{item.quantity || 1}</span>
+                                        {item.bundle_option_title ? (
+                                            <span className="rounded-sm bg-primary/[0.05] px-1.5 py-0.5 text-primary">
+                                                {item.bundle_option_title}
+                                            </span>
+                                        ) : null}
+                                        {item.is_bundle ? <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-primary">Bundle</span> : null}
+                                    </div>
+                                </div>
+
+                                <div className="shrink-0 text-right text-[11px] font-semibold text-primary/60">
+                                    <div>{formatMoney(item.unit_price || 0)}</div>
+                                    <div className="mt-1 font-black text-primary">{formatMoney(itemTotal)}</div>
+                                </div>
+                            </div>
+
+                            {bundleChildren.length > 0 ? (
+                                <div className="mt-3 rounded-sm border border-primary/10 bg-[#F8FAFC] p-3">
+                                    <div className="mb-2 text-[11px] font-black uppercase tracking-[0.08em] text-primary/70">
+                                        Sản phẩm trong gói
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        {bundleChildren.map((child, childIndex) => (
+                                            <div
+                                                key={`${itemKey}-${child.product_id || childIndex}`}
+                                                className="flex items-start justify-between gap-3 text-[12px] text-[#0F172A]"
+                                            >
+                                                <div className="min-w-0">
+                                                    <div className="font-semibold">{child.product_name || child.product_sku || 'Sản phẩm con'}</div>
+                                                    <div className="mt-1 text-[11px] text-primary/50">
+                                                        {(child.product_sku || 'N/A')} x{child.quantity || 1}
+                                                    </div>
+                                                </div>
+
+                                                <div className="shrink-0 text-right text-[11px] font-semibold text-primary/60">
+                                                    <div>{formatMoney(child.unit_price || 0)}</div>
+                                                    <div className="mt-1 text-primary">{formatMoney(child.line_total || 0)}</div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : null}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
 const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
     if (!Array.isArray(lead?.items) || lead.items.length === 0) {
         return <div className="text-[13px] text-primary/50">{lead?.product_summary || 'Không có sản phẩm'}</div>;
     }
+
+    const resizingColumnId = null;
 
     const legacyRenderTableCellA = useCallback((lead, columnId) => {
         switch (columnId) {
@@ -406,10 +526,16 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                                 <div className="truncate pr-3">{column.label}</div>
                                 <span
                                     onMouseDown={(event) => handleColumnResize(column.id, event)}
-                                    className="absolute right-[-6px] top-1/2 z-20 flex h-[70%] w-3 -translate-y-1/2 cursor-col-resize items-center justify-center rounded-full bg-primary/10 opacity-70 shadow-sm ring-1 ring-primary/10 transition-all hover:w-4 hover:bg-primary/20 hover:opacity-100 active:w-4 active:bg-primary/25"
+                                    className="group/resize absolute right-[-4px] top-0 z-20 flex h-full w-2.5 cursor-col-resize items-center justify-center"
                                     title="Kéo để đổi độ rộng cột"
                                 >
-                                    <span className="h-full w-[3px] rounded-full bg-primary/35 transition-all hover:bg-primary/70" />
+                                    <span
+                                        className={`pointer-events-none block w-px rounded-full bg-primary/45 transition-all ${
+                                            resizingColumnId === column.id
+                                                ? 'h-10 opacity-100 bg-primary/70'
+                                                : 'h-6 opacity-0 group-hover/resize:h-8 group-hover/resize:opacity-100'
+                                        }`}
+                                    />
                                 </span>
                             </th>
                         ))}
@@ -528,12 +654,12 @@ const CompactProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
         return <div className="truncate text-[13px] text-primary/50">{lead?.product_summary || 'Không có sản phẩm'}</div>;
     }
 
-    const detailKey = `lead-${lead.id}`;
+    const detailKey = getLeadDetailKey(lead.id);
     const isOpen = expandedBundleIds.has(detailKey);
     const primaryItem = lead.items[0];
     const totalItemCount = lead.items.length;
     const totalQuantity = lead.items.reduce((sum, item) => sum + Number(item?.quantity || 0), 0);
-    const hasDetailButton = totalItemCount > 1 || lead.items.some((item) => item?.is_bundle || (item?.bundle_items || []).length > 0);
+    const hasDetailButton = hasExpandableProductDetails(lead);
     const summaryTitle = primaryItem?.product_name || primaryItem?.product_sku || 'Sản phẩm';
     const productTooltip = buildProductTooltip(lead);
 
@@ -570,6 +696,8 @@ const CompactProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                             onToggleBundle(detailKey);
                         }}
                         className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/65 transition-all hover:border-primary/30 hover:text-primary"
+                        aria-expanded={isOpen}
+                        aria-controls={`lead-product-details-${lead.id}`}
                         title={isOpen ? 'Ẩn chi tiết sản phẩm' : 'Xem chi tiết sản phẩm'}
                     >
                         <span className="material-symbols-outlined text-[18px]">{isOpen ? 'expand_less' : 'expand_more'}</span>
@@ -577,7 +705,7 @@ const CompactProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                 ) : null}
             </div>
 
-            {isOpen ? (
+            {false && isOpen ? (
                 <div
                     className="absolute left-0 top-[calc(100%+8px)] z-20 w-[360px] max-w-[min(360px,calc(100vw-120px))] rounded-sm border border-primary/15 bg-white p-3 shadow-[0_18px_50px_-18px_rgba(15,23,42,0.45)]"
                     onClick={(event) => event.stopPropagation()}
@@ -1110,6 +1238,7 @@ const LeadList = () => {
     const [notesLead, setNotesLead] = useState(null);
     const [unreadNotifications, setUnreadNotifications] = useState([]);
     const [soundSettings, setSoundSettings] = useState(() => getStoredNotificationSettings());
+    const [realtimeReady, setRealtimeReady] = useState(false);
     const [page, setPage] = useState(parsePageParam(searchParams.get('page')));
     const [filters, setFilters] = useState(() => buildFiltersFromParams(searchParams));
     const [draftFilters, setDraftFilters] = useState(() => buildFiltersFromParams(searchParams));
@@ -1124,6 +1253,7 @@ const LeadList = () => {
         visibleColumns,
         renderedColumns,
         columnWidths,
+        resizingColumnId,
         toggleColumn,
         handleColumnResize,
         handleHeaderDragStart,
@@ -1144,6 +1274,9 @@ const LeadList = () => {
     const highlightTimeoutRef = useRef(null);
     const audioElementRef = useRef(null);
     const audioContextRef = useRef(null);
+    const notificationSoundQueuedRef = useRef(false);
+    const notificationInteractionReadyRef = useRef(false);
+    const realtimeRequestInFlightRef = useRef(false);
 
     const totalAcrossStatuses = useMemo(
         () => statuses.reduce((sum, status) => sum + Number(status.count || 0), 0),
@@ -1217,26 +1350,148 @@ const LeadList = () => {
         return true;
     }, []);
 
-    const playLeadNotificationSound = useCallback(async () => {
-        if (!soundSettings.enabled) return;
+    const primeLeadNotificationAudio = useCallback(async ({ userInitiated = false } = {}) => {
+        if (typeof window === 'undefined' || !soundSettings.enabled) return false;
+
+        if (!soundSettings.useDefault && soundSettings.customAudioDataUrl) {
+            if (!audioElementRef.current) {
+                audioElementRef.current = new Audio();
+                audioElementRef.current.preload = 'auto';
+            }
+
+            const audio = audioElementRef.current;
+            if (audio.src !== soundSettings.customAudioDataUrl) {
+                audio.src = soundSettings.customAudioDataUrl;
+                audio.load?.();
+            }
+
+            if (!userInitiated) return true;
+
+            const previousMuted = audio.muted;
+            audio.muted = true;
+
+            try {
+                audio.currentTime = 0;
+                await audio.play();
+                audio.pause();
+                audio.currentTime = 0;
+                return true;
+            } catch (error) {
+                if (!isAutoplayBlockedError(error)) {
+                    console.error('Failed to prime lead notification audio', error);
+                }
+                return false;
+            } finally {
+                audio.muted = previousMuted;
+            }
+        }
+
+        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextCtor) return false;
+
+        const context = audioContextRef.current || new AudioContextCtor();
+        audioContextRef.current = context;
+
+        if (context.state === 'running') return true;
+        if (!userInitiated) return false;
+
+        try {
+            await context.resume();
+            return context.state === 'running';
+        } catch (error) {
+            if (!isAutoplayBlockedError(error)) {
+                console.error('Failed to unlock default lead notification audio', error);
+            }
+            return false;
+        }
+    }, [soundSettings.enabled, soundSettings.useDefault, soundSettings.customAudioDataUrl]);
+
+    const playLeadNotificationSound = useCallback(async ({ allowQueue = true, userInitiated = false } = {}) => {
+        if (!soundSettings.enabled) {
+            notificationSoundQueuedRef.current = false;
+            return false;
+        }
+
+        if (userInitiated) {
+            notificationInteractionReadyRef.current = true;
+            await primeLeadNotificationAudio({ userInitiated: true });
+        }
+
+        if (!userInitiated && !notificationInteractionReadyRef.current) {
+            if (allowQueue) notificationSoundQueuedRef.current = true;
+            return false;
+        }
 
         try {
             if (!soundSettings.useDefault && soundSettings.customAudioDataUrl) {
-                if (!audioElementRef.current) {
-                    audioElementRef.current = new Audio();
+                const audio = audioElementRef.current || new Audio();
+                audioElementRef.current = audio;
+                audio.preload = 'auto';
+
+                if (audio.src !== soundSettings.customAudioDataUrl) {
+                    audio.src = soundSettings.customAudioDataUrl;
+                    audio.load?.();
                 }
 
-                audioElementRef.current.src = soundSettings.customAudioDataUrl;
-                audioElementRef.current.currentTime = 0;
-                await audioElementRef.current.play();
-                return;
+                audio.currentTime = 0;
+                await audio.play();
+                notificationSoundQueuedRef.current = false;
+                return true;
+            }
+
+            const unlocked = await primeLeadNotificationAudio({ userInitiated });
+            if (!unlocked) {
+                if (allowQueue) notificationSoundQueuedRef.current = true;
+                return false;
             }
 
             await playDefaultNotificationSound(audioContextRef);
+            notificationSoundQueuedRef.current = false;
+            return true;
         } catch (error) {
+            if (allowQueue && isAutoplayBlockedError(error)) {
+                notificationSoundQueuedRef.current = true;
+                return false;
+            }
+
             console.error('Failed to play lead notification sound', error);
+            return false;
         }
-    }, [soundSettings]);
+    }, [primeLeadNotificationAudio, soundSettings.enabled, soundSettings.useDefault, soundSettings.customAudioDataUrl]);
+
+    useEffect(() => {
+        if (!soundSettings.enabled) {
+            notificationSoundQueuedRef.current = false;
+            return;
+        }
+
+        primeLeadNotificationAudio({ userInitiated: false });
+    }, [primeLeadNotificationAudio, soundSettings.enabled]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        const unlockAudio = async () => {
+            if (notificationInteractionReadyRef.current) return;
+            notificationInteractionReadyRef.current = true;
+            await primeLeadNotificationAudio({ userInitiated: true });
+
+            if (notificationSoundQueuedRef.current) {
+                notificationSoundQueuedRef.current = false;
+                window.setTimeout(() => {
+                    playLeadNotificationSound({ allowQueue: false });
+                }, 0);
+            }
+        };
+
+        window.addEventListener('pointerdown', unlockAudio, true);
+        window.addEventListener('keydown', unlockAudio, true);
+
+        return () => {
+            window.removeEventListener('pointerdown', unlockAudio, true);
+            window.removeEventListener('keydown', unlockAudio, true);
+        };
+    }, [playLeadNotificationSound, primeLeadNotificationAudio]);
 
     const reloadSettings = useCallback(async () => {
         try {
@@ -1303,7 +1558,18 @@ const LeadList = () => {
     }, [showModal]);
 
     useEffect(() => {
-        fetchLeads(page, { silent: false, replaceData: true });
+        let isMounted = true;
+
+        const loadLeads = async () => {
+            await fetchLeads(page, { silent: false, replaceData: true });
+            if (isMounted) setRealtimeReady(true);
+        };
+
+        loadLeads();
+
+        return () => {
+            isMounted = false;
+        };
     }, [page, filters, debouncedQuickSearch, fetchLeads]);
 
     useEffect(() => {
@@ -1322,9 +1588,24 @@ const LeadList = () => {
     }, [notificationsOpen]);
 
     useEffect(() => {
+        if (!realtimeReady) return undefined;
+
         let isDisposed = false;
+        let timeoutId = null;
+
+        const scheduleNextPoll = () => {
+            if (isDisposed) return;
+            timeoutId = window.setTimeout(pollRealtime, 2000);
+        };
 
         const pollRealtime = async () => {
+            if (realtimeRequestInFlightRef.current) {
+                scheduleNextPoll();
+                return;
+            }
+
+            realtimeRequestInFlightRef.current = true;
+
             try {
                 const response = await leadApi.realtime({ after_id: latestIdRef.current || 0 });
                 if (isDisposed) return;
@@ -1332,6 +1613,11 @@ const LeadList = () => {
                 const payload = response.data || {};
                 const incoming = payload.items || [];
                 const nextLatestId = payload.latest_id || latestIdRef.current || 0;
+
+                if (latestIdRef.current === 0) {
+                    if (nextLatestId > 0) setLatestId(nextLatestId);
+                    return;
+                }
 
                 if (nextLatestId > latestIdRef.current) setLatestId(nextLatestId);
                 if (!incoming.length) return;
@@ -1368,17 +1654,20 @@ const LeadList = () => {
                 fetchLeads(activePage, { silent: true, replaceData: activePage === 1 && matchedIncoming.length === 0 });
             } catch (error) {
                 console.error('Lead realtime polling failed', error);
+            } finally {
+                realtimeRequestInFlightRef.current = false;
+                scheduleNextPoll();
             }
         };
 
-        const intervalId = window.setInterval(pollRealtime, 2000);
         pollRealtime();
 
         return () => {
             isDisposed = true;
-            window.clearInterval(intervalId);
+            realtimeRequestInFlightRef.current = false;
+            if (timeoutId) window.clearTimeout(timeoutId);
         };
-    }, [fetchLeads, playLeadNotificationSound, showToast]);
+    }, [fetchLeads, playLeadNotificationSound, realtimeReady, showToast]);
 
     useEffect(() => {
         if (!pendingFocusLeadId) return;
@@ -1555,13 +1844,19 @@ const LeadList = () => {
                                 style={{ width: columnWidths[column.id] || column.minWidth, minWidth: columnWidths[column.id] || column.minWidth, maxWidth: columnWidths[column.id] || column.minWidth }}
                                 title="Kéo để đổi vị trí cột"
                             >
-                                <div className="truncate pr-3">{column.label}</div>
+                                <div className="truncate pr-4">{column.label}</div>
                                 <span
                                     onMouseDown={(event) => handleColumnResize(column.id, event)}
-                                    className="absolute right-[-6px] top-1/2 z-20 flex h-[70%] w-3 -translate-y-1/2 cursor-col-resize items-center justify-center rounded-full bg-primary/10 opacity-70 shadow-sm ring-1 ring-primary/10 transition-all hover:w-4 hover:bg-primary/20 hover:opacity-100 active:w-4 active:bg-primary/25"
+                                    className="group/resize absolute right-[-4px] top-0 z-20 flex h-full w-2.5 cursor-col-resize items-center justify-center"
                                     title="Kéo để đổi độ rộng cột"
                                 >
-                                    <span className="h-full w-[3px] rounded-full bg-primary/35 transition-all hover:bg-primary/70" />
+                                    <span
+                                        className={`pointer-events-none block w-px rounded-full bg-primary/45 transition-all ${
+                                            resizingColumnId === column.id
+                                                ? 'h-10 opacity-100 bg-primary/70'
+                                                : 'h-6 opacity-0 group-hover/resize:h-8 group-hover/resize:opacity-100'
+                                        }`}
+                                    />
                                 </span>
                             </th>
                         ))}
@@ -1580,24 +1875,42 @@ const LeadList = () => {
                                 Không tìm thấy lead phù hợp với bộ lọc hiện tại.
                             </td>
                         </tr>
-                    ) : leads.map((lead) => (
-                        <tr
-                            key={lead.id}
-                            id={`lead-row-${lead.id}`}
-                            className={`border-b border-primary/10 align-top transition-all ${highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-white hover:bg-primary/[0.025]'}`}
-                            onDoubleClick={() => handleOpenOrderForm(lead)}
-                        >
-                            {renderedColumns.map((column) => (
-                                <td
-                                    key={`${lead.id}-${column.id}`}
-                                    className="overflow-hidden px-4 py-3 align-top text-[13px]"
-                                    style={{ width: columnWidths[column.id] || column.minWidth, minWidth: columnWidths[column.id] || column.minWidth, maxWidth: columnWidths[column.id] || column.minWidth }}
+                    ) : leads.map((lead) => {
+                        const detailKey = getLeadDetailKey(lead.id);
+                        const isExpanded = expandedBundleIds.has(detailKey);
+                        const highlightClass = highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-white hover:bg-primary/[0.025]';
+
+                        return (
+                            <React.Fragment key={lead.id}>
+                                <tr
+                                    id={`lead-row-${lead.id}`}
+                                    className={`align-top transition-all ${highlightClass} ${isExpanded ? '' : 'border-b border-primary/10'}`}
+                                    onDoubleClick={() => handleOpenOrderForm(lead)}
                                 >
-                                    {renderLeadTableCell(lead, column.id)}
-                                </td>
-                            ))}
-                        </tr>
-                    ))}
+                                    {renderedColumns.map((column) => (
+                                        <td
+                                            key={`${lead.id}-${column.id}`}
+                                            className="overflow-hidden px-4 py-3 align-top text-[13px]"
+                                            style={{ width: columnWidths[column.id] || column.minWidth, minWidth: columnWidths[column.id] || column.minWidth, maxWidth: columnWidths[column.id] || column.minWidth }}
+                                        >
+                                            {renderLeadTableCell(lead, column.id)}
+                                        </td>
+                                    ))}
+                                </tr>
+
+                                {isExpanded && hasExpandableProductDetails(lead) ? (
+                                    <tr className={`border-b border-primary/10 ${highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-[#FCFDFE]'}`}>
+                                        <td id={`lead-product-details-${lead.id}`} colSpan={renderedColumns.length || 1} className="px-4 pb-4 pt-0">
+                                            <LeadExpandedProductsPanel
+                                                lead={lead}
+                                                onCollapse={() => handleToggleBundle(detailKey)}
+                                            />
+                                        </td>
+                                    </tr>
+                                ) : null}
+                            </React.Fragment>
+                        );
+                    })}
                 </tbody>
             </table>
         </div>
@@ -1730,7 +2043,7 @@ const LeadList = () => {
 
                                                         <button
                                                             type="button"
-                                                            onClick={playLeadNotificationSound}
+                                                            onClick={() => playLeadNotificationSound({ allowQueue: false, userInitiated: true })}
                                                             className={buttonClassName}
                                                         >
                                                             Phát thử

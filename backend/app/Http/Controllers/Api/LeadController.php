@@ -334,6 +334,7 @@ class LeadController extends Controller
     {
         $accountId = $this->accountId($request);
         $afterId = max((int) $request->input('after_id', 0), 0);
+        $latestKnownId = Lead::query()->where('account_id', $accountId)->max('id') ?: $afterId;
 
         $items = Lead::query()
             ->where('account_id', $accountId)
@@ -343,8 +344,11 @@ class LeadController extends Controller
             ->limit(20)
             ->get();
 
+        $latestReturnedId = $items->last()?->id ?: $afterId;
+
         return response()->json([
-            'latest_id' => Lead::query()->where('account_id', $accountId)->max('id') ?: $afterId,
+            'latest_id' => $items->isNotEmpty() ? $latestReturnedId : $latestKnownId,
+            'has_more' => $latestKnownId > $latestReturnedId,
             'items' => $items->map(fn (Lead $lead) => $this->transformLead($lead))->values(),
         ]);
     }

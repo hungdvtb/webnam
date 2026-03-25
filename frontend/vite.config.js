@@ -9,12 +9,12 @@ export default defineConfig({
   },
   server: {
     host: 'localhost',
-    port: 3000,
+    port: 3003,
     strictPort: true,
     hmr: {
       host: 'localhost',
-      port: 3000,
-      clientPort: 3000,
+      port: 3003,
+      clientPort: 3003,
       protocol: 'ws',
     },
   },

@@ -193,14 +193,6 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
         </div>
 
         {/* ─── Footer strip ─── */}
-        <div className="ty-footer-strip">
-          <p>
-            Mọi thắc mắc vui lòng liên hệ:{' '}
-            <span className="ty-contact">1900 1234</span>{' '}
-            hoặc{' '}
-            <span className="ty-contact">hotro@disangomviet.vn</span>
-          </p>
-        </div>
       </div>
 
       <style>{`
@@ -426,14 +418,6 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
         .ty-btn--outline:hover { background: #C5A059; color: #fff; }
 
         /* Footer strip */
-        .ty-footer-strip {
-          background: #F9F5F0; padding: 1rem 2.5rem;
-          border-top: 1px solid rgba(197,160,89,0.15);
-          text-align: center;
-        }
-        .ty-footer-strip p { font-size: 0.88rem; font-style: italic; color: #94a3b8; margin: 0; }
-        .ty-contact { color: #C5A059; font-weight: 700; }
-
         @media (max-width: 640px) {
           .ty-card { border-width: 2px; }
           .ty-banner { height: 160px; }

@@ -17,6 +17,7 @@ export const useTableColumns = (storageKey, defaultColumns) => {
         return saved ? JSON.parse(saved) : {};
     });
     const [draggedItemIndex, setDraggedItemIndex] = useState(null);
+    const [resizingColumnId, setResizingColumnId] = useState(null);
 
     const getColumnMinWidth = useCallback((columnId) => {
         const matchedColumn = defaultColumns.find((column) => column.id === columnId);
@@ -88,6 +89,7 @@ export const useTableColumns = (storageKey, defaultColumns) => {
     }, [storageKey]);
 
     const handleColumnResize = useCallback((columnId, event) => {
+        if (event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
 
@@ -99,6 +101,7 @@ export const useTableColumns = (storageKey, defaultColumns) => {
         );
 
         let currentWidth = startWidth;
+        setResizingColumnId(columnId);
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
 
@@ -112,6 +115,7 @@ export const useTableColumns = (storageKey, defaultColumns) => {
             document.removeEventListener('mouseup', onMouseUp);
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
+            setResizingColumnId(null);
             setColumnWidths((prev) => {
                 const next = { ...prev, [columnId]: currentWidth };
                 localStorage.setItem(`${storageKey}_column_widths`, JSON.stringify(next));
@@ -205,6 +209,7 @@ export const useTableColumns = (storageKey, defaultColumns) => {
         renderedColumns,
         columnWidths,
         totalTableWidth,
+        resizingColumnId,
         toggleColumn,
         handleColumnResize,
         handleHeaderDragStart,

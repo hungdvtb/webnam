@@ -454,30 +454,7 @@ class OrderController extends Controller
         })
         ->when($request->filled('export_slip_state'), function ($q) use ($request) {
             $state = trim((string) $request->input('export_slip_state'));
-
-            if ($state === 'created') {
-                $q->whereExists(function ($builder) {
-                    $builder
-                        ->select(DB::raw(1))
-                        ->from('inventory_documents')
-                        ->whereColumn('inventory_documents.reference_id', 'orders.id')
-                        ->where('inventory_documents.reference_type', 'order')
-                        ->where('inventory_documents.type', 'export')
-                        ->whereIn('inventory_documents.status', ['draft', 'completed']);
-                });
-            }
-
-            if ($state === 'missing') {
-                $q->whereNotExists(function ($builder) {
-                    $builder
-                        ->select(DB::raw(1))
-                        ->from('inventory_documents')
-                        ->whereColumn('inventory_documents.reference_id', 'orders.id')
-                        ->where('inventory_documents.reference_type', 'order')
-                        ->where('inventory_documents.type', 'export')
-                        ->whereIn('inventory_documents.status', ['draft', 'completed']);
-                });
-            }
+            $this->orderInventorySlipService->applyExportSlipStateFilter($q, $state);
         });
 
         // Optimize Dynamic Attribute Filters (EAV) using JOIN for large data

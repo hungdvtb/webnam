@@ -7,6 +7,7 @@ use App\Models\InventoryDocument;
 use App\Models\InventoryDocumentItem;
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\Shipment;
 use App\Services\Inventory\InventoryService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -29,18 +30,89 @@ class OrderInventorySlipService
         }
 
         $documentsByOrderId = $this->loadDocumentsForOrders($orders);
+        $automaticExportsByOrderId = $this->loadAutomaticExportsForOrders($orders);
 
         return $orders
-            ->mapWithKeys(function (Order $order) use ($documentsByOrderId) {
+            ->mapWithKeys(function (Order $order) use ($documentsByOrderId, $automaticExportsByOrderId) {
                 $detail = $this->buildDetailPayload(
                     $order,
                     $documentsByOrderId->get((int) $order->id, collect()),
+                    $automaticExportsByOrderId->get((int) $order->id, collect()),
                     false
                 );
 
                 return [(int) $order->id => $detail['summary']];
             })
             ->all();
+    }
+
+    public function applyExportSlipStateFilter($query, string $state): void
+    {
+        $state = strtolower(trim($state));
+
+        if ($state === 'created') {
+            $query->where(function ($builder) {
+                $builder
+                    ->whereExists(function ($documentQuery) {
+                        $documentQuery
+                            ->select(DB::raw(1))
+                            ->from('inventory_documents')
+                            ->whereColumn('inventory_documents.reference_id', 'orders.id')
+                            ->where('inventory_documents.reference_type', 'order')
+                            ->where('inventory_documents.type', 'export')
+                            ->whereIn('inventory_documents.status', self::ACTIVE_STATUSES);
+                    })
+                    ->orWhereExists(function ($shipmentQuery) {
+                        $shipmentQuery
+                            ->select(DB::raw(1))
+                            ->from('shipments')
+                            ->whereColumn('shipments.order_id', 'orders.id')
+                            ->whereNull('shipments.deleted_at')
+                            ->whereNotIn('shipments.shipment_status', ['canceled']);
+                    })
+                    ->orWhere('type', 'inventory_export')
+                    ->orWhere(function ($trackingQuery) {
+                        $trackingQuery
+                            ->whereNotNull('shipping_tracking_code')
+                            ->where('shipping_tracking_code', '!=', '');
+                    });
+            });
+
+            return;
+        }
+
+        if ($state !== 'missing') {
+            return;
+        }
+
+        $query
+            ->whereNotExists(function ($documentQuery) {
+                $documentQuery
+                    ->select(DB::raw(1))
+                    ->from('inventory_documents')
+                    ->whereColumn('inventory_documents.reference_id', 'orders.id')
+                    ->where('inventory_documents.reference_type', 'order')
+                    ->where('inventory_documents.type', 'export')
+                    ->whereIn('inventory_documents.status', self::ACTIVE_STATUSES);
+            })
+            ->whereNotExists(function ($shipmentQuery) {
+                $shipmentQuery
+                    ->select(DB::raw(1))
+                    ->from('shipments')
+                    ->whereColumn('shipments.order_id', 'orders.id')
+                    ->whereNull('shipments.deleted_at')
+                    ->whereNotIn('shipments.shipment_status', ['canceled']);
+            })
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('shipping_tracking_code')
+                    ->orWhere('shipping_tracking_code', '');
+            })
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('type')
+                    ->orWhere('type', '!=', 'inventory_export');
+            });
     }
 
     public function getOrderDetail(Order $order): array
@@ -50,6 +122,7 @@ class OrderInventorySlipService
         return $this->buildDetailPayload(
             $order,
             $this->loadDocumentsForSingleOrder($order),
+            $this->loadAutomaticExportsForSingleOrder($order),
             true
         );
     }
@@ -104,8 +177,9 @@ class OrderInventorySlipService
             }
 
             $existingDocuments = $this->loadDocumentsForSingleOrder($order);
+            $automaticExports = $this->loadAutomaticExportsForSingleOrder($order);
             $progressMap = collect(
-                $this->buildDetailPayload($order, $existingDocuments, false)['products']
+                $this->buildDetailPayload($order, $existingDocuments, $automaticExports, false)['products']
             )->keyBy('product_id');
 
             foreach ($items as $item) {
@@ -293,15 +367,33 @@ class OrderInventorySlipService
         });
     }
 
-    private function buildDetailPayload(Order $order, Collection $documents, bool $includeDocuments): array
+    private function buildDetailPayload(
+        Order $order,
+        Collection $documents,
+        Collection $automaticExports,
+        bool $includeDocuments
+    ): array
     {
         $orderProducts = $this->aggregateOrderProducts($order);
         $counters = [];
+        $automaticExportCounters = [];
         $slipCounts = [
-            'export' => 0,
+            'export' => (int) $automaticExports->count(),
             'return' => 0,
             'damaged' => 0,
         ];
+
+        foreach ($automaticExports as $automaticExport) {
+            foreach (($automaticExport['items'] ?? []) as $item) {
+                $productId = (int) ($item['product_id'] ?? 0);
+                if ($productId <= 0) {
+                    continue;
+                }
+
+                $automaticExportCounters[$productId] = (int) ($automaticExportCounters[$productId] ?? 0)
+                    + (int) ($item['quantity'] ?? 0);
+            }
+        }
 
         foreach ($documents as $document) {
             if (!array_key_exists($document->type, $slipCounts)) {
@@ -335,7 +427,7 @@ class OrderInventorySlipService
         }
 
         $products = $orderProducts
-            ->map(function (array $product) use ($counters) {
+            ->map(function (array $product) use ($counters, $automaticExportCounters) {
                 $counter = $counters[(int) $product['product_id']] ?? [
                     'exported' => 0,
                     'returned' => 0,
@@ -343,7 +435,9 @@ class OrderInventorySlipService
                 ];
 
                 $requiredQuantity = (int) $product['required_quantity'];
-                $exportedQuantity = (int) $counter['exported'];
+                $manualExportedQuantity = (int) $counter['exported'];
+                $automaticExportedQuantity = (int) ($automaticExportCounters[(int) $product['product_id']] ?? 0);
+                $exportedQuantity = max($manualExportedQuantity, $automaticExportedQuantity);
                 $returnedQuantity = (int) $counter['returned'];
                 $damagedQuantity = (int) $counter['damaged'];
                 $remainingQuantity = max(0, $requiredQuantity - $exportedQuantity);
@@ -354,6 +448,8 @@ class OrderInventorySlipService
                     'product_name' => $product['product_name'],
                     'product_sku' => $product['product_sku'],
                     'required_quantity' => $requiredQuantity,
+                    'manual_exported_quantity' => $manualExportedQuantity,
+                    'automatic_exported_quantity' => $automaticExportedQuantity,
                     'exported_quantity' => $exportedQuantity,
                     'returned_quantity' => $returnedQuantity,
                     'damaged_quantity' => $damagedQuantity,
@@ -400,12 +496,13 @@ class OrderInventorySlipService
 
         $timeline = $documents
             ->map(fn (InventoryDocument $document) => $this->normalizeDocument($document))
+            ->concat($automaticExports)
             ->sortByDesc(function (array $document) {
-                return sprintf(
-                    '%s-%010d',
+                return (string) ($document['sort_key'] ?? sprintf(
+                    '%s-%s',
                     (string) ($document['document_date'] ?? ''),
-                    (int) ($document['id'] ?? 0)
-                );
+                    (string) ($document['id'] ?? '')
+                ));
             })
             ->values();
 
@@ -508,6 +605,242 @@ class OrderInventorySlipService
             ->keyBy('product_id');
     }
 
+    private function loadAutomaticExportsForOrders(Collection $orders): Collection
+    {
+        $orderIds = $orders
+            ->pluck('id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($orderIds)) {
+            return collect();
+        }
+
+        $shipmentsByOrderId = Shipment::query()
+            ->whereIn('order_id', $orderIds)
+            ->whereNotIn('shipment_status', ['canceled'])
+            ->with([
+                'items.orderItem:id,order_id,product_id,product_name_snapshot,product_sku_snapshot,quantity,price,cost_total,cost_price',
+            ])
+            ->orderBy('shipped_at')
+            ->orderBy('id')
+            ->get()
+            ->groupBy(fn (Shipment $shipment) => (int) $shipment->order_id);
+
+        return $orders->mapWithKeys(function (Order $order) use ($shipmentsByOrderId) {
+            return [
+                (int) $order->id => $this->buildAutomaticExportsForOrder(
+                    $order,
+                    $shipmentsByOrderId->get((int) $order->id, collect())
+                ),
+            ];
+        });
+    }
+
+    private function loadAutomaticExportsForSingleOrder(Order $order): Collection
+    {
+        $shipments = Shipment::query()
+            ->where('order_id', (int) $order->id)
+            ->whereNotIn('shipment_status', ['canceled'])
+            ->with([
+                'items.orderItem:id,order_id,product_id,product_name_snapshot,product_sku_snapshot,quantity,price,cost_total,cost_price',
+            ])
+            ->orderByDesc('shipped_at')
+            ->orderByDesc('id')
+            ->get();
+
+        return $this->buildAutomaticExportsForOrder($order, $shipments);
+    }
+
+    private function buildAutomaticExportsForOrder(Order $order, Collection $shipments): Collection
+    {
+        $order->loadMissing(['items']);
+
+        $automaticExports = $shipments
+            ->map(fn (Shipment $shipment) => $this->normalizeAutomaticShipmentExport($order, $shipment))
+            ->filter()
+            ->values();
+
+        if ($automaticExports->isNotEmpty()) {
+            return $automaticExports;
+        }
+
+        $legacyExport = $this->normalizeLegacyAutomaticExport($order);
+        if ($legacyExport) {
+            $automaticExports->push($legacyExport);
+        }
+
+        return $automaticExports->values();
+    }
+
+    private function normalizeAutomaticShipmentExport(Order $order, Shipment $shipment): ?array
+    {
+        $items = $this->buildAutomaticExportItemsFromShipment($order, $shipment);
+        if ($items->isEmpty()) {
+            return null;
+        }
+
+        $trackingNumber = trim((string) ($shipment->carrier_tracking_code ?: $shipment->tracking_number ?: $order->shipping_tracking_code));
+        $carrierName = trim((string) ($shipment->carrier_name ?: $order->shipping_carrier_name));
+        $documentDate = $shipment->shipped_at
+            ?: $shipment->out_for_delivery_at
+            ?: $shipment->created_at
+            ?: $order->shipping_dispatched_at
+            ?: $order->created_at;
+
+        return [
+            'id' => 'shipment-auto-' . (int) $shipment->id,
+            'sort_key' => sprintf(
+                '%s-%010d',
+                optional($documentDate)?->format('Y-m-d H:i:s') ?: '',
+                (int) $shipment->id
+            ),
+            'type' => 'export',
+            'type_label' => $this->typeLabel('export'),
+            'document_number' => $shipment->shipment_number ?: ($trackingNumber !== '' ? $trackingNumber : $order->order_number),
+            'document_date' => optional($documentDate)?->toISOString(),
+            'created_at' => optional($shipment->created_at)?->toISOString(),
+            'status' => 'completed',
+            'status_label' => 'Đã xuất',
+            'status_tone' => 'emerald',
+            'notes' => $this->buildAutomaticExportNotes('Tự tạo từ vận chuyển', $trackingNumber, $carrierName),
+            'created_by_name' => null,
+            'total_quantity' => (int) $items->sum('quantity'),
+            'items' => $items->all(),
+            'can_delete' => false,
+            'source_label' => 'Tự tạo từ vận chuyển',
+            'source_kind' => 'shipment_auto',
+        ];
+    }
+
+    private function normalizeLegacyAutomaticExport(Order $order): ?array
+    {
+        if (!$this->hasAutomaticExportMarker($order)) {
+            return null;
+        }
+
+        $items = $this->buildAutomaticExportItemsFromOrder($order);
+        if ($items->isEmpty()) {
+            return null;
+        }
+
+        $trackingNumber = trim((string) $order->shipping_tracking_code);
+        $carrierName = trim((string) $order->shipping_carrier_name);
+        $isManualExportOrder = (string) $order->type === 'inventory_export';
+        $sourceLabel = $isManualExportOrder ? 'Phiếu xuất kho tạo tay' : 'Tự tạo từ vận chuyển';
+        $documentDate = $order->shipping_dispatched_at ?: $order->created_at;
+
+        return [
+            'id' => 'order-auto-' . (int) $order->id,
+            'sort_key' => sprintf(
+                '%s-%010d',
+                optional($documentDate)?->format('Y-m-d H:i:s') ?: '',
+                (int) $order->id
+            ),
+            'type' => 'export',
+            'type_label' => $this->typeLabel('export'),
+            'document_number' => $trackingNumber !== '' ? $trackingNumber : $order->order_number,
+            'document_date' => optional($documentDate)?->toISOString(),
+            'created_at' => optional($order->updated_at ?: $order->created_at)?->toISOString(),
+            'status' => 'completed',
+            'status_label' => 'Đã xuất',
+            'status_tone' => 'emerald',
+            'notes' => $this->buildAutomaticExportNotes($sourceLabel, $trackingNumber, $carrierName),
+            'created_by_name' => null,
+            'total_quantity' => (int) $items->sum('quantity'),
+            'items' => $items->all(),
+            'can_delete' => false,
+            'source_label' => $sourceLabel,
+            'source_kind' => $isManualExportOrder ? 'legacy_manual_export' : 'legacy_tracking_export',
+        ];
+    }
+
+    private function buildAutomaticExportItemsFromShipment(Order $order, Shipment $shipment): Collection
+    {
+        $orderItemsById = $order->items->keyBy('id');
+
+        $items = $shipment->items
+            ->map(function ($shipmentItem) use ($orderItemsById) {
+                $orderItem = $shipmentItem->orderItem ?: $orderItemsById->get((int) $shipmentItem->order_item_id);
+                if (!$orderItem) {
+                    return null;
+                }
+
+                return $this->normalizeAutomaticExportItem(
+                    'shipment-item-' . (int) $shipmentItem->id,
+                    $orderItem,
+                    (int) ($shipmentItem->qty ?? 0)
+                );
+            })
+            ->filter()
+            ->values();
+
+        return $items->isNotEmpty() ? $items : $this->buildAutomaticExportItemsFromOrder($order);
+    }
+
+    private function buildAutomaticExportItemsFromOrder(Order $order): Collection
+    {
+        return $order->items
+            ->map(function ($orderItem) {
+                return $this->normalizeAutomaticExportItem(
+                    'order-item-' . (int) $orderItem->id,
+                    $orderItem,
+                    (int) ($orderItem->quantity ?? 0)
+                );
+            })
+            ->filter()
+            ->values();
+    }
+
+    private function normalizeAutomaticExportItem(string $id, $orderItem, int $quantity): ?array
+    {
+        if ($quantity <= 0) {
+            return null;
+        }
+
+        $unitCost = $quantity > 0 && $orderItem->cost_total !== null
+            ? round((float) $orderItem->cost_total / max(1, (int) ($orderItem->quantity ?? 0)), 2)
+            : round((float) ($orderItem->cost_price ?? 0), 2);
+        $unitPrice = $orderItem->price !== null ? round((float) $orderItem->price, 2) : null;
+
+        return [
+            'id' => $id,
+            'product_id' => (int) ($orderItem->product_id ?? 0),
+            'product_name' => $orderItem->product_name_snapshot ?: "Sản phẩm #{$orderItem->product_id}",
+            'product_sku' => $orderItem->product_sku_snapshot,
+            'quantity' => $quantity,
+            'unit_cost' => $unitCost,
+            'total_cost' => round($unitCost * $quantity, 2),
+            'unit_price' => $unitPrice,
+            'total_price' => $unitPrice !== null ? round($unitPrice * $quantity, 2) : null,
+            'notes' => null,
+        ];
+    }
+
+    private function hasAutomaticExportMarker(Order $order): bool
+    {
+        return (string) $order->type === 'inventory_export'
+            || trim((string) $order->shipping_tracking_code) !== '';
+    }
+
+    private function buildAutomaticExportNotes(string $sourceLabel, string $trackingNumber = '', string $carrierName = ''): ?string
+    {
+        $parts = [$sourceLabel];
+        if ($trackingNumber !== '') {
+            $parts[] = 'Mã vận đơn: ' . $trackingNumber;
+        }
+        if ($carrierName !== '') {
+            $parts[] = 'Đơn vị: ' . $carrierName;
+        }
+
+        $parts = array_values(array_filter($parts, fn ($value) => trim((string) $value) !== ''));
+
+        return empty($parts) ? null : implode(' • ', $parts);
+    }
+
     private function loadDocumentsForOrders(Collection $orders): Collection
     {
         $orderIds = $orders
@@ -595,6 +928,11 @@ class OrderInventorySlipService
 
         return [
             'id' => (int) $document->id,
+            'sort_key' => sprintf(
+                '%s-%010d',
+                optional($document->document_date)?->format('Y-m-d') ?: '',
+                (int) $document->id
+            ),
             'type' => $document->type,
             'type_label' => $this->typeLabel($document->type),
             'document_number' => $document->document_number,
@@ -606,6 +944,8 @@ class OrderInventorySlipService
             'notes' => $document->notes,
             'created_by_name' => $document->creator?->name,
             'total_quantity' => (int) ($document->total_quantity ?: $document->items->sum('quantity')),
+            'can_delete' => true,
+            'source_label' => null,
             'items' => $document->items->map(function (InventoryDocumentItem $item) {
                 return [
                     'id' => (int) $item->id,
@@ -634,7 +974,12 @@ class OrderInventorySlipService
             ->reject(fn (InventoryDocument $item) => (int) $item->id === (int) $document->id)
             ->values();
 
-        $detail = $this->buildDetailPayload($order, $documents, false);
+        $detail = $this->buildDetailPayload(
+            $order,
+            $documents,
+            $this->loadAutomaticExportsForSingleOrder($order),
+            false
+        );
         $invalidProduct = collect($detail['products'])->first(function (array $product) {
             return ((int) $product['returned_quantity'] + (int) $product['damaged_quantity']) > (int) $product['exported_quantity'];
         });

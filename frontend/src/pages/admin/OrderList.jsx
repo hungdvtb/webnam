@@ -1332,9 +1332,8 @@ const OrderList = () => {
 
     const handleQuickStatusUpdate = async (id, s) => {
         try {
-            const response = await orderApi.updateStatus(id, s);
-            // Updating the exact order in the list with the new data from backend
-            setOrders(prev => prev.map(o => o.id === id ? { ...o, ...response.data } : o));
+            await orderApi.updateStatus(id, s);
+            await fetchOrders(pagination.current_page || 1, filters, pagination.per_page, sortConfig);
             setStatusMenuOrderId(null);
             setNotification({ type: 'success', message: 'Đã cập nhật trạng thái đơn hàng' });
         } catch (e) {
@@ -1506,18 +1505,18 @@ const OrderList = () => {
                 <div className="flex justify-between items-center"><h1 className="admin-header-title italic">{isTrashView ? 'Thùng rác đơn hàng' : 'Quản lý đơn hàng'}</h1><AccountSelector user={user} /></div>
 
                 <div className="bg-white border border-primary/10 p-2 shadow-sm rounded-sm flex items-center gap-2">
-                    <div className="flex gap-1 items-center">
+                    <div className="flex gap-1 items-center flex-wrap">
                         {!isTrashView ? (
                             <>
                                 <button onClick={() => navigate('/admin/orders/new')} title="Tạo mới" className="bg-brick text-white p-1.5 rounded-sm w-9 h-9 flex items-center justify-center transition-all hover:bg-umber"><span className="material-symbols-outlined text-[18px]">add</span></button>
                                 <button onClick={handleBulkDuplicate} disabled={selectedIds.length === 0} title="Nhân bản" className={`p-1.5 rounded-sm w-9 h-9 flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary hover:bg-primary hover:text-white shadow-sm' : 'text-primary/30 grayscale opacity-50 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
-                                <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Xóa" className={`p-1.5 rounded-sm w-9 h-9 flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick hover:bg-brick hover:text-white shadow-sm' : 'text-primary/30 grayscale opacity-50 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete</span></button>
+                                <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Xóa" className={`h-9 px-3 rounded-sm flex items-center justify-center gap-1.5 transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick hover:bg-brick hover:text-white shadow-sm' : 'text-primary/30 grayscale opacity-50 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete</span><span className="text-[11px] font-black uppercase tracking-wide">Xóa</span></button>
                             </>
                         ) : (
                             <>
-                                <button onClick={() => setIsTrashView(false)} title="Về danh sách" className="bg-primary text-white p-1.5 rounded-sm w-9 h-9 flex items-center justify-center transition-all hover:bg-primary-800"><span className="material-symbols-outlined text-[18px]">arrow_back</span></button>
-                                <button onClick={handleBulkRestore} disabled={selectedIds.length === 0} title="Khôi phục" className={`p-1.5 rounded-sm w-9 h-9 flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-green-600/10 text-green-600 hover:bg-green-600 hover:text-white shadow-sm' : 'text-primary/30 grayscale opacity-50 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">restore_from_trash</span></button>
-                                <button onClick={handleBulkForceDelete} disabled={selectedIds.length === 0} title="Xóa vĩnh viễn" className={`p-1.5 rounded-sm w-9 h-9 flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick hover:bg-brick hover:text-white shadow-sm' : 'text-primary/30 grayscale opacity-50 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_forever</span></button>
+                                <button onClick={() => setIsTrashView(false)} title="Về danh sách" className="bg-primary text-white h-9 px-3 rounded-sm flex items-center justify-center gap-1.5 transition-all hover:bg-primary-800"><span className="material-symbols-outlined text-[18px]">arrow_back</span><span className="text-[11px] font-black uppercase tracking-wide">Danh sách</span></button>
+                                <button onClick={handleBulkRestore} disabled={selectedIds.length === 0} title="Khôi phục" className={`h-9 px-3 rounded-sm flex items-center justify-center gap-1.5 transition-all ${selectedIds.length > 0 ? 'bg-green-600/10 text-green-600 hover:bg-green-600 hover:text-white shadow-sm' : 'text-primary/30 grayscale opacity-50 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">restore_from_trash</span><span className="text-[11px] font-black uppercase tracking-wide">Khôi phục</span></button>
+                                <button onClick={handleBulkForceDelete} disabled={selectedIds.length === 0} title="Xóa vĩnh viễn" className={`h-9 px-3 rounded-sm flex items-center justify-center gap-1.5 transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick hover:bg-brick hover:text-white shadow-sm' : 'text-primary/30 grayscale opacity-50 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_forever</span><span className="text-[11px] font-black uppercase tracking-wide">Xóa vĩnh viễn</span></button>
                             </>
                         )}
                         <div className="w-[1px] h-6 bg-primary/20 mx-1"></div>
@@ -1551,7 +1550,7 @@ const OrderList = () => {
                         <button data-filter-btn onClick={() => { if (!showFilters) setTempFilters({ ...filters }); setShowFilters(!showFilters); }} className={`p-1.5 border transition-all rounded-sm w-9 h-9 flex items-center justify-center ${showFilters || activeCount() > 0 ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`} title="Bộ lọc nâng cao"><span className="material-symbols-outlined text-[18px]">filter_alt</span></button>
                         <button onClick={handleRefresh} disabled={loading} title="Làm mới" className="bg-white text-primary border border-primary/20 p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center hover:bg-primary/5"><span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span></button>
                         <button data-column-settings-btn onClick={() => setShowColumnSettings(!showColumnSettings)} className={`p-1.5 border rounded-sm w-9 h-9 flex items-center justify-center transition-all ${showColumnSettings ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/30 hover:bg-primary/5'}`} title="Cấu hình hiển thị cột"><span className="material-symbols-outlined text-[18px]">settings_suggest</span></button>
-                        {!isTrashView && <button onClick={() => setIsTrashView(true)} title="Thùng rác" className="bg-white text-primary/60 border border-primary/20 p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center hover:text-primary hover:border-primary"><span className="material-symbols-outlined text-[18px]">inventory_2</span></button>}
+                        {!isTrashView && <button onClick={() => setIsTrashView(true)} title="Thùng rác" className="bg-white text-primary/70 border border-primary/20 h-9 px-3 rounded-sm transition-all flex items-center justify-center gap-1.5 hover:text-primary hover:border-primary"><span className="material-symbols-outlined text-[18px]">inventory_2</span><span className="text-[11px] font-black uppercase tracking-wide">Thùng rác</span></button>}
 
                         {!isTrashView && (
                             <button
@@ -1845,7 +1844,12 @@ const OrderList = () => {
                 <table className="text-left border-collapse table-fixed min-w-full admin-text-13" style={{ width: `${totalTableWidth}px` }}>
                     <thead className="admin-table-header sticky top-0 z-20 shadow-sm border-b border-primary/10">
                         <tr>
-                            <th className="p-3 w-10 admin-table-header border border-primary/20 sticky-col-0"><input type="checkbox" checked={orders.length > 0 && selectedIds.length === orders.length} onChange={toggleSelectAll} className="size-4 accent-primary" /></th>
+                            <th className="p-3 w-20 admin-table-header border border-primary/20 sticky-col-0">
+                                <label className="flex items-center gap-2 text-primary font-black">
+                                    <input type="checkbox" checked={orders.length > 0 && selectedIds.length === orders.length} onChange={toggleSelectAll} className="size-4 accent-primary" />
+                                    <span className="text-[10px] uppercase tracking-[0.14em]">Chọn</span>
+                                </label>
+                            </th>
                             {renderedColumns.map((c, i) => (
                                 <th key={c.id} draggable={c.id !== 'actions'} onDragStart={(e) => handleHeaderDragStart(e, i)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleHeaderDrop(e, i)} onDoubleClick={() => handleSort(c.id)} className={`px-3 py-2.5 border border-primary/10 cursor-move hover:bg-primary/5 relative group ${c.id === 'order_number' ? 'sticky-col-1' : ''}`} style={{ width: columnWidths[c.id] || c.minWidth }}>
                                     <div className={`flex items-center gap-1.5 ${c.align === 'center' ? 'justify-center' : c.align === 'right' ? 'justify-end' : ''}`}>{c.id !== 'actions' && <span className="material-symbols-outlined text-[14px] opacity-20 group-hover:opacity-100 text-primary">drag_indicator</span>}<span className="truncate text-primary font-black">{c.label}</span><SortIndicator colId={c.id === 'customer' ? 'customer_name' : c.id} sortConfig={sortConfig} /></div>
@@ -1868,7 +1872,18 @@ const OrderList = () => {
                         ) : (
                             orders.map(o => (
                                 <tr key={o.id} onDoubleClick={() => { if (!isTrashView) navigate(`/admin/orders/edit/${o.id}`); }} onClick={() => toggleSelectOrder(o.id)} className={`transition-all group cursor-pointer ${selectedIds.includes(o.id) ? 'bg-primary/10' : 'hover:bg-primary/5'}`}>
-                                    <td className="p-3 border border-primary/20 sticky-col-0 group-hover:bg-primary/5 transition-colors"><input type="checkbox" checked={selectedIds.includes(o.id)} readOnly className="size-4 accent-primary" /></td>
+                                    <td className="p-3 border border-primary/20 sticky-col-0 group-hover:bg-primary/5 transition-colors">
+                                        <div className="flex items-center">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedIds.includes(o.id)}
+                                                onClick={(e) => e.stopPropagation()}
+                                                onChange={() => toggleSelectOrder(o.id)}
+                                                className="size-4 accent-primary cursor-pointer"
+                                                aria-label={`Chọn đơn ${o.order_number}`}
+                                            />
+                                        </div>
+                                    </td>
                                     {renderedColumns.map(c => {
                                         const cs = { width: columnWidths[c.id] || c.minWidth };
                                         if (c.id === 'order_number') return (

@@ -580,6 +580,12 @@ const OrderInventorySlipDrawer = ({ open, orderId, onClose, onUpdated, onNotify 
                                                                             <span className="material-symbols-outlined text-[14px]">{meta.icon}</span>
                                                                             {document.document_number}
                                                                         </div>
+                                                                        {document.source_label ? (
+                                                                            <div className="inline-flex items-center gap-1 rounded-sm border border-primary/15 bg-primary/[0.04] px-2.5 py-1 text-[11px] font-black text-primary/70">
+                                                                                <span className="material-symbols-outlined text-[14px]">sync</span>
+                                                                                {document.source_label}
+                                                                            </div>
+                                                                        ) : null}
                                                                         <div className={`inline-flex items-center gap-1 rounded-sm border px-2.5 py-1 text-[11px] font-black ${statusToneClasses[document.status_tone] || statusToneClasses.slate}`}>
                                                                             <span className="material-symbols-outlined text-[14px]">verified</span>
                                                                             {document.status_label}
@@ -592,15 +598,17 @@ const OrderInventorySlipDrawer = ({ open, orderId, onClose, onUpdated, onNotify 
                                                                     </div>
                                                                     {document.notes ? <div className="mt-2 text-[12px] text-primary/65">{document.notes}</div> : null}
                                                                 </div>
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => removeSlip(document)}
-                                                                    disabled={deletingId === document.id}
-                                                                    className="inline-flex h-9 items-center gap-1 rounded-sm border border-rose-200 bg-white px-3 text-[12px] font-black text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
-                                                                >
-                                                                    <span className="material-symbols-outlined text-[16px]">delete</span>
-                                                                    {deletingId === document.id ? 'Đang xóa...' : 'Xóa'}
-                                                                </button>
+                                                                {document.can_delete !== false ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => removeSlip(document)}
+                                                                        disabled={deletingId === document.id}
+                                                                        className="inline-flex h-9 items-center gap-1 rounded-sm border border-rose-200 bg-white px-3 text-[12px] font-black text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                                                    >
+                                                                        <span className="material-symbols-outlined text-[16px]">delete</span>
+                                                                        {deletingId === document.id ? 'Đang xóa...' : 'Xóa'}
+                                                                    </button>
+                                                                ) : null}
                                                             </div>
 
                                                             <div className="overflow-auto">

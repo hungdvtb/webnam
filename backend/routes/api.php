@@ -172,12 +172,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/leads/notifications', [\App\Http\Controllers\Api\LeadController::class , 'notifications']);
     Route::post('/leads/notifications/read', [\App\Http\Controllers\Api\LeadController::class , 'markNotificationsRead']);
     Route::post('/leads/notification-settings', [\App\Http\Controllers\Api\LeadController::class , 'storeNotificationSettings']);
+    Route::post('/leads/bulk-delete', [\App\Http\Controllers\Api\LeadController::class , 'bulkDelete']);
+    Route::post('/leads/bulk-restore', [\App\Http\Controllers\Api\LeadController::class , 'bulkRestore']);
     Route::get('/leads/{id}', [\App\Http\Controllers\Api\LeadController::class , 'show']);
     Route::get('/leads/{id}/notes', [\App\Http\Controllers\Api\LeadController::class , 'notes']);
     Route::post('/leads/{id}/notes', [\App\Http\Controllers\Api\LeadController::class , 'storeNote']);
     Route::get('/leads/{id}/order-draft', [\App\Http\Controllers\Api\LeadController::class , 'orderDraft']);
     Route::put('/leads/{id}', [\App\Http\Controllers\Api\LeadController::class , 'update']);
     Route::delete('/leads/{id}', [\App\Http\Controllers\Api\LeadController::class , 'destroy']);
+    Route::post('/leads/{id}/restore', [\App\Http\Controllers\Api\LeadController::class , 'restore']);
     Route::get('/lead-statuses', [\App\Http\Controllers\Api\LeadStatusController::class , 'index']);
     Route::post('/lead-statuses', [\App\Http\Controllers\Api\LeadStatusController::class , 'store']);
     Route::put('/lead-statuses/{id}', [\App\Http\Controllers\Api\LeadStatusController::class , 'update']);

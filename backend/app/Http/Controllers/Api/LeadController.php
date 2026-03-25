@@ -40,6 +40,18 @@ class LeadController extends Controller
         return (int) ($request->user()?->id ?? auth()->id() ?? 0);
     }
 
+    protected function scopedLeadQuery(Request $request, bool $withTrashed = false): Builder
+    {
+        $query = $withTrashed ? Lead::withTrashed() : Lead::query();
+
+        return $query->where('account_id', $this->accountId($request));
+    }
+
+    protected function findScopedLead(Request $request, int $id, bool $withTrashed = false): Lead
+    {
+        return $this->scopedLeadQuery($request, $withTrashed)->findOrFail($id);
+    }
+
     protected function notificationSettingsKey(int $userId): string
     {
         return self::NOTIFICATION_SETTINGS_KEY_PREFIX . $userId;
@@ -499,10 +511,11 @@ class LeadController extends Controller
         $statuses = LeadStatus::ensureDefaultsForAccount($accountId);
         $draftStatus = $statuses->firstWhere('code', 'don-nhap');
         $draftStatusId = (int) ($draftStatus?->id ?? 0);
+        $isTrashView = $request->boolean('trashed');
 
-        $query = Lead::query()
+        $query = $this->scopedLeadQuery($request, $isTrashView)
             ->with(['statusConfig', 'latestNote', 'items.product', 'order:id,order_number'])
-            ->where('account_id', $accountId);
+            ->when($isTrashView, fn (Builder $builder) => $builder->onlyTrashed());
 
         $this->applyLeadFilters($query, $request);
 
@@ -518,7 +531,8 @@ class LeadController extends Controller
         $leadItems = collect($paginator->items());
         $repeatMetaMap = $this->repeatCustomerPhoneService->buildLeadMeta($leadItems, $accountId);
 
-        $summaryQuery = Lead::query()->where('account_id', $accountId);
+        $summaryQuery = $this->scopedLeadQuery($request, $isTrashView)
+            ->when($isTrashView, fn (Builder $builder) => $builder->onlyTrashed());
         $this->applyLeadFilters($summaryQuery, $request, false);
         $summaryRows = $draftStatusId > 0
             ? $summaryQuery
@@ -530,8 +544,8 @@ class LeadController extends Controller
                 ->groupBy('lead_status_id')
                 ->pluck('total', 'lead_status_id');
 
-        $tags = Lead::query()
-            ->where('account_id', $accountId)
+        $tags = $this->scopedLeadQuery($request, $isTrashView)
+            ->when($isTrashView, fn (Builder $builder) => $builder->onlyTrashed())
             ->whereNotNull('tag')
             ->where('tag', '<>', '')
             ->distinct()
@@ -562,8 +576,7 @@ class LeadController extends Controller
 
     public function show(Request $request, int $id)
     {
-        $lead = Lead::query()
-            ->where('account_id', $this->accountId($request))
+        $lead = $this->scopedLeadQuery($request)
             ->with(['statusConfig', 'items.product', 'notesTimeline.user', 'order:id,order_number'])
             ->findOrFail($id);
         $draftStatus = $this->draftStatusForAccount((int) $lead->account_id);
@@ -582,8 +595,7 @@ class LeadController extends Controller
 
     public function update(Request $request, int $id)
     {
-        $lead = Lead::query()
-            ->where('account_id', $this->accountId($request))
+        $lead = $this->scopedLeadQuery($request)
             ->with('statusConfig')
             ->findOrFail($id);
         $draftStatus = $this->draftStatusForAccount((int) $lead->account_id);
@@ -650,19 +662,96 @@ class LeadController extends Controller
 
     public function destroy(Request $request, int $id)
     {
-        $lead = Lead::query()
-            ->where('account_id', $this->accountId($request))
-            ->findOrFail($id);
+        $lead = $this->findScopedLead($request, $id, true);
+
+        if ($lead->trashed()) {
+            return response()->json(['message' => 'Lead is already in trash.'], 422);
+        }
 
         $lead->delete();
 
-        return response()->json(['message' => 'Lead deleted successfully']);
+        return response()->json(['message' => 'Lead moved to trash successfully']);
+    }
+
+    public function restore(Request $request, int $id)
+    {
+        $lead = $this->findScopedLead($request, $id, true);
+
+        if (!$lead->trashed()) {
+            return response()->json(['message' => 'Lead is not in trash.'], 422);
+        }
+
+        $lead->restore();
+
+        return response()->json(['message' => 'Lead restored successfully']);
+    }
+
+    public function bulkDelete(Request $request)
+    {
+        $ids = collect($request->input('ids', []))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            return response()->json(['message' => 'No IDs provided'], 400);
+        }
+
+        $leads = $this->scopedLeadQuery($request, true)
+            ->whereIn('id', $ids)
+            ->get();
+        $deletedCount = 0;
+
+        foreach ($leads as $lead) {
+            if ($lead->trashed()) {
+                continue;
+            }
+
+            $lead->delete();
+            $deletedCount++;
+        }
+
+        return response()->json([
+            'message' => 'Leads moved to trash successfully',
+            'count' => $deletedCount,
+        ]);
+    }
+
+    public function bulkRestore(Request $request)
+    {
+        $ids = collect($request->input('ids', []))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            return response()->json(['message' => 'No IDs provided'], 400);
+        }
+
+        $leads = $this->scopedLeadQuery($request, true)
+            ->onlyTrashed()
+            ->whereIn('id', $ids)
+            ->get();
+
+        if ($leads->isEmpty()) {
+            return response()->json(['message' => 'No trashed leads selected'], 422);
+        }
+
+        foreach ($leads as $lead) {
+            $lead->restore();
+        }
+
+        return response()->json([
+            'message' => 'Leads restored successfully',
+            'count' => $leads->count(),
+        ]);
     }
 
     public function notes(Request $request, int $id)
     {
-        $lead = Lead::query()
-            ->where('account_id', $this->accountId($request))
+        $lead = $this->scopedLeadQuery($request)
             ->with(['notesTimeline.user'])
             ->findOrFail($id);
 
@@ -679,9 +768,7 @@ class LeadController extends Controller
 
     public function storeNote(Request $request, int $id)
     {
-        $lead = Lead::query()
-            ->where('account_id', $this->accountId($request))
-            ->findOrFail($id);
+        $lead = $this->scopedLeadQuery($request)->findOrFail($id);
 
         $validated = $request->validate([
             'content' => 'required|string|max:5000',

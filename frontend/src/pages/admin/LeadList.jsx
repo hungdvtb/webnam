@@ -11,6 +11,8 @@ const inputClassName = 'w-full h-10 rounded-sm border border-primary/10 bg-white
 const textareaClassName = 'w-full min-h-[132px] rounded-sm border border-primary/10 bg-white px-3 py-2 text-[13px] text-[#0F172A] shadow-sm transition-all focus:border-primary/30 focus:outline-none resize-none';
 const buttonClassName = 'inline-flex h-10 items-center gap-2 rounded-sm border border-primary/10 bg-white px-3 text-[12px] font-black uppercase tracking-[0.08em] text-primary/80 shadow-sm transition-all hover:border-primary/30 hover:text-primary';
 const iconButtonClassName = 'relative inline-flex size-10 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/70 shadow-sm transition-all hover:border-primary/30 hover:text-primary';
+const tableToolbarButtonClassName = 'inline-flex h-10 items-center gap-2 rounded-sm border border-primary/10 bg-white px-3 text-[12px] font-black uppercase tracking-[0.08em] text-primary/80 shadow-sm transition-all hover:border-primary/30 hover:text-primary';
+const LEAD_SELECT_COLUMN_WIDTH = 56;
 const MAX_NOTIFICATION_ITEMS = 12;
 const LEAD_LIST_COPY_RESET_MS = 1800;
 const emptyFilters = { status: '', tag: '', date_from: '', date_to: '' };
@@ -844,28 +846,62 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                     <tbody>
                         {loading && leads.length === 0 ? (
                             <tr>
-                                <td colSpan={renderedColumns.length || 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
                                     Äang táº£i danh sÃ¡ch lead...
                                 </td>
                             </tr>
                         ) : leads.length === 0 ? (
                             <tr>
-                                <td colSpan={renderedColumns.length || 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
                                     KhÃ´ng tÃ¬m tháº¥y lead phÃ¹ há»£p vá»›i bá»™ lá»c hiá»‡n táº¡i.
                                 </td>
                             </tr>
                         ) : leads.map((lead) => {
                             const detailKey = getLeadDetailKey(lead.id);
                             const isExpanded = expandedBundleIds.has(detailKey);
-                            const highlightClass = highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-white hover:bg-primary/[0.025]';
+                            const highlightClass = selectedLeadIds.includes(lead.id)
+                                ? 'bg-primary/[0.08]'
+                                : highlightedLeadId === lead.id
+                                    ? 'bg-amber-50'
+                                    : 'bg-white hover:bg-primary/[0.025]';
 
                             return (
                                 <React.Fragment key={lead.id}>
                                     <tr
                                         id={`lead-row-${lead.id}`}
                                         className={`align-top transition-all ${highlightClass}`}
-                                        onDoubleClick={() => handleOpenOrderForm(lead)}
+                                        onDoubleClick={() => { if (!isTrashView) handleOpenOrderForm(lead); }}
                                     >
+                                        <td className="border-b border-r border-primary/10 px-3 py-3 align-top text-center">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedLeadIds.includes(lead.id)}
+                                                onClick={(event) => event.stopPropagation()}
+                                                onChange={() => toggleSelectLead(lead.id)}
+                                                className="size-4 cursor-pointer accent-primary"
+                                                aria-label={`Chọn lead ${lead.lead_number || lead.id}`}
+                                            />
+                                        </td>
+                                        <td className="border-b border-r border-primary/10 px-3 py-3 align-top text-center">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedLeadIds.includes(lead.id)}
+                                                onClick={(event) => event.stopPropagation()}
+                                                onChange={() => toggleSelectLead(lead.id)}
+                                                className="size-4 cursor-pointer accent-primary"
+                                                aria-label={`Chọn lead ${lead.lead_number || lead.id}`}
+                                            />
+                                        </td>
+                                        <td className="border-b border-r border-primary/10 px-3 py-3 align-top text-center">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedLeadIds.includes(lead.id)}
+                                                onClick={(event) => event.stopPropagation()}
+                                                onChange={() => toggleSelectLead(lead.id)}
+                                                className="size-4 cursor-pointer accent-primary"
+                                                aria-label={`Chọn lead ${lead.lead_number || lead.id}`}
+                                            />
+                                        </td>
                                         {renderedColumns.map((column) => (
                                             <td
                                                 key={`${lead.id}-${column.id}`}
@@ -878,7 +914,7 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
 
                                     {isExpanded && hasExpandableProductDetails(lead) ? (
                                         <tr className={highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-[#FCFDFE]'}>
-                                            <td id={`lead-product-details-${lead.id}`} colSpan={renderedColumns.length || 1} className="border-b border-primary/10 px-4 pb-4 pt-0">
+                                            <td id={`lead-product-details-${lead.id}`} colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 pb-4 pt-0">
                                                 <LeadExpandedProductsPanel
                                                     lead={lead}
                                                     onCollapse={() => handleToggleBundle(detailKey)}
@@ -942,7 +978,7 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                     ) : leads.length === 0 ? (
                         <tr>
                             <td colSpan={renderedColumns.length || 1} className="border border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
-                                Không tìm thấy lead phù hợp với bộ lọc hiện tại.
+                                    {isTrashView ? 'Thùng rác lead đang trống.' : 'Không tìm thấy lead phù hợp với bộ lọc hiện tại.'}
                             </td>
                         </tr>
                     ) : leads.map((lead) => (
@@ -950,7 +986,7 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                             key={lead.id}
                             id={`lead-row-${lead.id}`}
                             className={`border-b border-primary/10 align-top transition-all ${highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-white hover:bg-primary/[0.025]'}`}
-                            onDoubleClick={() => handleOpenOrderForm(lead)}
+                                        onDoubleClick={() => { if (!isTrashView) handleOpenOrderForm(lead); }}
                         >
                             {renderedColumns.map((column) => (
                                 <td
@@ -1652,6 +1688,8 @@ const LeadList = () => {
     const [expandedBundleIds, setExpandedBundleIds] = useState(() => new Set());
     const [copiedCellId, setCopiedCellId] = useState(null);
     const [leadTableScrollbarWidth, setLeadTableScrollbarWidth] = useState(0);
+    const [selectedLeadIds, setSelectedLeadIds] = useState([]);
+    const [isTrashView, setIsTrashView] = useState(false);
 
     const {
         availableColumns,
@@ -1688,6 +1726,7 @@ const LeadList = () => {
     const realtimeRequestInFlightRef = useRef(false);
     const browserNotificationRef = useRef(null);
     const hydratedFromCacheRef = useRef(Boolean(initialLeadListViewState?.leads?.length));
+    const isTrashViewRef = useRef(false);
 
     const totalAcrossStatuses = useMemo(
         () => statuses.reduce((sum, status) => sum + Number(status.count || 0), 0),
@@ -1701,9 +1740,13 @@ const LeadList = () => {
             const width = columnWidths[column.id] || column.minWidth || 0;
             const numericWidth = typeof width === 'string' ? parseInt(width, 10) : Number(width || 0);
             return total + numericWidth;
-        }, 0),
+        }, LEAD_SELECT_COLUMN_WIDTH),
         [columnWidths, renderedColumns]
     );
+
+    useEffect(() => {
+        isTrashViewRef.current = isTrashView;
+    }, [isTrashView]);
 
     useEffect(() => {
         const timer = window.setTimeout(() => {
@@ -2226,6 +2269,7 @@ const LeadList = () => {
             const response = await leadApi.getAll({
                 page: targetPage,
                 per_page: paginationRef.current.per_page || 20,
+                trashed: isTrashViewRef.current ? 1 : 0,
                 ...filtersRef.current,
                 search: searchRef.current || undefined,
             }, controller.signal);
@@ -2272,7 +2316,15 @@ const LeadList = () => {
         return () => {
             isMounted = false;
         };
-    }, [page, filters, debouncedQuickSearch, fetchLeads]);
+    }, [page, filters, debouncedQuickSearch, isTrashView, fetchLeads]);
+
+    useEffect(() => {
+        setSelectedLeadIds([]);
+    }, [isTrashView]);
+
+    useEffect(() => {
+        setSelectedLeadIds((prev) => prev.filter((id) => leads.some((lead) => lead.id === id)));
+    }, [leads]);
 
     useEffect(() => {
         reloadSettings();
@@ -2357,6 +2409,10 @@ const LeadList = () => {
                     type: 'info',
                     duration: 2500,
                 });
+
+                if (isTrashViewRef.current) {
+                    return;
+                }
 
                 const activePage = pageRef.current;
                 const activeFilters = filtersRef.current;
@@ -2447,6 +2503,64 @@ const LeadList = () => {
         fetchNotificationCenter({ silent: true });
     };
 
+    const toggleSelectAllLeads = useCallback(() => {
+        if (selectedLeadIds.length === leads.length && leads.length > 0) {
+            setSelectedLeadIds([]);
+            return;
+        }
+
+        setSelectedLeadIds(leads.map((lead) => lead.id));
+    }, [leads, selectedLeadIds.length]);
+
+    const toggleSelectLead = useCallback((leadId) => {
+        setSelectedLeadIds((prev) => (
+            prev.includes(leadId)
+                ? prev.filter((id) => id !== leadId)
+                : [...prev, leadId]
+        ));
+    }, []);
+
+    const handleMoveSelectedLeadsToTrash = useCallback(async () => {
+        if (selectedLeadIds.length === 0) return;
+        if (!window.confirm(`Chuyển ${selectedLeadIds.length} lead đã chọn vào thùng rác?`)) return;
+
+        try {
+            await leadApi.bulkDelete(selectedLeadIds);
+            setSelectedLeadIds([]);
+            await fetchLeads(pageRef.current, { silent: false, replaceData: true });
+            showToast({ message: 'Đã chuyển lead vào thùng rác.', type: 'success', duration: 1800 });
+        } catch (error) {
+            console.error('Failed to move leads to trash', error);
+            showModal({ title: 'Lỗi', content: 'Không thể chuyển lead vào thùng rác.', type: 'error' });
+        }
+    }, [fetchLeads, selectedLeadIds, showModal, showToast]);
+
+    const handleRestoreSelectedLeads = useCallback(async () => {
+        if (selectedLeadIds.length === 0) return;
+
+        try {
+            await leadApi.bulkRestore(selectedLeadIds);
+            setSelectedLeadIds([]);
+            await fetchLeads(pageRef.current, { silent: false, replaceData: true });
+            showToast({ message: 'Đã khôi phục lead.', type: 'success', duration: 1800 });
+        } catch (error) {
+            console.error('Failed to restore leads', error);
+            showModal({ title: 'Lỗi', content: 'Không thể khôi phục lead.', type: 'error' });
+        }
+    }, [fetchLeads, selectedLeadIds, showModal, showToast]);
+
+    const openLeadTrashView = useCallback(() => {
+        setSelectedLeadIds([]);
+        setPage(1);
+        setIsTrashView(true);
+    }, []);
+
+    const closeLeadTrashView = useCallback(() => {
+        setSelectedLeadIds([]);
+        setPage(1);
+        setIsTrashView(false);
+    }, []);
+
     const syncLeadTableHeaderScroll = useCallback((scrollLeft = 0) => {
         if (leadTableHeaderScrollRef.current) {
             leadTableHeaderScrollRef.current.scrollLeft = scrollLeft;
@@ -2493,6 +2607,10 @@ const LeadList = () => {
     };
 
     const handleOpenOrderForm = (lead) => {
+        if (isTrashViewRef.current) {
+            return;
+        }
+
         if (lead?.status_config?.blocks_order_create) {
             showModal({ title: 'Không thể tạo đơn', content: 'Trạng thái hiện tại của lead đang chặn thao tác tạo đơn.', type: 'warning' });
             return;
@@ -2795,8 +2913,9 @@ const LeadList = () => {
                     <select
                         value={lead.status_config?.id || ''}
                         title={statusLabel}
+                        disabled={isTrashView}
                         onChange={(event) => handleLeadStatusChange(lead, event.target.value)}
-                        className={`${inputClassName} w-full min-w-0 max-w-full pr-9`}
+                        className={`${inputClassName} w-full min-w-0 max-w-full pr-9 disabled:cursor-not-allowed disabled:bg-primary/5`}
                     >
                         {statuses.map((status) => (
                             <option key={status.id} value={status.id}>{formatStatusLabel(status.name, status.code)}</option>
@@ -2847,10 +2966,11 @@ const LeadList = () => {
         default:
             return renderLeadTableCell(lead, columnId);
         }
-    }, [copiedCellId, expandedBundleIds, handleCopyCellValue, handleToggleBundle, renderLeadTableCell, statuses]);
+    }, [copiedCellId, expandedBundleIds, handleCopyCellValue, handleToggleBundle, isTrashView, renderLeadTableCell, statuses]);
 
     const renderLeadTableColGroupActive = () => (
         <colgroup>
+            <col style={{ width: `${LEAD_SELECT_COLUMN_WIDTH}px`, minWidth: `${LEAD_SELECT_COLUMN_WIDTH}px`, maxWidth: `${LEAD_SELECT_COLUMN_WIDTH}px` }} />
             {renderedColumns.map((column) => {
                 const width = columnWidths[column.id] || column.minWidth;
 
@@ -2869,6 +2989,15 @@ const LeadList = () => {
                     {renderLeadTableColGroupActive()}
                     <thead>
                         <tr className="lead-table-head text-left shadow-sm">
+                            <th className="border-b border-r border-primary/10 bg-[#F0F4F8] px-3 py-3 text-center text-[11px] font-black uppercase tracking-[0.08em] text-primary">
+                                <input
+                                    type="checkbox"
+                                    checked={leads.length > 0 && selectedLeadIds.length === leads.length}
+                                    onChange={toggleSelectAllLeads}
+                                    className="size-4 accent-primary"
+                                    aria-label="Chọn tất cả lead"
+                                />
+                            </th>
                             {renderedColumns.map((column, index) => (
                                 <th
                                     key={column.id}
@@ -2910,28 +3039,42 @@ const LeadList = () => {
                     <tbody>
                         {loading && leads.length === 0 ? (
                             <tr>
-                                <td colSpan={renderedColumns.length || 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
                                     Äang táº£i danh sÃ¡ch lead...
                                 </td>
                             </tr>
                         ) : leads.length === 0 ? (
                             <tr>
-                                <td colSpan={renderedColumns.length || 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
                                     KhÃ´ng tÃ¬m tháº¥y lead phÃ¹ há»£p vá»›i bá»™ lá»c hiá»‡n táº¡i.
                                 </td>
                             </tr>
                         ) : leads.map((lead) => {
                             const detailKey = getLeadDetailKey(lead.id);
                             const isExpanded = expandedBundleIds.has(detailKey);
-                            const highlightClass = highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-white hover:bg-primary/[0.025]';
+                            const highlightClass = selectedLeadIds.includes(lead.id)
+                                ? 'bg-primary/[0.08]'
+                                : highlightedLeadId === lead.id
+                                    ? 'bg-amber-50'
+                                    : 'bg-white hover:bg-primary/[0.025]';
 
                             return (
                                 <React.Fragment key={lead.id}>
                                     <tr
                                         id={`lead-row-${lead.id}`}
                                         className={`align-top transition-all ${highlightClass}`}
-                                        onDoubleClick={() => handleOpenOrderForm(lead)}
+                                        onDoubleClick={() => { if (!isTrashView) handleOpenOrderForm(lead); }}
                                     >
+                                        <td className="border-b border-r border-primary/10 px-3 py-3 align-top text-center">
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedLeadIds.includes(lead.id)}
+                                                onClick={(event) => event.stopPropagation()}
+                                                onChange={() => toggleSelectLead(lead.id)}
+                                                className="size-4 cursor-pointer accent-primary"
+                                                aria-label={`Chọn lead ${lead.lead_number || lead.id}`}
+                                            />
+                                        </td>
                                         {renderedColumns.map((column) => (
                                             <td
                                                 key={`${lead.id}-${column.id}`}
@@ -2944,7 +3087,7 @@ const LeadList = () => {
 
                                     {isExpanded && hasExpandableProductDetails(lead) ? (
                                         <tr className={highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-[#FCFDFE]'}>
-                                            <td id={`lead-product-details-${lead.id}`} colSpan={renderedColumns.length || 1} className="border-b border-primary/10 px-4 pb-4 pt-0">
+                                            <td id={`lead-product-details-${lead.id}`} colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 pb-4 pt-0">
                                                 <LeadExpandedProductsPanel
                                                     lead={lead}
                                                     onCollapse={() => handleToggleBundle(detailKey)}
@@ -3005,20 +3148,24 @@ const LeadList = () => {
                     ) : leads.length === 0 ? (
                         <tr>
                             <td colSpan={renderedColumns.length || 1} className="border border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
-                                Không tìm thấy lead phù hợp với bộ lọc hiện tại.
+                                {isTrashView ? 'Thùng rác lead đang trống.' : 'Không tìm thấy lead phù hợp với bộ lọc hiện tại.'}
                             </td>
                         </tr>
                     ) : leads.map((lead) => {
                         const detailKey = getLeadDetailKey(lead.id);
                         const isExpanded = expandedBundleIds.has(detailKey);
-                        const highlightClass = highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-white hover:bg-primary/[0.025]';
+                            const highlightClass = selectedLeadIds.includes(lead.id)
+                                ? 'bg-primary/[0.08]'
+                                : highlightedLeadId === lead.id
+                                    ? 'bg-amber-50'
+                                    : 'bg-white hover:bg-primary/[0.025]';
 
                         return (
                             <React.Fragment key={lead.id}>
                                 <tr
                                     id={`lead-row-${lead.id}`}
                                     className={`align-top transition-all ${highlightClass}`}
-                                    onDoubleClick={() => handleOpenOrderForm(lead)}
+                                        onDoubleClick={() => { if (!isTrashView) handleOpenOrderForm(lead); }}
                                 >
                                     {renderedColumns.map((column) => (
                                         <td
@@ -3413,6 +3560,70 @@ const LeadList = () => {
                             <button type="button" onClick={handleRefresh} className={iconButtonClassName} title="Làm mới">
                                 <span className="material-symbols-outlined text-[18px]">refresh</span>
                             </button>
+
+                            {!isTrashView ? (
+                                <>
+                                    <button
+                                        type="button"
+                                        onClick={handleMoveSelectedLeadsToTrash}
+                                        disabled={selectedLeadIds.length === 0}
+                                        title="Xóa"
+                                        aria-label="Xóa"
+                                        className={`${iconButtonClassName} ${
+                                            selectedLeadIds.length > 0
+                                                ? 'border-brick/20 text-brick hover:border-brick hover:text-brick'
+                                                : 'cursor-not-allowed opacity-40 hover:border-primary/10 hover:text-primary/70'
+                                        }`}
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">delete</span>
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={openLeadTrashView}
+                                        title="Thùng rác"
+                                        aria-label="Thùng rác"
+                                        className={iconButtonClassName}
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">inventory_2</span>
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <button
+                                        type="button"
+                                        onClick={closeLeadTrashView}
+                                        className={tableToolbarButtonClassName}
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+                                        Danh sách
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={handleRestoreSelectedLeads}
+                                        disabled={selectedLeadIds.length === 0}
+                                        className={`${tableToolbarButtonClassName} ${
+                                            selectedLeadIds.length > 0
+                                                ? 'border-green-600/20 text-green-700 hover:border-green-600 hover:text-green-700'
+                                                : 'cursor-not-allowed opacity-40'
+                                        }`}
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">restore_from_trash</span>
+                                        Khôi phục
+                                    </button>
+
+                                </>
+                            )}
+
+                            {selectedLeadIds.length > 0 ? (
+                                <div className="inline-flex h-10 items-center gap-2 rounded-sm border border-primary/10 bg-white px-3 text-[12px] font-black text-primary/75 shadow-sm">
+                                    <span>{selectedLeadIds.length} chọn</span>
+                                    <button type="button" onClick={() => setSelectedLeadIds([])} className="text-primary/45 transition-all hover:text-brick">
+                                        <span className="material-symbols-outlined text-[16px]">close</span>
+                                    </button>
+                                </div>
+                            ) : null}
                         </div>
 
                         <div className="w-full xl:min-w-0 xl:flex-1">
@@ -3492,7 +3703,7 @@ const LeadList = () => {
                                         className={`border-b border-primary/10 align-top transition-all ${
                                             highlightedLeadId === lead.id ? 'bg-amber-50' : 'bg-white hover:bg-primary/[0.025]'
                                         }`}
-                                        onDoubleClick={() => handleOpenOrderForm(lead)}
+                                        onDoubleClick={() => { if (!isTrashView) handleOpenOrderForm(lead); }}
                                     >
                                         <td className="px-4 py-4 text-[13px] text-[#0F172A]">
                                             <div>{lead.placed_date || '-'}</div>

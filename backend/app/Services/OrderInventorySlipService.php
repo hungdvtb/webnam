@@ -5,6 +5,8 @@ namespace App\Services;
 use App\Models\InventoryBatch;
 use App\Models\InventoryDocument;
 use App\Models\InventoryDocumentItem;
+use App\Models\InventoryDocumentItemOrderLink;
+use App\Models\InventoryDocumentOrderLink;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\Shipment;
@@ -17,6 +19,8 @@ use Illuminate\Validation\ValidationException;
 class OrderInventorySlipService
 {
     private const ACTIVE_STATUSES = ['draft', 'completed'];
+    private const MANAGED_RETURN_SOURCE = 'order_return_reconciliation';
+    private const MANAGED_RETURN_ADJUSTMENT_SOURCE = 'order_return_reconciliation_adjustment';
 
     public function __construct(
         private readonly InventoryService $inventoryService,
@@ -103,7 +107,36 @@ class OrderInventorySlipService
 
     public function applyReturnSlipStateFilter($query, string $state): void
     {
-        $this->applyActiveDocumentSlipStateFilter($query, $state, 'return');
+        $normalizedState = strtolower(trim($state));
+
+        if (!in_array($normalizedState, ['created', 'missing'], true)) {
+            return;
+        }
+
+        $method = $normalizedState === 'created' ? 'whereExists' : 'whereNotExists';
+
+        $query->{$method}(function ($documentQuery) {
+            $documentQuery
+                ->select(DB::raw(1))
+                ->from('inventory_documents')
+                ->leftJoin(
+                    'inventory_document_order_links',
+                    'inventory_document_order_links.inventory_document_id',
+                    '=',
+                    'inventory_documents.id'
+                )
+                ->where('inventory_documents.type', 'return')
+                ->whereIn('inventory_documents.status', self::ACTIVE_STATUSES)
+                ->where(function ($builder) {
+                    $builder
+                        ->where(function ($legacyQuery) {
+                            $legacyQuery
+                                ->where('inventory_documents.reference_type', 'order')
+                                ->whereColumn('inventory_documents.reference_id', 'orders.id');
+                        })
+                        ->orWhereColumn('inventory_document_order_links.order_id', 'orders.id');
+                });
+        });
     }
 
     public function applyDamagedSlipStateFilter($query, string $state): void
@@ -121,6 +154,188 @@ class OrderInventorySlipService
             $this->loadAutomaticExportsForSingleOrder($order),
             true
         );
+    }
+
+    public function previewBatchReturn(array $orderIds, int $accountId): array
+    {
+        $orders = $this->loadBatchOrders($orderIds, $accountId);
+        $this->assertOrdersEligibleForManagedReturn($orders);
+        $this->assertNoManagedReturnConflict($orders, null);
+
+        return $this->buildManagedReturnPreviewPayload($orders, null);
+    }
+
+    public function createBatchReturn(array $payload, int $accountId, ?int $userId = null): array
+    {
+        $orderIds = collect($payload['order_ids'] ?? [])
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $orders = $this->loadBatchOrders($orderIds, $accountId);
+        $this->assertOrdersEligibleForManagedReturn($orders);
+        $this->assertNoManagedReturnConflict($orders, null);
+
+        $document = DB::transaction(function () use ($orders, $payload, $accountId, $userId) {
+            return $this->storeManagedReturnDocument(null, $orders, $payload, $accountId, $userId);
+        });
+
+        return $this->buildManagedReturnDocumentPayload($document);
+    }
+
+    public function getManagedReturnDocumentPayload(InventoryDocument $document): array
+    {
+        $managedDocument = $this->loadManagedReturnDocument($document);
+
+        if (!$this->isManagedReturnDocument($managedDocument)) {
+            throw ValidationException::withMessages([
+                'document' => ['Phieu hoan nay khong thuoc luong doi chieu theo lo.'],
+            ]);
+        }
+
+        return $this->buildManagedReturnDocumentPayload($managedDocument);
+    }
+
+    public function serializeManagedReturnDocumentForInventory(InventoryDocument $document): array
+    {
+        $managedDocument = $this->loadManagedReturnDocument($document);
+        $payload = $this->buildManagedReturnDocumentPayload($managedDocument);
+        $adjustmentDocument = $this->findLinkedAdjustmentDocument($managedDocument);
+
+        return [
+            'id' => (int) $managedDocument->id,
+            'document_number' => $managedDocument->document_number,
+            'type' => $managedDocument->type,
+            'document_date' => optional($managedDocument->document_date)->toDateString(),
+            'supplier_id' => $managedDocument->supplier_id,
+            'notes' => $managedDocument->notes,
+            'batch_group_key' => $managedDocument->batch_group_key,
+            'meta' => $managedDocument->meta,
+            'creator' => $managedDocument->creator,
+            'items' => $managedDocument->items->map(function (InventoryDocumentItem $item) {
+                return [
+                    'id' => (int) $item->id,
+                    'product_id' => (int) $item->product_id,
+                    'product' => $item->product ? [
+                        'id' => (int) $item->product->id,
+                        'sku' => $item->product->sku,
+                        'name' => $item->product->name,
+                    ] : null,
+                    'product_name_snapshot' => $item->product_name_snapshot,
+                    'product_sku_snapshot' => $item->product_sku_snapshot,
+                    'quantity' => (int) $item->quantity,
+                    'stock_bucket' => (string) ($item->stock_bucket ?? 'sellable'),
+                    'direction' => (string) ($item->direction ?? 'in'),
+                    'unit_cost' => (float) ($item->unit_cost ?? 0),
+                    'notes' => $item->notes,
+                    'meta' => $item->meta,
+                ];
+            })->values()->all(),
+            'managed_batch_return' => [
+                ...$payload,
+                'adjustment_document_id' => $adjustmentDocument?->id,
+                'adjustment_document_number' => $adjustmentDocument?->document_number,
+            ],
+        ];
+    }
+
+    public function updateManagedReturnDocument(InventoryDocument $document, array $payload, ?int $userId = null): array
+    {
+        $managedDocument = $this->loadManagedReturnDocument($document);
+
+        if (!$this->isManagedReturnDocument($managedDocument)) {
+            throw ValidationException::withMessages([
+                'document' => ['Phieu hoan nay khong thuoc luong doi chieu theo lo.'],
+            ]);
+        }
+
+        $orders = $managedDocument->orderLinks
+            ->pluck('order')
+            ->filter()
+            ->values();
+
+        if ($orders->isEmpty()) {
+            throw ValidationException::withMessages([
+                'document' => ['Phieu hoan nay khong con lien ket don hang de cap nhat.'],
+            ]);
+        }
+
+        $updated = DB::transaction(function () use ($managedDocument, $orders, $payload, $userId) {
+            $this->assertOrdersEligibleForManagedReturn($orders);
+
+            return $this->storeManagedReturnDocument(
+                $managedDocument,
+                $orders,
+                $payload,
+                (int) $managedDocument->account_id,
+                $userId
+            );
+        });
+
+        return $this->buildManagedReturnDocumentPayload($updated);
+    }
+
+    public function deleteManagedReturnDocument(InventoryDocument $document): void
+    {
+        $managedDocument = $this->loadManagedReturnDocument($document);
+
+        if (!$this->isManagedReturnDocument($managedDocument)) {
+            throw ValidationException::withMessages([
+                'document' => ['Phieu hoan nay khong thuoc luong doi chieu theo lo.'],
+            ]);
+        }
+
+        DB::transaction(function () use ($managedDocument) {
+            $this->ensureReturnSlipCanBeDeleted($managedDocument);
+            $touchedProductIds = $managedDocument->items
+                ->pluck('product_id')
+                ->map(fn ($id) => (int) $id)
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            $adjustmentDocument = $this->findLinkedAdjustmentDocument($managedDocument);
+            if ($adjustmentDocument) {
+                $this->inventoryService->deleteDocument($adjustmentDocument);
+            }
+
+            InventoryBatch::query()
+                ->where('source_type', 'document')
+                ->where('source_id', (int) $managedDocument->id)
+                ->delete();
+
+            InventoryDocumentOrderLink::query()
+                ->where('inventory_document_id', (int) $managedDocument->id)
+                ->delete();
+
+            InventoryDocumentItem::query()
+                ->where('inventory_document_id', (int) $managedDocument->id)
+                ->delete();
+
+            $managedDocument->delete();
+
+            if (!empty($touchedProductIds)) {
+                $this->inventoryService->refreshProducts($touchedProductIds);
+            }
+        });
+    }
+
+    public function isManagedReturnDocument(InventoryDocument $document): bool
+    {
+        if ((string) $document->type !== 'return') {
+            return false;
+        }
+
+        return !empty($document->batch_group_key)
+            || (string) ($document->meta['managed_by'] ?? '') === self::MANAGED_RETURN_SOURCE
+            || ($document->relationLoaded('orderLinks')
+                ? $document->orderLinks->isNotEmpty()
+                : InventoryDocumentOrderLink::query()
+                    ->where('inventory_document_id', (int) $document->id)
+                    ->exists());
     }
 
     private function applyActiveDocumentSlipStateFilter($query, string $state, string $type): void
@@ -178,7 +393,7 @@ class OrderInventorySlipService
 
             if ($items->isEmpty()) {
                 throw ValidationException::withMessages([
-                    'items' => ['Cần nhập ít nhất một dòng sản phẩm có số lượng lớn hơn 0.'],
+                    'items' => ['Can nhap it nhat mot dong san pham co so luong lon hon 0.'],
                 ]);
             }
 
@@ -188,7 +403,7 @@ class OrderInventorySlipService
             foreach ($productIds as $productId) {
                 if (!$orderProducts->has($productId)) {
                     throw ValidationException::withMessages([
-                        'items' => ["Sản phẩm #{$productId} không thuộc đơn hàng này."],
+                        'items' => ["San pham #{$productId} khong thuoc don hang nay."],
                     ]);
                 }
             }
@@ -209,10 +424,10 @@ class OrderInventorySlipService
 
                 if ($item['quantity'] > $availableQuantity) {
                     $label = $this->typeLabel($type);
-                    $productName = $progress['product_name'] ?? "Sản phẩm #{$item['product_id']}";
+                    $productName = $progress['product_name'] ?? "San pham #{$item['product_id']}";
 
                     throw ValidationException::withMessages([
-                        'items' => ["{$productName} chỉ còn {$availableQuantity} đơn vị có thể tạo {$label}."],
+                        'items' => ["{$productName} chi con {$availableQuantity} don vi co the tao {$label}."],
                     ]);
                 }
             }
@@ -238,7 +453,7 @@ class OrderInventorySlipService
 
             if (count($productIds) !== $products->count()) {
                 throw ValidationException::withMessages([
-                    'items' => ['Có sản phẩm không còn tồn tại trong hệ thống.'],
+                    'items' => ['Co san pham khong con ton tai trong he thong.'],
                 ]);
             }
 
@@ -281,7 +496,7 @@ class OrderInventorySlipService
                         'unit_cost' => $unitCost,
                         'status' => 'open',
                         'meta' => [
-                            'source_name' => 'Phiếu hoàn đơn hàng',
+                            'source_name' => 'Phieu hoan don hang',
                             'source_label' => $document->document_number,
                             'document_type' => 'return',
                             'document_item_id' => (int) $documentItem->id,
@@ -389,10 +604,15 @@ class OrderInventorySlipService
         Collection $documents,
         Collection $automaticExports,
         bool $includeDocuments
-    ): array
-    {
-        $orderProducts = $this->aggregateOrderProducts($order);
+    ): array {
+        $orderProducts = $this->appendExtraProductsForOrder(
+            $this->aggregateOrderProducts($order),
+            $documents,
+            (int) $order->id
+        );
+
         $counters = [];
+        $effectiveExportAdjustments = [];
         $automaticExportCounters = [];
         $slipCounts = [
             'export' => (int) $automaticExports->count(),
@@ -413,13 +633,32 @@ class OrderInventorySlipService
         }
 
         foreach ($documents as $document) {
-            if (!array_key_exists($document->type, $slipCounts)) {
+            if (!array_key_exists((string) $document->type, $slipCounts)) {
                 continue;
             }
 
             $slipCounts[$document->type]++;
 
             if (!$this->countsTowardProcessing((string) $document->status)) {
+                continue;
+            }
+
+            if ($document->type === 'return' && $this->isManagedReturnDocument($document)) {
+                foreach ($this->managedReturnLinksForOrder($document, (int) $order->id) as $link) {
+                    $productId = (int) $link->product_id;
+                    if (!isset($counters[$productId])) {
+                        $counters[$productId] = [
+                            'exported' => 0,
+                            'returned' => 0,
+                            'damaged' => 0,
+                        ];
+                    }
+
+                    $counters[$productId]['returned'] += (int) ($link->actual_quantity ?? 0);
+                    $effectiveExportAdjustments[$productId] = (int) ($effectiveExportAdjustments[$productId] ?? 0)
+                        + (int) ($link->export_adjustment_quantity ?? 0);
+                }
+
                 continue;
             }
 
@@ -444,8 +683,9 @@ class OrderInventorySlipService
         }
 
         $products = $orderProducts
-            ->map(function (array $product) use ($counters, $automaticExportCounters) {
-                $counter = $counters[(int) $product['product_id']] ?? [
+            ->map(function (array $product) use ($counters, $effectiveExportAdjustments, $automaticExportCounters) {
+                $productId = (int) $product['product_id'];
+                $counter = $counters[$productId] ?? [
                     'exported' => 0,
                     'returned' => 0,
                     'damaged' => 0,
@@ -453,26 +693,32 @@ class OrderInventorySlipService
 
                 $requiredQuantity = (int) $product['required_quantity'];
                 $manualExportedQuantity = (int) $counter['exported'];
-                $automaticExportedQuantity = (int) ($automaticExportCounters[(int) $product['product_id']] ?? 0);
-                $exportedQuantity = max($manualExportedQuantity, $automaticExportedQuantity);
+                $automaticExportedQuantity = (int) ($automaticExportCounters[$productId] ?? 0);
+                $baseExportedQuantity = max($manualExportedQuantity, $automaticExportedQuantity);
+                $exportAdjustmentQuantity = (int) ($effectiveExportAdjustments[$productId] ?? 0);
+                $exportedQuantity = max(0, $baseExportedQuantity + $exportAdjustmentQuantity);
                 $returnedQuantity = (int) $counter['returned'];
                 $damagedQuantity = (int) $counter['damaged'];
                 $remainingQuantity = max(0, $requiredQuantity - $exportedQuantity);
                 $reversibleQuantity = max(0, $exportedQuantity - $returnedQuantity - $damagedQuantity);
 
                 return [
-                    'product_id' => (int) $product['product_id'],
+                    'product_id' => $productId,
                     'product_name' => $product['product_name'],
                     'product_sku' => $product['product_sku'],
                     'required_quantity' => $requiredQuantity,
                     'manual_exported_quantity' => $manualExportedQuantity,
                     'automatic_exported_quantity' => $automaticExportedQuantity,
+                    'base_exported_quantity' => $baseExportedQuantity,
+                    'export_adjustment_quantity' => $exportAdjustmentQuantity,
                     'exported_quantity' => $exportedQuantity,
                     'returned_quantity' => $returnedQuantity,
                     'damaged_quantity' => $damagedQuantity,
                     'remaining_quantity' => $remainingQuantity,
                     'exportable_quantity' => $remainingQuantity,
                     'reversible_quantity' => $reversibleQuantity,
+                    'discrepancy_quantity' => $exportAdjustmentQuantity,
+                    'discrepancy_state' => $exportAdjustmentQuantity === 0 ? 'matched' : 'mismatch',
                 ];
             })
             ->values();
@@ -482,6 +728,7 @@ class OrderInventorySlipService
         $returnedQuantity = (int) $products->sum('returned_quantity');
         $damagedQuantity = (int) $products->sum('damaged_quantity');
         $remainingQuantity = max(0, $requiredQuantity - $exportedQuantity);
+        $discrepancyQuantity = (int) $products->sum('discrepancy_quantity');
 
         $summary = $this->buildSummaryPayload(
             $requiredQuantity,
@@ -489,6 +736,7 @@ class OrderInventorySlipService
             $returnedQuantity,
             $damagedQuantity,
             $remainingQuantity,
+            $discrepancyQuantity,
             $slipCounts
         );
 
@@ -512,7 +760,7 @@ class OrderInventorySlipService
         }
 
         $timeline = $documents
-            ->map(fn (InventoryDocument $document) => $this->normalizeDocument($document))
+            ->map(fn (InventoryDocument $document) => $this->normalizeDocumentForOrder($document, (int) $order->id))
             ->concat($automaticExports)
             ->sortByDesc(function (array $document) {
                 return (string) ($document['sort_key'] ?? sprintf(
@@ -539,6 +787,7 @@ class OrderInventorySlipService
         int $returnedQuantity,
         int $damagedQuantity,
         int $remainingQuantity,
+        int $discrepancyQuantity,
         array $slipCounts
     ): array {
         $state = $slipCounts['export'] === 0
@@ -546,9 +795,9 @@ class OrderInventorySlipService
             : ($remainingQuantity > 0 ? 'partial' : 'fulfilled');
 
         [$label, $tone] = match ($state) {
-            'fulfilled' => ['Xuất đủ', 'emerald'],
-            'partial' => ['Xuất thiếu', 'amber'],
-            default => ['Chưa tạo phiếu', 'slate'],
+            'fulfilled' => ['Xuat du', 'emerald'],
+            'partial' => ['Xuat thieu', 'amber'],
+            default => ['Chua tao phieu', 'slate'],
         };
 
         return [
@@ -560,18 +809,19 @@ class OrderInventorySlipService
             'returned_quantity' => $returnedQuantity,
             'damaged_quantity' => $damagedQuantity,
             'remaining_quantity' => $remainingQuantity,
+            'discrepancy_quantity' => $discrepancyQuantity,
             'export_slip_count' => (int) ($slipCounts['export'] ?? 0),
             'return_slip_count' => (int) ($slipCounts['return'] ?? 0),
             'damaged_slip_count' => (int) ($slipCounts['damaged'] ?? 0),
             'has_return' => (int) ($slipCounts['return'] ?? 0) > 0,
             'has_damaged' => (int) ($slipCounts['damaged'] ?? 0) > 0,
             'quick_summary' => sprintf(
-                'Cần %d • Xuất %d • Thiếu %d • Hoàn %d • Hỏng %d',
+                'Can %d • Xuat %d • Hoan %d • Hong %d • Lech %d',
                 $requiredQuantity,
                 $exportedQuantity,
-                $remainingQuantity,
                 $returnedQuantity,
-                $damagedQuantity
+                $damagedQuantity,
+                $discrepancyQuantity
             ),
         ];
     }
@@ -589,7 +839,7 @@ class OrderInventorySlipService
 
                 $current = $carry->get($productId, [
                     'product_id' => $productId,
-                    'product_name' => $item->product_name_snapshot ?: "Sản phẩm #{$productId}",
+                    'product_name' => $item->product_name_snapshot ?: "San pham #{$productId}",
                     'product_sku' => $item->product_sku_snapshot,
                     'required_quantity' => 0,
                     'ordered_revenue_total' => 0,
@@ -618,6 +868,40 @@ class OrderInventorySlipService
 
                 return $item;
             })
+            ->values()
+            ->keyBy('product_id');
+    }
+
+    private function appendExtraProductsForOrder(Collection $orderProducts, Collection $documents, int $orderId): Collection
+    {
+        $nextSortOrder = $orderProducts->count();
+
+        $documents
+            ->filter(fn (InventoryDocument $document) => $document->type === 'return' && $this->isManagedReturnDocument($document))
+            ->each(function (InventoryDocument $document) use (&$orderProducts, $orderId, &$nextSortOrder) {
+                foreach ($this->managedReturnLinksForOrder($document, $orderId) as $link) {
+                    $productId = (int) $link->product_id;
+                    if ($productId <= 0 || $orderProducts->has($productId)) {
+                        continue;
+                    }
+
+                    $item = $link->item;
+                    $orderProducts->put($productId, [
+                        'product_id' => $productId,
+                        'product_name' => $item?->product_name_snapshot ?: "San pham #{$productId}",
+                        'product_sku' => $item?->product_sku_snapshot,
+                        'required_quantity' => 0,
+                        'ordered_revenue_total' => 0,
+                        'ordered_cost_total' => 0,
+                        'ordered_unit_price' => 0,
+                        'ordered_unit_cost' => round((float) ($item?->unit_cost ?? 0), 2),
+                        'sort_order' => $nextSortOrder++,
+                    ]);
+                }
+            });
+
+        return $orderProducts
+            ->sortBy('sort_order')
             ->values()
             ->keyBy('product_id');
     }
@@ -721,14 +1005,15 @@ class OrderInventorySlipService
             'document_date' => optional($documentDate)?->toISOString(),
             'created_at' => optional($shipment->created_at)?->toISOString(),
             'status' => 'completed',
-            'status_label' => 'Đã xuất',
+            'status_label' => 'Da xuat',
             'status_tone' => 'emerald',
-            'notes' => $this->buildAutomaticExportNotes('Tự tạo từ vận chuyển', $trackingNumber, $carrierName),
+            'notes' => $this->buildAutomaticExportNotes('Tu tao tu van chuyen', $trackingNumber, $carrierName),
             'created_by_name' => null,
             'total_quantity' => (int) $items->sum('quantity'),
             'items' => $items->all(),
             'can_delete' => false,
-            'source_label' => 'Tự tạo từ vận chuyển',
+            'can_edit' => false,
+            'source_label' => 'Tu tao tu van chuyen',
             'source_kind' => 'shipment_auto',
         ];
     }
@@ -747,7 +1032,7 @@ class OrderInventorySlipService
         $trackingNumber = trim((string) $order->shipping_tracking_code);
         $carrierName = trim((string) $order->shipping_carrier_name);
         $isManualExportOrder = (string) $order->type === 'inventory_export';
-        $sourceLabel = $isManualExportOrder ? 'Phiếu xuất kho tạo tay' : 'Tự tạo từ vận chuyển';
+        $sourceLabel = $isManualExportOrder ? 'Phieu xuat kho tao tay' : 'Tu tao tu van chuyen';
         $documentDate = $order->shipping_dispatched_at ?: $order->created_at;
 
         return [
@@ -763,13 +1048,14 @@ class OrderInventorySlipService
             'document_date' => optional($documentDate)?->toISOString(),
             'created_at' => optional($order->updated_at ?: $order->created_at)?->toISOString(),
             'status' => 'completed',
-            'status_label' => 'Đã xuất',
+            'status_label' => 'Da xuat',
             'status_tone' => 'emerald',
             'notes' => $this->buildAutomaticExportNotes($sourceLabel, $trackingNumber, $carrierName),
             'created_by_name' => null,
             'total_quantity' => (int) $items->sum('quantity'),
             'items' => $items->all(),
             'can_delete' => false,
+            'can_edit' => false,
             'source_label' => $sourceLabel,
             'source_kind' => $isManualExportOrder ? 'legacy_manual_export' : 'legacy_tracking_export',
         ];
@@ -826,7 +1112,7 @@ class OrderInventorySlipService
         return [
             'id' => $id,
             'product_id' => (int) ($orderItem->product_id ?? 0),
-            'product_name' => $orderItem->product_name_snapshot ?: "Sản phẩm #{$orderItem->product_id}",
+            'product_name' => $orderItem->product_name_snapshot ?: "San pham #{$orderItem->product_id}",
             'product_sku' => $orderItem->product_sku_snapshot,
             'quantity' => $quantity,
             'unit_cost' => $unitCost,
@@ -847,10 +1133,10 @@ class OrderInventorySlipService
     {
         $parts = [$sourceLabel];
         if ($trackingNumber !== '') {
-            $parts[] = 'Mã vận đơn: ' . $trackingNumber;
+            $parts[] = 'Ma van don: ' . $trackingNumber;
         }
         if ($carrierName !== '') {
-            $parts[] = 'Đơn vị: ' . $carrierName;
+            $parts[] = 'Don vi: ' . $carrierName;
         }
 
         $parts = array_values(array_filter($parts, fn ($value) => trim((string) $value) !== ''));
@@ -872,12 +1158,27 @@ class OrderInventorySlipService
             return collect();
         }
 
-        return InventoryDocument::query()
-            ->where('reference_type', 'order')
-            ->whereIn('reference_id', $orderIds)
+        $documents = InventoryDocument::query()
             ->whereIn('type', ['export', 'return', 'damaged'])
             ->whereIn('status', self::ACTIVE_STATUSES)
+            ->where(function ($query) use ($orderIds) {
+                $query
+                    ->where(function ($legacyQuery) use ($orderIds) {
+                        $legacyQuery
+                            ->where('reference_type', 'order')
+                            ->whereIn('reference_id', $orderIds);
+                    })
+                    ->orWhereExists(function ($linkQuery) use ($orderIds) {
+                        $linkQuery
+                            ->select(DB::raw(1))
+                            ->from('inventory_document_order_links')
+                            ->whereColumn('inventory_document_order_links.inventory_document_id', 'inventory_documents.id')
+                            ->whereIn('inventory_document_order_links.order_id', $orderIds);
+                    });
+            })
             ->with([
+                'creator:id,name',
+                'orderLinks.order:id,order_number,customer_name,customer_phone',
                 'items' => function ($query) {
                     $query
                         ->select([
@@ -887,30 +1188,73 @@ class OrderInventorySlipService
                             'product_name_snapshot',
                             'product_sku_snapshot',
                             'quantity',
+                            'stock_bucket',
+                            'direction',
                             'unit_cost',
                             'total_cost',
                             'unit_price',
                             'total_price',
                             'notes',
+                            'meta',
+                        ])
+                        ->with([
+                            'product:id,sku,name',
+                            'orderLinks.order:id,order_number,customer_name',
                         ])
                         ->orderBy('id');
                 },
             ])
             ->orderBy('document_date')
             ->orderBy('id')
-            ->get()
-            ->groupBy(fn (InventoryDocument $document) => (int) $document->reference_id);
+            ->get();
+
+        $map = collect();
+
+        foreach ($documents as $document) {
+            $targetOrderIds = collect();
+
+            if ((string) $document->reference_type === 'order' && in_array((int) $document->reference_id, $orderIds, true)) {
+                $targetOrderIds->push((int) $document->reference_id);
+            }
+
+            foreach ($document->orderLinks as $link) {
+                if (in_array((int) $link->order_id, $orderIds, true)) {
+                    $targetOrderIds->push((int) $link->order_id);
+                }
+            }
+
+            foreach ($targetOrderIds->unique() as $orderId) {
+                $existing = $map->get($orderId, collect());
+                $map->put($orderId, $existing->push($document)->unique('id')->values());
+            }
+        }
+
+        return $map;
     }
 
     private function loadDocumentsForSingleOrder(Order $order): Collection
     {
-        return InventoryDocument::query()
-            ->where('reference_type', 'order')
-            ->where('reference_id', (int) $order->id)
+        $documents = InventoryDocument::query()
             ->whereIn('type', ['export', 'return', 'damaged'])
             ->whereIn('status', self::ACTIVE_STATUSES)
+            ->where(function ($query) use ($order) {
+                $query
+                    ->where(function ($legacyQuery) use ($order) {
+                        $legacyQuery
+                            ->where('reference_type', 'order')
+                            ->where('reference_id', (int) $order->id);
+                    })
+                    ->orWhereExists(function ($linkQuery) use ($order) {
+                        $linkQuery
+                            ->select(DB::raw(1))
+                            ->from('inventory_document_order_links')
+                            ->whereColumn('inventory_document_order_links.inventory_document_id', 'inventory_documents.id')
+                            ->where('inventory_document_order_links.order_id', (int) $order->id);
+                    });
+            })
             ->with([
                 'creator:id,name',
+                'orderLinks.order:id,order_number,customer_name,customer_phone',
                 'items' => function ($query) {
                     $query
                         ->select([
@@ -920,28 +1264,56 @@ class OrderInventorySlipService
                             'product_name_snapshot',
                             'product_sku_snapshot',
                             'quantity',
+                            'stock_bucket',
+                            'direction',
                             'unit_cost',
                             'total_cost',
                             'unit_price',
                             'total_price',
                             'notes',
+                            'meta',
                         ])
-                        ->with('product:id,sku,name')
+                        ->with([
+                            'product:id,sku,name',
+                            'orderLinks.order:id,order_number,customer_name',
+                        ])
                         ->orderBy('id');
                 },
             ])
             ->orderByDesc('document_date')
             ->orderByDesc('id')
             ->get();
+
+        return $documents->unique('id')->values();
     }
 
-    private function normalizeDocument(InventoryDocument $document): array
+    private function normalizeDocumentForOrder(InventoryDocument $document, int $orderId): array
     {
         [$statusLabel, $statusTone] = match ((string) $document->status) {
-            'draft' => ['Nháp', 'amber'],
-            'canceled' => ['Đã hủy', 'slate'],
-            default => ['Hoàn tất', 'emerald'],
+            'draft' => ['Nhap', 'amber'],
+            'canceled' => ['Da huy', 'slate'],
+            default => ['Hoan tat', 'emerald'],
         };
+
+        $isManagedReturn = $document->type === 'return' && $this->isManagedReturnDocument($document);
+        $items = $isManagedReturn
+            ? $this->normalizeManagedReturnItemsForOrder($document, $orderId)
+            : $document->items->map(function (InventoryDocumentItem $item) {
+                return [
+                    'id' => (int) $item->id,
+                    'product_id' => (int) $item->product_id,
+                    'product_name' => $item->product_name_snapshot ?: $item->product?->name ?: "San pham #{$item->product_id}",
+                    'product_sku' => $item->product_sku_snapshot ?: $item->product?->sku,
+                    'quantity' => (int) $item->quantity,
+                    'unit_cost' => (float) ($item->unit_cost ?? 0),
+                    'total_cost' => (float) ($item->total_cost ?? 0),
+                    'unit_price' => $item->unit_price !== null ? (float) $item->unit_price : null,
+                    'total_price' => $item->total_price !== null ? (float) $item->total_price : null,
+                    'notes' => $item->notes,
+                ];
+            })->values();
+
+        $adjustmentDocument = $isManagedReturn ? $this->findLinkedAdjustmentDocument($document) : null;
 
         return [
             'id' => (int) $document->id,
@@ -960,24 +1332,72 @@ class OrderInventorySlipService
             'status_tone' => $statusTone,
             'notes' => $document->notes,
             'created_by_name' => $document->creator?->name,
-            'total_quantity' => (int) ($document->total_quantity ?: $document->items->sum('quantity')),
-            'can_delete' => true,
-            'source_label' => null,
-            'items' => $document->items->map(function (InventoryDocumentItem $item) {
-                return [
-                    'id' => (int) $item->id,
-                    'product_id' => (int) $item->product_id,
-                    'product_name' => $item->product_name_snapshot ?: $item->product?->name ?: "Sản phẩm #{$item->product_id}",
-                    'product_sku' => $item->product_sku_snapshot ?: $item->product?->sku,
-                    'quantity' => (int) $item->quantity,
-                    'unit_cost' => (float) ($item->unit_cost ?? 0),
-                    'total_cost' => (float) ($item->total_cost ?? 0),
-                    'unit_price' => $item->unit_price !== null ? (float) $item->unit_price : null,
-                    'total_price' => $item->total_price !== null ? (float) $item->total_price : null,
-                    'notes' => $item->notes,
-                ];
-            })->values()->all(),
+            'total_quantity' => (int) $items->sum('quantity'),
+            'can_delete' => !$isManagedReturn,
+            'can_edit' => $isManagedReturn,
+            'is_batch_return' => $isManagedReturn,
+            'batch_group_key' => $document->batch_group_key,
+            'discrepancy_quantity' => $isManagedReturn
+                ? (int) $items->sum('discrepancy_quantity')
+                : 0,
+            'adjustment_document_id' => $adjustmentDocument?->id,
+            'adjustment_document_number' => $adjustmentDocument?->document_number,
+            'source_label' => $isManagedReturn && $document->orderLinks->count() > 1
+                ? 'Phieu hoan theo lo'
+                : null,
+            'items' => $items->all(),
         ];
+    }
+
+    private function normalizeManagedReturnItemsForOrder(InventoryDocument $document, int $orderId): Collection
+    {
+        return $document->items
+            ->flatMap(function (InventoryDocumentItem $item) use ($orderId) {
+                return $item->orderLinks
+                    ->filter(function (InventoryDocumentItemOrderLink $link) use ($orderId) {
+                        return (int) $link->order_id === $orderId
+                            && (
+                                (int) ($link->actual_quantity ?? 0) > 0
+                                || (int) ($link->exported_quantity ?? 0) > 0
+                                || (int) ($link->export_adjustment_quantity ?? 0) !== 0
+                            );
+                    })
+                    ->map(function (InventoryDocumentItemOrderLink $link) use ($item) {
+                        $actualQuantity = (int) ($link->actual_quantity ?? 0);
+                        $exportedQuantity = (int) ($link->exported_quantity ?? 0);
+                        $discrepancyQuantity = (int) ($link->export_adjustment_quantity ?? 0);
+                        $unitCost = round((float) ($item->unit_cost ?? 0), 2);
+                        $unitPrice = $item->unit_price !== null ? round((float) $item->unit_price, 2) : null;
+
+                        return [
+                            'id' => (int) $item->id . ':' . (int) $link->id,
+                            'product_id' => (int) $item->product_id,
+                            'product_name' => $item->product_name_snapshot ?: $item->product?->name ?: "San pham #{$item->product_id}",
+                            'product_sku' => $item->product_sku_snapshot ?: $item->product?->sku,
+                            'quantity' => $actualQuantity,
+                            'unit_cost' => $unitCost,
+                            'total_cost' => round($unitCost * $actualQuantity, 2),
+                            'unit_price' => $unitPrice,
+                            'total_price' => $unitPrice !== null ? round($unitPrice * $actualQuantity, 2) : null,
+                            'notes' => $item->notes,
+                            'exported_quantity_snapshot' => $exportedQuantity,
+                            'discrepancy_quantity' => $discrepancyQuantity,
+                            'adjusted_exported_quantity' => max(0, $exportedQuantity + $discrepancyQuantity),
+                            'is_extra_product' => $exportedQuantity === 0 && $actualQuantity > 0,
+                        ];
+                    });
+            })
+            ->values();
+    }
+
+    private function managedReturnLinksForOrder(InventoryDocument $document, int $orderId): Collection
+    {
+        return $document->items
+            ->flatMap(function (InventoryDocumentItem $item) use ($orderId) {
+                return $item->orderLinks
+                    ->filter(fn (InventoryDocumentItemOrderLink $link) => (int) $link->order_id === $orderId);
+            })
+            ->values();
     }
 
     private function countsTowardProcessing(string $status): bool
@@ -1003,7 +1423,7 @@ class OrderInventorySlipService
 
         if ($invalidProduct) {
             throw ValidationException::withMessages([
-                'document' => ["Không thể xóa phiếu xuất vì {$invalidProduct['product_name']} đang có phiếu hoàn/hỏng phụ thuộc vào số lượng đã xuất."],
+                'document' => ["Khong the xoa phieu xuat vi {$invalidProduct['product_name']} dang co phieu hoan/hong phu thuoc vao so luong da xuat."],
             ]);
         }
     }
@@ -1020,7 +1440,7 @@ class OrderInventorySlipService
         foreach ($batches as $batch) {
             if ((int) $batch->remaining_quantity !== (int) $batch->quantity || (int) $batch->allocations_count > 0 || (int) $batch->document_allocations_count > 0) {
                 throw ValidationException::withMessages([
-                    'document' => ['Phiếu hoàn này đã phát sinh luồng kho tiếp theo nên không thể xóa.'],
+                    'document' => ['Phieu hoan nay da phat sinh luong kho tiep theo nen khong the xoa hoac sua.'],
                 ]);
             }
         }
@@ -1050,7 +1470,7 @@ class OrderInventorySlipService
 
             if ((int) ($product->damaged_quantity ?? 0) < (int) $item->quantity) {
                 throw ValidationException::withMessages([
-                    'document' => ["Không thể xóa phiếu hỏng vì {$product->sku} - {$product->name} đã được xử lý tiếp trong tồn hỏng."],
+                    'document' => ["Khong the xoa phieu hong vi {$product->sku} - {$product->name} da duoc xu ly tiep trong ton hong."],
                 ]);
             }
         }
@@ -1076,7 +1496,7 @@ class OrderInventorySlipService
 
         if (!in_array($normalized, ['export', 'return', 'damaged'], true)) {
             throw ValidationException::withMessages([
-                'type' => ['Loại phiếu kho không hợp lệ.'],
+                'type' => ['Loai phieu kho khong hop le.'],
             ]);
         }
 
@@ -1096,10 +1516,10 @@ class OrderInventorySlipService
     private function typeLabel(string $type): string
     {
         return match ($type) {
-            'export' => 'phiếu xuất',
-            'return' => 'phiếu hoàn',
-            'damaged' => 'phiếu hỏng',
-            default => 'phiếu kho',
+            'export' => 'phieu xuat',
+            'return' => 'phieu hoan',
+            'damaged' => 'phieu hong',
+            default => 'phieu kho',
         };
     }
 
@@ -1130,5 +1550,718 @@ class OrderInventorySlipService
     private function generateLotNumber(string $referenceNumber, int $lineNumber): string
     {
         return strtoupper(sprintf('LO-%s-%02d', $referenceNumber, $lineNumber));
+    }
+
+    private function loadBatchOrders(array $orderIds, int $accountId): Collection
+    {
+        if (empty($orderIds)) {
+            throw ValidationException::withMessages([
+                'order_ids' => ['Can chon it nhat mot don hang de tao phieu hoan theo lo.'],
+            ]);
+        }
+
+        $orders = Order::query()
+            ->when($accountId > 0, fn ($query) => $query->where('account_id', $accountId))
+            ->whereIn('id', $orderIds)
+            ->with('items')
+            ->get()
+            ->sortBy(function (Order $order) use ($orderIds) {
+                return array_search((int) $order->id, $orderIds, true);
+            })
+            ->values();
+
+        if ($orders->count() !== count(array_unique($orderIds))) {
+            throw ValidationException::withMessages([
+                'order_ids' => ['Co don hang khong ton tai hoac khong thuoc tai khoan hien tai.'],
+            ]);
+        }
+
+        return $orders;
+    }
+
+    private function assertOrdersEligibleForManagedReturn(Collection $orders): void
+    {
+        $invalidOrder = $orders->first(function (Order $order) {
+            return !((string) ($order->order_kind ?: Order::KIND_OFFICIAL) === Order::KIND_OFFICIAL);
+        });
+
+        if ($invalidOrder) {
+            throw ValidationException::withMessages([
+                'order_ids' => ["Don {$invalidOrder->order_number} khong thuoc nhom don chinh de lap phieu hoan theo lo."],
+            ]);
+        }
+    }
+
+    private function assertNoManagedReturnConflict(Collection $orders, ?int $excludingDocumentId): void
+    {
+        $orderIds = $orders->pluck('id')->map(fn ($id) => (int) $id)->values()->all();
+
+        $conflict = InventoryDocument::query()
+            ->where('type', 'return')
+            ->whereIn('status', self::ACTIVE_STATUSES)
+            ->whereNotNull('batch_group_key')
+            ->when($excludingDocumentId, fn ($query) => $query->whereKeyNot($excludingDocumentId))
+            ->where(function ($query) use ($orderIds) {
+                $query
+                    ->where(function ($legacyQuery) use ($orderIds) {
+                        $legacyQuery
+                            ->where('reference_type', 'order')
+                            ->whereIn('reference_id', $orderIds);
+                    })
+                    ->orWhereExists(function ($linkQuery) use ($orderIds) {
+                        $linkQuery
+                            ->select(DB::raw(1))
+                            ->from('inventory_document_order_links')
+                            ->whereColumn('inventory_document_order_links.inventory_document_id', 'inventory_documents.id')
+                            ->whereIn('inventory_document_order_links.order_id', $orderIds);
+                    });
+            })
+            ->orderByDesc('id')
+            ->first();
+
+        if ($conflict) {
+            throw ValidationException::withMessages([
+                'order_ids' => ["Da ton tai phieu hoan doi chieu {$conflict->document_number} cho mot trong cac don da chon. Hay sua phieu nay thay vi tao moi."],
+            ]);
+        }
+    }
+
+    private function buildManagedReturnPreviewPayload(Collection $orders, ?int $excludingDocumentId): array
+    {
+        $sourceContext = $this->buildManagedReturnSourceContext($orders, $excludingDocumentId);
+
+        $products = collect($sourceContext['products'])
+            ->map(function (array $row) {
+                return [
+                    'product_id' => (int) $row['product_id'],
+                    'product_name' => $row['product_name'],
+                    'product_sku' => $row['product_sku'],
+                    'exported_quantity' => (int) $row['exported_quantity'],
+                    'actual_quantity' => (int) $row['exported_quantity'],
+                    'discrepancy_quantity' => 0,
+                    'notes' => '',
+                    'is_extra_product' => false,
+                    'can_remove' => false,
+                    'order_breakdown' => $row['order_breakdown'],
+                ];
+            })
+            ->values();
+
+        return [
+            'document' => [
+                'id' => null,
+                'document_number' => null,
+                'batch_group_key' => null,
+                'document_date' => now()->toDateString(),
+                'notes' => '',
+                'adjustment_document_id' => null,
+                'adjustment_document_number' => null,
+            ],
+            'orders' => $sourceContext['orders'],
+            'summary' => [
+                'order_count' => $orders->count(),
+                'exported_quantity' => (int) $products->sum('exported_quantity'),
+                'actual_quantity' => (int) $products->sum('actual_quantity'),
+                'discrepancy_quantity' => 0,
+                'discrepancy_abs_quantity' => 0,
+            ],
+            'products' => $products->all(),
+        ];
+    }
+
+    private function buildManagedReturnSourceContext(Collection $orders, ?int $excludingDocumentId): array
+    {
+        $productMap = [];
+        $orderPayloads = [];
+
+        foreach ($orders as $order) {
+            $orderProducts = $this->aggregateOrderProducts($order);
+            $documents = $this->loadDocumentsForSingleOrder($order)
+                ->reject(fn (InventoryDocument $document) => $excludingDocumentId !== null && (int) $document->id === $excludingDocumentId)
+                ->values();
+
+            $detail = $this->buildDetailPayload(
+                $order,
+                $documents,
+                $this->loadAutomaticExportsForSingleOrder($order),
+                false
+            );
+
+            $orderPayloads[] = [
+                'id' => (int) $order->id,
+                'order_number' => $order->order_number,
+                'customer_name' => $order->customer_name,
+                'customer_phone' => $order->customer_phone,
+            ];
+
+            foreach ($detail['products'] as $product) {
+                $productId = (int) ($product['product_id'] ?? 0);
+                $exportedQuantity = (int) ($product['base_exported_quantity'] ?? $product['exported_quantity'] ?? 0);
+                $orderProduct = $orderProducts->get($productId, []);
+                if ($productId <= 0 || $exportedQuantity <= 0) {
+                    continue;
+                }
+
+                if (!isset($productMap[$productId])) {
+                    $productMap[$productId] = [
+                        'product_id' => $productId,
+                        'product_name' => $product['product_name'],
+                        'product_sku' => $product['product_sku'],
+                        'exported_quantity' => 0,
+                        'order_breakdown' => [],
+                    ];
+                }
+
+                $productMap[$productId]['exported_quantity'] += $exportedQuantity;
+                $productMap[$productId]['order_breakdown'][] = [
+                    'order_id' => (int) $order->id,
+                    'order_number' => $order->order_number,
+                    'customer_name' => $order->customer_name,
+                    'exported_quantity' => $exportedQuantity,
+                    'actual_quantity' => 0,
+                    'discrepancy_quantity' => 0,
+                    'unit_cost' => round((float) ($orderProduct['ordered_unit_cost'] ?? 0), 2),
+                    'unit_price' => round((float) ($orderProduct['ordered_unit_price'] ?? 0), 2),
+                ];
+            }
+        }
+
+        return [
+            'orders' => $orderPayloads,
+            'products' => collect($productMap)
+                ->sortBy(fn (array $row) => mb_strtolower((string) ($row['product_name'] ?? '')))
+                ->values()
+                ->all(),
+        ];
+    }
+
+    private function storeManagedReturnDocument(
+        ?InventoryDocument $document,
+        Collection $orders,
+        array $payload,
+        int $accountId,
+        ?int $userId
+    ): InventoryDocument {
+        $orders = $orders->values();
+        $excludingDocumentId = $document?->id ? (int) $document->id : null;
+
+        if ($document === null) {
+            $this->assertNoManagedReturnConflict($orders, null);
+        }
+
+        $sourceContext = $this->buildManagedReturnSourceContext($orders, $excludingDocumentId);
+        $normalizedItems = $this->normalizeManagedReturnItems(
+            $payload,
+            $sourceContext['products'],
+            $sourceContext['orders']
+        );
+
+        if ($normalizedItems->isEmpty()) {
+            throw ValidationException::withMessages([
+                'items' => ['Can nhap it nhat mot san pham hoan co so luong lon hon 0.'],
+            ]);
+        }
+
+        $documentDate = Carbon::parse($payload['document_date'] ?? now());
+        $selectedOrders = collect($sourceContext['orders']);
+
+        if ($document !== null) {
+            $this->ensureReturnSlipCanBeDeleted($document);
+
+            $existingAdjustmentDocument = $this->findLinkedAdjustmentDocument($document);
+            if ($existingAdjustmentDocument) {
+                $this->inventoryService->deleteDocument($existingAdjustmentDocument);
+            }
+
+            InventoryBatch::query()
+                ->where('source_type', 'document')
+                ->where('source_id', (int) $document->id)
+                ->delete();
+
+            InventoryDocumentItem::query()
+                ->where('inventory_document_id', (int) $document->id)
+                ->delete();
+
+            InventoryDocumentOrderLink::query()
+                ->where('inventory_document_id', (int) $document->id)
+                ->delete();
+        }
+
+        if ($document === null) {
+            $referenceType = $orders->count() === 1 ? 'order' : 'order_batch';
+            $document = InventoryDocument::create([
+                'account_id' => $accountId,
+                'document_number' => $this->generateDocumentNumber('return', $accountId),
+                'type' => 'return',
+                'document_date' => $documentDate->toDateString(),
+                'status' => 'completed',
+                'reference_type' => $referenceType,
+                'reference_id' => (int) ($orders->first()?->id ?? 0) ?: null,
+                'notes' => $payload['notes'] ?? null,
+                'meta' => [
+                    'managed_by' => self::MANAGED_RETURN_SOURCE,
+                    'mode' => 'batch_return',
+                ],
+                'created_by' => $userId,
+            ]);
+
+            $document->batch_group_key = 'BTH-' . $document->document_number;
+            $document->save();
+        } else {
+            $document->forceFill([
+                'document_date' => $documentDate->toDateString(),
+                'notes' => $payload['notes'] ?? null,
+                'reference_type' => $orders->count() === 1 ? 'order' : 'order_batch',
+                'reference_id' => (int) ($orders->first()?->id ?? 0) ?: null,
+                'meta' => array_merge((array) ($document->meta ?? []), [
+                    'managed_by' => self::MANAGED_RETURN_SOURCE,
+                    'mode' => 'batch_return',
+                ]),
+            ])->save();
+        }
+
+        $this->syncManagedReturnOrderLinks($document, $selectedOrders, $accountId);
+
+        $productIds = $normalizedItems
+            ->pluck('product_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $products = Product::query()
+            ->whereIn('id', $productIds)
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('id');
+
+        if (count($productIds) !== $products->count()) {
+            throw ValidationException::withMessages([
+                'items' => ['Co san pham khong con ton tai trong he thong.'],
+            ]);
+        }
+
+        $touchedProductIds = [];
+
+        foreach ($normalizedItems->values() as $index => $item) {
+            $product = $products->get((int) $item['product_id']);
+            $actualQuantity = (int) $item['actual_quantity'];
+            $unitCostDraft = (float) ($item['unit_cost'] ?? 0);
+            $unitPriceDraft = (float) ($item['unit_price'] ?? 0);
+            $unitCost = round($unitCostDraft > 0 ? $unitCostDraft : (float) ($product->cost_price ?? $product->expected_cost ?? 0), 2);
+            $unitPrice = round($unitPriceDraft > 0 ? $unitPriceDraft : (float) ($product->price ?? 0), 2);
+            $discrepancyQuantity = (int) $item['discrepancy_quantity'];
+            $orderBreakdown = collect($item['order_breakdown'] ?? []);
+
+            $documentItem = InventoryDocumentItem::create([
+                'account_id' => $accountId,
+                'inventory_document_id' => (int) $document->id,
+                'product_id' => (int) $product->id,
+                'product_name_snapshot' => $item['product_name'] ?: $product->name,
+                'product_sku_snapshot' => $item['product_sku'] ?: $product->sku,
+                'quantity' => $actualQuantity,
+                'stock_bucket' => 'sellable',
+                'direction' => 'in',
+                'unit_cost' => $unitCost,
+                'total_cost' => round($unitCost * $actualQuantity, 2),
+                'unit_price' => $unitPrice,
+                'total_price' => round($unitPrice * $actualQuantity, 2),
+                'notes' => $item['notes'] ?? null,
+                'meta' => [
+                    'exported_quantity_snapshot' => (int) $item['exported_quantity'],
+                    'actual_quantity' => $actualQuantity,
+                    'discrepancy_quantity' => $discrepancyQuantity,
+                    'is_extra_product' => (bool) ($item['is_extra_product'] ?? false),
+                ],
+            ]);
+
+            foreach ($orderBreakdown as $allocation) {
+                InventoryDocumentItemOrderLink::create([
+                    'account_id' => $accountId,
+                    'inventory_document_item_id' => (int) $documentItem->id,
+                    'order_id' => (int) ($allocation['order_id'] ?? 0) ?: null,
+                    'product_id' => (int) $product->id,
+                    'exported_quantity' => (int) ($allocation['exported_quantity'] ?? 0),
+                    'actual_quantity' => (int) ($allocation['actual_quantity'] ?? 0),
+                    'export_adjustment_quantity' => (int) ($allocation['discrepancy_quantity'] ?? 0),
+                    'meta' => [
+                        'order_number' => $allocation['order_number'] ?? null,
+                        'customer_name' => $allocation['customer_name'] ?? null,
+                    ],
+                ]);
+            }
+
+            if ($actualQuantity > 0) {
+                InventoryBatch::create([
+                    'account_id' => $accountId,
+                    'product_id' => (int) $product->id,
+                    'source_type' => 'document',
+                    'source_id' => (int) $document->id,
+                    'batch_number' => $this->generateLotNumber($document->document_number, $index + 1),
+                    'received_at' => $documentDate->copy()->setTimeFrom(now()),
+                    'quantity' => $actualQuantity,
+                    'remaining_quantity' => $actualQuantity,
+                    'unit_cost' => $unitCost,
+                    'status' => 'open',
+                    'meta' => [
+                        'source_name' => 'Phieu hoan theo lo',
+                        'source_label' => $document->document_number,
+                        'document_type' => 'return',
+                        'document_item_id' => (int) $documentItem->id,
+                        'batch_group_key' => $document->batch_group_key,
+                    ],
+                ]);
+            }
+
+            $touchedProductIds[] = (int) $product->id;
+        }
+
+        $this->finalizeDocumentTotals($document);
+
+        $adjustmentDocument = $this->upsertManagedReturnAdjustmentDocument(
+            $document,
+            $normalizedItems,
+            $accountId,
+            $userId
+        );
+
+        $document->forceFill([
+            'meta' => array_merge((array) ($document->meta ?? []), [
+                'managed_by' => self::MANAGED_RETURN_SOURCE,
+                'mode' => 'batch_return',
+                'order_ids' => $selectedOrders->pluck('id')->map(fn ($id) => (int) $id)->values()->all(),
+                'adjustment_document_id' => $adjustmentDocument?->id,
+                'adjustment_document_number' => $adjustmentDocument?->document_number,
+            ]),
+        ])->save();
+
+        if (!empty($touchedProductIds)) {
+            $this->inventoryService->refreshProducts($touchedProductIds);
+        }
+
+        return $this->loadManagedReturnDocument($document);
+    }
+
+    private function normalizeManagedReturnItems(array $payload, array $sourceProducts, array $sourceOrders): Collection
+    {
+        $sourceMap = collect($sourceProducts)->keyBy('product_id');
+        $normalized = [];
+        $primaryOrder = collect($sourceOrders)->first();
+
+        foreach ((array) ($payload['items'] ?? []) as $item) {
+            $productId = (int) ($item['product_id'] ?? 0);
+            $actualQuantity = (int) ($item['quantity'] ?? 0);
+
+            if ($productId <= 0 || $actualQuantity < 0) {
+                continue;
+            }
+
+            $source = $sourceMap->get($productId);
+            $exportedQuantity = (int) ($source['exported_quantity'] ?? 0);
+
+            if ($actualQuantity === 0 && $exportedQuantity === 0) {
+                continue;
+            }
+
+            $orderBreakdown = collect($source['order_breakdown'] ?? []);
+
+            $allocation = $this->allocateManagedReturnToOrders($orderBreakdown, $actualQuantity, $primaryOrder);
+
+            $normalized[$productId] = [
+                'product_id' => $productId,
+                'product_name' => $source['product_name'] ?? ($item['product_name'] ?? "San pham #{$productId}"),
+                'product_sku' => $source['product_sku'] ?? ($item['product_sku'] ?? null),
+                'exported_quantity' => $exportedQuantity,
+                'actual_quantity' => $actualQuantity,
+                'discrepancy_quantity' => $actualQuantity - $exportedQuantity,
+                'notes' => $item['notes'] ?? null,
+                'is_extra_product' => $exportedQuantity === 0,
+                'order_breakdown' => $allocation->all(),
+                'unit_cost' => $this->resolveManagedReturnWeightedUnitCost($allocation),
+                'unit_price' => $this->resolveManagedReturnWeightedUnitPrice($allocation),
+            ];
+        }
+
+        return collect($normalized)
+            ->sortBy(fn (array $item) => mb_strtolower((string) ($item['product_name'] ?? '')))
+            ->values();
+    }
+
+    private function allocateManagedReturnToOrders(Collection $orderBreakdown, int $actualQuantity, ?array $primaryOrder = null): Collection
+    {
+        $rows = $orderBreakdown
+            ->map(function (array $row) {
+                return [
+                    'order_id' => (int) ($row['order_id'] ?? 0) ?: null,
+                    'order_number' => $row['order_number'] ?? null,
+                    'customer_name' => $row['customer_name'] ?? null,
+                    'exported_quantity' => (int) ($row['exported_quantity'] ?? 0),
+                    'actual_quantity' => 0,
+                    'discrepancy_quantity' => 0,
+                    'unit_cost' => round((float) ($row['unit_cost'] ?? 0), 2),
+                    'unit_price' => round((float) ($row['unit_price'] ?? 0), 2),
+                ];
+            })
+            ->values();
+
+        $remainingActual = $actualQuantity;
+
+        foreach ($rows as $index => $row) {
+            if ($remainingActual <= 0) {
+                break;
+            }
+
+            $takeQuantity = min($remainingActual, (int) $row['exported_quantity']);
+            $rows[$index]['actual_quantity'] = $takeQuantity;
+            $remainingActual -= $takeQuantity;
+        }
+
+        if ($rows->isEmpty()) {
+            $rows->push([
+                'order_id' => $primaryOrder['id'] ?? null,
+                'order_number' => $primaryOrder['order_number'] ?? null,
+                'customer_name' => $primaryOrder['customer_name'] ?? null,
+                'exported_quantity' => 0,
+                'actual_quantity' => $actualQuantity,
+                'discrepancy_quantity' => $actualQuantity,
+                'unit_cost' => 0.0,
+                'unit_price' => 0.0,
+            ]);
+        } elseif ($remainingActual > 0) {
+            $rows[0]['actual_quantity'] = (int) $rows[0]['actual_quantity'] + $remainingActual;
+            $remainingActual = 0;
+        }
+
+        foreach ($rows as $index => $row) {
+            $rows[$index]['discrepancy_quantity'] = (int) ($rows[$index]['actual_quantity'] ?? 0)
+                - (int) ($rows[$index]['exported_quantity'] ?? 0);
+        }
+
+        return $rows->values();
+    }
+
+    private function resolveManagedReturnWeightedUnitCost(Collection $allocation): float
+    {
+        $weightedQuantity = (float) $allocation
+            ->sum(fn (array $row) => max(0, (int) ($row['actual_quantity'] ?? 0)));
+
+        if ($weightedQuantity <= 0) {
+            return 0.0;
+        }
+
+        $weightedTotal = (float) $allocation->sum(function (array $row) {
+            $quantity = max(0, (int) ($row['actual_quantity'] ?? 0));
+            $unitCost = round((float) ($row['unit_cost'] ?? 0), 2);
+
+            return $quantity * $unitCost;
+        });
+
+        return round($weightedTotal / $weightedQuantity, 2);
+    }
+
+    private function resolveManagedReturnWeightedUnitPrice(Collection $allocation): float
+    {
+        $weightedQuantity = (float) $allocation
+            ->sum(fn (array $row) => max(0, (int) ($row['actual_quantity'] ?? 0)));
+
+        if ($weightedQuantity <= 0) {
+            return 0.0;
+        }
+
+        $weightedTotal = (float) $allocation->sum(function (array $row) {
+            $quantity = max(0, (int) ($row['actual_quantity'] ?? 0));
+            $unitPrice = round((float) ($row['unit_price'] ?? 0), 2);
+
+            return $quantity * $unitPrice;
+        });
+
+        return round($weightedTotal / $weightedQuantity, 2);
+    }
+
+    private function syncManagedReturnOrderLinks(InventoryDocument $document, Collection $orders, int $accountId): void
+    {
+        InventoryDocumentOrderLink::query()
+            ->where('inventory_document_id', (int) $document->id)
+            ->delete();
+
+        foreach ($orders as $order) {
+            InventoryDocumentOrderLink::create([
+                'account_id' => $accountId,
+                'inventory_document_id' => (int) $document->id,
+                'order_id' => (int) $order['id'],
+            ]);
+        }
+    }
+
+    private function upsertManagedReturnAdjustmentDocument(
+        InventoryDocument $document,
+        Collection $normalizedItems,
+        int $accountId,
+        ?int $userId
+    ): ?InventoryDocument {
+        $adjustmentItems = $normalizedItems
+            ->filter(fn (array $item) => (int) ($item['discrepancy_quantity'] ?? 0) !== 0)
+            ->map(function (array $item) {
+                $discrepancyQuantity = (int) $item['discrepancy_quantity'];
+
+                return [
+                    'product_id' => (int) $item['product_id'],
+                    'quantity' => abs($discrepancyQuantity),
+                    'stock_bucket' => 'sellable',
+                    'direction' => $discrepancyQuantity > 0 ? 'in' : 'out',
+                    'unit_cost' => ((float) ($item['unit_cost'] ?? 0)) > 0
+                        ? round((float) $item['unit_cost'], 2)
+                        : null,
+                    'notes' => $discrepancyQuantity > 0
+                        ? 'Phan lech duong tu phieu hoan doi chieu'
+                        : 'Phan lech am tu phieu hoan doi chieu',
+                    'allow_oversold' => $discrepancyQuantity < 0,
+                ];
+            })
+            ->values();
+
+        $existingAdjustmentDocument = $this->findLinkedAdjustmentDocument($document);
+
+        if ($adjustmentItems->isEmpty()) {
+            if ($existingAdjustmentDocument) {
+                $this->inventoryService->deleteDocument($existingAdjustmentDocument);
+            }
+
+            return null;
+        }
+
+        $payload = [
+            'document_date' => optional($document->document_date)->toDateString() ?: now()->toDateString(),
+            'notes' => 'Tu dong cap nhat tu phieu hoan doi chieu ' . $document->document_number,
+            'reference_type' => 'inventory_document',
+            'reference_id' => (int) $document->id,
+            'parent_document_id' => (int) $document->id,
+            'batch_group_key' => $document->batch_group_key,
+            'meta' => [
+                'managed_by' => self::MANAGED_RETURN_ADJUSTMENT_SOURCE,
+                'return_document_id' => (int) $document->id,
+                'return_document_number' => $document->document_number,
+            ],
+            'allow_oversold' => true,
+            'items' => $adjustmentItems->all(),
+        ];
+
+        if ($existingAdjustmentDocument) {
+            return $this->inventoryService->updateDocument(
+                $existingAdjustmentDocument,
+                'adjustment',
+                $payload,
+                $accountId,
+                $userId
+            );
+        }
+
+        return $this->inventoryService->createDocument('adjustment', $payload, $accountId, $userId);
+    }
+
+    private function findLinkedAdjustmentDocument(InventoryDocument $document): ?InventoryDocument
+    {
+        return InventoryDocument::query()
+            ->where('type', 'adjustment')
+            ->where('parent_document_id', (int) $document->id)
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    private function loadManagedReturnDocument(InventoryDocument $document): InventoryDocument
+    {
+        return InventoryDocument::query()
+            ->with([
+                'creator:id,name',
+                'orderLinks.order:id,order_number,customer_name,customer_phone,status',
+                'items' => function ($query) {
+                    $query
+                        ->with([
+                            'product:id,sku,name,cost_price,expected_cost',
+                            'orderLinks.order:id,order_number,customer_name,customer_phone',
+                        ])
+                        ->orderBy('id');
+                },
+            ])
+            ->findOrFail((int) $document->id);
+    }
+
+    private function buildManagedReturnDocumentPayload(InventoryDocument $document): array
+    {
+        $adjustmentDocument = $this->findLinkedAdjustmentDocument($document);
+        $orders = $document->orderLinks
+            ->map(function (InventoryDocumentOrderLink $link) {
+                return [
+                    'id' => (int) $link->order_id,
+                    'order_number' => $link->order?->order_number,
+                    'customer_name' => $link->order?->customer_name,
+                    'customer_phone' => $link->order?->customer_phone,
+                    'status' => $link->order?->status,
+                ];
+            })
+            ->filter(fn (array $row) => (int) ($row['id'] ?? 0) > 0)
+            ->values();
+
+        $products = $document->items
+            ->map(function (InventoryDocumentItem $item) {
+                $exportedQuantity = (int) (($item->meta['exported_quantity_snapshot'] ?? null) ?? $item->orderLinks->sum('exported_quantity'));
+                $actualQuantity = (int) $item->quantity;
+                $discrepancyQuantity = (int) (($item->meta['discrepancy_quantity'] ?? null) ?? $item->orderLinks->sum('export_adjustment_quantity'));
+
+                return [
+                    'item_id' => (int) $item->id,
+                    'product_id' => (int) $item->product_id,
+                    'product_name' => $item->product_name_snapshot ?: $item->product?->name ?: "San pham #{$item->product_id}",
+                    'product_sku' => $item->product_sku_snapshot ?: $item->product?->sku,
+                    'exported_quantity' => $exportedQuantity,
+                    'actual_quantity' => $actualQuantity,
+                    'discrepancy_quantity' => $discrepancyQuantity,
+                    'notes' => $item->notes,
+                    'is_extra_product' => (bool) ($item->meta['is_extra_product'] ?? false),
+                    'order_breakdown' => $item->orderLinks
+                        ->map(function (InventoryDocumentItemOrderLink $link) {
+                            return [
+                                'order_id' => $link->order_id ? (int) $link->order_id : null,
+                                'order_number' => $link->order?->order_number ?? ($link->meta['order_number'] ?? null),
+                                'customer_name' => $link->order?->customer_name ?? ($link->meta['customer_name'] ?? null),
+                                'exported_quantity' => (int) ($link->exported_quantity ?? 0),
+                                'actual_quantity' => (int) ($link->actual_quantity ?? 0),
+                                'discrepancy_quantity' => (int) ($link->export_adjustment_quantity ?? 0),
+                            ];
+                        })
+                        ->filter(function (array $row) {
+                            return (int) ($row['exported_quantity'] ?? 0) > 0
+                                || (int) ($row['actual_quantity'] ?? 0) > 0
+                                || (int) ($row['discrepancy_quantity'] ?? 0) !== 0;
+                        })
+                        ->values()
+                        ->all(),
+                ];
+            })
+            ->values();
+
+        return [
+            'document' => [
+                'id' => (int) $document->id,
+                'document_number' => $document->document_number,
+                'batch_group_key' => $document->batch_group_key,
+                'document_date' => optional($document->document_date)->toDateString(),
+                'notes' => $document->notes,
+                'created_at' => optional($document->created_at)?->toISOString(),
+                'created_by_name' => $document->creator?->name,
+                'adjustment_document_id' => $adjustmentDocument?->id,
+                'adjustment_document_number' => $adjustmentDocument?->document_number,
+            ],
+            'orders' => $orders->all(),
+            'summary' => [
+                'order_count' => $orders->count(),
+                'exported_quantity' => (int) $products->sum('exported_quantity'),
+                'actual_quantity' => (int) $products->sum('actual_quantity'),
+                'discrepancy_quantity' => (int) $products->sum('discrepancy_quantity'),
+                'discrepancy_abs_quantity' => (int) $products->sum(fn (array $row) => abs((int) ($row['discrepancy_quantity'] ?? 0))),
+            ],
+            'products' => $products->all(),
+        ];
     }
 }

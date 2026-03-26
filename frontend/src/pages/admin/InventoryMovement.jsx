@@ -9,6 +9,7 @@ import useAiAvailability from '../../hooks/useAiAvailability';
 import { useTableColumns } from '../../hooks/useTableColumns';
 import { ACTIVE_PRODUCT_TYPE_OPTIONS } from '../../config/productTypes';
 import { aiApi, categoryApi, cmsApi, inventoryApi, orderApi, productApi } from '../../services/api';
+import BatchReturnSlipModal from '../../components/admin/BatchReturnSlipModal';
 import { formatWholeMoneyInput, normalizeWholeMoneyDraft, normalizeWholeMoneyNumber, parseWholeMoneyValue } from '../../utils/money';
 
 const emptyPagination = { current_page: 1, last_page: 1, total: 0, per_page: 20 };
@@ -2538,6 +2539,7 @@ const InventoryMovement = () => {
     const [importDetailTableSettingsOpen, setImportDetailTableSettingsOpen] = useState(false);
     const [importStatusModal, setImportStatusModal] = useState({ open: false, form: createImportStatusForm() });
     const [documentModal, setDocumentModal] = useState({ open: false, tabKey: 'returns', form: createDocumentForm('returns') });
+    const [batchReturnModal, setBatchReturnModal] = useState({ open: false, documentId: null });
     const [exportModal, setExportModal] = useState({ open: false, form: createExportForm() });
     const [pageSizes, setPageSizes] = useState(() => ({
         products: getStoredPageSize('products'),
@@ -5022,6 +5024,10 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         setFlag('documentModal', true);
         try {
             const response = await inventoryApi.getDocument(documentTypeMap[tabKey], row.id);
+            if (tabKey === 'returns' && response.data?.managed_batch_return) {
+                setBatchReturnModal({ open: true, documentId: row.id });
+                return;
+            }
             setDocumentModal({ open: true, tabKey, form: createDocumentForm(tabKey, response.data) });
         } catch (error) {
             fail(error, 'Không thể tải phiếu để sửa.');
@@ -5140,6 +5146,18 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         } catch (error) {
             fail(error, 'Không thể xóa phiếu kho.');
         }
+    };
+
+    const closeBatchReturnModal = () => {
+        setBatchReturnModal({ open: false, documentId: null });
+    };
+
+    const handleBatchReturnSaved = async () => {
+        closeBatchReturnModal();
+        fetchDocuments('return', returnPagination.current_page || 1);
+        fetchProducts(productPagination.current_page || 1);
+        fetchOverview();
+        fetchLots(lotPagination.current_page || 1);
     };
 
     const deleteExport = async (row) => {
@@ -7193,6 +7211,14 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 </div>
             </ModalShell>
             <ModalShell open={documentModal.open} title={documentModal.form.id ? `Sửa ${documentTitleMap[documentModal.tabKey]}` : `Tạo ${documentTitleMap[documentModal.tabKey]}`} onClose={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} footer={<div className="flex items-center justify-between gap-3"><div className="text-[13px] font-black text-primary">{documentModal.tabKey === 'damaged' ? `Tổng số lượng: ${formatNumber(documentModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}` : `Tổng giá trị tạm tính: ${formatCurrency(documentLineTotal)}`}</div><div className="flex gap-2"><button type="button" onClick={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} className={ghostButton}>Hủy</button><button type="button" onClick={saveDocument} className={primaryButton} disabled={loading.saving}>{loading.saving ? 'Đang lưu' : 'Lưu phiếu'}</button></div></div>}><div className="space-y-4"><div className="grid gap-3 md:grid-cols-3"><input type="date" value={documentModal.form.document_date} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, document_date: event.target.value } }))} className={inputClass} /><select value={documentModal.form.supplier_id} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, supplier_id: event.target.value } }))} className={selectClass}><option value="">Không gắn nhà cung cấp</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select><div className="flex items-center rounded-sm border border-primary/15 px-3 text-[13px] font-semibold text-primary">{documentTitleMap[documentModal.tabKey]}</div></div><ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => { const index = documentModal.form.items.findIndex((item) => !item.product_id); const targetIndex = index >= 0 ? index : documentModal.form.items.length; if (index < 0) addLine(setDocumentModal); attachProductToLine(setDocumentModal, targetIndex, product); }} buttonLabel="Thêm vào phiếu" /><div className="overflow-hidden rounded-sm border border-primary/10"><table className="w-full border-collapse"><thead className="bg-[#f6f9fc]"><tr>{['Sản phẩm', 'Số lượng', documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? 'Giá vốn' : null, documentModal.tabKey === 'adjustments' ? 'Loại tồn' : null, documentModal.tabKey === 'adjustments' ? 'Hướng' : null, 'Ghi chú', 'Xóa'].filter(Boolean).map((label) => <th key={label} className="border-b border-r border-primary/10 px-3 py-2.5 text-center text-[12px] font-bold text-primary">{label}</th>)}</tr></thead><tbody>{documentModal.form.items.map((item, index) => <tr key={item.key}><td className="border-b border-r border-primary/10 px-3 py-2"><div className="space-y-2">{item.product_id ? <CellText primary={item.product_name || '-'} secondary={item.product_sku || '-'} /> : <div className="text-[12px] text-primary/45">Chưa chọn sản phẩm</div>}<ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => attachProductToLine(setDocumentModal, index, product)} placeholder="Đổi sản phẩm" buttonLabel="Chọn" /></div></td><td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.quantity} onChange={(event) => updateLine(setDocumentModal, index, 'quantity', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} /></td>{documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><input value={formatWholeNumberInput(item.unit_cost)} onChange={(event) => updateLine(setDocumentModal, index, 'unit_cost', normalizeWholeMoneyDraft(event.target.value))} className={`w-full text-right ${inputClass}`} /></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.stock_bucket} onChange={(event) => updateLine(setDocumentModal, index, 'stock_bucket', event.target.value)} className={`w-full ${selectClass}`}><option value="sellable">Tồn bán được</option><option value="damaged">Tồn hỏng</option></select></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.direction} onChange={(event) => updateLine(setDocumentModal, index, 'direction', event.target.value)} className={`w-full ${selectClass}`}><option value="in">Cộng</option><option value="out">Trừ</option></select></td> : null}<td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.notes} onChange={(event) => updateLine(setDocumentModal, index, 'notes', event.target.value)} className={`w-full ${inputClass}`} placeholder="Ghi chú" /></td><td className="border-b border-primary/10 px-3 py-2 text-center"><button type="button" onClick={() => removeLine(setDocumentModal, index)} className={dangerButton}>Xóa</button></td></tr>)}</tbody></table></div><div className="flex justify-between gap-2"><button type="button" onClick={() => addLine(setDocumentModal)} className={ghostButton}>Thêm dòng</button><textarea value={documentModal.form.notes} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú phiếu kho" className="min-h-[96px] flex-1 rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary" /></div></div></ModalShell>
+            <BatchReturnSlipModal
+                open={batchReturnModal.open}
+                mode="edit"
+                documentId={batchReturnModal.documentId}
+                onClose={closeBatchReturnModal}
+                onSaved={handleBatchReturnSaved}
+                onNotify={showToast}
+            />
         </div>
     );
 };

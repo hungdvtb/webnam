@@ -10,6 +10,7 @@ import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel'
 import SortIndicator from '../../components/SortIndicator';
 import { SHIPPING_SOUND_STORAGE_KEY, defaultSoundSettings, beep } from '../../components/admin/ShippingSettingsPanel';
 import OrderInventorySlipDrawer from '../../components/admin/OrderInventorySlipDrawer';
+import BatchReturnSlipModal from '../../components/admin/BatchReturnSlipModal';
 import { printOrders } from '../../utils/orderPrint';
 
 const DEFAULT_COLUMNS = [
@@ -876,6 +877,13 @@ const OrderList = () => {
     const [statusMenuOrderId, setStatusMenuOrderId] = useState(null);
     const [productPopupOrderId, setProductPopupOrderId] = useState(null);
     const [inventorySlipOrderId, setInventorySlipOrderId] = useState(null);
+    const [inventorySlipRefreshKey, setInventorySlipRefreshKey] = useState(0);
+    const [batchReturnModal, setBatchReturnModal] = useState({
+        open: false,
+        mode: 'create',
+        documentId: null,
+        orderIds: [],
+    });
     const productPopupAnchorRef = useRef(null);
     const statusMenuAnchorRef = useRef(null);
     const statusMenuRef = useRef(null);
@@ -1058,6 +1066,62 @@ const OrderList = () => {
         };
     }, [selectedIds, selectedOrderMap]);
 
+    const selectedBatchReturnState = useMemo(() => {
+        const details = selectedIds.map((id) => {
+            const order = selectedOrderMap.get(String(id));
+            const isOfficial = String(order?.order_kind || MAIN_ORDER_KIND) === MAIN_ORDER_KIND;
+
+            return {
+                id,
+                order,
+                eligible: Boolean(order) && isOfficial,
+                reason: !order
+                    ? 'Khong tim thay don hang trong danh sach hien tai.'
+                    : (!isOfficial ? 'Chi don hang chinh moi lap phieu hoan theo lo.' : ''),
+            };
+        });
+
+        const validOrders = details.filter((item) => item.eligible);
+        const invalidOrders = details.filter((item) => !item.eligible);
+
+        return {
+            details,
+            validOrders,
+            invalidOrders,
+            canSubmit: validOrders.length > 0 && invalidOrders.length === 0,
+            firstInvalidReason: invalidOrders[0]?.reason || '',
+        };
+    }, [selectedIds, selectedOrderMap]);
+
+    const openBatchReturnCreateModal = useCallback(() => {
+        if (!selectedBatchReturnState.canSubmit) return;
+
+        setBatchReturnModal({
+            open: true,
+            mode: 'create',
+            documentId: null,
+            orderIds: selectedBatchReturnState.validOrders.map((item) => item.id),
+        });
+    }, [selectedBatchReturnState]);
+
+    const openBatchReturnEditModal = useCallback((document) => {
+        if (!document?.id) return;
+
+        setBatchReturnModal({
+            open: true,
+            mode: 'edit',
+            documentId: document.id,
+            orderIds: [],
+        });
+    }, []);
+
+    const closeBatchReturnModal = useCallback(() => {
+        setBatchReturnModal((current) => ({
+            ...current,
+            open: false,
+        }));
+    }, []);
+
     const fetchInitialData = async () => {
         try {
             const response = await orderApi.getBootstrap({ mode: 'list' });
@@ -1171,6 +1235,12 @@ const OrderList = () => {
             }
         }
     }, [filters, isDraftView, isTrashView, pagination.per_page, sortConfig]);
+
+    const handleBatchReturnSaved = useCallback(async () => {
+        closeBatchReturnModal();
+        setInventorySlipRefreshKey((current) => current + 1);
+        await fetchOrders(pagination.current_page || 1);
+    }, [closeBatchReturnModal, fetchOrders, pagination.current_page]);
 
     useEffect(() => { fetchInitialData(); }, []);
 
@@ -1946,6 +2016,25 @@ const OrderList = () => {
                         <button data-column-settings-btn onClick={() => setShowColumnSettings(!showColumnSettings)} className={`p-1.5 border rounded-sm w-9 h-9 flex items-center justify-center transition-all ${showColumnSettings ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/30 hover:bg-primary/5'}`} title="Cấu hình hiển thị cột"><span className="material-symbols-outlined text-[18px]">settings_suggest</span></button>
 
                         {isMainView && <>
+                            <button
+                                type="button"
+                                onClick={openBatchReturnCreateModal}
+                                disabled={!selectedBatchReturnState.canSubmit}
+                                title={
+                                    selectedIds.length === 0
+                                        ? 'Chon don de tao phieu hoan theo lo'
+                                        : selectedBatchReturnState.canSubmit
+                                            ? 'Tao phieu hoan theo lo'
+                                            : (selectedBatchReturnState.firstInvalidReason || 'Danh sach don da chon khong hop le de lap phieu hoan theo lo')
+                                }
+                                className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${
+                                    selectedBatchReturnState.canSubmit
+                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-600 hover:text-white'
+                                        : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'
+                                }`}
+                            >
+                                <span className="material-symbols-outlined text-[18px]">assignment_return</span>
+                            </button>
                             <button type="button" onClick={openDispatchModal} disabled={selectedIds.length === 0} title="Gửi đơn vị vận chuyển" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary text-white border-primary hover:bg-primary/90' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">local_shipping</span></button>
                             <button
                                 type="button"
@@ -2646,8 +2735,19 @@ const OrderList = () => {
             <OrderInventorySlipDrawer
                 open={!!inventorySlipOrderId}
                 orderId={inventorySlipOrderId}
+                refreshKey={inventorySlipRefreshKey}
                 onClose={() => setInventorySlipOrderId(null)}
                 onUpdated={() => fetchOrders(pagination.current_page || 1)}
+                onNotify={setNotification}
+                onOpenBatchReturn={openBatchReturnEditModal}
+            />
+            <BatchReturnSlipModal
+                open={batchReturnModal.open}
+                mode={batchReturnModal.mode}
+                documentId={batchReturnModal.documentId}
+                orderIds={batchReturnModal.orderIds}
+                onClose={closeBatchReturnModal}
+                onSaved={handleBatchReturnSaved}
                 onNotify={setNotification}
             />
         </div>

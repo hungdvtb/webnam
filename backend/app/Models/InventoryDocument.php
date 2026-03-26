@@ -17,15 +17,19 @@ class InventoryDocument extends Model
         'status',
         'reference_type',
         'reference_id',
+        'parent_document_id',
+        'batch_group_key',
         'total_quantity',
         'total_amount',
         'notes',
+        'meta',
         'created_by',
     ];
 
     protected $casts = [
         'document_date' => 'date',
         'total_amount' => 'decimal:2',
+        'meta' => 'array',
     ];
 
     public function supplier()
@@ -36,6 +40,21 @@ class InventoryDocument extends Model
     public function items()
     {
         return $this->hasMany(InventoryDocumentItem::class);
+    }
+
+    public function parentDocument()
+    {
+        return $this->belongsTo(self::class, 'parent_document_id');
+    }
+
+    public function childDocuments()
+    {
+        return $this->hasMany(self::class, 'parent_document_id');
+    }
+
+    public function orderLinks()
+    {
+        return $this->hasMany(InventoryDocumentOrderLink::class);
     }
 
     public function creator()

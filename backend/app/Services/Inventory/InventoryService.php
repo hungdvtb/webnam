@@ -1497,6 +1497,7 @@ class InventoryService
                 $quantity = (int) $item['quantity'];
                 $stockBucket = $item['stock_bucket'] ?? 'sellable';
                 $direction = $item['direction'] ?? 'in';
+                $allowOversold = (bool) ($item['allow_oversold'] ?? $payload['allow_oversold'] ?? false);
                 $unitCost = round((float) ($item['unit_cost'] ?? $product->cost_price ?? $product->expected_cost ?? 0), 2);
                 $totalCost = round($quantity * $unitCost, 2);
 
@@ -1532,7 +1533,9 @@ class InventoryService
                         ]
                     );
                 } elseif ($stockBucket === 'sellable' && $direction === 'out') {
-                    $allocation = $this->allocateSellableBatches($accountId, $product, $quantity);
+                    $allocation = $allowOversold
+                        ? $this->allocateOrderSellableBatches($accountId, $product, $quantity)
+                        : $this->allocateSellableBatches($accountId, $product, $quantity);
                     $documentItem->forceFill([
                         'unit_cost' => $quantity > 0 ? round($allocation['total_cost'] / $quantity, 2) : 0,
                         'total_cost' => $allocation['total_cost'],
@@ -1586,7 +1589,10 @@ class InventoryService
             'status' => 'completed',
             'reference_type' => $payload['reference_type'] ?? null,
             'reference_id' => $payload['reference_id'] ?? null,
+            'parent_document_id' => $payload['parent_document_id'] ?? null,
+            'batch_group_key' => $payload['batch_group_key'] ?? null,
             'notes' => $payload['notes'] ?? null,
+            'meta' => $payload['meta'] ?? null,
             'created_by' => $userId ?? Auth::id(),
         ]);
     }

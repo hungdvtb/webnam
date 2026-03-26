@@ -119,7 +119,7 @@ const EmptyState = ({ title, description }) => (
     </div>
 );
 
-const OrderInventorySlipDrawer = ({ open, orderId, onClose, onUpdated, onNotify }) => {
+const OrderInventorySlipDrawer = ({ open, orderId, refreshKey = 0, onClose, onUpdated, onNotify, onOpenBatchReturn }) => {
     const [detail, setDetail] = useState(emptyDetail);
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -151,7 +151,7 @@ const OrderInventorySlipDrawer = ({ open, orderId, onClose, onUpdated, onNotify 
         }
 
         loadDetail();
-    }, [loadDetail, open]);
+    }, [loadDetail, open, refreshKey]);
 
     useEffect(() => {
         if (!open) return undefined;
@@ -598,6 +598,16 @@ const OrderInventorySlipDrawer = ({ open, orderId, onClose, onUpdated, onNotify 
                                                                     </div>
                                                                     {document.notes ? <div className="mt-2 text-[12px] text-primary/65">{document.notes}</div> : null}
                                                                 </div>
+                                                                {document.can_edit ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => onOpenBatchReturn?.(document)}
+                                                                        className="inline-flex h-9 items-center gap-1 rounded-sm border border-sky-200 bg-white px-3 text-[12px] font-black text-sky-700 transition hover:bg-sky-50"
+                                                                    >
+                                                                        <span className="material-symbols-outlined text-[16px]">edit_square</span>
+                                                                        Sua
+                                                                    </button>
+                                                                ) : null}
                                                                 {document.can_delete !== false ? (
                                                                     <button
                                                                         type="button"
@@ -627,6 +637,18 @@ const OrderInventorySlipDrawer = ({ open, orderId, onClose, onUpdated, onNotify 
                                                                                 <td className="border-b border-r border-primary/10 px-4 py-3">
                                                                                     <div className="text-[13px] font-black text-primary">{item.product_name}</div>
                                                                                     <div className="mt-1 text-[11px] font-bold text-orange-600/70">{item.product_sku || 'Không có SKU'}</div>
+                                                                                    {typeof item.discrepancy_quantity === 'number' ? (
+                                                                                        <div className={`mt-2 inline-flex items-center gap-1 rounded-sm border px-2 py-1 text-[10px] font-black ${
+                                                                                            item.discrepancy_quantity === 0
+                                                                                                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                                                                                : item.discrepancy_quantity > 0
+                                                                                                    ? 'border-sky-200 bg-sky-50 text-sky-700'
+                                                                                                    : 'border-amber-200 bg-amber-50 text-amber-700'
+                                                                                        }`}>
+                                                                                            <span className="material-symbols-outlined text-[12px]">rule</span>
+                                                                                            Lech {item.discrepancy_quantity > 0 ? '+' : ''}{formatNumber(item.discrepancy_quantity)}
+                                                                                        </div>
+                                                                                    ) : null}
                                                                                     {item.notes ? <div className="mt-1 text-[11px] text-primary/55">{item.notes}</div> : null}
                                                                                 </td>
                                                                                 <td className="border-b border-r border-primary/10 px-3 py-3 text-right text-[13px] font-black text-primary">{formatNumber(item.quantity)}</td>

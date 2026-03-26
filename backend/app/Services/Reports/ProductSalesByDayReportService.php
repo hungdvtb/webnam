@@ -8,11 +8,14 @@ use App\Services\OrderInventorySlipService;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class ProductSalesByDayReportService
 {
+    private const CACHE_TTL_SECONDS = 20;
+
     public function __construct(
         private readonly OrderInventorySlipService $orderInventorySlipService,
     ) {
@@ -23,7 +26,6 @@ class ProductSalesByDayReportService
         $normalizedFilters = $this->normalizeFilters($filters);
         [$from, $to] = $this->resolveDateRange($normalizedFilters);
         $dates = $this->buildDateHeaders($from, $to);
-        $search = $normalizedFilters['search'];
         $requestedStatuses = $normalizedFilters['status'];
         $effectiveStatuses = $requestedStatuses !== []
             ? $requestedStatuses
@@ -37,6 +39,17 @@ class ProductSalesByDayReportService
 
         if ($accountId <= 0 || $effectiveStatuses === []) {
             return $this->emptyResponse($normalizedFilters, $from, $to, $dates, $effectiveStatusOptions);
+        }
+
+        if (!$normalizedFilters['force_refresh']) {
+            $freshFilters = $filters;
+            $freshFilters['force_refresh'] = true;
+
+            return Cache::remember(
+                $this->reportCacheKey($accountId, $normalizedFilters, $from, $to, $effectiveStatuses),
+                now()->addSeconds(self::CACHE_TTL_SECONDS),
+                fn () => $this->build($accountId, $freshFilters)
+            );
         }
 
         $dateKeys = collect($dates)->pluck('date')->all();
@@ -175,6 +188,7 @@ class ProductSalesByDayReportService
         array $effectiveStatuses
     ) {
         $search = $filters['search'];
+        $searchContainsLike = $this->containsLike($search);
         $completedAtSubquery = DB::table('order_status_logs')
             ->selectRaw('order_id, MAX(created_at) AS completed_at')
             ->where('to_status', 'completed')
@@ -227,39 +241,36 @@ class ProductSalesByDayReportService
             ->whereBetween(DB::raw($reportDateExpression), [$from->toDateString(), $to->toDateString()]);
 
         if ($search !== '') {
-            $like = '%' . $search . '%';
-
-            $query->where(function ($searchQuery) use ($like) {
-                $searchQuery
-                    ->where('orders.order_number', 'like', $like)
-                    ->orWhere('orders.customer_name', 'like', $like)
-                    ->orWhere('orders.customer_phone', 'like', $like)
-                    ->orWhere('orders.shipping_address', 'like', $like)
-                    ->orWhere('orders.notes', 'like', $like)
-                    ->orWhere('orders.shipping_tracking_code', 'like', $like)
-                    ->orWhere('order_items.product_name_snapshot', 'like', $like)
-                    ->orWhere('order_items.product_sku_snapshot', 'like', $like)
-                    ->orWhere('child_products.name', 'like', $like)
-                    ->orWhere('child_products.sku', 'like', $like)
-                    ->orWhere('parent_products.name', 'like', $like)
-                    ->orWhere('parent_products.sku', 'like', $like);
+            $query->where(function ($searchQuery) use ($searchContainsLike) {
+                $this->applyInsensitiveLike($searchQuery, 'orders.order_number', $searchContainsLike);
+                $this->applyInsensitiveLike($searchQuery, 'orders.customer_name', $searchContainsLike, true);
+                $this->applyInsensitiveLike($searchQuery, 'orders.customer_phone', $searchContainsLike, true);
+                $this->applyInsensitiveLike($searchQuery, 'orders.shipping_address', $searchContainsLike, true);
+                $this->applyInsensitiveLike($searchQuery, 'orders.notes', $searchContainsLike, true);
+                $this->applyInsensitiveLike($searchQuery, 'orders.shipping_tracking_code', $searchContainsLike, true);
+                $this->applyInsensitiveLike($searchQuery, 'order_items.product_name_snapshot', $searchContainsLike, true);
+                $this->applyInsensitiveLike($searchQuery, 'order_items.product_sku_snapshot', $searchContainsLike, true);
+                $this->applyInsensitiveLike($searchQuery, 'child_products.name', $searchContainsLike, true);
+                $this->applyInsensitiveLike($searchQuery, 'child_products.sku', $searchContainsLike, true);
+                $this->applyInsensitiveLike($searchQuery, 'parent_products.name', $searchContainsLike, true);
+                $this->applyInsensitiveLike($searchQuery, 'parent_products.sku', $searchContainsLike, true);
             });
         }
 
         if ($filters['customer_name'] !== '') {
-            $query->where('orders.customer_name', 'like', '%' . $filters['customer_name'] . '%');
+            $this->applyInsensitiveLike($query, 'orders.customer_name', $this->containsLike($filters['customer_name']));
         }
 
         if ($filters['order_number'] !== '') {
-            $query->where('orders.order_number', 'like', $filters['order_number'] . '%');
+            $this->applyInsensitiveLike($query, 'orders.order_number', $this->prefixLike($filters['order_number']));
         }
 
         if ($filters['customer_phone'] !== '') {
-            $query->where('orders.customer_phone', 'like', $filters['customer_phone'] . '%');
+            $this->applyInsensitiveLike($query, 'orders.customer_phone', $this->prefixLike($filters['customer_phone']));
         }
 
         if ($filters['shipping_address'] !== '') {
-            $query->where('orders.shipping_address', 'like', '%' . $filters['shipping_address'] . '%');
+            $this->applyInsensitiveLike($query, 'orders.shipping_address', $this->containsLike($filters['shipping_address']));
         }
 
         if ($filters['created_at_from'] !== '') {
@@ -303,11 +314,13 @@ class ProductSalesByDayReportService
                     ->where('attribute_id', $attributeId)
                     ->where(function ($valueQuery) use ($values) {
                         foreach ($values as $value) {
-                            $valueQuery->orWhere('value', 'like', '%' . $value . '%');
+                            $this->applyInsensitiveLike($valueQuery, 'value', $this->containsLike($value), true);
                         }
                     });
             });
         }
+
+        $currentUnitCostExpression = $this->currentUnitCostExpression();
 
         return $query
             ->selectRaw('order_items.product_id AS child_product_id')
@@ -320,7 +333,7 @@ class ProductSalesByDayReportService
             ->selectRaw('parent_products.sku AS parent_product_sku')
             ->selectRaw($reportDateExpression . ' AS report_date')
             ->selectRaw('SUM(order_items.quantity) AS total_quantity')
-            ->selectRaw('ROUND(SUM(COALESCE(order_items.cost_total, COALESCE(order_items.cost_price, 0) * order_items.quantity)), 2) AS total_cost_amount')
+            ->selectRaw('ROUND(SUM((' . $currentUnitCostExpression . ') * order_items.quantity), 2) AS total_cost_amount')
             ->selectRaw('ROUND(SUM(' . $revenueExpression . '), 2) AS total_revenue_amount')
             ->groupBy(
                 'order_items.product_id',
@@ -403,6 +416,7 @@ class ProductSalesByDayReportService
             'shipping_dispatched_from' => trim((string) ($filters['shipping_dispatched_from'] ?? '')),
             'shipping_dispatched_to' => trim((string) ($filters['shipping_dispatched_to'] ?? '')),
             'attributes' => $attributes,
+            'force_refresh' => filter_var($filters['force_refresh'] ?? false, FILTER_VALIDATE_BOOL),
         ];
     }
 
@@ -427,6 +441,63 @@ class ProductSalesByDayReportService
             'shipping_dispatched_to' => $filters['shipping_dispatched_to'],
             'attributes' => $filters['attributes'],
         ];
+    }
+
+    private function usesPostgresSearchDriver(): bool
+    {
+        return DB::connection()->getDriverName() === 'pgsql';
+    }
+
+    private function loweredSearchExpression(string $column): string
+    {
+        $column = "COALESCE({$column}, '')";
+
+        if ($this->usesPostgresSearchDriver()) {
+            return "LOWER(immutable_unaccent({$column}))";
+        }
+
+        return "LOWER({$column})";
+    }
+
+    private function escapeLike(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
+    }
+
+    private function normalizeSearchText(string $value): string
+    {
+        return (string) Str::of($value)
+            ->lower()
+            ->trim();
+    }
+
+    private function containsLike(string $value): ?string
+    {
+        $normalized = $this->normalizeSearchText($value);
+
+        return $normalized === ''
+            ? null
+            : '%' . $this->escapeLike($normalized) . '%';
+    }
+
+    private function prefixLike(string $value): ?string
+    {
+        $normalized = $this->normalizeSearchText($value);
+
+        return $normalized === ''
+            ? null
+            : $this->escapeLike($normalized) . '%';
+    }
+
+    private function applyInsensitiveLike($query, string $column, ?string $like, bool $or = false): void
+    {
+        if ($like === null) {
+            return;
+        }
+
+        $expression = $this->loweredSearchExpression($column);
+        $method = $or ? 'orWhereRaw' : 'whereRaw';
+        $query->{$method}("{$expression} LIKE ? ESCAPE '\\'", [$like]);
     }
 
     private function buildDateHeaders(Carbon $from, Carbon $to): array
@@ -556,6 +627,20 @@ class ProductSalesByDayReportService
         return "DATE(COALESCE({$completedAlias}.completed_at, {$ordersAlias}.created_at))";
     }
 
+    private function currentUnitCostExpression(): string
+    {
+        return "COALESCE(
+            child_products.cost_price,
+            child_products.expected_cost,
+            order_items.cost_price,
+            CASE
+                WHEN COALESCE(order_items.quantity, 0) <> 0 THEN order_items.cost_total / order_items.quantity
+                ELSE 0
+            END,
+            0
+        )";
+    }
+
     private function revenueExpression(): string
     {
         $lineGrossExpression = '(order_items.price * order_items.quantity)';
@@ -659,6 +744,34 @@ class ProductSalesByDayReportService
     private function parentRowKey(int $productId): string
     {
         return 'parent-' . $productId;
+    }
+
+    private function reportCacheKey(
+        int $accountId,
+        array $filters,
+        Carbon $from,
+        Carbon $to,
+        array $effectiveStatuses
+    ): string {
+        $cacheableFilters = $filters;
+        unset($cacheableFilters['force_refresh']);
+
+        if (!empty($cacheableFilters['attributes'])) {
+            ksort($cacheableFilters['attributes']);
+
+            foreach ($cacheableFilters['attributes'] as &$values) {
+                sort($values);
+            }
+            unset($values);
+        }
+
+        return 'reports:product-sales-by-day:' . md5(json_encode([
+            'account_id' => $accountId,
+            'from' => $from->toDateString(),
+            'to' => $to->toDateString(),
+            'filters' => $cacheableFilters,
+            'effective_statuses' => array_values($effectiveStatuses),
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     }
 
     private function emptyResponse(array $filters, Carbon $from, Carbon $to, array $dates, array $effectiveStatuses): array

@@ -18,6 +18,7 @@ use App\Models\SupplierProductPrice;
 use App\Services\Inventory\InvoiceAnalysisService;
 use App\Services\Inventory\InventoryService;
 use App\Services\Inventory\ProductPricingService;
+use App\Services\OrderInventorySlipService;
 use App\Services\ProductSkuService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
@@ -35,6 +36,7 @@ class InventoryController extends Controller
         private readonly InventoryService $inventoryService,
         private readonly InvoiceAnalysisService $invoiceAnalysisService,
         private readonly ProductPricingService $productPricingService,
+        private readonly OrderInventorySlipService $orderInventorySlipService,
         private readonly ProductSkuService $productSkuService,
     )
     {
@@ -1493,6 +1495,12 @@ class InventoryController extends Controller
             ])
             ->findOrFail($id);
 
+        if ($type === 'return' && $this->orderInventorySlipService->isManagedReturnDocument($document)) {
+            return response()->json(
+                $this->orderInventorySlipService->serializeManagedReturnDocumentForInventory($document)
+            );
+        }
+
         return response()->json($document);
     }
 
@@ -1526,6 +1534,12 @@ class InventoryController extends Controller
 
         $validated = $request->validate($rules);
 
+        if ($type === 'return' && $this->orderInventorySlipService->isManagedReturnDocument($document)) {
+            return response()->json(
+                $this->orderInventorySlipService->updateManagedReturnDocument($document, $validated, auth()->id())
+            );
+        }
+
         return response()->json(
             $this->inventoryService->updateDocument($document, $type, $validated, $accountId, auth()->id())
         );
@@ -1537,6 +1551,12 @@ class InventoryController extends Controller
         $document = InventoryDocument::query()
             ->where('type', $type)
             ->findOrFail($id);
+
+        if ($type === 'return' && $this->orderInventorySlipService->isManagedReturnDocument($document)) {
+            $this->orderInventorySlipService->deleteManagedReturnDocument($document);
+
+            return response()->json(['message' => 'Đã xóa phiếu kho.']);
+        }
 
         $this->inventoryService->deleteDocument($document);
 

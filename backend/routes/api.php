@@ -127,6 +127,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/quick-dispatch', [\App\Http\Controllers\Api\OrderController::class , 'quickDispatch']);
     Route::post('/orders/print-data', [\App\Http\Controllers\Api\OrderController::class , 'printData']);
     Route::post('/orders/mark-printed', [\App\Http\Controllers\Api\OrderController::class , 'markPrinted']);
+    Route::post('/orders/inventory-returns/batch-preview', [\App\Http\Controllers\Api\OrderController::class , 'previewBatchReturn']);
+    Route::post('/orders/inventory-returns/batch', [\App\Http\Controllers\Api\OrderController::class , 'storeBatchReturn']);
+    Route::get('/orders/inventory-returns/{documentId}', [\App\Http\Controllers\Api\OrderController::class , 'showBatchReturn'])->whereNumber('documentId');
+    Route::put('/orders/inventory-returns/{documentId}', [\App\Http\Controllers\Api\OrderController::class , 'updateBatchReturn'])->whereNumber('documentId');
     Route::get('/orders/{id}/inventory-slips', [\App\Http\Controllers\Api\OrderController::class , 'inventorySlips'])->whereNumber('id');
     Route::post('/orders/{id}/inventory-slips', [\App\Http\Controllers\Api\OrderController::class , 'storeInventorySlip'])->whereNumber('id');
     Route::delete('/orders/{id}/inventory-slips/{documentId}', [\App\Http\Controllers\Api\OrderController::class , 'destroyInventorySlip'])->whereNumber('id')->whereNumber('documentId');

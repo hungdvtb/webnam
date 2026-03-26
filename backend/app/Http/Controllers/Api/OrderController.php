@@ -9,6 +9,7 @@ use App\Models\Cart;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Customer;
+use App\Models\InventoryDocument;
 use App\Models\Invoice;
 use App\Models\OrderStatus;
 use App\Models\Product;
@@ -61,6 +62,63 @@ class OrderController extends Controller
         protected RepeatCustomerPhoneService $repeatCustomerPhoneService,
         protected OrderInventorySlipService $orderInventorySlipService,
     ) {
+    }
+
+    private function usesPostgresSearchDriver(): bool
+    {
+        return DB::connection()->getDriverName() === 'pgsql';
+    }
+
+    private function loweredSearchExpression(string $column): string
+    {
+        $column = "COALESCE({$column}, '')";
+
+        if ($this->usesPostgresSearchDriver()) {
+            return "LOWER(immutable_unaccent({$column}))";
+        }
+
+        return "LOWER({$column})";
+    }
+
+    private function escapeLike(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
+    }
+
+    private function normalizeSearchText(string $value): string
+    {
+        return (string) Str::of($value)
+            ->lower()
+            ->trim();
+    }
+
+    private function containsLike(string $value): ?string
+    {
+        $normalized = $this->normalizeSearchText($value);
+
+        return $normalized === ''
+            ? null
+            : '%' . $this->escapeLike($normalized) . '%';
+    }
+
+    private function prefixLike(string $value): ?string
+    {
+        $normalized = $this->normalizeSearchText($value);
+
+        return $normalized === ''
+            ? null
+            : $this->escapeLike($normalized) . '%';
+    }
+
+    private function applyInsensitiveLike($query, string $column, ?string $like, bool $or = false): void
+    {
+        if ($like === null) {
+            return;
+        }
+
+        $expression = $this->loweredSearchExpression($column);
+        $method = $or ? 'orWhereRaw' : 'whereRaw';
+        $query->{$method}("{$expression} LIKE ? ESCAPE '\\'", [$like]);
     }
 
     private function freshShippingState(): array
@@ -1145,38 +1203,40 @@ class OrderController extends Controller
         }
         
         $query->when($request->filled('search'), function($q) use ($request) {
-            $search = $request->input('search');
-            $q->where(function($sub) use ($search) {
+            $searchContainsLike = $this->containsLike((string) $request->input('search'));
+            $searchPrefixLike = $this->prefixLike((string) $request->input('search'));
+
+            $q->where(function($sub) use ($searchContainsLike, $searchPrefixLike) {
                 // Order-level fields
-                $sub->where('order_number', 'like', "{$search}%")
-                    ->orWhere('customer_name', 'like', "%{$search}%")
-                    ->orWhere('customer_phone', 'like', "{$search}%")
-                    ->orWhere('shipping_address', 'like', "%{$search}%")
-                    ->orWhere('notes', 'like', "%{$search}%")
-                    ->orWhere('shipping_tracking_code', 'like', "%{$search}%")
+                $this->applyInsensitiveLike($sub, 'order_number', $searchPrefixLike);
+                $this->applyInsensitiveLike($sub, 'customer_name', $searchContainsLike, true);
+                $this->applyInsensitiveLike($sub, 'customer_phone', $searchPrefixLike, true);
+                $this->applyInsensitiveLike($sub, 'shipping_address', $searchContainsLike, true);
+                $this->applyInsensitiveLike($sub, 'notes', $searchContainsLike, true);
+                $this->applyInsensitiveLike($sub, 'shipping_tracking_code', $searchContainsLike, true);
                     // Product-level: search by snapshot SKU/name stored in order_items
-                    ->orWhereHas('items', function($iq) use ($search) {
-                        $iq->where('product_sku_snapshot', 'like', "%{$search}%")
-                           ->orWhere('product_name_snapshot', 'like', "%{$search}%");
+                $sub->orWhereHas('items', function($iq) use ($searchContainsLike) {
+                        $this->applyInsensitiveLike($iq, 'product_sku_snapshot', $searchContainsLike);
+                        $this->applyInsensitiveLike($iq, 'product_name_snapshot', $searchContainsLike, true);
                     })
                     // Also search live product data via JOIN (catches new/updated products)
-                    ->orWhereHas('items.product', function($pq) use ($search) {
-                        $pq->where('sku', 'like', "%{$search}%")
-                           ->orWhere('name', 'like', "%{$search}%");
+                    ->orWhereHas('items.product', function($pq) use ($searchContainsLike) {
+                        $this->applyInsensitiveLike($pq, 'sku', $searchContainsLike);
+                        $this->applyInsensitiveLike($pq, 'name', $searchContainsLike, true);
                     });
             });
         })
         ->when($request->filled('customer_name'), function($q) use ($request) {
-            $q->where('customer_name', 'like', "%{$request->customer_name}%");
+            $this->applyInsensitiveLike($q, 'customer_name', $this->containsLike((string) $request->customer_name));
         })
         ->when($request->filled('order_number'), function($q) use ($request) {
-            $q->where('order_number', 'like', "{$request->order_number}%");
+            $this->applyInsensitiveLike($q, 'order_number', $this->prefixLike((string) $request->order_number));
         })
         ->when($request->filled('customer_phone'), function($q) use ($request) {
-            $q->where('customer_phone', 'like', "{$request->customer_phone}%");
+            $this->applyInsensitiveLike($q, 'customer_phone', $this->prefixLike((string) $request->customer_phone));
         })
         ->when($request->filled('shipping_address'), function($q) use ($request) {
-            $q->where('shipping_address', 'like', "%{$request->shipping_address}%");
+            $this->applyInsensitiveLike($q, 'shipping_address', $this->containsLike((string) $request->shipping_address));
         })
         ->when($request->filled('status'), function($q) use ($request) {
             $statuses = is_array($request->status) ? $request->status : explode(',', $request->status);
@@ -1219,7 +1279,9 @@ class OrderController extends Controller
                         ->from('order_attribute_values')
                         ->whereRaw('order_attribute_values.order_id = orders.id')
                         ->where('attribute_id', $attrId)
-                        ->where('value', 'like', "%{$value}%");
+                        ->whereRaw($this->loweredSearchExpression('value') . " LIKE ? ESCAPE '\\'", [
+                            $this->containsLike((string) $value),
+                        ]);
                 });
             }
         }
@@ -1297,6 +1359,74 @@ class OrderController extends Controller
         return response()->json([
             'message' => 'Đã xóa phiếu kho của đơn hàng.',
         ]);
+    }
+
+    public function previewBatchReturn(Request $request)
+    {
+        $accountId = $this->resolveAccountId($request);
+        $validated = $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer|distinct',
+        ]);
+
+        return response()->json(
+            $this->orderInventorySlipService->previewBatchReturn($validated['order_ids'], $accountId)
+        );
+    }
+
+    public function storeBatchReturn(Request $request)
+    {
+        $accountId = $this->resolveAccountId($request);
+        $validated = $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer|distinct',
+            'document_date' => 'nullable|date',
+            'notes' => 'nullable|string|max:5000',
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'required|integer|exists:products,id',
+            'items.*.quantity' => 'nullable|integer|min:0',
+            'items.*.notes' => 'nullable|string|max:1000',
+        ]);
+
+        return response()->json(
+            $this->orderInventorySlipService->createBatchReturn($validated, $accountId, Auth::id()),
+            201
+        );
+    }
+
+    public function showBatchReturn(Request $request, int $documentId)
+    {
+        $accountId = $this->resolveAccountId($request);
+        $document = InventoryDocument::query()
+            ->where('type', 'return')
+            ->when($accountId > 0, fn ($query) => $query->where('account_id', $accountId))
+            ->findOrFail($documentId);
+
+        return response()->json(
+            $this->orderInventorySlipService->getManagedReturnDocumentPayload($document)
+        );
+    }
+
+    public function updateBatchReturn(Request $request, int $documentId)
+    {
+        $accountId = $this->resolveAccountId($request);
+        $document = InventoryDocument::query()
+            ->where('type', 'return')
+            ->when($accountId > 0, fn ($query) => $query->where('account_id', $accountId))
+            ->findOrFail($documentId);
+
+        $validated = $request->validate([
+            'document_date' => 'nullable|date',
+            'notes' => 'nullable|string|max:5000',
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'required|integer|exists:products,id',
+            'items.*.quantity' => 'nullable|integer|min:0',
+            'items.*.notes' => 'nullable|string|max:1000',
+        ]);
+
+        return response()->json(
+            $this->orderInventorySlipService->updateManagedReturnDocument($document, $validated, Auth::id())
+        );
     }
 
     public function store(Request $request)

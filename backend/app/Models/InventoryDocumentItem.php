@@ -22,6 +22,7 @@ class InventoryDocumentItem extends Model
         'unit_price',
         'total_price',
         'notes',
+        'meta',
     ];
 
     protected $casts = [
@@ -29,6 +30,7 @@ class InventoryDocumentItem extends Model
         'total_cost' => 'decimal:2',
         'unit_price' => 'decimal:2',
         'total_price' => 'decimal:2',
+        'meta' => 'array',
     ];
 
     public function document()
@@ -44,5 +46,10 @@ class InventoryDocumentItem extends Model
     public function allocations()
     {
         return $this->hasMany(InventoryDocumentAllocation::class);
+    }
+
+    public function orderLinks()
+    {
+        return $this->hasMany(InventoryDocumentItemOrderLink::class, 'inventory_document_item_id');
     }
 }

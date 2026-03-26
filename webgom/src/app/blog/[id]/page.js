@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { getBlogPost, getBlogPosts } from '@/lib/blogApi';
 import { buildBlogContentMarkup } from '@/lib/blogContent';
 import BlogMediaGalleryEnhancer from '@/components/blog/BlogMediaGalleryEnhancer';
+import ResponsiveArticleTitle from '@/components/blog/ResponsiveArticleTitle';
 import { resolveMediaUrl } from '@/lib/media';
 
 const FALLBACK_RELATED_POSTS = [
@@ -199,7 +200,9 @@ export default async function BlogPostPage({ params }) {
               <div className="bdt-category-badge">{articleCategory}</div>
             ) : null}
 
-            <h1 className="bdt-title">{post.title}</h1>
+            <ResponsiveArticleTitle className="bdt-title">
+              {post.title}
+            </ResponsiveArticleTitle>
 
             {post.author ? (
               <div className="bdt-meta">
@@ -362,21 +365,23 @@ export default async function BlogPostPage({ params }) {
         }
 
         .bdt-title {
-          display: -webkit-box;
+          display: block;
           width: 100%;
           max-width: 100%;
           margin: 0 auto;
           color: #1B365D;
           font-family: 'Playfair Display', serif;
-          font-size: clamp(1.95rem, 8vw, 4.1rem);
+          font-size: clamp(1.82rem, 7vw, 4rem);
           font-style: italic;
           font-weight: 900;
-          line-height: 1.08;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          -webkit-box-orient: vertical;
-          -webkit-line-clamp: 2;
-          line-clamp: 2;
+          line-height: 1.1;
+          letter-spacing: -0.02em;
+          overflow: visible;
+          text-overflow: clip;
+          white-space: normal;
+          overflow-wrap: anywhere;
+          word-break: normal;
+          text-wrap: balance;
         }
 
         .bdt-meta {
@@ -1107,8 +1112,9 @@ export default async function BlogPostPage({ params }) {
 
         @media (max-width: 600px) {
           .bdt-title {
-            font-size: clamp(1.52rem, 6.6vw, 2.15rem);
+            font-size: clamp(1.42rem, 5.95vw, 2rem);
             line-height: 1.08;
+            letter-spacing: -0.025em;
           }
 
           .bdt-related-card {

@@ -281,6 +281,15 @@ export const orderStatusApi = {
     destroy: (id) => api.delete(`/order-statuses/${id}`),
 };
 
+export const reportApi = {
+    getDashboard: () => api.get('/reports/dashboard'),
+    getInventory: () => api.get('/reports/inventory'),
+    getTopProducts: () => api.get('/reports/top-products'),
+    getSales: (days) => api.get('/reports/sales', { params: { days } }),
+    getSalesMatrix: (params) => api.get('/reports/sales-matrix', { params }),
+    getProductSalesByDay: (params) => api.get('/reports/product-sales-by-day', { params }),
+};
+
 export const customerApi = {
     getAll: (params) => api.get('/customers', { params }),
     getOne: (id) => api.get(`/customers/${id}`),
@@ -425,14 +434,6 @@ export const blogApi = {
         headers: { 'Content-Type': 'multipart/form-data' }
     }),
     downloadImportTemplate: () => api.get('/blog/import/template', { responseType: 'blob' }),
-};
-
-export const reportApi = {
-    getDashboard: () => api.get('/reports/dashboard'),
-    getInventory: () => api.get('/reports/inventory'),
-    getTopProducts: () => api.get('/reports/top-products'),
-    getSales: (days) => api.get('/reports/sales', { params: { days } }),
-    getSalesMatrix: (params) => api.get('/reports/sales-matrix', { params }),
 };
 
 export const invoiceApi = {

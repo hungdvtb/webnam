@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { Link, Outlet, useNavigate, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import AccountSelector from '../components/AccountSelector';
@@ -81,7 +81,7 @@ const AdminLayout = () => {
                         <img src="/logo-brand.jpg" alt="Logo" className="w-full h-full object-contain" />
                     </div>
                     <div className="flex flex-col text-left">
-                        <h1 className="font-sans text-lg font-bold tracking-tight text-white leading-tight uppercase">GÔM <br/> ĐẠI THÀNH</h1>
+                        <h1 className="font-sans text-lg font-bold tracking-tight text-white leading-tight uppercase">GỐM <br/> ĐẠI THÀNH</h1>
                     </div>
                 </div>
 
@@ -276,7 +276,7 @@ const AdminLayout = () => {
                         </div>
                     )}
 
-                    <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-stone uppercase tracking-[0.2em] opacity-50">Kho & Vận Chuyển</div>
+                    <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-stone uppercase tracking-[0.2em] opacity-50">Kho & Vận chuyển</div>
                     {canAccess('inventory') && (
                         <Link to="/admin/inventory" className="flex items-center gap-4 p-3 hover:bg-white/10 rounded-sm transition-colors group">
                             <span className="material-symbols-outlined w-6 text-center text-stone group-hover:text-gold transition-colors">inventory</span>
@@ -289,7 +289,7 @@ const AdminLayout = () => {
                     <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-stone uppercase tracking-[0.2em] opacity-50">Báo cáo & Phân tích</div>
                     <Link to="/admin/reports" className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname.startsWith('/admin/reports') ? 'bg-gold/10 text-gold' : 'hover:bg-white/10 text-white'}`}>
                         <span className={`material-symbols-outlined w-6 text-center ${location.pathname.startsWith('/admin/reports') ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>table_chart</span>
-                        <span className="font-sans text-sm font-medium tracking-wider">BÃ¡o cÃ¡o doanh sá»‘</span>
+                        <span className="font-sans text-sm font-medium tracking-wider">Hàng đi hàng ngày</span>
                     </Link>
                     <Link to="/admin/finance" className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname.startsWith('/admin/finance') ? 'bg-gold/10 text-gold' : 'hover:bg-white/10 text-white'}`}>
                         <span className={`material-symbols-outlined w-6 text-center ${location.pathname.startsWith('/admin/finance') ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>account_balance_wallet</span>

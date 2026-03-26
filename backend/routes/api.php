@@ -375,6 +375,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/reports/top-products', [\App\Http\Controllers\Api\ReportController::class , 'topSellingProducts']);
         Route::get('/reports/sales', [\App\Http\Controllers\Api\ReportController::class , 'salesReport']);
         Route::get('/reports/sales-matrix', [\App\Http\Controllers\Api\ReportController::class , 'salesProductMatrix']);
+        Route::get('/reports/product-sales-by-day', [\App\Http\Controllers\Api\ReportController::class , 'productSalesByDay']);
 
         // Invoices
         Route::get('/invoices', [\App\Http\Controllers\Api\InvoiceController::class , 'index']);

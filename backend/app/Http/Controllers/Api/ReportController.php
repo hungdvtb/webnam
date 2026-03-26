@@ -7,6 +7,7 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Models\InventoryItem;
 use App\Models\StockMovement;
+use App\Services\Reports\ProductSalesByDayReportService;
 use App\Services\Reports\SalesProductReportService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -29,6 +30,22 @@ class ReportController extends Controller
 
         return response()->json(
             $salesProductReportService->build(
+                (int) $request->header('X-Account-Id'),
+                $validated
+            )
+        );
+    }
+
+    public function productSalesByDay(Request $request, ProductSalesByDayReportService $productSalesByDayReportService)
+    {
+        $validated = $request->validate([
+            'date_from' => 'nullable|date',
+            'date_to' => 'nullable|date',
+            'search' => 'nullable|string|max:255',
+        ]);
+
+        return response()->json(
+            $productSalesByDayReportService->build(
                 (int) $request->header('X-Account-Id'),
                 $validated
             )

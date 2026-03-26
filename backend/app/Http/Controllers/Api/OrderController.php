@@ -1274,7 +1274,10 @@ class OrderController extends Controller
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer',
             'items.*.quantity' => 'nullable|integer|min:0',
+            'items.*.actual_product_id' => 'nullable|integer',
+            'items.*.actual_quantity' => 'nullable|integer|min:0',
             'items.*.notes' => 'nullable|string|max:1000',
+            'items.*.actual_reason' => 'nullable|string|max:1000',
         ]);
 
         $document = $this->orderInventorySlipService->createSlip($order, $validated, Auth::id());

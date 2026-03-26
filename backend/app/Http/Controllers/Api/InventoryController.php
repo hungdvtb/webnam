@@ -2185,15 +2185,15 @@ class InventoryController extends Controller
 
         $returnQtySub = \App\Models\InventoryDocumentItem::query()
             ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
-            ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0)')
-            ->whereColumn('inventory_document_items.product_id', 'products.id')
+            ->selectRaw('COALESCE(SUM(COALESCE(inventory_document_items.actual_quantity, inventory_document_items.quantity)), 0)')
+            ->whereRaw('COALESCE(inventory_document_items.actual_product_id, inventory_document_items.product_id) = products.id')
             ->where('inventory_documents.type', 'return');
         $this->applyDateRange($returnQtySub, 'inventory_documents.document_date', $request);
 
         $damagedQtySub = \App\Models\InventoryDocumentItem::query()
             ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
-            ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0)')
-            ->whereColumn('inventory_document_items.product_id', 'products.id')
+            ->selectRaw('COALESCE(SUM(COALESCE(inventory_document_items.actual_quantity, inventory_document_items.quantity)), 0)')
+            ->whereRaw('COALESCE(inventory_document_items.actual_product_id, inventory_document_items.product_id) = products.id')
             ->where('inventory_documents.type', 'damaged');
         $this->applyDateRange($damagedQtySub, 'inventory_documents.document_date', $request);
 

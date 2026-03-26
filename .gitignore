@@ -4,6 +4,7 @@
 
 # Local browser debug profiles
 webgom/.tmp-chrome-profile/
+webgom/.tmp-chrome-footer-profile/
 webgom/.tmp-edge-cdp-profile/
 webgom/.tmp-edge-profile/
 

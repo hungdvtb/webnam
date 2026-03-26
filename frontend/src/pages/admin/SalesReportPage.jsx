@@ -679,25 +679,22 @@ const SalesReportPage = () => {
                                 type="button"
                                 onClick={toggleFilterPanel}
                                 className={`relative inline-flex h-11 w-11 items-center justify-center rounded-sm border transition-all ${showFilterPanel || activeAdvancedFilterCount > 0 ? 'border-primary bg-primary text-white shadow-lg' : 'border-primary/15 bg-primary/5 text-primary hover:bg-primary/10'}`}
-                                title="Bộ lọc nâng cao"
+                                title={'Bộ lọc nâng cao'}
                             >
                                 <span className="material-symbols-outlined text-[20px]">filter_alt</span>
                                 {activeAdvancedFilterCount > 0 ? <span className="absolute -right-1 -top-1 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-brick px-1 text-[10px] font-black text-white">{activeAdvancedFilterCount}</span> : null}
                             </button>
-                            <button type="button" onClick={() => loadReport(filters, { forceRefresh: true })} className="inline-flex h-10 w-10 items-center justify-center rounded-sm border border-primary/15 bg-white text-primary hover:bg-primary/5" title="Làm mới dữ liệu">
+                            <button type="button" onClick={() => loadReport(filters, { forceRefresh: true })} className="inline-flex h-10 w-10 items-center justify-center rounded-sm border border-primary/15 bg-white text-primary hover:bg-primary/5" title={'Làm mới dữ liệu'}>
                                 <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>{loading ? 'progress_activity' : 'refresh'}</span>
                             </button>
-                            <button type="button" onClick={useAutoFitWidths} className="inline-flex h-10 items-center gap-2 rounded-sm border border-primary/15 bg-white px-3 text-[12px] font-black uppercase tracking-[0.12em] text-primary hover:bg-primary/5" title="Trả bảng về auto-fit theo dữ liệu">
-                                <span className="material-symbols-outlined text-[18px]">restart_alt</span>
-                                <span className="hidden xl:inline">Auto Fit</span>
+                            <button type="button" onClick={useAutoFitWidths} className="inline-flex h-10 w-10 items-center justify-center rounded-sm border border-primary/15 bg-white text-primary hover:bg-primary/5" title={'Trả bảng về auto-fit theo dữ liệu'}>
+                                <span className="material-symbols-outlined text-[18px]">fit_screen</span>
                             </button>
-                            <button type="button" onClick={restoreSavedWidthPreset} className="inline-flex h-10 items-center gap-2 rounded-sm border border-primary/15 bg-white px-3 text-[12px] font-black uppercase tracking-[0.12em] text-primary hover:bg-primary/5" title="Khôi phục kích thước đã lưu làm mặc định">
-                                <span className="material-symbols-outlined text-[18px]">history</span>
-                                <span className="hidden xl:inline">Khôi phục</span>
+                            <button type="button" onClick={restoreSavedWidthPreset} className="inline-flex h-10 w-10 items-center justify-center rounded-sm border border-primary/15 bg-white text-primary hover:bg-primary/5" title={'Khôi phục kích thước đã lưu làm mặc định'}>
+                                <span className="material-symbols-outlined text-[18px]">settings_backup_restore</span>
                             </button>
-                            <button type="button" onClick={saveWidthPreset} className={`inline-flex h-10 items-center gap-2 rounded-sm border px-3 text-[12px] font-black uppercase tracking-[0.12em] transition-all ${hasUnsavedWidthChanges ? 'border-primary bg-primary text-white shadow-lg' : 'border-primary/15 bg-white text-primary hover:bg-primary/5'}`} title="Lưu kích thước cột hiện tại làm mặc định">
-                                <span className="material-symbols-outlined text-[18px]">save</span>
-                                <span className="hidden xl:inline">Lưu mặc định</span>
+                            <button type="button" onClick={saveWidthPreset} className={`inline-flex h-10 w-10 items-center justify-center rounded-sm border transition-all ${hasUnsavedWidthChanges ? 'border-primary bg-primary text-white shadow-lg' : 'border-primary/15 bg-white text-primary hover:bg-primary/5'}`} title={'Lưu kích thước cột hiện tại làm mặc định'}>
+                                <span className="material-symbols-outlined text-[18px]">bookmark_added</span>
                             </button>
                         </div>
 
@@ -883,15 +880,15 @@ const SalesReportPage = () => {
                                     className={`sticky left-0 z-50 h-[76px] border-b border-r border-primary/10 bg-[#F8FAFC] px-3 py-3 align-middle relative group ${resizingColumnId === 'product' ? 'bg-primary/[0.04]' : ''}`}
                                     style={{ width: productColumnWidth, minWidth: productColumnWidth }}
                                 >
-                                    <div className="pr-3 text-[11px] font-black uppercase tracking-[0.18em] text-primary/35">M� SP</div>
-                                    <div onMouseDown={(event) => handleColumnResize('product', event)} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize transition-colors hover:bg-brick/20" title="K�o d? d?i d? r?ng c?t" />
+                                    <div className="pr-3 text-[11px] font-black uppercase tracking-[0.18em] text-primary/35">{'Mã SP'}</div>
+                                    <div onMouseDown={(event) => handleColumnResize('product', event)} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize transition-colors hover:bg-brick/20" title={'Kéo để đổi độ rộng cột'} />
                                 </th>
                                 <th
                                     className={`sticky z-50 h-[76px] border-b border-r border-primary/10 bg-[#F8FAFC] px-3 py-3 align-middle relative group ${resizingColumnId === 'total' ? 'bg-primary/[0.04]' : ''}`}
                                     style={{ left: productColumnWidth, width: totalColumnWidth, minWidth: totalColumnWidth }}
                                 >
-                                    <div className="pr-3 text-[11px] font-black uppercase tracking-[0.18em] text-primary/35">T?ng</div>
-                                    <div onMouseDown={(event) => handleColumnResize('total', event)} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize transition-colors hover:bg-brick/20" title="K�o d? d?i d? r?ng c?t" />
+                                    <div className="pr-3 text-[11px] font-black uppercase tracking-[0.18em] text-primary/35">{'Tổng'}</div>
+                                    <div onMouseDown={(event) => handleColumnResize('total', event)} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize transition-colors hover:bg-brick/20" title={'Kéo để đổi độ rộng cột'} />
                                 </th>
                                 {reportState.dates.map((date, index) => (
                                     <th
@@ -899,9 +896,9 @@ const SalesReportPage = () => {
                                         className={`h-[76px] border-b border-r border-primary/10 bg-[#F8FAFC] px-3 py-3 align-middle relative group ${resizingColumnId === getDayColumnKey(index) ? 'bg-primary/[0.04]' : ''}`}
                                         style={{ width: dayColumnWidths[index] || DEFAULT_DAY_COLUMN_WIDTH, minWidth: dayColumnWidths[index] || DEFAULT_DAY_COLUMN_WIDTH }}
                                     >
-                                        <div className="pr-3 text-[10px] font-black uppercase tracking-[0.18em] text-primary/35">Ng�y</div>
+                                        <div className="pr-3 text-[10px] font-black uppercase tracking-[0.18em] text-primary/35">{'Ngày'}</div>
                                         <div className="mt-1 pr-3 text-[15px] font-black tracking-tight text-primary">{date.label}</div>
-                                        <div onMouseDown={(event) => handleColumnResize(getDayColumnKey(index), event)} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize transition-colors hover:bg-brick/20" title="K�o d? d?i d? r?ng c?t" />
+                                        <div onMouseDown={(event) => handleColumnResize(getDayColumnKey(index), event)} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize transition-colors hover:bg-brick/20" title={'Kéo để đổi độ rộng cột'} />
                                     </th>
                                 ))}
                             </tr>

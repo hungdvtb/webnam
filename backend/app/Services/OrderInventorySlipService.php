@@ -14,6 +14,7 @@ use App\Services\Inventory\InventoryService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class OrderInventorySlipService
@@ -21,10 +22,53 @@ class OrderInventorySlipService
     private const ACTIVE_STATUSES = ['draft', 'completed'];
     private const MANAGED_RETURN_SOURCE = 'order_return_reconciliation';
     private const MANAGED_RETURN_ADJUSTMENT_SOURCE = 'order_return_reconciliation_adjustment';
+    private ?bool $inventoryDocumentOrderLinksTableExists = null;
+    private ?bool $inventoryDocumentItemOrderLinksTableExists = null;
 
     public function __construct(
         private readonly InventoryService $inventoryService,
     ) {
+    }
+
+    private function hasInventoryDocumentOrderLinksTable(): bool
+    {
+        return $this->inventoryDocumentOrderLinksTableExists
+            ??= Schema::hasTable('inventory_document_order_links');
+    }
+
+    private function hasInventoryDocumentItemOrderLinksTable(): bool
+    {
+        return $this->inventoryDocumentItemOrderLinksTableExists
+            ??= Schema::hasTable('inventory_document_item_order_links');
+    }
+
+    private function ensureManagedReturnLinkTablesExist(): void
+    {
+        if (
+            $this->hasInventoryDocumentOrderLinksTable()
+            && $this->hasInventoryDocumentItemOrderLinksTable()
+        ) {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'inventory' => ['Tinh nang phieu hoan theo lo yeu cau chay day du migration kho moi nhat.'],
+        ]);
+    }
+
+    private function managedReturnOrderLinksCount(InventoryDocument $document): int
+    {
+        if (!$this->hasInventoryDocumentOrderLinksTable()) {
+            return 0;
+        }
+
+        if ($document->relationLoaded('orderLinks')) {
+            return $document->orderLinks->count();
+        }
+
+        return InventoryDocumentOrderLink::query()
+            ->where('inventory_document_id', (int) $document->id)
+            ->count();
     }
 
     public function buildListSummaryMap(Collection $orders): array
@@ -119,12 +163,6 @@ class OrderInventorySlipService
             $documentQuery
                 ->select(DB::raw(1))
                 ->from('inventory_documents')
-                ->leftJoin(
-                    'inventory_document_order_links',
-                    'inventory_document_order_links.inventory_document_id',
-                    '=',
-                    'inventory_documents.id'
-                )
                 ->where('inventory_documents.type', 'return')
                 ->whereIn('inventory_documents.status', self::ACTIVE_STATUSES)
                 ->where(function ($builder) {
@@ -133,8 +171,17 @@ class OrderInventorySlipService
                             $legacyQuery
                                 ->where('inventory_documents.reference_type', 'order')
                                 ->whereColumn('inventory_documents.reference_id', 'orders.id');
-                        })
-                        ->orWhereColumn('inventory_document_order_links.order_id', 'orders.id');
+                        });
+
+                    if ($this->hasInventoryDocumentOrderLinksTable()) {
+                        $builder->orWhereExists(function ($linkQuery) {
+                            $linkQuery
+                                ->select(DB::raw(1))
+                                ->from('inventory_document_order_links')
+                                ->whereColumn('inventory_document_order_links.inventory_document_id', 'inventory_documents.id')
+                                ->whereColumn('inventory_document_order_links.order_id', 'orders.id');
+                        });
+                    }
                 });
         });
     }
@@ -158,6 +205,8 @@ class OrderInventorySlipService
 
     public function previewBatchReturn(array $orderIds, int $accountId): array
     {
+        $this->ensureManagedReturnLinkTablesExist();
+
         $orders = $this->loadBatchOrders($orderIds, $accountId);
         $this->assertOrdersEligibleForManagedReturn($orders);
         $this->assertNoManagedReturnConflict($orders, null);
@@ -167,6 +216,8 @@ class OrderInventorySlipService
 
     public function createBatchReturn(array $payload, int $accountId, ?int $userId = null): array
     {
+        $this->ensureManagedReturnLinkTablesExist();
+
         $orderIds = collect($payload['order_ids'] ?? [])
             ->map(fn ($id) => (int) $id)
             ->filter()
@@ -307,9 +358,11 @@ class OrderInventorySlipService
                 ->where('source_id', (int) $managedDocument->id)
                 ->delete();
 
-            InventoryDocumentOrderLink::query()
-                ->where('inventory_document_id', (int) $managedDocument->id)
-                ->delete();
+            if ($this->hasInventoryDocumentOrderLinksTable()) {
+                InventoryDocumentOrderLink::query()
+                    ->where('inventory_document_id', (int) $managedDocument->id)
+                    ->delete();
+            }
 
             InventoryDocumentItem::query()
                 ->where('inventory_document_id', (int) $managedDocument->id)
@@ -331,11 +384,16 @@ class OrderInventorySlipService
 
         return !empty($document->batch_group_key)
             || (string) ($document->meta['managed_by'] ?? '') === self::MANAGED_RETURN_SOURCE
-            || ($document->relationLoaded('orderLinks')
-                ? $document->orderLinks->isNotEmpty()
-                : InventoryDocumentOrderLink::query()
-                    ->where('inventory_document_id', (int) $document->id)
-                    ->exists());
+            || (
+                $this->hasInventoryDocumentOrderLinksTable()
+                && (
+                    $document->relationLoaded('orderLinks')
+                        ? $document->orderLinks->isNotEmpty()
+                        : InventoryDocumentOrderLink::query()
+                            ->where('inventory_document_id', (int) $document->id)
+                            ->exists()
+                )
+            );
     }
 
     private function applyActiveDocumentSlipStateFilter($query, string $state, string $type): void
@@ -1158,28 +1216,35 @@ class OrderInventorySlipService
             return collect();
         }
 
-        $documents = InventoryDocument::query()
+        $documentsQuery = InventoryDocument::query()
             ->whereIn('type', ['export', 'return', 'damaged'])
             ->whereIn('status', self::ACTIVE_STATUSES)
             ->where(function ($query) use ($orderIds) {
-                $query
-                    ->where(function ($legacyQuery) use ($orderIds) {
-                        $legacyQuery
-                            ->where('reference_type', 'order')
-                            ->whereIn('reference_id', $orderIds);
-                    })
-                    ->orWhereExists(function ($linkQuery) use ($orderIds) {
+                $query->where(function ($legacyQuery) use ($orderIds) {
+                    $legacyQuery
+                        ->where('reference_type', 'order')
+                        ->whereIn('reference_id', $orderIds);
+                });
+
+                if ($this->hasInventoryDocumentOrderLinksTable()) {
+                    $query->orWhereExists(function ($linkQuery) use ($orderIds) {
                         $linkQuery
                             ->select(DB::raw(1))
                             ->from('inventory_document_order_links')
                             ->whereColumn('inventory_document_order_links.inventory_document_id', 'inventory_documents.id')
                             ->whereIn('inventory_document_order_links.order_id', $orderIds);
                     });
+                }
             })
             ->with([
                 'creator:id,name',
-                'orderLinks.order:id,order_number,customer_name,customer_phone',
                 'items' => function ($query) {
+                    $itemRelations = ['product:id,sku,name'];
+
+                    if ($this->hasInventoryDocumentItemOrderLinksTable()) {
+                        $itemRelations[] = 'orderLinks.order:id,order_number,customer_name';
+                    }
+
                     $query
                         ->select([
                             'id',
@@ -1197,16 +1262,18 @@ class OrderInventorySlipService
                             'notes',
                             'meta',
                         ])
-                        ->with([
-                            'product:id,sku,name',
-                            'orderLinks.order:id,order_number,customer_name',
-                        ])
+                        ->with($itemRelations)
                         ->orderBy('id');
                 },
             ])
             ->orderBy('document_date')
-            ->orderBy('id')
-            ->get();
+            ->orderBy('id');
+
+        if ($this->hasInventoryDocumentOrderLinksTable()) {
+            $documentsQuery->with('orderLinks.order:id,order_number,customer_name,customer_phone');
+        }
+
+        $documents = $documentsQuery->get();
 
         $map = collect();
 
@@ -1217,9 +1284,11 @@ class OrderInventorySlipService
                 $targetOrderIds->push((int) $document->reference_id);
             }
 
-            foreach ($document->orderLinks as $link) {
-                if (in_array((int) $link->order_id, $orderIds, true)) {
-                    $targetOrderIds->push((int) $link->order_id);
+            if ($this->hasInventoryDocumentOrderLinksTable()) {
+                foreach ($document->orderLinks as $link) {
+                    if (in_array((int) $link->order_id, $orderIds, true)) {
+                        $targetOrderIds->push((int) $link->order_id);
+                    }
                 }
             }
 
@@ -1234,28 +1303,35 @@ class OrderInventorySlipService
 
     private function loadDocumentsForSingleOrder(Order $order): Collection
     {
-        $documents = InventoryDocument::query()
+        $documentsQuery = InventoryDocument::query()
             ->whereIn('type', ['export', 'return', 'damaged'])
             ->whereIn('status', self::ACTIVE_STATUSES)
             ->where(function ($query) use ($order) {
-                $query
-                    ->where(function ($legacyQuery) use ($order) {
-                        $legacyQuery
-                            ->where('reference_type', 'order')
-                            ->where('reference_id', (int) $order->id);
-                    })
-                    ->orWhereExists(function ($linkQuery) use ($order) {
+                $query->where(function ($legacyQuery) use ($order) {
+                    $legacyQuery
+                        ->where('reference_type', 'order')
+                        ->where('reference_id', (int) $order->id);
+                });
+
+                if ($this->hasInventoryDocumentOrderLinksTable()) {
+                    $query->orWhereExists(function ($linkQuery) use ($order) {
                         $linkQuery
                             ->select(DB::raw(1))
                             ->from('inventory_document_order_links')
                             ->whereColumn('inventory_document_order_links.inventory_document_id', 'inventory_documents.id')
                             ->where('inventory_document_order_links.order_id', (int) $order->id);
                     });
+                }
             })
             ->with([
                 'creator:id,name',
-                'orderLinks.order:id,order_number,customer_name,customer_phone',
                 'items' => function ($query) {
+                    $itemRelations = ['product:id,sku,name'];
+
+                    if ($this->hasInventoryDocumentItemOrderLinksTable()) {
+                        $itemRelations[] = 'orderLinks.order:id,order_number,customer_name';
+                    }
+
                     $query
                         ->select([
                             'id',
@@ -1273,16 +1349,18 @@ class OrderInventorySlipService
                             'notes',
                             'meta',
                         ])
-                        ->with([
-                            'product:id,sku,name',
-                            'orderLinks.order:id,order_number,customer_name',
-                        ])
+                        ->with($itemRelations)
                         ->orderBy('id');
                 },
             ])
             ->orderByDesc('document_date')
-            ->orderByDesc('id')
-            ->get();
+            ->orderByDesc('id');
+
+        if ($this->hasInventoryDocumentOrderLinksTable()) {
+            $documentsQuery->with('orderLinks.order:id,order_number,customer_name,customer_phone');
+        }
+
+        $documents = $documentsQuery->get();
 
         return $documents->unique('id')->values();
     }
@@ -1342,7 +1420,7 @@ class OrderInventorySlipService
                 : 0,
             'adjustment_document_id' => $adjustmentDocument?->id,
             'adjustment_document_number' => $adjustmentDocument?->document_number,
-            'source_label' => $isManagedReturn && $document->orderLinks->count() > 1
+            'source_label' => $isManagedReturn && $this->managedReturnOrderLinksCount($document) > 1
                 ? 'Phieu hoan theo lo'
                 : null,
             'items' => $items->all(),
@@ -1351,6 +1429,10 @@ class OrderInventorySlipService
 
     private function normalizeManagedReturnItemsForOrder(InventoryDocument $document, int $orderId): Collection
     {
+        if (!$this->hasInventoryDocumentItemOrderLinksTable()) {
+            return collect();
+        }
+
         return $document->items
             ->flatMap(function (InventoryDocumentItem $item) use ($orderId) {
                 return $item->orderLinks
@@ -1392,6 +1474,10 @@ class OrderInventorySlipService
 
     private function managedReturnLinksForOrder(InventoryDocument $document, int $orderId): Collection
     {
+        if (!$this->hasInventoryDocumentItemOrderLinksTable()) {
+            return collect();
+        }
+
         return $document->items
             ->flatMap(function (InventoryDocumentItem $item) use ($orderId) {
                 return $item->orderLinks
@@ -1782,9 +1868,11 @@ class OrderInventorySlipService
                 ->where('inventory_document_id', (int) $document->id)
                 ->delete();
 
-            InventoryDocumentOrderLink::query()
-                ->where('inventory_document_id', (int) $document->id)
-                ->delete();
+            if ($this->hasInventoryDocumentOrderLinksTable()) {
+                InventoryDocumentOrderLink::query()
+                    ->where('inventory_document_id', (int) $document->id)
+                    ->delete();
+            }
         }
 
         if ($document === null) {
@@ -2081,6 +2169,8 @@ class OrderInventorySlipService
 
     private function syncManagedReturnOrderLinks(InventoryDocument $document, Collection $orders, int $accountId): void
     {
+        $this->ensureManagedReturnLinkTablesExist();
+
         InventoryDocumentOrderLink::query()
             ->where('inventory_document_id', (int) $document->id)
             ->delete();
@@ -2171,6 +2261,8 @@ class OrderInventorySlipService
 
     private function loadManagedReturnDocument(InventoryDocument $document): InventoryDocument
     {
+        $this->ensureManagedReturnLinkTablesExist();
+
         return InventoryDocument::query()
             ->with([
                 'creator:id,name',

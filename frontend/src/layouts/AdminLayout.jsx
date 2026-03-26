@@ -2,6 +2,7 @@
 import { Link, Outlet, useNavigate, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import AccountSelector from '../components/AccountSelector';
+import { INVENTORY_NAV_ITEMS, buildInventoryPath } from '../config/adminInventoryNavigation';
 
 
 const AdminLayout = () => {
@@ -11,6 +12,7 @@ const AdminLayout = () => {
     const [isSettingsOpen, setIsSettingsOpen] = React.useState(location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users') || location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/shipping-settings'));
     const [isOrdersOpen, setIsOrdersOpen] = React.useState(location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads'));
     const [isDesignOpen, setIsDesignOpen] = React.useState(location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/blog'));
+    const [isInventoryOpen, setIsInventoryOpen] = React.useState(location.pathname.startsWith('/admin/inventory'));
 
     const isOrderForm = location.pathname.startsWith('/admin/orders/new') || location.pathname.startsWith('/admin/orders/edit');
 
@@ -18,6 +20,7 @@ const AdminLayout = () => {
         if (location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users') || location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/shipping-settings')) setIsSettingsOpen(true);
         if (location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads')) setIsOrdersOpen(true);
         if (location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/blog')) setIsDesignOpen(true);
+        if (location.pathname.startsWith('/admin/inventory')) setIsInventoryOpen(true);
     }, [location.pathname]);
 
 
@@ -278,10 +281,39 @@ const AdminLayout = () => {
 
                     <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-stone uppercase tracking-[0.2em] opacity-50">Kho & Vận chuyển</div>
                     {canAccess('inventory') && (
-                        <Link to="/admin/inventory" className="flex items-center gap-4 p-3 hover:bg-white/10 rounded-sm transition-colors group">
-                            <span className="material-symbols-outlined w-6 text-center text-stone group-hover:text-gold transition-colors">inventory</span>
-                            <span className="font-sans text-sm font-medium tracking-wider">Nhập xuất & Kiểm kê</span>
-                        </Link>
+                        <div className="space-y-1">
+                            <button
+                                onClick={() => setIsInventoryOpen(!isInventoryOpen)}
+                                className={`w-full flex items-center justify-between p-3 hover:bg-white/10 rounded-sm transition-colors group ${isInventoryOpen ? 'bg-white/5' : ''}`}
+                            >
+                                <div className="flex items-center gap-4 text-left">
+                                    <span className={`material-symbols-outlined w-6 text-center ${isInventoryOpen ? 'text-gold' : 'text-stone'} group-hover:text-gold transition-colors`}>inventory</span>
+                                    <span className="font-sans text-sm font-medium tracking-wider text-left">Quản lý kho</span>
+                                </div>
+                                <span className={`material-symbols-outlined text-xs transition-transform duration-300 ${isInventoryOpen ? 'rotate-180 text-gold' : 'text-stone'}`}>
+                                    expand_more
+                                </span>
+                            </button>
+
+                            {isInventoryOpen && (
+                                <div className="pl-4 space-y-1 animate-in slide-in-from-top-2 duration-200">
+                                    {INVENTORY_NAV_ITEMS.map((item) => {
+                                        const targetPath = buildInventoryPath(item.key);
+                                        const isActive = location.pathname === targetPath;
+                                        return (
+                                            <Link
+                                                key={item.key}
+                                                to={targetPath}
+                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${isActive ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
+                                            >
+                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${isActive ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>{item.icon}</span>
+                                                <span className="font-sans text-xs font-medium tracking-wide">{item.label}</span>
+                                            </Link>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
                     )}
 
 

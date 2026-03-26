@@ -169,7 +169,7 @@ const HEADER_ROUTE_REFERENCE_ROWS = [
     { page: 'Admin - Tạo đơn hàng', route: '/admin/orders/new', note: 'Form tạo đơn', scope: 'Admin', exists: true },
     { page: 'Admin - Sửa đơn hàng', route: '/admin/orders/edit/:id', note: 'Route động', scope: 'Admin', exists: true },
     { page: 'Admin - Chi tiết đơn hàng', route: '/admin/orders/:id', note: 'Route động chi tiết', scope: 'Admin', exists: true },
-    { page: 'Admin - Tồn kho', route: '/admin/inventory', note: 'Theo dõi nhập/xuất', scope: 'Admin', exists: true },
+    { page: 'Admin - Tồn kho', route: '/admin/inventory/tong-quan', note: 'Theo dõi nhập/xuất', scope: 'Admin', exists: true },
     { page: 'Admin - Khách hàng', route: '/admin/customers', note: 'Quản lý khách hàng', scope: 'Admin', exists: true },
     { page: 'Admin - Xử lý lead', route: '/admin/leads', note: 'Màn hình xử lý lead hiện tại', scope: 'Admin', exists: true },
     { page: 'Admin - Blog', route: '/admin/blog', note: 'Danh sách bài viết', scope: 'Admin', exists: true },

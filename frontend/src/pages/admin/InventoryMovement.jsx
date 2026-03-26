@@ -1,8 +1,9 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import Pagination from '../../components/Pagination';
 import SortIndicator from '../../components/SortIndicator';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
+import { DEFAULT_INVENTORY_SECTION_KEY, buildInventoryPath, getInventoryNavItem, resolveInventorySectionKey } from '../../config/adminInventoryNavigation';
 import { useUI } from '../../context/UIContext';
 import useAiAvailability from '../../hooks/useAiAvailability';
 import { useTableColumns } from '../../hooks/useTableColumns';
@@ -34,15 +35,6 @@ const INVENTORY_SEARCH_CACHE_TTL = 60 * 1000;
 const IMPORT_PRINT_SETTINGS_KEY = 'inventory_import_print_templates';
 const IMPORT_PRINT_DEFAULT_TEMPLATE_ID = 'inventory_import_default_template';
 const IMPORT_PRINT_DEFAULT_TEMPLATE_NAME = 'Bản chính';
-
-const topTabs = [
-    ['overview', 'Tổng quan'],
-    ['products', 'Sản phẩm'],
-    ['suppliers', 'Nhà cung cấp'],
-    ['supplierPrices', 'Giá nhập từng nhà'],
-    ['lots', 'Lô hàng'],
-    ['trash', 'Thùng rác'],
-];
 
 const documentTabs = [
     ['imports', 'Phiếu nhập'],
@@ -2428,8 +2420,11 @@ const InventoryTable = ({
 const InventoryMovement = () => {
     const navigate = useNavigate();
     const location = useLocation();
+    const { section: sectionSlug } = useParams();
     const { showToast } = useUI();
     const { available: aiAvailable, disabledReason: aiDisabledReason } = useAiAvailability();
+    const resolvedRouteSection = resolveInventorySectionKey(sectionSlug);
+    const currentInventorySection = getInventoryNavItem(resolvedRouteSection || DEFAULT_INVENTORY_SECTION_KEY);
     const restoredSupplierContextRef = useRef(false);
     const skipSupplierSearchResetRef = useRef(false);
     const savingSupplierPriceRowsRef = useRef(new Set());
@@ -2445,7 +2440,7 @@ const InventoryMovement = () => {
         trash: '',
     });
 
-    const [activeTab, setActiveTab] = useState('products');
+    const [activeTab, setActiveTab] = useState(() => resolvedRouteSection || DEFAULT_INVENTORY_SECTION_KEY);
     const [dashboard, setDashboard] = useState(null);
     const [categories, setCategories] = useState([]);
     const [inventoryUnits, setInventoryUnits] = useState([]);
@@ -2579,7 +2574,7 @@ const InventoryMovement = () => {
     };
     const buildSupplierPriceReturnContext = () => ({
         source: 'inventorySupplierPrices',
-        target: '/admin/inventory',
+        target: buildInventoryPath('supplierPrices'),
         activeTab: 'supplierPrices',
         selectedSupplierId,
         supplierQuickSearch,
@@ -2589,6 +2584,20 @@ const InventoryMovement = () => {
         supplierSortConfig: sortConfigs.supplierPrices,
         supplierPanels: openPanels.supplierPrices,
     });
+    const goToTab = (tabKey, options = {}) => {
+        const resolvedTab = resolveInventorySectionKey(tabKey);
+        if (!resolvedTab) return;
+
+        const targetPath = buildInventoryPath(resolvedTab);
+        setActiveTab(resolvedTab);
+
+        if (location.pathname !== targetPath || Object.prototype.hasOwnProperty.call(options, 'state') || options.replace) {
+            navigate(targetPath, {
+                replace: options.replace ?? false,
+                state: options.state,
+            });
+        }
+    };
 
     const getImportPrintAccountId = () => {
         if (typeof window === 'undefined') return null;
@@ -3748,6 +3757,23 @@ const InventoryMovement = () => {
     ].filter(Boolean);
 
     useEffect(() => {
+        if (!sectionSlug) {
+            navigate(buildInventoryPath(DEFAULT_INVENTORY_SECTION_KEY), {
+                replace: true,
+                state: location.state,
+            });
+            return;
+        }
+
+        if (!resolvedRouteSection) {
+            navigate(buildInventoryPath(DEFAULT_INVENTORY_SECTION_KEY), { replace: true });
+            return;
+        }
+
+        setActiveTab((prev) => (prev === resolvedRouteSection ? prev : resolvedRouteSection));
+    }, [location.state, navigate, resolvedRouteSection, sectionSlug]);
+
+    useEffect(() => {
         const loadCategories = async () => {
             try {
                 const response = await categoryApi.getAll();
@@ -3771,7 +3797,7 @@ const InventoryMovement = () => {
 
         restoredSupplierContextRef.current = true;
         skipSupplierSearchResetRef.current = true;
-        setActiveTab(returnContext.activeTab || 'supplierPrices');
+        goToTab(returnContext.activeTab || 'supplierPrices');
         if (returnContext.selectedSupplierId) {
             setSelectedSupplierId(Number(returnContext.selectedSupplierId));
         }
@@ -4584,7 +4610,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
 
     const openSupplierPriceTab = (supplierId = selectedSupplierId) => {
         if (supplierId) setSelectedSupplierId(supplierId);
-        setActiveTab('supplierPrices');
+        goToTab('supplierPrices');
     };
 
     const openImportStatusManager = (status = null) => {
@@ -4780,13 +4806,13 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     };
 
     const openCreateImport = async () => {
+        goToTab('imports');
         await ensureSuppliersLoaded();
         await fetchInventoryUnits();
         if (!importStatuses.length) {
             await fetchImportStatuses();
         }
         const defaultStatus = getDefaultImportStatus();
-        setActiveTab('imports');
         setImportTableSettingsOpen(false);
         closeImportPrintModal();
         setImportCompleteToggleSnapshot(null);
@@ -4804,7 +4830,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     };
 
     const openCreateExport = async () => {
-        setActiveTab('exports');
+        goToTab('exports');
         setExportModal({ open: true, form: createExportForm() });
     };
 
@@ -4986,6 +5012,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     };
 
     const openCreateDocument = async (tabKey) => {
+        goToTab(tabKey);
         await ensureSuppliersLoaded();
         setDocumentModal({ open: true, tabKey, form: createDocumentForm(tabKey) });
     };
@@ -5742,7 +5769,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     const productsTabContent = (
         <div className={panelClass}>
             <PanelHeader
-                title="Sản phẩm kho"
+                title="Tồn kho"
                 activeFilterChips={productFilterChips}
                 onClearAllFilters={productFilterChips.length ? clearAllProductFilters : null}
                 toggles={[
@@ -5810,7 +5837,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         <div className={panelClass}>
             <PanelHeader
                 title="Quản lý nhà cung cấp"
-                description="Chọn một nhà cung cấp rồi bấm Xem để mở tab giá nhập riêng."
+                description="Chọn một nhà cung cấp rồi bấm Xem để mở trang giá nhập riêng."
                 activeFilterChips={supplierFilterChips}
                 onClearAllFilters={supplierFilterChips.length ? clearAllSupplierFilters : null}
                 toggles={[
@@ -5882,7 +5909,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         <div className={panelClass}>
             <PanelHeader
                 title={currentSupplier ? `Giá nhập - ${currentSupplier.name}` : 'Giá nhập từng nhà'}
-                description={currentSupplier ? 'Mỗi nhà cung cấp có một bảng giá nhập riêng. Khi tạo phiếu nhập, giá sẽ tự đổ từ bảng này và vẫn có thể sửa tay.' : 'Chọn nhà cung cấp trong tab Nhà cung cấp hoặc đổi nhanh ngay tại đây để mở thư viện giá nhập.'}
+                description={currentSupplier ? 'Mỗi nhà cung cấp có một bảng giá nhập riêng. Khi tạo phiếu nhập, giá sẽ tự đổ từ bảng này và vẫn có thể sửa tay.' : 'Chọn nhà cung cấp trong mục Nhà cung cấp hoặc đổi nhanh ngay tại đây để mở thư viện giá nhập.'}
                 activeFilterChips={supplierCatalogFilterChips}
                 onClearAllFilters={supplierCatalogFilterChips.length ? clearAllSupplierCatalogFilters : null}
                 actions={
@@ -6155,16 +6182,19 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     const createSlipActions = [
         { key: 'imports', label: 'Phiếu nhập', icon: 'inventory_2', onClick: async () => { setCreateMenuOpen(false); await openCreateImport(); } },
         { key: 'exports', label: 'Phiếu xuất', icon: 'shopping_cart', onClick: async () => { setCreateMenuOpen(false); await openCreateExport(); } },
-        { key: 'returns', label: 'Phiếu hoàn', icon: 'assignment_return', onClick: async () => { setCreateMenuOpen(false); setActiveTab('returns'); await openCreateDocument('returns'); } },
-        { key: 'damaged', label: 'Phiếu hỏng', icon: 'broken_image', onClick: async () => { setCreateMenuOpen(false); setActiveTab('damaged'); await openCreateDocument('damaged'); } },
-        { key: 'adjustments', label: 'Phiếu điều chỉnh', icon: 'tune', onClick: async () => { setCreateMenuOpen(false); setActiveTab('adjustments'); await openCreateDocument('adjustments'); } },
+        { key: 'returns', label: 'Phiếu hoàn', icon: 'assignment_return', onClick: async () => { setCreateMenuOpen(false); await openCreateDocument('returns'); } },
+        { key: 'damaged', label: 'Phiếu hỏng', icon: 'broken_image', onClick: async () => { setCreateMenuOpen(false); await openCreateDocument('damaged'); } },
+        { key: 'adjustments', label: 'Phiếu điều chỉnh', icon: 'tune', onClick: async () => { setCreateMenuOpen(false); await openCreateDocument('adjustments'); } },
     ];
     const documentWorkspace = isDocumentTab(activeTab) ? renderSimpleTab(activeTab) : null;
 
     return (
         <div className="space-y-4 px-5 pb-6 pt-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="text-[16px] font-black uppercase tracking-[0.18em] text-primary">Quản lý kho</div>
+                <div className="space-y-1">
+                    <div className="text-[11px] font-black uppercase tracking-[0.18em] text-primary/45">Quản lý kho</div>
+                    <div className="text-[16px] font-black uppercase tracking-[0.18em] text-primary">{currentInventorySection?.label || 'Tổng quan'}</div>
+                </div>
                 <div className="relative flex flex-wrap items-center gap-2">
                     <button type="button" onClick={() => setCreateMenuOpen((prev) => !prev)} className={primaryButton}>
                         <span className="material-symbols-outlined text-[18px]">add</span>
@@ -6186,39 +6216,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                             ))}
                         </div>
                     ) : null}
-                </div>
-            </div>
-            <div className={`${panelClass} p-2`}>
-                <div className="flex flex-nowrap gap-2 overflow-x-auto">
-                    {topTabs.map(([key, label]) => {
-                        return (
-                            <React.Fragment key={key}>
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setCreateMenuOpen(false);
-                                        setActiveTab(key);
-                                    }}
-                                    className={`h-10 shrink-0 rounded-sm border px-4 text-[12px] font-black transition ${activeTab === key ? 'border-primary bg-primary text-white' : 'border-primary/15 bg-white text-primary hover:border-primary/35 hover:bg-primary/[0.03]'}`}
-                                >
-                                    {label}
-                                </button>
-                                {key === 'supplierPrices' ? documentTabs.map(([documentKey, documentLabel]) => (
-                                    <button
-                                        key={documentKey}
-                                        type="button"
-                                        onClick={() => {
-                                            setCreateMenuOpen(false);
-                                            setActiveTab(documentKey);
-                                        }}
-                                        className={`h-10 shrink-0 rounded-sm border px-4 text-[12px] font-black transition ${activeTab === documentKey ? 'border-primary bg-primary text-white' : 'border-primary/15 bg-white text-primary hover:border-primary/35 hover:bg-primary/[0.03]'}`}
-                                    >
-                                        {documentLabel}
-                                    </button>
-                                )) : null}
-                            </React.Fragment>
-                        );
-                    })}
                 </div>
             </div>
             {activeTab === 'overview' ? <div className={panelClass}><PanelHeader title="Tổng quan kho" toggles={[{ id: 'overview_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.overview.stats, onClick: () => togglePanel('overview', 'stats') }]} />{openPanels.overview.stats ? <SummaryPanel items={overviewItems} /> : null}</div> : null}
@@ -7096,7 +7093,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             >
                 <div className="space-y-4">
                     <div className="rounded-sm border border-primary/10 bg-[#fbfcfe] px-4 py-3 text-[13px] text-primary/70">
-                        Đơn hàng nào đã gửi sang đơn vị vận chuyển và có mã vận đơn sẽ tự xuất hiện ở tab này như một phiếu xuất tự động.
+                        Đơn hàng nào đã gửi sang đơn vị vận chuyển và có mã vận đơn sẽ tự xuất hiện ở mục này như một phiếu xuất tự động.
                         Mẫu dưới đây chỉ dùng cho các phiếu xuất tạo tay hoặc xuất nội bộ.
                     </div>
 

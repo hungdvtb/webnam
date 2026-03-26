@@ -150,6 +150,7 @@ function App() {
                 <Route path="orders/new" element={<OrderForm />} />
                 <Route path="orders/edit/:id" element={<OrderForm />} />
                 <Route path="inventory" element={<InventoryMovement />} />
+                <Route path="inventory/:section" element={<InventoryMovement />} />
                 <Route path="customers" element={<CustomerManagement />} />
                 <Route path="leads" element={<LeadList />} />
                 <Route path="blog" element={<BlogList />} />

@@ -37,6 +37,22 @@ const EXPORT_SLIP_FILTER_OPTIONS = [
     { value: 'missing', label: 'Chưa tạo phiếu xuất' },
 ];
 
+const RETURN_SLIP_FILTER_OPTIONS = [
+    { value: 'created', label: 'Đã tạo phiếu hoàn' },
+    { value: 'missing', label: 'Chưa tạo phiếu hoàn' },
+];
+
+const DAMAGED_SLIP_FILTER_OPTIONS = [
+    { value: 'created', label: 'Đã tạo phiếu hỏng' },
+    { value: 'missing', label: 'Chưa tạo phiếu hỏng' },
+];
+
+const INVENTORY_SLIP_FILTERS = [
+    { key: 'export_slip_state', label: 'Phiếu xuất', options: EXPORT_SLIP_FILTER_OPTIONS },
+    { key: 'return_slip_state', label: 'Phiếu hoàn', options: RETURN_SLIP_FILTER_OPTIONS },
+    { key: 'damaged_slip_state', label: 'Phiếu hỏng', options: DAMAGED_SLIP_FILTER_OPTIONS },
+];
+
 /**
  * Hover card that shows full product list for an order.
  * Stays open while mouse moves between trigger and card.
@@ -822,6 +838,8 @@ const OrderList = () => {
         shipping_address: '',
         shipping_carrier_code: '',
         export_slip_state: '',
+        return_slip_state: '',
+        damaged_slip_state: '',
         shipping_dispatched_from: '',
         shipping_dispatched_to: '',
         attributes: {}
@@ -1011,6 +1029,8 @@ const OrderList = () => {
             if (currentFilters.created_at_to) params.created_at_to = currentFilters.created_at_to;
             if (currentFilters.shipping_carrier_code) params.shipping_carrier_code = currentFilters.shipping_carrier_code;
             if (currentFilters.export_slip_state) params.export_slip_state = currentFilters.export_slip_state;
+            if (currentFilters.return_slip_state) params.return_slip_state = currentFilters.return_slip_state;
+            if (currentFilters.damaged_slip_state) params.damaged_slip_state = currentFilters.damaged_slip_state;
             if (currentFilters.shipping_dispatched_from) params.shipping_dispatched_from = currentFilters.shipping_dispatched_from;
             if (currentFilters.shipping_dispatched_to) params.shipping_dispatched_to = currentFilters.shipping_dispatched_to;
 
@@ -1216,6 +1236,8 @@ const OrderList = () => {
             shipping_address: '',
             shipping_carrier_code: '',
             export_slip_state: '',
+            return_slip_state: '',
+            damaged_slip_state: '',
             shipping_dispatched_from: '',
             shipping_dispatched_to: '',
             attributes: {},
@@ -1515,9 +1537,11 @@ const OrderList = () => {
         }
     }, []);
 
-    const openOrderEditor = useCallback((orderId) => {
+    const openOrderEditor = useCallback((orderId, options = {}) => {
+        const returnTo = options.returnTo || currentListUrl;
+
         warmOrderEditor(orderId);
-        navigate(`/admin/orders/edit/${orderId}?return_to=${encodeURIComponent(currentListUrl)}`);
+        navigate(`/admin/orders/edit/${orderId}?return_to=${encodeURIComponent(returnTo)}`);
     }, [currentListUrl, navigate, warmOrderEditor]);
 
     const handleBulkDelete = async () => {
@@ -1555,12 +1579,30 @@ const OrderList = () => {
         } catch (e) { setNotification({ type: 'error', message: 'L?i x?a' }); } finally { setLoading(false); }
     };
 
-    const handleBulkDuplicate = async () => {
+    const handleBulkDuplicate = useCallback(async () => {
         if (!selectedIds.length) return;
 
         try {
             setLoading(true);
-            await orderApi.bulkDuplicate(selectedIds, DRAFT_ORDER_KIND);
+
+            if (selectedIds.length === 1) {
+                const response = await orderApi.duplicate(selectedIds[0], {
+                    target_kind: DRAFT_ORDER_KIND,
+                });
+                const duplicatedOrderId = response?.data?.id;
+
+                setSelectedIds([]);
+
+                if (duplicatedOrderId) {
+                    openOrderEditor(duplicatedOrderId, {
+                        returnTo: buildOrderListUrl('draft'),
+                    });
+                    return;
+                }
+            } else {
+                await orderApi.bulkDuplicate(selectedIds, DRAFT_ORDER_KIND);
+            }
+
             setNotification({
                 type: 'success',
                 message: `Đã sao chép ${selectedIds.length} đơn thành đơn nháp mới`,
@@ -1581,7 +1623,7 @@ const OrderList = () => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [fetchOrders, isDraftView, navigateToListView, openOrderEditor, selectedIds]);
 
     const handleBulkConvert = async (targetKind) => {
         if (!selectedIds.length) return;
@@ -1625,7 +1667,9 @@ const OrderList = () => {
         if (filters.order_number) c++;
         if (filters.customer_phone) c++;
         if (filters.shipping_carrier_code) c++;
-        if (filters.export_slip_state) c++;
+        INVENTORY_SLIP_FILTERS.forEach(({ key }) => {
+            if (filters[key]) c++;
+        });
         if (filters.created_at_from || filters.created_at_to) c++;
         if (filters.shipping_dispatched_from || filters.shipping_dispatched_to) c++;
         if (filters.attributes) c += Object.keys(filters.attributes).length;
@@ -1697,6 +1741,8 @@ const OrderList = () => {
 
                         <div className="w-[1px] h-6 bg-primary/20 mx-1"></div>
 
+                        <button data-filter-btn onClick={() => { if (!showFilters) setTempFilters({ ...filters }); setShowFilters(!showFilters); }} className={`p-1.5 border transition-all rounded-sm w-9 h-9 flex items-center justify-center ${showFilters || activeCount() > 0 ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`} title="Bộ lọc nâng cao"><span className="material-symbols-outlined text-[18px]">filter_alt</span></button>
+
                         {isTrashView ? (
                             <>
                                 <button onClick={handleBulkDuplicate} disabled={selectedIds.length === 0} title="Sao chép đơn hàng" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
@@ -1723,8 +1769,6 @@ const OrderList = () => {
                                 {showShippingAlerts && <ShippingAlertsPopover alerts={shippingAlerts} unreadCount={shippingAlertUnread.length} onClose={() => setShowShippingAlerts(false)} onOpenOrder={handleOpenShippingAlert} onMarkAllSeen={() => markShippingAlertsSeen()} />}
                             </div>
                         )}
-
-                        <button data-filter-btn onClick={() => { if (!showFilters) setTempFilters({ ...filters }); setShowFilters(!showFilters); }} className={`p-1.5 border transition-all rounded-sm w-9 h-9 flex items-center justify-center ${showFilters || activeCount() > 0 ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`} title="Bộ lọc nâng cao"><span className="material-symbols-outlined text-[18px]">filter_alt</span></button>
                         <button onClick={handleRefresh} disabled={loading} title="Làm mới" className="bg-white text-primary border border-primary/20 p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center hover:bg-primary/5"><span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span></button>
                         <button data-column-settings-btn onClick={() => setShowColumnSettings(!showColumnSettings)} className={`p-1.5 border rounded-sm w-9 h-9 flex items-center justify-center transition-all ${showColumnSettings ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/30 hover:bg-primary/5'}`} title="Cấu hình hiển thị cột"><span className="material-symbols-outlined text-[18px]">settings_suggest</span></button>
 
@@ -1825,27 +1869,29 @@ const OrderList = () => {
                                 </span>
                             </div>
                         </div>
-                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
-                            <label className="text-[13px] font-medium text-stone-600">Phiếu xuất</label>
-                            <div className="relative">
-                                <select
-                                    name="export_slip_state"
-                                    className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer appearance-none"
-                                    value={tempFilters.export_slip_state}
-                                    onChange={handleTempFilterChange}
-                                >
-                                    <option value="">Tất cả</option>
-                                    {EXPORT_SLIP_FILTER_OPTIONS.map((option) => (
-                                        <option key={option.value} value={option.value}>
-                                            {option.label}
-                                        </option>
-                                    ))}
-                                </select>
-                                <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 pointer-events-none text-[18px]">
-                                    expand_more
-                                </span>
+                        {INVENTORY_SLIP_FILTERS.map(({ key, label, options }) => (
+                            <div key={key} className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                                <label className="text-[13px] font-medium text-stone-600">{label}</label>
+                                <div className="relative">
+                                    <select
+                                        name={key}
+                                        className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer appearance-none"
+                                        value={tempFilters[key]}
+                                        onChange={handleTempFilterChange}
+                                    >
+                                        <option value="">Tất cả</option>
+                                        {options.map((option) => (
+                                            <option key={option.value} value={option.value}>
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 pointer-events-none text-[18px]">
+                                        expand_more
+                                    </span>
+                                </div>
                             </div>
-                        </div>
+                        ))}
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Ngày gửi vận chuyển</label>
                             <div className="flex gap-2 items-center h-10">
@@ -1961,13 +2007,15 @@ const OrderList = () => {
                             <button onClick={() => removeFilter('shipping_carrier_code')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     )}
-                    {filters.export_slip_state && (
-                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
-                            <span className="text-[11px] text-primary/40">Phiếu xuất:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{EXPORT_SLIP_FILTER_OPTIONS.find((option) => option.value === filters.export_slip_state)?.label || filters.export_slip_state}</span>
-                            <button onClick={() => removeFilter('export_slip_state')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
-                        </div>
-                    )}
+                    {INVENTORY_SLIP_FILTERS.map(({ key, label, options }) => (
+                        filters[key] ? (
+                            <div key={key} className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                                <span className="text-[11px] text-primary/40">{label}:</span>
+                                <span className="text-[13px] font-bold text-[#0F172A]">{options.find((option) => option.value === filters[key])?.label || filters[key]}</span>
+                                <button onClick={() => removeFilter(key)} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                            </div>
+                        ) : null
+                    ))}
                     {(filters.shipping_dispatched_from || filters.shipping_dispatched_to) && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">Ngày gửi VC:</span>

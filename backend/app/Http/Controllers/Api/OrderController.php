@@ -1199,6 +1199,14 @@ class OrderController extends Controller
         ->when($request->filled('export_slip_state'), function ($q) use ($request) {
             $state = trim((string) $request->input('export_slip_state'));
             $this->orderInventorySlipService->applyExportSlipStateFilter($q, $state);
+        })
+        ->when($request->filled('return_slip_state'), function ($q) use ($request) {
+            $state = trim((string) $request->input('return_slip_state'));
+            $this->orderInventorySlipService->applyReturnSlipStateFilter($q, $state);
+        })
+        ->when($request->filled('damaged_slip_state'), function ($q) use ($request) {
+            $state = trim((string) $request->input('damaged_slip_state'));
+            $this->orderInventorySlipService->applyDamagedSlipStateFilter($q, $state);
         });
 
         // Optimize Dynamic Attribute Filters (EAV) using JOIN for large data

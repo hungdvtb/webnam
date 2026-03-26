@@ -52,16 +52,8 @@ class OrderInventorySlipService
 
         if ($state === 'created') {
             $query->where(function ($builder) {
+                $this->applyActiveDocumentSlipStateFilter($builder, 'created', 'export');
                 $builder
-                    ->whereExists(function ($documentQuery) {
-                        $documentQuery
-                            ->select(DB::raw(1))
-                            ->from('inventory_documents')
-                            ->whereColumn('inventory_documents.reference_id', 'orders.id')
-                            ->where('inventory_documents.reference_type', 'order')
-                            ->where('inventory_documents.type', 'export')
-                            ->whereIn('inventory_documents.status', self::ACTIVE_STATUSES);
-                    })
                     ->orWhereExists(function ($shipmentQuery) {
                         $shipmentQuery
                             ->select(DB::raw(1))
@@ -86,14 +78,8 @@ class OrderInventorySlipService
         }
 
         $query
-            ->whereNotExists(function ($documentQuery) {
-                $documentQuery
-                    ->select(DB::raw(1))
-                    ->from('inventory_documents')
-                    ->whereColumn('inventory_documents.reference_id', 'orders.id')
-                    ->where('inventory_documents.reference_type', 'order')
-                    ->where('inventory_documents.type', 'export')
-                    ->whereIn('inventory_documents.status', self::ACTIVE_STATUSES);
+            ->where(function ($builder) {
+                $this->applyActiveDocumentSlipStateFilter($builder, 'missing', 'export');
             })
             ->whereNotExists(function ($shipmentQuery) {
                 $shipmentQuery
@@ -115,6 +101,16 @@ class OrderInventorySlipService
             });
     }
 
+    public function applyReturnSlipStateFilter($query, string $state): void
+    {
+        $this->applyActiveDocumentSlipStateFilter($query, $state, 'return');
+    }
+
+    public function applyDamagedSlipStateFilter($query, string $state): void
+    {
+        $this->applyActiveDocumentSlipStateFilter($query, $state, 'damaged');
+    }
+
     public function getOrderDetail(Order $order): array
     {
         $order->loadMissing(['items']);
@@ -125,6 +121,27 @@ class OrderInventorySlipService
             $this->loadAutomaticExportsForSingleOrder($order),
             true
         );
+    }
+
+    private function applyActiveDocumentSlipStateFilter($query, string $state, string $type): void
+    {
+        $normalizedState = strtolower(trim($state));
+
+        if (!in_array($normalizedState, ['created', 'missing'], true)) {
+            return;
+        }
+
+        $method = $normalizedState === 'created' ? 'whereExists' : 'whereNotExists';
+
+        $query->{$method}(function ($documentQuery) use ($type) {
+            $documentQuery
+                ->select(DB::raw(1))
+                ->from('inventory_documents')
+                ->whereColumn('inventory_documents.reference_id', 'orders.id')
+                ->where('inventory_documents.reference_type', 'order')
+                ->where('inventory_documents.type', $type)
+                ->whereIn('inventory_documents.status', self::ACTIVE_STATUSES);
+        });
     }
 
     public function createSlip(Order $order, array $payload, ?int $userId = null): InventoryDocument

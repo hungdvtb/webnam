@@ -23,6 +23,18 @@ function escapeHtml(value) {
         .replace(/'/g, '&#39;');
 }
 
+function getMediaItemKey(item) {
+    if (!item || typeof item !== 'object') {
+        return '';
+    }
+
+    if (item.type === 'video') {
+        return item.youtubeId || extractYouTubeVideoId(item.url || item.youtubeId) || item.url || '';
+    }
+
+    return item.src || item.url || '';
+}
+
 const BlogMediaGalleryModal = ({
     open,
     initialItems = [],
@@ -80,6 +92,26 @@ const BlogMediaGalleryModal = ({
                 ? (typeof updater === 'function' ? updater(item) : updater)
                 : item
         )));
+    };
+
+    const resolvePendingVideoItems = (rawValue, baseItems = items) => {
+        const { links, invalid } = parseYouTubeLinks(rawValue);
+        const existingKeys = new Set(baseItems.map(getMediaItemKey).filter(Boolean));
+        const nextItems = [];
+
+        links.forEach((link) => {
+            const videoItem = buildVideoGalleryItem(link);
+            const itemKey = getMediaItemKey(videoItem);
+
+            if (!videoItem || !itemKey || existingKeys.has(itemKey)) {
+                return;
+            }
+
+            existingKeys.add(itemKey);
+            nextItems.push(videoItem);
+        });
+
+        return { links, invalid, nextItems };
     };
 
     const moveItem = (index, direction) => {
@@ -148,7 +180,7 @@ const BlogMediaGalleryModal = ({
     };
 
     const handleAddVideos = () => {
-        const { links, invalid } = parseYouTubeLinks(youtubeInput);
+        const { links, invalid, nextItems } = resolvePendingVideoItems(youtubeInput);
 
         if (!links.length) {
             showModal({
@@ -160,16 +192,6 @@ const BlogMediaGalleryModal = ({
             });
             return;
         }
-
-        const existingKeys = new Set(items.map((item) => (
-            item.type === 'video'
-                ? item.youtubeId || item.url
-                : item.src
-        )));
-
-        const nextItems = links
-            .map((link) => buildVideoGalleryItem(link))
-            .filter((item) => item && !existingKeys.has(item.youtubeId || item.url));
 
         if (!nextItems.length) {
             showToast({
@@ -196,13 +218,36 @@ const BlogMediaGalleryModal = ({
     };
 
     const handleSave = () => {
-        const normalizedItems = normalizeGalleryItems(items);
-        const invalidVideoCount = items.filter((item) => item.type === 'video' && !extractYouTubeVideoId(item.url || item.youtubeId)).length;
+        const pendingVideoState = resolvePendingVideoItems(youtubeInput, items);
+        const mergedItems = [
+            ...items,
+            ...pendingVideoState.nextItems,
+        ];
+        const normalizedItems = normalizeGalleryItems(mergedItems);
+        const invalidVideoCount = normalizedItems.filter((item) => item.type === 'video' && !extractYouTubeVideoId(item.url || item.youtubeId)).length;
+
+        if (youtubeInput.trim() && !pendingVideoState.links.length && !pendingVideoState.invalid.length) {
+            showModal({
+                title: 'Chưa có video hợp lệ',
+                content: 'Hãy dán ít nhất một link YouTube đúng định dạng trước khi lưu block media.',
+                type: 'warning',
+            });
+            return;
+        }
 
         if (invalidVideoCount > 0) {
             showModal({
                 title: 'Video chưa hợp lệ',
                 content: 'Có video YouTube đang bị sai link. Hãy sửa lại trước khi lưu block media.',
+                type: 'warning',
+            });
+            return;
+        }
+
+        if (youtubeInput.trim() && !pendingVideoState.nextItems.length && pendingVideoState.invalid.length) {
+            showModal({
+                title: 'Video chưa hợp lệ',
+                content: 'Các link YouTube đang nhập chưa được nhận diện đúng. Hãy kiểm tra lại trước khi lưu block media.',
                 type: 'warning',
             });
             return;
@@ -217,7 +262,18 @@ const BlogMediaGalleryModal = ({
             return;
         }
 
+        if (pendingVideoState.nextItems.length) {
+            setItems(normalizedItems);
+        }
+
         onSave(normalizedItems);
+
+        if (pendingVideoState.invalid.length) {
+            showToast({
+                message: `Đã bỏ qua ${pendingVideoState.invalid.length} link YouTube không hợp lệ.`,
+                type: 'warning',
+            });
+        }
     };
 
     return (
@@ -245,8 +301,8 @@ const BlogMediaGalleryModal = ({
                     </div>
                 </div>
 
-                <div className="grid flex-1 grid-cols-1 gap-0 overflow-hidden lg:grid-cols-[340px_minmax(0,1fr)]">
-                    <aside className="border-b border-gold/15 bg-[#f8f2e8] p-6 lg:border-b-0 lg:border-r">
+                <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 overflow-hidden lg:grid-cols-[340px_minmax(0,1fr)]">
+                    <aside className="min-h-0 overflow-y-auto border-b border-gold/15 bg-[#f8f2e8] p-6 pb-28 lg:border-b-0 lg:border-r lg:pb-6">
                         <div className="space-y-6">
                             <div className="rounded-sm border border-gold/20 bg-white p-5">
                                 <div className="flex items-center justify-between gap-3">
@@ -339,7 +395,7 @@ const BlogMediaGalleryModal = ({
                             </div>
                         </div>
 
-                        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+                        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6 pb-28 lg:pb-6">
                             {items.length === 0 ? (
                                 <div className="flex h-full min-h-[320px] flex-col items-center justify-center border border-dashed border-gold/25 bg-white/80 px-8 text-center">
                                     <span className="material-symbols-outlined text-[52px] text-gold/60">gallery_thumbnail</span>

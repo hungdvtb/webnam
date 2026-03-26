@@ -56,6 +56,16 @@ const BlogForm = () => {
         is_system: false,
     });
 
+    const getQuillEditor = () => {
+        try {
+            return typeof quillRef.current?.getEditor === 'function'
+                ? quillRef.current.getEditor()
+                : null;
+        } catch {
+            return null;
+        }
+    };
+
     const serializeEditorContent = (editorInstance) => {
         if (editorInstance?.root?.innerHTML) {
             return editorInstance.root.innerHTML;
@@ -66,9 +76,7 @@ const BlogForm = () => {
         }
 
         try {
-            const quill = typeof quillRef.current?.getEditor === 'function'
-                ? quillRef.current.getEditor()
-                : null;
+            const quill = getQuillEditor();
             return quill?.root?.innerHTML || '';
         } catch {
             return '';
@@ -119,18 +127,8 @@ const BlogForm = () => {
         }
     };
 
-    const syncEditorContent = (quill) => {
-        const nextContent = serializeEditorContent(quill);
-
-        setFormData((prev) => (
-            !nextContent || nextContent === prev.content
-                ? prev
-                : { ...prev, content: nextContent }
-        ));
-    };
-
     const openMediaModal = (options = {}) => {
-        const quill = quillRef.current?.getEditor();
+        const quill = getQuillEditor();
         const range = quill?.getSelection(true);
         const fallbackIndex = typeof range?.index === 'number'
             ? range.index
@@ -179,7 +177,7 @@ const BlogForm = () => {
     }
 
     const openExistingMediaGallery = (galleryNode) => {
-        const quill = quillRef.current?.getEditor();
+        const quill = getQuillEditor();
         const root = quill?.root;
 
         if (!galleryNode || !quill || !root?.contains(galleryNode)) {
@@ -238,9 +236,14 @@ const BlogForm = () => {
     };
 
     const handleSaveMediaGallery = (items) => {
-        const quill = quillRef.current?.getEditor();
+        const quill = getQuillEditor();
 
         if (!quill) {
+            showModal({
+                title: 'Editor chưa sẵn sàng',
+                content: 'Không thể cập nhật block media lúc này. Hãy tải lại trang rồi thử lại.',
+                type: 'warning',
+            });
             return;
         }
 
@@ -248,24 +251,23 @@ const BlogForm = () => {
         let insertIndex = typeof mediaModalState.insertIndex === 'number'
             ? mediaModalState.insertIndex
             : Math.max(quill.getLength() - 1, 0);
+        let deleteLength = 0;
 
         if (mediaModalState.editing) {
-            quill.deleteText(insertIndex, 1, 'user');
+            deleteLength = 1;
         } else if (selection) {
             insertIndex = selection.index;
-            if (selection.length > 0) {
-                quill.deleteText(selection.index, selection.length, 'user');
-            }
+            deleteLength = Math.max(selection.length || 0, 0);
         }
 
-        quill.insertEmbed(insertIndex, 'mediaGallery', items, 'user');
+        const delta = new Delta()
+            .retain(insertIndex)
+            .delete(deleteLength)
+            .insert({ mediaGallery: items })
+            .insert('\n');
 
-        if (quill.getText(insertIndex + 1, 1) !== '\n') {
-            quill.insertText(insertIndex + 1, '\n', 'user');
-        }
-
+        quill.updateContents(delta, 'user');
         quill.setSelection(Math.min(insertIndex + 2, quill.getLength()), 0, 'silent');
-        syncEditorContent(quill);
         closeMediaModal();
 
         showToast({
@@ -277,15 +279,17 @@ const BlogForm = () => {
     };
 
     const handleRemoveMediaGallery = () => {
-        const quill = quillRef.current?.getEditor();
+        const quill = getQuillEditor();
 
         if (!quill || typeof mediaModalState.insertIndex !== 'number') {
             closeMediaModal();
             return;
         }
 
-        quill.deleteText(mediaModalState.insertIndex, 1, 'user');
-        syncEditorContent(quill);
+        quill.updateContents(
+            new Delta().retain(mediaModalState.insertIndex).delete(1),
+            'user'
+        );
         closeMediaModal();
 
         showToast({
@@ -313,7 +317,7 @@ const BlogForm = () => {
                 blog_category_id: formData.blog_category_id ? Number(formData.blog_category_id) : null,
                 seo_keyword: formData.seo_keyword,
                 excerpt: formData.excerpt,
-                content: serializeEditorContent() || formData.content,
+                content: serializeEditorContent(getQuillEditor()) || formData.content,
                 featured_image: formData.featured_image,
                 is_published: formData.is_published,
                 is_starred: formData.is_starred,
@@ -549,8 +553,8 @@ const BlogForm = () => {
                                     ref={quillRef}
                                     theme="snow"
                                     value={formData.content}
-                                    onChange={(content, _delta, _source, editor) => {
-                                        const nextContent = serializeEditorContent(editor) || content || '';
+                                    onChange={(content) => {
+                                        const nextContent = content || '';
 
                                         setFormData((prev) => (
                                             nextContent === prev.content

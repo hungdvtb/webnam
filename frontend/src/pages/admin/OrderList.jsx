@@ -20,21 +20,17 @@ const DEFAULT_COLUMNS = [
     { id: 'shipping_address', label: 'Địa Chỉ', minWidth: '220px' },
     { id: 'items', label: 'Sản Phẩm', minWidth: '250px' },
     { id: 'total_price', label: 'Tổng Tiền', minWidth: '130px' },
-    { id: 'created_at', label: 'Ngày Đặt', minWidth: '120px' },
+    { id: 'created_at', label: 'Ngày Đặt', minWidth: '112px' },
     { id: 'notes', label: 'Ghi Chú Đơn', minWidth: '180px' },
     { id: 'status', label: 'Trạng Thái', minWidth: '120px', align: 'left' },
-    { id: 'actions', label: 'Thao Tác', minWidth: '100px', align: 'right', fixed: true },
     { id: 'shipping_carrier_name', label: 'Đơn vị VC', minWidth: '140px' },
     { id: 'shipping_tracking_code', label: 'Mã vận đơn', minWidth: '170px' },
-    { id: 'shipping_dispatched_at', label: 'Ngày gửi VC', minWidth: '160px' },
+    { id: 'shipping_dispatched_at', label: 'Ngày gửi VC', minWidth: '120px' },
 ];
 
 DEFAULT_COLUMNS.splice(7, 0, { id: 'inventory_slips', label: 'Phiếu kho', minWidth: '180px' });
 
-const ORDER_TABLE_COLUMNS = [
-    ...DEFAULT_COLUMNS.filter((column) => column.id !== 'actions'),
-    DEFAULT_COLUMNS.find((column) => column.id === 'actions'),
-];
+const ORDER_TABLE_COLUMNS = [...DEFAULT_COLUMNS];
 
 const EXPORT_SLIP_FILTER_OPTIONS = [
     { value: 'created', label: 'Đã tạo phiếu xuất' },
@@ -254,6 +250,36 @@ const formatDateTime = (value) => {
         minute: '2-digit',
         second: '2-digit',
     })}`;
+};
+
+const formatDateTimeParts = (value) => {
+    if (!value) return { date: '-', time: '', text: '-' };
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        const rawText = String(value).trim();
+        const [datePart = rawText, timePart = ''] = rawText.split(/\s+/, 2);
+        return { date: datePart, time: timePart, text: rawText || '-' };
+    }
+
+    const datePart = date.toLocaleDateString('vi-VN');
+    const timePart = date.toLocaleTimeString('vi-VN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+    });
+
+    return {
+        date: datePart,
+        time: timePart,
+        text: `${datePart} ${timePart}`,
+    };
+};
+
+const getCompactColumnLabelLines = (columnId, label) => {
+    if (columnId === 'created_at') return ['Ngày', 'đặt'];
+    if (columnId === 'shipping_dispatched_at') return ['Ngày gửi', 'VC'];
+    return [label];
 };
 
 const MAIN_ORDER_KIND = 'official';
@@ -909,7 +935,7 @@ const OrderList = () => {
                 attrId: attr.id
             }));
 
-            const combinedColumns = [...ORDER_TABLE_COLUMNS.slice(0, -1), ...attrColumns, ORDER_TABLE_COLUMNS[ORDER_TABLE_COLUMNS.length - 1]];
+            const combinedColumns = [...ORDER_TABLE_COLUMNS, ...attrColumns];
 
             const savedOrder = localStorage.getItem('order_list_column_order');
             let sortedColumns = [...combinedColumns];
@@ -1372,7 +1398,7 @@ const OrderList = () => {
     const handleSort = (colId) => {
         let key = colId === 'customer' ? 'customer_name' : colId;
         const valid = ['id', 'order_number', 'customer_name', 'created_at', 'total_price', 'status'];
-        if (colId === 'actions' || !valid.includes(key)) return;
+        if (!valid.includes(key)) return;
         let ns;
         if (sortConfig.key !== key) ns = { key, direction: 'desc', phase: 1 };
         else {
@@ -1517,59 +1543,6 @@ const OrderList = () => {
         } catch (e) { setNotification({ type: 'error', message: 'L?i x?a' }); } finally { setLoading(false); }
     };
 
-    const handleMoveOrderToTrash = async (orderId, event) => {
-        event?.stopPropagation();
-        if (!window.confirm('Chuy?n ??n n?y v?o th?ng r?c?')) return;
-
-        try {
-            setLoading(true);
-            await orderApi.destroy(orderId);
-            setNotification({ type: 'success', message: '?? chuy?n ??n v?o th?ng r?c' });
-            setSelectedIds(prev => prev.filter(id => id !== orderId));
-            fetchOrders(1);
-        } catch (e) {
-            const errorMsg = e.response?.data?.message || 'L?i x?a ??n';
-            setNotification({ type: 'error', message: errorMsg });
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleRestoreOrder = async (orderId, event) => {
-        event?.stopPropagation();
-
-        try {
-            setLoading(true);
-            await orderApi.restore(orderId);
-            setNotification({ type: 'success', message: '?? kh?i ph?c ??n h?ng' });
-            setSelectedIds(prev => prev.filter(id => id !== orderId));
-            fetchOrders(1);
-        } catch (e) {
-            const errorMsg = e.response?.data?.message || 'L?i kh?i ph?c ??n';
-            setNotification({ type: 'error', message: errorMsg });
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleForceDeleteOrder = async (orderId, event) => {
-        event?.stopPropagation();
-        if (!window.confirm('X?a v?nh vi?n ??n n?y?')) return;
-
-        try {
-            setLoading(true);
-            await orderApi.forceDelete(orderId);
-            setNotification({ type: 'success', message: '?? x?a v?nh vi?n ??n h?ng' });
-            setSelectedIds(prev => prev.filter(id => id !== orderId));
-            fetchOrders(1);
-        } catch (e) {
-            const errorMsg = e.response?.data?.message || 'L?i x?a v?nh vi?n ??n';
-            setNotification({ type: 'error', message: errorMsg });
-        } finally {
-            setLoading(false);
-        }
-    };
-
     const handleBulkDuplicate = async () => {
         if (!selectedIds.length) return;
 
@@ -1609,21 +1582,6 @@ const OrderList = () => {
             navigateToListView(targetView);
         } catch (e) {
             setNotification({ type: 'error', message: e.response?.data?.message || 'Lỗi chuyển nhóm đơn' });
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleConvertOrder = async (orderId, targetKind, event) => {
-        event?.stopPropagation();
-        try {
-            setLoading(true);
-            await orderApi.convert(orderId, { target_kind: targetKind });
-            const targetView = getTargetListView(targetKind);
-            setNotification({ type: 'success', message: targetView === 'draft' ? 'Đã chuyển đơn sang đơn nháp' : 'Đã chốt đơn thành đơn chính' });
-            navigateToListView(targetView);
-        } catch (error) {
-            setNotification({ type: 'error', message: error.response?.data?.message || 'Lỗi chuyển nhóm đơn' });
         } finally {
             setLoading(false);
         }
@@ -2032,9 +1990,9 @@ const OrderList = () => {
                                 </label>
                             </th>
                             {renderedColumns.map((c, i) => (
-                                <th key={c.id} draggable={c.id !== 'actions'} onDragStart={(e) => handleHeaderDragStart(e, i)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleHeaderDrop(e, i)} onDoubleClick={() => handleSort(c.id)} className={`px-3 py-2.5 border border-primary/10 cursor-move hover:bg-primary/5 relative group ${c.id === 'order_number' ? 'sticky-col-1' : ''}`} style={{ width: columnWidths[c.id] || c.minWidth }}>
-                                    <div className={`flex items-center gap-1.5 ${c.align === 'center' ? 'justify-center' : c.align === 'right' ? 'justify-end' : ''}`}>{c.id !== 'actions' && <span className="material-symbols-outlined text-[14px] opacity-20 group-hover:opacity-100 text-primary">drag_indicator</span>}<span className="truncate text-primary font-black">{c.label}</span><SortIndicator colId={c.id === 'customer' ? 'customer_name' : c.id} sortConfig={sortConfig} /></div>
-                                    {c.id !== 'actions' && <div onMouseDown={(e) => handleColumnResize(c.id, e)} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/20 transition-colors" />}
+                                <th key={c.id} draggable onDragStart={(e) => handleHeaderDragStart(e, i)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleHeaderDrop(e, i)} onDoubleClick={() => handleSort(c.id)} className={`px-3 py-2.5 border border-primary/10 cursor-move hover:bg-primary/5 relative group ${c.id === 'order_number' ? 'sticky-col-1' : ''}`} style={{ width: columnWidths[c.id] || c.minWidth }}>
+                                    <div className={`flex items-center gap-1.5 ${c.align === 'center' ? 'justify-center' : c.align === 'right' ? 'justify-end' : ''}`}><span className="material-symbols-outlined text-[14px] opacity-20 group-hover:opacity-100 text-primary">drag_indicator</span><span className={`text-primary font-black ${c.id === 'created_at' || c.id === 'shipping_dispatched_at' ? 'leading-[1.05]' : 'truncate'}`}>{(c.id === 'created_at' || c.id === 'shipping_dispatched_at') ? <span className="flex flex-col"><span className="whitespace-nowrap">{getCompactColumnLabelLines(c.id, c.label)[0]}</span><span className="whitespace-nowrap">{getCompactColumnLabelLines(c.id, c.label)[1]}</span></span> : c.label}</span><SortIndicator colId={c.id === 'customer' ? 'customer_name' : c.id} sortConfig={sortConfig} /></div>
+                                    <div onMouseDown={(e) => handleColumnResize(c.id, e)} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/20 transition-colors" />
                                 </th>
                             ))}
                         </tr>
@@ -2330,30 +2288,16 @@ const OrderList = () => {
                                                 return <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary/30 font-bold">-</td>;
                                             }
                                             const dispatchedAt = o.shipping_dispatched_at || o.active_shipment?.shipped_at || null;
+                                            const dispatchedAtDisplay = formatDateTimeParts(dispatchedAt);
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary font-bold">
-                                                    <span className="truncate block">{formatDateTime(dispatchedAt)}</span>
+                                                    <div className="flex min-w-0 flex-col leading-[1.15]">
+                                                        <span className="whitespace-nowrap">{dispatchedAtDisplay.date}</span>
+                                                        {dispatchedAtDisplay.time && <span className="whitespace-nowrap">{dispatchedAtDisplay.time}</span>}
+                                                    </div>
                                                 </td>
                                             );
                                         }
-                                        if (c.id === 'actions') return (
-                                            <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-right sticky right-0 bg-white group-hover:bg-primary/5"><div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                                                {!isTrashView ? (
-                                                    <>
-                                                        <button onMouseEnter={() => warmOrderEditor(o.id)} onFocus={() => warmOrderEditor(o.id)} onClick={(e) => { e.stopPropagation(); openOrderEditor(o.id); }} className="p-1 hover:text-primary" title="Sửa đơn"><span className="material-symbols-outlined text-[18px]">edit</span></button>
-                                                        {isDraftOrder(o.order_kind)
-                                                            ? <button onClick={(e) => handleConvertOrder(o.id, MAIN_ORDER_KIND, e)} className="p-1 hover:text-primary" title="Chốt thành đơn chính"><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>
-                                                            : <button onClick={(e) => handleConvertOrder(o.id, DRAFT_ORDER_KIND, e)} className="p-1 hover:text-sky-700" title="Chuyển sang đơn nháp"><span className="material-symbols-outlined text-[18px]">drive_file_move</span></button>}
-                                                        <button onClick={(e) => handleMoveOrderToTrash(o.id, e)} className="p-1 hover:text-brick" title="Chuyển vào thùng rác"><span className="material-symbols-outlined text-[18px]">delete</span></button>
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <button onClick={(e) => handleRestoreOrder(o.id, e)} className="p-1 hover:text-green-600" title="Khôi phục"><span className="material-symbols-outlined text-[18px]">restore_from_trash</span></button>
-                                                        <button onClick={(e) => handleForceDeleteOrder(o.id, e)} className="p-1 hover:text-brick" title="Xóa vĩnh viễn"><span className="material-symbols-outlined text-[18px]">delete_forever</span></button>
-                                                    </>
-                                                )}
-                                            </div></td>
-                                        );
                                         if (c.isAttribute) {
                                             const attrVal = (o.attribute_values?.find(av => av.attribute_id === c.attrId)?.value || '-');
                                             return (
@@ -2368,12 +2312,15 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'created_at') {
-                                            const dateText = `${new Date(o.created_at).toLocaleDateString('vi-VN')} ${new Date(o.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`;
+                                            const dateDisplay = formatDateTimeParts(o.created_at);
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary font-black italic group/date relative">
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="truncate">{dateText}</span>
-                                                        <button onClick={(e) => { e.stopPropagation(); handleCopy(dateText, e); }} className={`opacity-0 group-hover/date:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === dateText ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
+                                                    <div className="flex items-start justify-between gap-2">
+                                                        <div className="flex min-w-0 flex-col leading-[1.15]">
+                                                            <span className="whitespace-nowrap">{dateDisplay.date}</span>
+                                                            {dateDisplay.time && <span className="whitespace-nowrap">{dateDisplay.time}</span>}
+                                                        </div>
+                                                        <button onClick={(e) => { e.stopPropagation(); handleCopy(dateDisplay.text, e); }} className={`mt-0.5 opacity-0 group-hover/date:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === dateDisplay.text ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
                                                             <span className="material-symbols-outlined text-[14px]">content_copy</span>
                                                         </button>
                                                     </div>

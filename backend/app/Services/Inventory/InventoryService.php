@@ -1672,17 +1672,6 @@ class InventoryService
         return round($value, 2);
     }
 
-    public function allocateFlexibleSellableBatches(
-        int $accountId,
-        Product $product,
-        int $requestedQty,
-        bool $allowOversold = false
-    ): array {
-        return $allowOversold
-            ? $this->allocateOrderSellableBatches($accountId, $product, $requestedQty)
-            : $this->allocateSellableBatches($accountId, $product, $requestedQty);
-    }
-
     private function allocateSellableBatches(int $accountId, Product $product, int $requestedQty): array
     {
         $batches = InventoryBatch::query()

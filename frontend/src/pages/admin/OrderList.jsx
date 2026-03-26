@@ -2455,7 +2455,7 @@ const OrderList = () => {
                                                     >
                                                         <span className={`inline-flex items-center gap-1 rounded-sm border px-2 py-1 text-[11px] font-black ${inventorySlipToneClasses[summary.tone] || inventorySlipToneClasses.slate}`}>
                                                             <span className="material-symbols-outlined text-[14px]">
-                                                                {summary.state === 'fulfilled' ? 'verified' : summary.has_variance ? 'warning' : summary.state === 'partial' ? 'rule' : 'inventory_2'}
+                                                                {summary.state === 'fulfilled' ? 'verified' : summary.state === 'partial' ? 'rule' : 'inventory_2'}
                                                             </span>
                                                             {summary.label}
                                                         </span>

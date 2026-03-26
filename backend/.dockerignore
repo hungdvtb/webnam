@@ -1,0 +1,9 @@
+node_modules
+dist
+.next
+.git
+.env
+vendor
+npm-debug.log
+error.log
+storage/*.log

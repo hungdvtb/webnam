@@ -1,0 +1,77 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: webnam-db
+    restart: always
+    environment:
+      POSTGRES_DB: webnam
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Hungdv@121
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: webnam-api
+    restart: always
+    volumes:
+      - ./backend:/var/www/html
+    environment:
+      DB_CONNECTION: pgsql
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_DATABASE: webnam
+      DB_USERNAME: postgres
+      DB_PASSWORD: Hungdv@121
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: https://api.gomdaithanh.com
+      FRONTEND_URL: https://admin.gomdaithanh.com
+      FRONTEND_WEBSITE_URL: https://gomdaithanh.com
+    depends_on:
+      - db
+
+  admin:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: https://api.gomdaithanh.com/api
+    container_name: webnam-admin
+    restart: always
+    depends_on:
+      - backend
+
+  website:
+    build:
+      context: ./webgom
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: https://api.gomdaithanh.com/api
+        NEXT_PUBLIC_SITE_CODE: GSDT
+        NEXT_PUBLIC_STORAGE_URL: https://api.gomdaithanh.com/storage
+    container_name: webnam-website
+    restart: always
+    environment:
+      NEXT_PUBLIC_API_URL: https://api.gomdaithanh.com/api
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:alpine
+    container_name: webnam-proxy
+    restart: always
+    ports:
+      - "8383:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./backend:/var/www/html
+    depends_on:
+      - backend
+      - admin
+      - website
+
+volumes:
+  db_data:

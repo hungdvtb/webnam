@@ -300,6 +300,33 @@ const getCompactColumnLabelLines = (columnId, label) => {
 
 const MAIN_ORDER_KIND = 'official';
 const DRAFT_ORDER_KIND = 'draft';
+const CANCEL_DISPATCH_ALLOWED_SHIPMENT_STATUSES = new Set([
+    'created',
+    'waiting_pickup',
+    'picked_up',
+    'shipped',
+    'in_transit',
+    'out_for_delivery',
+]);
+const CANCEL_DISPATCH_BLOCKED_ORDER_STATUSES = new Set([
+    'completed',
+    'pending_return',
+    'returned',
+    'cancelled',
+]);
+const CANCEL_DISPATCH_STATUS_LABELS = {
+    created: 'Mới tạo',
+    waiting_pickup: 'Chờ lấy hàng',
+    picked_up: 'Đã lấy hàng',
+    shipped: 'Đã gửi hàng',
+    in_transit: 'Đang trung chuyển',
+    out_for_delivery: 'Đang giao hàng',
+    delivered: 'Giao thành công',
+    delivery_failed: 'Giao thất bại',
+    returning: 'Đang hoàn',
+    returned: 'Đã hoàn',
+    canceled: 'Đã hủy',
+};
 
 const isDraftOrder = (orderKind) => String(orderKind || MAIN_ORDER_KIND) === DRAFT_ORDER_KIND;
 const getTargetListView = (orderKind) => (isDraftOrder(orderKind) ? 'draft' : 'main');
@@ -307,6 +334,66 @@ const buildOrderListUrl = (view = 'main') => {
     if (view === 'draft') return '/admin/orders?view=draft';
     if (view === 'trash') return '/admin/orders?view=trash';
     return '/admin/orders';
+};
+
+const getCancelDispatchEligibility = (order) => {
+    if (!order) {
+        return {
+            eligible: false,
+            reason: 'Không tìm thấy đơn hàng trong danh sách hiện tại.',
+        };
+    }
+
+    if (String(order.order_kind || MAIN_ORDER_KIND) !== MAIN_ORDER_KIND) {
+        return {
+            eligible: false,
+            reason: 'Chỉ hỗ trợ hủy gửi vận chuyển cho đơn hàng chính.',
+        };
+    }
+
+    if (order.type === 'inventory_export') {
+        return {
+            eligible: false,
+            reason: 'Phiếu xuất nội bộ không thuộc luồng gửi vận chuyển để rollback.',
+        };
+    }
+
+    if (CANCEL_DISPATCH_BLOCKED_ORDER_STATUSES.has(String(order.status || ''))) {
+        return {
+            eligible: false,
+            reason: 'Đơn đang ở trạng thái không hợp lệ để rollback gửi vận chuyển.',
+        };
+    }
+
+    const activeShipment = order.active_shipment || null;
+    if (activeShipment) {
+        const shipmentStatus = String(activeShipment.shipment_status || '');
+        if (!CANCEL_DISPATCH_ALLOWED_SHIPMENT_STATUSES.has(shipmentStatus)) {
+            return {
+                eligible: false,
+                reason: `Vận đơn đang ở trạng thái "${CANCEL_DISPATCH_STATUS_LABELS[shipmentStatus] || shipmentStatus || 'không xác định'}" nên chưa thể hủy gửi.`,
+            };
+        }
+
+        return { eligible: true, reason: '' };
+    }
+
+    const hasLegacyDispatchMarker = Boolean(
+        order.shipping_tracking_code
+        || order.shipping_carrier_code
+        || order.shipping_carrier_name
+        || order.shipping_dispatched_at
+        || order.shipping_status
+    );
+
+    if (hasLegacyDispatchMarker) {
+        return { eligible: true, reason: '' };
+    }
+
+    return {
+        eligible: false,
+        reason: 'Đơn này chưa được gửi sang đơn vị vận chuyển.',
+    };
 };
 
 const LIST_VIEW_META = {
@@ -806,6 +893,7 @@ const OrderList = () => {
     const [dispatchPreview, setDispatchPreview] = useState(null);
     const [dispatchPreviewLoading, setDispatchPreviewLoading] = useState(false);
     const [dispatchSubmitting, setDispatchSubmitting] = useState(false);
+    const [cancelDispatchSubmitting, setCancelDispatchSubmitting] = useState(false);
     const [quickDispatchModalOpen, setQuickDispatchModalOpen] = useState(false);
     const [quickDispatchSubmitting, setQuickDispatchSubmitting] = useState(false);
     const [quickDispatchRows, setQuickDispatchRows] = useState({});
@@ -944,6 +1032,31 @@ const OrderList = () => {
         () => quickDispatchOrderRows.filter((row) => !row.locked),
         [quickDispatchOrderRows]
     );
+    const selectedCancelDispatchState = useMemo(() => {
+        const details = selectedIds.map((id) => {
+            const order = selectedOrderMap.get(String(id));
+            const eligibility = getCancelDispatchEligibility(order);
+
+            return {
+                id,
+                order,
+                ...eligibility,
+            };
+        });
+
+        const validOrders = details.filter((item) => item.eligible);
+        const invalidOrders = details.filter((item) => !item.eligible);
+
+        return {
+            details,
+            validOrders,
+            invalidOrders,
+            validCount: validOrders.length,
+            invalidCount: invalidOrders.length,
+            canSubmit: validOrders.length > 0 && invalidOrders.length === 0,
+            firstInvalidReason: invalidOrders[0]?.reason || '',
+        };
+    }, [selectedIds, selectedOrderMap]);
 
     const fetchInitialData = async () => {
         try {
@@ -1312,6 +1425,66 @@ const OrderList = () => {
             setNotification({ type: 'error', message: error.response?.data?.message || 'Kh?ng th? g?i ??n sang ??n v? v?n chuy?n.' });
         } finally {
             setDispatchSubmitting(false);
+        }
+    };
+
+    const handleCancelDispatchOrders = async () => {
+        if (!selectedCancelDispatchState.canSubmit || cancelDispatchSubmitting) {
+            if (selectedCancelDispatchState.invalidCount > 0) {
+                setNotification({
+                    type: 'error',
+                    message: selectedCancelDispatchState.firstInvalidReason || 'Có đơn không hợp lệ để hủy gửi vận chuyển.',
+                });
+            }
+            return;
+        }
+
+        const confirmMessage = selectedCancelDispatchState.validCount === 1
+            ? 'Hủy gửi vận chuyển cho đơn đã chọn? Đơn sẽ về trạng thái "Đơn mới", xóa mã vận đơn và xóa liên kết vận chuyển hiện tại.'
+            : `Hủy gửi vận chuyển cho ${selectedCancelDispatchState.validCount} đơn đã chọn? Các đơn sẽ được đưa về trạng thái "Đơn mới" và xóa liên kết vận chuyển hiện tại.`;
+
+        if (!window.confirm(confirmMessage)) {
+            return;
+        }
+
+        setCancelDispatchSubmitting(true);
+
+        try {
+            const response = await orderApi.cancelDispatch({
+                order_ids: selectedIds,
+            });
+            const {
+                success_count: successCount = 0,
+                failed_count: failedCount = 0,
+                results = [],
+            } = response.data || {};
+            const failedResults = results.filter((item) => item.success === false);
+            const failedIds = failedResults.map((item) => item.order_id);
+            const firstFailed = failedResults.find((item) => item.message);
+
+            setNotification({
+                type: failedCount > 0 ? 'error' : 'success',
+                message: `Đã hủy gửi vận chuyển ${successCount} đơn${failedCount > 0 ? `, ${failedCount} đơn lỗi` : ''}.${firstFailed ? ` ${firstFailed.order_number || `#${firstFailed.order_id}`}: ${firstFailed.message}` : ''}`,
+            });
+
+            if (successCount > 0) {
+                fetchOrders(pagination.current_page);
+                fetchShippingAlerts();
+            }
+
+            if (failedIds.length > 0) {
+                setSelectedIds(failedIds);
+                return;
+            }
+
+            setSelectedIds([]);
+        } catch (error) {
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể hủy gửi vận chuyển cho các đơn đã chọn.',
+            });
+        } finally {
+            setCancelDispatchSubmitting(false);
         }
     };
 
@@ -1774,6 +1947,27 @@ const OrderList = () => {
 
                         {isMainView && <>
                             <button type="button" onClick={openDispatchModal} disabled={selectedIds.length === 0} title="Gửi đơn vị vận chuyển" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary text-white border-primary hover:bg-primary/90' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">local_shipping</span></button>
+                            <button
+                                type="button"
+                                onClick={handleCancelDispatchOrders}
+                                disabled={!selectedCancelDispatchState.canSubmit || cancelDispatchSubmitting}
+                                title={
+                                    selectedIds.length === 0
+                                        ? 'Chọn đơn đã gửi vận chuyển để hủy'
+                                        : selectedCancelDispatchState.canSubmit
+                                            ? 'Hủy gửi vận chuyển'
+                                            : (selectedCancelDispatchState.firstInvalidReason || 'Chỉ khả dụng khi toàn bộ đơn đã chọn đang ở trạng thái có thể rollback')
+                                }
+                                className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${
+                                    selectedCancelDispatchState.canSubmit && !cancelDispatchSubmitting
+                                        ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-600 hover:text-white'
+                                        : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'
+                                }`}
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${cancelDispatchSubmitting ? 'animate-refresh-spin' : ''}`}>
+                                    {cancelDispatchSubmitting ? 'progress_activity' : 'undo'}
+                                </span>
+                            </button>
                             <button type="button" onClick={openQuickDispatchModal} disabled={selectedIds.length === 0} title="Gửi vận chuyển nhanh" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">flash_on</span></button>
                         </>}
 

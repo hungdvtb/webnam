@@ -23,6 +23,7 @@ use App\Services\Inventory\InventoryService;
 use App\Services\OrderInventorySlipService;
 use App\Services\RepeatCustomerPhoneService;
 use App\Services\Shipping\ShipmentDispatchService;
+use App\Services\Shipping\ShipmentRollbackService;
 use App\Services\Shipping\ShippingAlertService;
 use App\Services\Shipping\ShipmentStatusSyncService;
 use Illuminate\Http\Request;
@@ -2096,6 +2097,26 @@ class OrderController extends Controller
                 Auth::id(),
                 $validated['warehouse_id'] ?? null
             )
+        );
+    }
+
+    public function cancelDispatch(Request $request, ShipmentRollbackService $rollbackService)
+    {
+        $validated = $request->validate([
+            'order_ids' => 'required|array|min:1',
+            'order_ids.*' => 'integer|exists:orders,id',
+        ]);
+
+        $orders = $this->scopedOrderQuery($request)
+            ->whereIn('id', $validated['order_ids'])
+            ->get();
+
+        if ($orders->isEmpty()) {
+            return response()->json(['message' => 'Khong tim thay don hang can huy gui van chuyen.'], 404);
+        }
+
+        return response()->json(
+            $rollbackService->cancel($orders, Auth::id())
         );
     }
 

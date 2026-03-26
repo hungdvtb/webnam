@@ -123,6 +123,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/orders/shipping-alerts', [\App\Http\Controllers\Api\OrderController::class , 'shippingAlerts']);
     Route::post('/orders/dispatch/preview', [\App\Http\Controllers\Api\OrderController::class , 'dispatchPreview']);
     Route::post('/orders/dispatch', [\App\Http\Controllers\Api\OrderController::class , 'dispatch']);
+    Route::post('/orders/dispatch/cancel', [\App\Http\Controllers\Api\OrderController::class , 'cancelDispatch']);
     Route::post('/orders/quick-dispatch', [\App\Http\Controllers\Api\OrderController::class , 'quickDispatch']);
     Route::post('/orders/print-data', [\App\Http\Controllers\Api\OrderController::class , 'printData']);
     Route::post('/orders/mark-printed', [\App\Http\Controllers\Api\OrderController::class , 'markPrinted']);

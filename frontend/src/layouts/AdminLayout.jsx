@@ -46,6 +46,9 @@ const AdminLayout = () => {
         return perms.includes(permId);
     };
 
+    const canAccessLeadBoard = canAccess('orders') || canAccess('customers') || canAccess('leads');
+    const isLeadRoute = location.pathname === '/admin/leads' || location.pathname === '/admin/pending-orders';
+
     const getCurrentPermId = () => {
         const path = location.pathname;
         if (path === '/admin') return 'dashboard';
@@ -189,15 +192,17 @@ const AdminLayout = () => {
                             
                             {isOrdersOpen && (
                                 <div className="pl-4 space-y-1 animate-in slide-in-from-top-2 duration-200">
+                                    {canAccessLeadBoard && (
+                                        <Link 
+                                            to="/admin/leads" 
+                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${isLeadRoute ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
+                                        >
+                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${isLeadRoute ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>pending_actions</span>
+                                            <span className="font-sans text-xs font-medium tracking-wide">Xử lý lead</span>
+                                        </Link>
+                                    )}
                                     {canAccess('orders') && (
                                         <>
-                                            <Link 
-                                                to="/admin/leads" 
-                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/leads' || location.pathname === '/admin/pending-orders' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
-                                            >
-                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/leads' || location.pathname === '/admin/pending-orders' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>pending_actions</span>
-                                                <span className="font-sans text-xs font-medium tracking-wide">Xử lý lead</span>
-                                            </Link>
                                             <Link 
                                                 to="/admin/orders" 
                                                 className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/orders' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
@@ -222,13 +227,6 @@ const AdminLayout = () => {
                                             >
                                                 <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/customers' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>group</span>
                                                 <span className="font-sans text-xs font-medium tracking-wide">Khách hàng</span>
-                                            </Link>
-                                            <Link 
-                                                to="/admin/leads" 
-                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/leads' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
-                                            >
-                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/leads' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>support_agent</span>
-                                                <span className="font-sans text-xs font-medium tracking-wide">Khách liên hệ</span>
                                             </Link>
                                         </>
                                     )}

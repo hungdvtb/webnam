@@ -190,7 +190,7 @@ class OrderListDuplicatePhoneMetaTest extends TestCase
         $this->assertDuplicatePhoneState($orders[$orderTwo->id], true, false, 'red');
     }
 
-    public function test_order_list_keeps_mixed_same_phone_groups_red_even_if_some_orders_share_the_same_product_set(): void
+    public function test_order_list_marks_only_orders_with_matching_products_blue_inside_mixed_same_phone_groups(): void
     {
         [$account, $user] = $this->authenticate();
         $productA = $this->createProduct($account, ['sku' => 'SET-A']);
@@ -217,9 +217,62 @@ class OrderListDuplicatePhoneMetaTest extends TestCase
 
         $orders = $this->draftOrderMap($account);
 
+        $this->assertDuplicatePhoneState($orders[$orderOne->id], true, true, 'blue');
+        $this->assertDuplicatePhoneState($orders[$orderTwo->id], true, false, 'red');
+        $this->assertDuplicatePhoneState($orders[$orderThree->id], true, true, 'blue');
+    }
+
+    public function test_order_list_keeps_partial_product_overlap_red_until_the_full_order_matches(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $productA = $this->createProduct($account, ['sku' => 'PARTIAL-A']);
+        $productB = $this->createProduct($account, ['sku' => 'PARTIAL-B']);
+        $productC = $this->createProduct($account, ['sku' => 'PARTIAL-C']);
+
+        $orderOne = $this->createDraftOrderWithProducts($account, $user, [
+            ['product' => $productA],
+        ], [
+            'customer_phone' => '0905000006',
+        ]);
+        $orderTwo = $this->createDraftOrderWithProducts($account, $user, [
+            ['product' => $productA],
+            ['product' => $productB],
+        ], [
+            'customer_phone' => '0905000006',
+        ]);
+        $orderThree = $this->createDraftOrderWithProducts($account, $user, [
+            ['product' => $productC],
+        ], [
+            'customer_phone' => '0905000006',
+        ]);
+
+        $orders = $this->draftOrderMap($account);
+
         $this->assertDuplicatePhoneState($orders[$orderOne->id], true, false, 'red');
         $this->assertDuplicatePhoneState($orders[$orderTwo->id], true, false, 'red');
         $this->assertDuplicatePhoneState($orders[$orderThree->id], true, false, 'red');
+    }
+
+    public function test_order_list_keeps_same_sku_but_different_quantity_red(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $productShared = $this->createProduct($account, ['sku' => 'QTY-MATCH']);
+
+        $orderOne = $this->createDraftOrderWithProducts($account, $user, [
+            ['product' => $productShared, 'quantity' => 1],
+        ], [
+            'customer_phone' => '0905000007',
+        ]);
+        $orderTwo = $this->createDraftOrderWithProducts($account, $user, [
+            ['product' => $productShared, 'quantity' => 2],
+        ], [
+            'customer_phone' => '0905000007',
+        ]);
+
+        $orders = $this->draftOrderMap($account);
+
+        $this->assertDuplicatePhoneState($orders[$orderOne->id], true, false, 'red');
+        $this->assertDuplicatePhoneState($orders[$orderTwo->id], true, false, 'red');
     }
 
     private function draftOrderMap(Account $account): array

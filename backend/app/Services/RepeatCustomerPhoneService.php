@@ -68,12 +68,13 @@ class RepeatCustomerPhoneService
         }
 
         $orderIdsByPhone = [];
-        $productKeysByPhoneAndOrder = [];
+        $orderLineQuantitiesByPhoneAndOrder = [];
 
         foreach ($activeOrderRows as $row) {
             $phone = $row['normalized_phone'];
             $orderId = (int) $row['order_id'];
             $productKey = $row['product_key'];
+            $quantity = (float) ($row['quantity'] ?? 0);
 
             if ($phone === '') {
                 continue;
@@ -82,16 +83,17 @@ class RepeatCustomerPhoneService
             $orderIdsByPhone[$phone][$orderId] = true;
 
             if ($productKey !== '') {
-                $productKeysByPhoneAndOrder[$phone][$orderId][$productKey] = true;
+                $orderLineQuantitiesByPhoneAndOrder[$phone][$orderId][$productKey]
+                    = ($orderLineQuantitiesByPhoneAndOrder[$phone][$orderId][$productKey] ?? 0) + $quantity;
             }
         }
 
         $orderSignatureByPhoneAndOrder = [];
         $orderIdsByPhoneAndSignature = [];
 
-        foreach ($productKeysByPhoneAndOrder as $phone => $ordersByProductKey) {
-            foreach ($ordersByProductKey as $orderId => $productKeyMap) {
-                $signature = $this->buildOrderProductSignature(array_keys($productKeyMap));
+        foreach ($orderLineQuantitiesByPhoneAndOrder as $phone => $ordersByLineQuantities) {
+            foreach ($ordersByLineQuantities as $orderId => $lineQuantities) {
+                $signature = $this->buildOrderProductSignature($lineQuantities);
 
                 if ($signature === '') {
                     continue;
@@ -118,8 +120,7 @@ class RepeatCustomerPhoneService
                 $sameSignatureOrderIds = array_keys($orderIdsByPhoneAndSignature[$phone][$targetSignature] ?? []);
                 $hasMatchingProduct = $hasDuplicatePhone
                     && $targetSignature !== ''
-                    && count($sameSignatureOrderIds) > 1
-                    && count($sameSignatureOrderIds) === count($matchingOrderIds);
+                    && count(array_diff($sameSignatureOrderIds, [$target['order_id']])) > 0;
 
                 return [
                     $target['key'] => array_merge($meta, [
@@ -267,10 +268,13 @@ class RepeatCustomerPhoneService
 
         return DB::table('orders')
             ->leftJoin('order_items', 'order_items.order_id', '=', 'orders.id')
+            ->leftJoin('products', 'products.id', '=', 'order_items.product_id')
             ->selectRaw('orders.id as order_id')
             ->selectRaw("{$orderPhoneSql} as normalized_phone")
             ->selectRaw('order_items.product_id as product_id')
             ->selectRaw('order_items.product_sku_snapshot as product_sku_snapshot')
+            ->selectRaw('products.sku as product_sku')
+            ->selectRaw('order_items.quantity as quantity')
             ->where('orders.account_id', $accountId)
             ->whereNull('orders.deleted_at')
             ->where(function ($query) use ($orderPhoneSql, $normalizedPhones) {
@@ -285,8 +289,10 @@ class RepeatCustomerPhoneService
                     'normalized_phone' => (string) ($row->normalized_phone ?? ''),
                     'product_key' => $this->buildOrderProductKey(
                         (int) ($row->product_id ?? 0),
-                        (string) ($row->product_sku_snapshot ?? '')
+                        (string) ($row->product_sku_snapshot ?? ''),
+                        (string) ($row->product_sku ?? '')
                     ),
+                    'quantity' => (float) ($row->quantity ?? 0),
                 ];
             })
             ->filter(fn (array $row) => $row['normalized_phone'] !== '')
@@ -317,11 +323,16 @@ class RepeatCustomerPhoneService
         return strtoupper(trim($value));
     }
 
-    protected function buildOrderProductKey(int $productId, string $skuSnapshot): string
+    protected function buildOrderProductKey(int $productId, string $skuSnapshot, string $productSku = ''): string
     {
         $normalizedSku = $this->normalizeSku($skuSnapshot);
         if ($normalizedSku !== '') {
             return "sku:{$normalizedSku}";
+        }
+
+        $normalizedProductSku = $this->normalizeSku($productSku);
+        if ($normalizedProductSku !== '') {
+            return "sku:{$normalizedProductSku}";
         }
 
         if ($productId > 0) {
@@ -331,12 +342,27 @@ class RepeatCustomerPhoneService
         return '';
     }
 
-    protected function buildOrderProductSignature(array $productKeys): string
+    protected function buildOrderProductSignature(array $lineQuantities): string
     {
-        $normalizedKeys = array_values(array_unique(array_filter($productKeys, fn ($key) => is_string($key) && $key !== '')));
-        sort($normalizedKeys, SORT_STRING);
+        $normalizedEntries = collect($lineQuantities)
+            ->filter(fn ($quantity, $productKey) => is_string($productKey) && $productKey !== '' && abs((float) $quantity) > 0.000001)
+            ->map(function ($quantity, $productKey) {
+                return $productKey . '@' . $this->normalizeQuantity($quantity);
+            })
+            ->values()
+            ->all();
 
-        return implode('|', $normalizedKeys);
+        sort($normalizedEntries, SORT_STRING);
+
+        return implode('|', $normalizedEntries);
+    }
+
+    protected function normalizeQuantity($quantity): string
+    {
+        $normalized = number_format((float) $quantity, 6, '.', '');
+        $normalized = rtrim(rtrim($normalized, '0'), '.');
+
+        return $normalized !== '' ? $normalized : '0';
     }
 
     protected function normalizedPhoneSql(string $column): string

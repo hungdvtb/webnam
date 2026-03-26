@@ -153,9 +153,9 @@ const OrderProductsPortal = ({
                         const price = item.price ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(item.price) : null;
 
                         return (
-                            <div key={idx} className="flex items-center gap-4 px-4 py-3 rounded-sm hover:bg-primary/5 border border-transparent hover:border-primary/10 transition-all group/item">
+                            <div key={idx} className="flex items-center gap-4 px-4 py-3 transition-all group/item">
                                 <div className="w-12 shrink-0 flex justify-center">
-                                    <div className="text-[13px] font-black text-orange-600 bg-orange-50 w-10 h-10 flex items-center justify-center rounded-sm border border-orange-200 shadow-sm">
+                                    <div className="flex h-8 min-w-[36px] items-center justify-center rounded-sm border border-orange-200 bg-orange-50 px-2 text-[13px] font-black leading-none text-orange-600">
                                         {item.quantity}x
                                     </div>
                                 </div>
@@ -2168,21 +2168,24 @@ const OrderList = () => {
                                                                     itemSku.toLowerCase().includes(filters.search.toLowerCase().trim())
                                                                 );
 
+                                                                const skuToneClass = isMatch ? 'text-orange-600' : 'text-orange-600/60';
+                                                                const itemNameClass = isMatch ? 'font-black text-primary' : 'font-bold text-primary';
+
                                                                 return (
-                                                                    <div key={idx} className={`flex items-start gap-2.5 relative p-1 rounded-sm transition-colors ${isMatch ? 'bg-primary/5 ring-1 ring-primary/10' : ''}`}>
-                                                                        <div className="shrink-0 mt-0.5">
-                                                                            <div className={`text-[12px] font-black px-1.5 py-0.5 rounded-sm border flex items-center justify-center min-w-[28px] ${isMatch ? 'text-white bg-primary border-primary shadow-sm' : 'text-orange-600 bg-orange-50 border-orange-200'}`}>
+                                                                    <div key={idx} className="flex items-start gap-2.5 relative">
+                                                                        <div className="shrink-0 mt-0.5 w-10">
+                                                                            <div className="flex h-6 min-w-[34px] items-center justify-center rounded-sm border border-orange-200 bg-orange-50 px-1.5 text-[12px] font-black leading-none text-orange-600">
                                                                                 {item.quantity}x
                                                                             </div>
                                                                         </div>
                                                                         <div className="flex-1 min-w-0">
                                                                             <div className="flex items-center gap-1.5 group/name">
-                                                                                <span className={`truncate font-bold text-[13px] block ${isMatch ? 'text-primary underline decoration-primary/30 underline-offset-2' : 'text-primary'}`} title={itemName}>{itemName}</span>
+                                                                                <span className={`truncate text-[13px] block ${itemNameClass}`} title={itemName}>{itemName}</span>
                                                                                 <button onClick={(e) => { e.stopPropagation(); handleCopy(itemName, e); }} className="opacity-0 group-hover/name:opacity-100 p-0.5 hover:text-primary transition-all text-primary/30 flex shrink-0"><span className="material-symbols-outlined text-[14px]">content_copy</span></button>
                                                                             </div>
                                                                             {itemSku && (
                                                                                 <div className="flex items-center gap-1.5 group/sku mt-0.5">
-                                                                                    <span className={`truncate font-black text-[13px] block ${isMatch ? 'text-orange-600' : 'text-orange-600/60'}`} title={itemSku}>{itemSku}</span>
+                                                                                    <span className={`truncate font-black text-[13px] block ${skuToneClass}`} title={itemSku}>{itemSku}</span>
                                                                                     <button onClick={(e) => { e.stopPropagation(); handleCopy(itemSku, e); }} className="opacity-0 group-hover/sku:opacity-100 p-0.5 hover:text-primary transition-all text-primary/30 flex shrink-0"><span className="material-symbols-outlined text-[14px]">content_copy</span></button>
                                                                                 </div>
                                                                             )}

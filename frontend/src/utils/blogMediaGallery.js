@@ -2,6 +2,7 @@ const GALLERY_PAYLOAD_VERSION = 1;
 const GALLERY_BLOCK_CLASS = 'ql-bdt-media-gallery';
 const GALLERY_PAYLOAD_ATTRIBUTE = 'data-gallery-payload';
 const YOUTUBE_HOST_PATTERN = /(?:youtube(?:-nocookie)?\.com|youtu\.be)/i;
+const YOUTUBE_VIDEO_ID_PATTERN = /^[a-zA-Z0-9_-]{6,}$/;
 
 function createGalleryItemId(prefix = 'media') {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -11,11 +12,37 @@ function normalizeMediaText(value) {
     return String(value || '').trim();
 }
 
+function safeDecodeURIComponent(value) {
+    try {
+        return decodeURIComponent(value);
+    } catch {
+        return value;
+    }
+}
+
+function sanitizeYouTubeVideoId(value) {
+    const normalized = normalizeMediaText(value);
+    return YOUTUBE_VIDEO_ID_PATTERN.test(normalized) ? normalized : '';
+}
+
+function buildCanonicalYouTubeUrl(videoId) {
+    const normalizedVideoId = sanitizeYouTubeVideoId(videoId);
+
+    return normalizedVideoId
+        ? `https://www.youtube.com/watch?v=${normalizedVideoId}`
+        : '';
+}
+
 function normalizeVideoCandidate(value) {
-    const normalized = normalizeMediaText(value).replace(/&amp;/gi, '&');
+    const normalized = safeDecodeURIComponent(normalizeMediaText(value)).replace(/&amp;/gi, '&');
 
     if (!normalized) {
         return '';
+    }
+
+    const directVideoId = sanitizeYouTubeVideoId(normalized);
+    if (directVideoId) {
+        return directVideoId;
     }
 
     if (normalized.startsWith('//')) {
@@ -36,27 +63,45 @@ export function extractYouTubeVideoId(value) {
         return '';
     }
 
+    const directVideoId = sanitizeYouTubeVideoId(normalized);
+    if (directVideoId) {
+        return directVideoId;
+    }
+
     const fallbackMatch = normalized.match(
-        /(?:youtube(?:-nocookie)?\.com\/(?:watch\?.*?v=|embed\/|live\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{6,})/i
+        /(?:youtube(?:-nocookie)?\.com\/(?:watch\/?\?(?:[^#\s]*&)?(?:v|vi)=|embed\/|live\/|shorts\/|v\/|e\/)|youtu\.be\/)([a-zA-Z0-9_-]{6,})/i
     );
 
     try {
         const parsedUrl = new URL(normalized);
         const host = parsedUrl.hostname.toLowerCase();
         const pathSegments = parsedUrl.pathname.split('/').filter(Boolean);
+        const nestedUrl = parsedUrl.searchParams.get('u');
+
+        if (nestedUrl) {
+            const normalizedNestedUrl = nestedUrl.startsWith('/')
+                ? `https://www.youtube.com${safeDecodeURIComponent(nestedUrl)}`
+                : safeDecodeURIComponent(nestedUrl);
+            const nestedVideoId = extractYouTubeVideoId(normalizedNestedUrl);
+
+            if (nestedVideoId) {
+                return nestedVideoId;
+            }
+        }
 
         if (host.includes('youtu.be')) {
-            return pathSegments[0] || fallbackMatch?.[1] || '';
+            return sanitizeYouTubeVideoId(pathSegments[0]) || fallbackMatch?.[1] || '';
         }
 
         if (host.includes('youtube.com') || host.includes('youtube-nocookie.com')) {
-            if (parsedUrl.searchParams.has('v')) {
-                return parsedUrl.searchParams.get('v') || fallbackMatch?.[1] || '';
+            const directParamVideoId = sanitizeYouTubeVideoId(parsedUrl.searchParams.get('v') || parsedUrl.searchParams.get('vi'));
+            if (directParamVideoId) {
+                return directParamVideoId;
             }
 
-            const embedIndex = pathSegments.findIndex((segment) => ['embed', 'live', 'shorts'].includes(segment));
+            const embedIndex = pathSegments.findIndex((segment) => ['embed', 'live', 'shorts', 'v', 'e'].includes(segment));
             if (embedIndex >= 0 && pathSegments[embedIndex + 1]) {
-                return pathSegments[embedIndex + 1];
+                return sanitizeYouTubeVideoId(pathSegments[embedIndex + 1]) || fallbackMatch?.[1] || '';
             }
         }
     } catch {
@@ -119,9 +164,9 @@ export function buildVideoGalleryItem(sourceUrl, overrides = {}) {
     return {
         id: overrides.id || createGalleryItemId('video'),
         type: 'video',
-        url,
+        url: buildCanonicalYouTubeUrl(videoId) || url,
         youtubeId: videoId,
-        thumbnail: resolveYouTubeThumbnailUrl(url),
+        thumbnail: resolveYouTubeThumbnailUrl(videoId),
         title: normalizeMediaText(overrides.title),
     };
 }
@@ -262,11 +307,14 @@ export function renderBlogMediaGalleryNode(node, value) {
     const videoCount = items.filter((item) => item.type === 'video').length;
 
     node.setAttribute('contenteditable', 'false');
+    node.setAttribute('role', 'button');
+    node.setAttribute('tabindex', '0');
     node.setAttribute(GALLERY_PAYLOAD_ATTRIBUTE, encodeGalleryPayload(items));
     node.setAttribute('data-gallery-count', String(items.length));
     node.setAttribute('data-image-count', String(imageCount));
     node.setAttribute('data-video-count', String(videoCount));
     node.setAttribute('data-gallery-summary', summary);
+    node.setAttribute('aria-label', `${summary}. Nhấn để chỉnh block media gallery`);
     node.setAttribute('title', 'Nhấn để chỉnh block media gallery');
     node.textContent = `${summary} • Nhấn để chỉnh`;
 

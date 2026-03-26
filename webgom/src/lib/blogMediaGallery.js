@@ -1,4 +1,10 @@
-import { resolveMediaUrl, resolveVideoEmbedUrl, resolveVideoThumbnailUrl } from './media';
+import {
+  resolveCanonicalVideoUrl,
+  resolveMediaUrl,
+  resolveVideoEmbedUrl,
+  resolveVideoThumbnailUrl,
+  resolveYouTubeVideoId,
+} from './media';
 
 const GALLERY_PAYLOAD_ATTRIBUTE = 'data-gallery-payload';
 
@@ -54,16 +60,21 @@ export function normalizeGalleryItems(items) {
       }
 
       if (item.type === 'video') {
-        const url = normalizeText(item.url || item.src);
-        const thumbnail = resolveVideoThumbnailUrl(url);
+        const rawVideoSource = normalizeText(item.url || item.src || item.youtubeId);
+        const youtubeId = resolveYouTubeVideoId(rawVideoSource);
+        const url = resolveCanonicalVideoUrl(rawVideoSource) || rawVideoSource;
+        const thumbnail = resolveVideoThumbnailUrl(youtubeId || url);
+        const embedUrl = resolveVideoEmbedUrl(youtubeId || url);
 
-        if (!url || !thumbnail) {
+        if (!youtubeId || !embedUrl || !thumbnail) {
           return null;
         }
 
         return {
           type: 'video',
           url,
+          youtubeId,
+          embedUrl,
           thumbnail,
           title: normalizeText(item.title),
         };
@@ -104,7 +115,7 @@ export function buildGalleryStageMarkup(item) {
   }
 
   if (item.type === 'video') {
-    const embedUrl = resolveVideoEmbedUrl(item.url);
+    const embedUrl = item.embedUrl || resolveVideoEmbedUrl(item.youtubeId || item.url);
 
     if (!embedUrl) {
       return '';
@@ -126,7 +137,7 @@ export function buildGalleryStageMarkup(item) {
 
 function buildThumbMarkup(item, index, isActive) {
   const thumbImage = item.type === 'video'
-    ? item.thumbnail
+    ? (item.thumbnail || resolveVideoThumbnailUrl(item.youtubeId || item.url))
     : item.src;
   const label = item.type === 'video'
     ? (item.title || 'Video YouTube')

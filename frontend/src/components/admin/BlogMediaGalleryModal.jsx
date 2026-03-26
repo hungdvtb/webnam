@@ -38,6 +38,16 @@ const BlogMediaGalleryModal = ({
 
     useEffect(() => {
         if (!open) {
+            return;
+        }
+
+        setItems(normalizeGalleryItems(initialItems));
+        setYoutubeInput('');
+        setUploadingImages(false);
+    }, [initialItems, open]);
+
+    useEffect(() => {
+        if (!open) {
             return undefined;
         }
 
@@ -187,7 +197,7 @@ const BlogMediaGalleryModal = ({
 
     const handleSave = () => {
         const normalizedItems = normalizeGalleryItems(items);
-        const invalidVideoCount = items.filter((item) => item.type === 'video' && !extractYouTubeVideoId(item.url)).length;
+        const invalidVideoCount = items.filter((item) => item.type === 'video' && !extractYouTubeVideoId(item.url || item.youtubeId)).length;
 
         if (invalidVideoCount > 0) {
             showModal({

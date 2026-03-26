@@ -4,6 +4,7 @@ const ABSOLUTE_URL_PATTERN = /^(https?:)?\/\//i;
 const DATA_URL_PATTERN = /^data:image\//i;
 const BLOB_URL_PATTERN = /^blob:/i;
 const YOUTUBE_DIRECT_URL_PATTERN = /^(?:www\.|m\.youtube\.com|youtube\.com|youtu\.be|youtube-nocookie\.com)/i;
+const YOUTUBE_VIDEO_ID_PATTERN = /^[a-zA-Z0-9_-]{6,}$/;
 
 const normalizeMediaCandidate = (value) => {
   const normalized = String(value || '').trim();
@@ -22,11 +23,29 @@ const normalizeMediaCandidate = (value) => {
   return normalized;
 };
 
+const safeDecodeURIComponent = (value) => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
+const sanitizeYouTubeVideoId = (value) => {
+  const normalized = String(value || '').trim();
+  return YOUTUBE_VIDEO_ID_PATTERN.test(normalized) ? normalized : '';
+};
+
 const normalizeVideoCandidate = (value) => {
-  const normalized = normalizeMediaCandidate(value).replace(/&amp;/gi, '&');
+  const normalized = safeDecodeURIComponent(normalizeMediaCandidate(value)).replace(/&amp;/gi, '&');
 
   if (!normalized) {
     return '';
+  }
+
+  const directVideoId = sanitizeYouTubeVideoId(normalized);
+  if (directVideoId) {
+    return directVideoId;
   }
 
   if (normalized.startsWith('//')) {
@@ -38,6 +57,14 @@ const normalizeVideoCandidate = (value) => {
   }
 
   return normalized;
+};
+
+const buildCanonicalYouTubeUrl = (videoId) => {
+  const normalizedVideoId = sanitizeYouTubeVideoId(videoId);
+
+  return normalizedVideoId
+    ? `https://www.youtube.com/watch?v=${normalizedVideoId}`
+    : '';
 };
 
 export const getApiOrigin = () => {
@@ -108,27 +135,45 @@ export const resolveYouTubeVideoId = (value) => {
     return '';
   }
 
+  const directVideoId = sanitizeYouTubeVideoId(normalized);
+  if (directVideoId) {
+    return directVideoId;
+  }
+
   const fallbackMatch = normalized.match(
-    /(?:youtube(?:-nocookie)?\.com\/(?:watch\?.*?v=|embed\/|live\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{6,})/i
+    /(?:youtube(?:-nocookie)?\.com\/(?:watch\/?\?(?:[^#\s]*&)?(?:v|vi)=|embed\/|live\/|shorts\/|v\/|e\/)|youtu\.be\/)([a-zA-Z0-9_-]{6,})/i
   );
 
   try {
     const parsedUrl = new URL(normalized);
     const host = parsedUrl.hostname.toLowerCase();
     const pathSegments = parsedUrl.pathname.split('/').filter(Boolean);
+    const nestedUrl = parsedUrl.searchParams.get('u');
+
+    if (nestedUrl) {
+      const normalizedNestedUrl = nestedUrl.startsWith('/')
+        ? `https://www.youtube.com${safeDecodeURIComponent(nestedUrl)}`
+        : safeDecodeURIComponent(nestedUrl);
+      const nestedVideoId = resolveYouTubeVideoId(normalizedNestedUrl);
+
+      if (nestedVideoId) {
+        return nestedVideoId;
+      }
+    }
 
     if (host.includes('youtu.be')) {
-      return pathSegments[0] || fallbackMatch?.[1] || '';
+      return sanitizeYouTubeVideoId(pathSegments[0]) || fallbackMatch?.[1] || '';
     }
 
     if (host.includes('youtube.com') || host.includes('youtube-nocookie.com')) {
-      if (parsedUrl.searchParams.has('v')) {
-        return parsedUrl.searchParams.get('v') || fallbackMatch?.[1] || '';
+      const directParamVideoId = sanitizeYouTubeVideoId(parsedUrl.searchParams.get('v') || parsedUrl.searchParams.get('vi'));
+      if (directParamVideoId) {
+        return directParamVideoId;
       }
 
-      const embedIndex = pathSegments.findIndex((segment) => ['embed', 'live', 'shorts'].includes(segment));
+      const embedIndex = pathSegments.findIndex((segment) => ['embed', 'live', 'shorts', 'v', 'e'].includes(segment));
       if (embedIndex >= 0 && pathSegments[embedIndex + 1]) {
-        return pathSegments[embedIndex + 1];
+        return sanitizeYouTubeVideoId(pathSegments[embedIndex + 1]) || fallbackMatch?.[1] || '';
       }
     }
   } catch {
@@ -190,4 +235,12 @@ export const resolveVideoEmbedUrl = (value) => {
   }
 
   return '';
+};
+
+export const resolveCanonicalVideoUrl = (value) => {
+  const youtubeVideoId = resolveYouTubeVideoId(value);
+
+  return youtubeVideoId
+    ? buildCanonicalYouTubeUrl(youtubeVideoId)
+    : '';
 };

@@ -54,43 +54,6 @@ const BlogForm = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id]);
 
-    useEffect(() => {
-        const quill = quillRef.current?.getEditor();
-
-        if (!quill) {
-            return undefined;
-        }
-
-        const root = quill.root;
-
-        const handleGalleryClick = (event) => {
-            const galleryNode = event.target.closest(`.${GALLERY_BLOCK_CLASS}`);
-
-            if (!galleryNode || !root.contains(galleryNode)) {
-                return;
-            }
-
-            event.preventDefault();
-            event.stopPropagation();
-
-            const blot = Quill.find(galleryNode);
-            const blotIndex = blot ? quill.getIndex(blot) : Math.max(quill.getLength() - 1, 0);
-
-            setMediaModalState({
-                open: true,
-                items: readGalleryItemsFromNode(galleryNode),
-                insertIndex: blotIndex,
-                editing: true,
-            });
-        };
-
-        root.addEventListener('click', handleGalleryClick);
-
-        return () => {
-            root.removeEventListener('click', handleGalleryClick);
-        };
-    }, []);
-
     const loadCategories = async () => {
         try {
             const response = await blogApi.getCategories();
@@ -151,6 +114,58 @@ const BlogForm = () => {
             insertIndex: typeof options.index === 'number' ? options.index : fallbackIndex,
             editing: Boolean(options.editing),
         });
+    };
+
+    const openExistingMediaGallery = (galleryNode) => {
+        const quill = quillRef.current?.getEditor();
+        const root = quill?.root;
+
+        if (!galleryNode || !quill || !root?.contains(galleryNode)) {
+            return false;
+        }
+
+        const blot = Quill.find(galleryNode);
+        const blotIndex = blot ? quill.getIndex(blot) : Math.max(quill.getLength() - 1, 0);
+
+        quill.setSelection(blotIndex, 1, 'silent');
+        openMediaModal({
+            items: readGalleryItemsFromNode(galleryNode),
+            index: blotIndex,
+            editing: true,
+        });
+
+        return true;
+    };
+
+    const getGalleryNodeFromEventTarget = (target) => {
+        const eventElement = target instanceof Element ? target : target?.parentElement;
+        return eventElement?.closest?.(`.${GALLERY_BLOCK_CLASS}`) || null;
+    };
+
+    const handleEditorClickCapture = (event) => {
+        const galleryNode = getGalleryNodeFromEventTarget(event.target);
+
+        if (!openExistingMediaGallery(galleryNode)) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+    };
+
+    const handleEditorKeyDownCapture = (event) => {
+        if (!['Enter', ' '].includes(event.key)) {
+            return;
+        }
+
+        const galleryNode = getGalleryNodeFromEventTarget(event.target);
+
+        if (!openExistingMediaGallery(galleryNode)) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
     };
 
     const closeMediaModal = () => {
@@ -485,7 +500,11 @@ const BlogForm = () => {
                                 <p className="text-[11px] italic text-amber-700">{disabledReason}</p>
                             ) : null}
 
-                            <div className="quill-premium-wrapper border border-gold/20 bg-white shadow-sm">
+                            <div
+                                className="quill-premium-wrapper border border-gold/20 bg-white shadow-sm"
+                                onClickCapture={handleEditorClickCapture}
+                                onKeyDownCapture={handleEditorKeyDownCapture}
+                            >
                                 <ReactQuill
                                     ref={quillRef}
                                     theme="snow"

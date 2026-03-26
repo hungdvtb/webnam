@@ -5,17 +5,35 @@ import BlogMediaGalleryEnhancer from '@/components/blog/BlogMediaGalleryEnhancer
 import { resolveMediaUrl } from '@/lib/media';
 
 const FALLBACK_RELATED_POSTS = [
-  { title: 'Tâm hồn Việt trong chén trà Bát Tràng', date: 'Ngày 12 tháng 10, 2023' },
-  { title: 'Men chàm: Sắc lam vĩnh cửu của thời đại', date: 'Ngày 05 tháng 10, 2023' },
-  { title: 'Quy trình vẽ tay trên gốm sứ thủ công', date: 'Ngày 28 tháng 09, 2023' },
+  {
+    title: 'Tâm hồn Việt trong chén trà Bát Tràng',
+    category: 'Kiến thức gốm',
+    dateLabel: '12 thg 10, 2023',
+    excerpt: 'Những lớp men, dáng chén và nếp thưởng trà cùng nhau tạo nên một lát cắt rất Việt của gốm Bát Tràng.',
+    href: '/blog',
+  },
+  {
+    title: 'Men chàm: Sắc lam vĩnh cửu của thời đại',
+    category: 'Kiến thức gốm',
+    dateLabel: '05 thg 10, 2023',
+    excerpt: 'Từ bảng màu cổ điển đến cảm hứng hiện đại, men chàm luôn giữ được chiều sâu thị giác rất riêng cho gốm.',
+    href: '/blog',
+  },
+  {
+    title: 'Quy trình vẽ tay trên gốm sứ thủ công',
+    category: 'Nghệ thuật gốm',
+    dateLabel: '28 thg 09, 2023',
+    excerpt: 'Theo dõi từng công đoạn phác thảo, lên nét và hoàn thiện để thấy rõ độ tinh xảo phía sau mỗi món gốm.',
+    href: '/blog',
+  },
 ];
 
-function formatDate(dateStr) {
+function formatDate(dateStr, format = 'long') {
   if (!dateStr) return '';
 
   return new Date(dateStr).toLocaleDateString('vi-VN', {
     day: 'numeric',
-    month: 'long',
+    month: format === 'short' ? 'short' : 'long',
     year: 'numeric',
   });
 }
@@ -34,6 +52,43 @@ function extractPosts(response) {
   if (Array.isArray(response?.data)) return response.data;
   if (Array.isArray(response?.data?.data)) return response.data.data;
   return [];
+}
+
+function getPostCategory(post) {
+  if (post?.category?.name) return post.category.name;
+  if (typeof post?.category === 'string' && post.category.trim()) return post.category;
+  if (typeof post?.tag === 'string' && post.tag.trim()) return post.tag;
+
+  if (Array.isArray(post?.tags) && post.tags.length > 0) {
+    const [firstTag] = post.tags;
+
+    if (typeof firstTag === 'string' && firstTag.trim()) return firstTag;
+    if (firstTag?.name) return firstTag.name;
+  }
+
+  return 'Kiến thức gốm';
+}
+
+function stripHtml(html) {
+  return String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getPostExcerpt(post) {
+  return stripHtml(post?.excerpt || post?.content || post?.body || '') || 'Bài viết đang được cập nhật nội dung tóm tắt.';
+}
+
+function getPostDateLabel(post, format = 'short') {
+  if (post?.dateLabel) return post.dateLabel;
+  return formatDate(post?.published_at || post?.created_at, format);
 }
 
 export async function generateMetadata({ params }) {
@@ -129,31 +184,28 @@ export default async function BlogPostPage({ params }) {
   const rawContent = post.content || post.body || '';
   const contentMarkup = buildBlogContentMarkup(rawContent);
   const hasContent = Boolean(contentMarkup.__html.trim());
+  const relatedPosts = related.length > 0 ? related : FALLBACK_RELATED_POSTS;
+  const articleCategory = post?.category?.name || post?.category || post?.tag
+    || (Array.isArray(post?.tags) && post.tags.length > 0
+      ? (typeof post.tags[0] === 'string' ? post.tags[0] : post.tags[0]?.name)
+      : '');
 
   return (
     <main className="bdt-page">
       <div className="bdt-container">
-        <nav className="bdt-breadcrumb">
-          <Link href="/">Trang chủ</Link>
-          <span className="material-symbols-outlined">chevron_right</span>
-          <Link href="/blog">Blog</Link>
-          <span className="material-symbols-outlined">chevron_right</span>
-          <span className="bdt-bc-current">{post.title}</span>
-        </nav>
-
         <article>
           <header className="bdt-article-header">
-            {(post.category?.name || post.category || post.tag) ? (
-              <div className="bdt-category-badge">{post.category?.name || post.category || post.tag}</div>
+            {articleCategory ? (
+              <div className="bdt-category-badge">{articleCategory}</div>
             ) : null}
 
             <h1 className="bdt-title">{post.title}</h1>
 
-            <div className="bdt-meta">
-              {post.created_at ? <span>{formatDate(post.created_at)}</span> : null}
-              {post.created_at && post.author ? <span className="bdt-meta-dot" /> : null}
-              {post.author ? <span>Tác giả: {post.author}</span> : null}
-            </div>
+            {post.author ? (
+              <div className="bdt-meta">
+                <span>Tác giả: {post.author}</span>
+              </div>
+            ) : null}
           </header>
 
           {heroImage ? (
@@ -209,40 +261,55 @@ export default async function BlogPostPage({ params }) {
           <div className="bdt-divider-line" />
         </div>
 
-        <section className="bdt-related">
+        <section id="related-posts" className="bdt-related">
           <h3 className="bdt-related-title">Bài viết liên quan</h3>
 
           <div className="bdt-related-grid">
-            {related.length > 0 ? related.map((item) => (
-              <Link key={item.id} href={`/blog/${item.slug || item.id}`} className="bdt-related-card">
-                <div className="bdt-related-img">
-                  {getPostImage(item) ? (
-                    <img
-                      src={getPostImage(item)}
-                      alt={item.title}
-                      loading="lazy"
-                      decoding="async"
-                    />
-                  ) : (
-                    <div className="bdt-related-placeholder">
-                      <span className="material-symbols-outlined">article</span>
+            {relatedPosts.map((item) => {
+              const relatedImage = getPostImage(item);
+              const relatedHref = item.href || `/blog/${item.slug || item.id}`;
+
+              return (
+                <Link
+                  key={item.id || item.slug || item.title}
+                  href={relatedHref}
+                  className="bdt-related-card"
+                  aria-label={item.title}
+                >
+                  <div className="bdt-related-img">
+                    {relatedImage ? (
+                      <img
+                        src={relatedImage}
+                        alt={item.title}
+                        loading="lazy"
+                        decoding="async"
+                      />
+                    ) : (
+                      <div className="bdt-related-placeholder">
+                        <span className="material-symbols-outlined">article</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bdt-related-body">
+                    <div className="bdt-related-meta">
+                      <span className="bdt-related-category">{getPostCategory(item)}</span>
+                      {getPostDateLabel(item) ? (
+                        <time className="bdt-related-date">{getPostDateLabel(item)}</time>
+                      ) : null}
                     </div>
-                  )}
-                </div>
-                <h4 className="bdt-related-name">{item.title}</h4>
-                {item.created_at ? (
-                  <p className="bdt-related-date">{formatDate(item.created_at)}</p>
-                ) : null}
-              </Link>
-            )) : FALLBACK_RELATED_POSTS.map((item) => (
-              <div key={item.title} className="bdt-related-card">
-                <div className="bdt-related-img bdt-related-placeholder-bg">
-                  <span className="material-symbols-outlined">article</span>
-                </div>
-                <h4 className="bdt-related-name">{item.title}</h4>
-                <p className="bdt-related-date">{item.date}</p>
-              </div>
-            ))}
+
+                    <h4 className="bdt-related-name">{item.title}</h4>
+                    <p className="bdt-related-excerpt">{getPostExcerpt(item)}</p>
+
+                    <span className="bdt-related-cta">
+                      Đọc bài
+                      <span className="material-symbols-outlined">arrow_outward</span>
+                    </span>
+                  </div>
+                </Link>
+              );
+            })}
           </div>
         </section>
 
@@ -268,7 +335,7 @@ export default async function BlogPostPage({ params }) {
           min-width: 0;
           max-width: 960px;
           margin: 0 auto;
-          padding: 2.5rem 1.5rem 3rem;
+          padding: 1.7rem 1.5rem 3rem;
         }
 
         article {
@@ -276,47 +343,14 @@ export default async function BlogPostPage({ params }) {
           min-width: 0;
         }
 
-        .bdt-breadcrumb {
-          display: flex;
-          align-items: center;
-          gap: 0.3rem;
-          flex-wrap: wrap;
-          margin-bottom: 2.2rem;
-          color: rgba(27, 54, 93, 0.62);
-          font-size: 0.85rem;
-          font-style: italic;
-        }
-
-        .bdt-breadcrumb a {
-          color: rgba(27, 54, 93, 0.74);
-          transition: color 0.2s ease;
-        }
-
-        .bdt-breadcrumb a:hover {
-          color: #1B365D;
-        }
-
-        .bdt-breadcrumb .material-symbols-outlined {
-          font-size: 1rem;
-        }
-
-        .bdt-bc-current {
-          max-width: 360px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          color: #1B365D;
-          font-weight: 500;
-        }
-
         .bdt-article-header {
           text-align: center;
-          margin-bottom: 2.6rem;
+          margin-bottom: 1.9rem;
         }
 
         .bdt-category-badge {
           display: inline-block;
-          margin-bottom: 1.3rem;
+          margin-bottom: 0.95rem;
           padding: 0.32rem 1rem;
           border: 1px solid #C5A059;
           color: #C5A059;
@@ -328,13 +362,21 @@ export default async function BlogPostPage({ params }) {
         }
 
         .bdt-title {
-          margin: 0 0 1.25rem;
+          display: -webkit-box;
+          width: 100%;
+          max-width: 100%;
+          margin: 0 auto;
           color: #1B365D;
           font-family: 'Playfair Display', serif;
-          font-size: clamp(2rem, 7vw, 4.25rem);
+          font-size: clamp(1.95rem, 8vw, 4.1rem);
           font-style: italic;
           font-weight: 900;
           line-height: 1.08;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+          line-clamp: 2;
         }
 
         .bdt-meta {
@@ -342,17 +384,12 @@ export default async function BlogPostPage({ params }) {
           align-items: center;
           justify-content: center;
           flex-wrap: wrap;
-          gap: 0.85rem;
-          color: rgba(27, 54, 93, 0.7);
-          font-size: 1rem;
+          gap: 0.5rem;
+          margin-top: 0.85rem;
+          color: rgba(27, 54, 93, 0.66);
+          font-family: var(--font-sans, 'Segoe UI', sans-serif);
+          font-size: 0.84rem;
           font-style: italic;
-        }
-
-        .bdt-meta-dot {
-          width: 5px;
-          height: 5px;
-          border-radius: 50%;
-          background: #C5A059;
         }
 
         .bdt-hero-img-wrap {
@@ -834,54 +871,73 @@ export default async function BlogPostPage({ params }) {
         }
 
         .bdt-related {
-          margin-bottom: 4rem;
+          margin-bottom: 3.5rem;
         }
 
         .bdt-related-title {
-          margin: 0 0 2.2rem;
+          margin: 0 0 1rem;
           color: #1B365D;
           font-family: 'Playfair Display', serif;
-          font-size: 1.4rem;
-          font-style: italic;
+          font-size: clamp(1.25rem, 3vw, 1.55rem);
           font-weight: 700;
-          letter-spacing: 0.15em;
-          text-align: center;
-          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          text-align: left;
         }
 
         .bdt-related-grid {
           display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 1.25rem;
+          grid-template-columns: minmax(0, 1fr);
+          gap: 0.9rem;
         }
 
         .bdt-related-card {
-          display: block;
-          border: 1px solid rgba(197, 160, 89, 0.25);
-          background: #fff;
+          display: grid;
+          grid-template-columns: 96px minmax(0, 1fr);
+          align-items: stretch;
+          gap: 0.88rem;
+          padding: 0.82rem;
+          border: 1px solid rgba(27, 54, 93, 0.08);
+          border-radius: 1.2rem;
+          background: rgba(255, 255, 255, 0.96);
           color: inherit;
           text-decoration: none;
-          transition: transform 0.2s ease, box-shadow 0.2s ease;
+          box-shadow: 0 14px 28px rgba(27, 54, 93, 0.06);
+          transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
         }
 
         .bdt-related-card:hover {
           transform: translateY(-2px);
-          box-shadow: 0 10px 22px rgba(27, 54, 93, 0.12);
+          border-color: rgba(197, 160, 89, 0.42);
+          box-shadow: 0 18px 34px rgba(27, 54, 93, 0.1);
+        }
+
+        .bdt-related-card:focus-visible {
+          outline: none;
+          border-color: rgba(197, 160, 89, 0.88);
+          box-shadow: 0 0 0 3px rgba(197, 160, 89, 0.18);
         }
 
         .bdt-related-img {
+          position: relative;
           display: flex;
           align-items: center;
           justify-content: center;
-          height: 140px;
+          width: 96px;
+          aspect-ratio: 1 / 1;
           overflow: hidden;
-          background: rgba(27, 54, 93, 0.08);
+          border-radius: 0.95rem;
+          background: linear-gradient(135deg, rgba(197, 160, 89, 0.2), rgba(27, 54, 93, 0.16));
         }
 
         .bdt-related-img img {
           width: 100%;
           height: 100%;
           object-fit: cover;
+          transition: transform 0.3s ease;
+        }
+
+        .bdt-related-card:hover .bdt-related-img img {
+          transform: scale(1.04);
         }
 
         .bdt-related-placeholder,
@@ -891,24 +947,110 @@ export default async function BlogPostPage({ params }) {
           height: 100%;
           align-items: center;
           justify-content: center;
-          color: rgba(27, 54, 93, 0.4);
+          background: linear-gradient(135deg, rgba(197, 160, 89, 0.22), rgba(27, 54, 93, 0.82));
+          color: rgba(255, 255, 255, 0.56);
+        }
+
+        .bdt-related-placeholder .material-symbols-outlined,
+        .bdt-related-placeholder-bg .material-symbols-outlined {
+          font-size: 2rem;
+        }
+
+        .bdt-related-body {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 0.42rem;
+        }
+
+        .bdt-related-meta {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 0.4rem 0.55rem;
+          font-family: var(--font-sans, 'Segoe UI', sans-serif);
+          font-size: 0.72rem;
+          line-height: 1.2;
+          color: #62748a;
+        }
+
+        .bdt-related-category {
+          display: inline-flex;
+          align-items: center;
+          max-width: 100%;
+          padding: 0.24rem 0.52rem;
+          border-radius: 999px;
+          background: rgba(27, 54, 93, 0.07);
+          color: #1B365D;
+          font-weight: 700;
+          white-space: nowrap;
         }
 
         .bdt-related-name {
           margin: 0;
-          padding: 0.85rem 0.9rem 0.45rem;
           color: #1B365D;
           font-family: 'Playfair Display', serif;
-          font-size: 1rem;
-          line-height: 1.4;
+          font-size: 1.02rem;
+          line-height: 1.32;
+          display: -webkit-box;
+          overflow: hidden;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+          line-clamp: 2;
         }
 
         .bdt-related-date {
           margin: 0;
-          padding: 0 0.9rem 0.9rem;
-          color: rgba(27, 54, 93, 0.5);
-          font-size: 0.8rem;
-          font-style: italic;
+          color: #62748a;
+          font-family: var(--font-sans, 'Segoe UI', sans-serif);
+          font-size: 0.72rem;
+          white-space: nowrap;
+        }
+
+        .bdt-related-excerpt {
+          margin: 0;
+          color: rgba(27, 54, 93, 0.78);
+          font-family: var(--font-sans, 'Segoe UI', sans-serif);
+          font-size: 0.86rem;
+          line-height: 1.45;
+          display: -webkit-box;
+          overflow: hidden;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+          line-clamp: 2;
+        }
+
+        .bdt-related-cta {
+          display: inline-flex;
+          width: fit-content;
+          align-items: center;
+          gap: 0.25rem;
+          margin-top: auto;
+          padding: 0.48rem 0.78rem;
+          border-radius: 999px;
+          border: 1px solid rgba(27, 54, 93, 0.1);
+          background: rgba(27, 54, 93, 0.04);
+          color: #1B365D;
+          font-family: var(--font-sans, 'Segoe UI', sans-serif);
+          font-size: 0.78rem;
+          font-weight: 700;
+          letter-spacing: 0.02em;
+          transition: color 0.22s ease, background-color 0.22s ease, border-color 0.22s ease;
+        }
+
+        .bdt-related-cta .material-symbols-outlined {
+          font-size: 0.95rem;
+          transition: transform 0.22s ease;
+        }
+
+        .bdt-related-card:hover .bdt-related-cta {
+          border-color: rgba(197, 160, 89, 0.42);
+          background: rgba(197, 160, 89, 0.1);
+          color: #8d6320;
+        }
+
+        .bdt-related-card:hover .bdt-related-cta .material-symbols-outlined {
+          transform: translate(2px, -2px);
         }
 
         .bdt-back-wrap {
@@ -944,7 +1086,7 @@ export default async function BlogPostPage({ params }) {
 
         @media (max-width: 700px) {
           .bdt-container {
-            padding: 1.6rem 1rem 2.5rem;
+            padding: 1.2rem 1rem 2.5rem;
           }
 
           .bdt-hero-img-wrap {
@@ -964,6 +1106,34 @@ export default async function BlogPostPage({ params }) {
         }
 
         @media (max-width: 600px) {
+          .bdt-title {
+            font-size: clamp(1.52rem, 6.6vw, 2.15rem);
+            line-height: 1.08;
+          }
+
+          .bdt-related-card {
+            grid-template-columns: 84px minmax(0, 1fr);
+            gap: 0.75rem;
+            padding: 0.74rem;
+          }
+
+          .bdt-related-img {
+            width: 84px;
+          }
+
+          .bdt-related-name {
+            font-size: 0.97rem;
+          }
+
+          .bdt-related-excerpt {
+            font-size: 0.82rem;
+          }
+
+          .bdt-related-cta {
+            padding: 0.42rem 0.68rem;
+            font-size: 0.76rem;
+          }
+
           .bdt-content .grid-2 {
             grid-template-columns: 1fr;
           }

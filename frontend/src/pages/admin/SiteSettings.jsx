@@ -52,6 +52,18 @@ const defaultSettings = {
     store_locations: [],
 };
 
+const normalizeIncomingSettings = (incomingSettings = {}) => {
+    const normalized = { ...incomingSettings };
+
+    Object.entries(defaultSettings).forEach(([key, defaultValue]) => {
+        if (typeof defaultValue === 'string') {
+            normalized[key] = incomingSettings[key] == null ? '' : String(incomingSettings[key]);
+        }
+    });
+
+    return normalized;
+};
+
 const createHeaderMenuItem = () => ({
     id: `header-menu-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     label: 'Menu mới',
@@ -458,29 +470,30 @@ const SiteSettings = () => {
         try {
             const response = await cmsApi.settings.get();
             const incomingSettings = response.data || {};
-            const normalizedHeaderMenus = normalizeHeaderMenus(incomingSettings.header_menu_items);
-            const normalizedFooterMenuGroups = normalizeFooterMenuGroups(incomingSettings.footer_menu_groups);
-            const normalizedStoreLocations = normalizeStoreLocations(incomingSettings.store_locations);
+            const normalizedSettings = normalizeIncomingSettings(incomingSettings);
+            const normalizedHeaderMenus = normalizeHeaderMenus(normalizedSettings.header_menu_items);
+            const normalizedFooterMenuGroups = normalizeFooterMenuGroups(normalizedSettings.footer_menu_groups);
+            const normalizedStoreLocations = normalizeStoreLocations(normalizedSettings.store_locations);
 
             setHeaderMenus(normalizedHeaderMenus);
             setFooterMenuGroups(normalizedFooterMenuGroups);
             setStoreLocations(normalizedStoreLocations);
             setSettings((prev) => ({
                 ...prev,
-                ...incomingSettings,
+                ...normalizedSettings,
                 ai_gemini_api_key: '',
-                ai_gemini_model: incomingSettings.ai_gemini_model || prev.ai_gemini_model,
-                ai_gemini_enabled: incomingSettings.ai_gemini_enabled ?? prev.ai_gemini_enabled,
-                ai_gemini_has_api_key: Boolean(incomingSettings.ai_gemini_has_api_key),
-                ai_gemini_available: Boolean(incomingSettings.ai_gemini_available),
-                ai_gemini_key_source: incomingSettings.ai_gemini_key_source || null,
-                header_brand_text: incomingSettings.header_brand_text || incomingSettings.site_name || prev.header_brand_text,
-                header_notice_text: incomingSettings.header_notice_text || prev.header_notice_text,
-                header_search_placeholder: incomingSettings.header_search_placeholder || prev.header_search_placeholder,
+                ai_gemini_model: normalizedSettings.ai_gemini_model || prev.ai_gemini_model,
+                ai_gemini_enabled: normalizedSettings.ai_gemini_enabled ?? prev.ai_gemini_enabled,
+                ai_gemini_has_api_key: Boolean(normalizedSettings.ai_gemini_has_api_key),
+                ai_gemini_available: Boolean(normalizedSettings.ai_gemini_available),
+                ai_gemini_key_source: normalizedSettings.ai_gemini_key_source || null,
+                header_brand_text: normalizedSettings.header_brand_text || normalizedSettings.site_name || prev.header_brand_text,
+                header_notice_text: normalizedSettings.header_notice_text || prev.header_notice_text,
+                header_search_placeholder: normalizedSettings.header_search_placeholder || prev.header_search_placeholder,
                 header_menu_items: normalizedHeaderMenus,
-                footer_brand_text: incomingSettings.footer_brand_text || incomingSettings.site_name || prev.footer_brand_text,
-                footer_hotline: incomingSettings.footer_hotline || incomingSettings.contact_phone || prev.footer_hotline,
-                footer_email: incomingSettings.footer_email || incomingSettings.contact_email || prev.footer_email,
+                footer_brand_text: normalizedSettings.footer_brand_text || normalizedSettings.site_name || prev.footer_brand_text,
+                footer_hotline: normalizedSettings.footer_hotline || normalizedSettings.contact_phone || prev.footer_hotline,
+                footer_email: normalizedSettings.footer_email || normalizedSettings.contact_email || prev.footer_email,
                 footer_menu_groups: normalizedFooterMenuGroups,
                 store_locations: normalizedStoreLocations,
             }));

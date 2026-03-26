@@ -532,9 +532,7 @@ export const userApi = {
 };
 
 export const mediaApi = {
-    upload: (formData) => api.post('/media/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-    }),
+    upload: (formData) => api.post('/media/upload', formData, multipartConfig(formData)),
 };
 
 export const quoteTemplateApi = {

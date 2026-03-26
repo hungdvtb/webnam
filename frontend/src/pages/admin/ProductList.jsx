@@ -1034,7 +1034,7 @@ const ProductList = () => {
                             {isTrashView && (
                                 <button 
                                     disabled={selectedIds.length === 0} 
-                                    onClick={handleBulkForceDelete} 
+                                    onClick={handleBulkDelete} 
                                     className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick hover:bg-brick hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
                                     title="Xóa vĩnh viễn đã chọn"
                                 >

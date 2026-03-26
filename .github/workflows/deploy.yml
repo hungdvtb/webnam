@@ -1,0 +1,24 @@
+name: CI/CD Auto Deploy
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            cd /root/www/webname
+            git pull origin master
+            # Run the rebuild script
+            ./deploy.sh rebuild
+            # Optional: Clear Laravel cache after deploy
+            docker exec webnam-api php artisan optimize:clear

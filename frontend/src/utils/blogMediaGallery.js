@@ -183,7 +183,7 @@ export function normalizeGalleryItems(items) {
             }
 
             if (item.type === 'video') {
-                return buildVideoGalleryItem(item.url || item.src, item);
+                return buildVideoGalleryItem(item.url || item.src || item.youtubeId, item);
             }
 
             return buildImageGalleryItem(item.src || item.url, item);

@@ -23,6 +23,10 @@ use ZipArchive;
 
 class BlogController extends Controller
 {
+    private const MEDIA_GALLERY_BLOCK_CLASS = 'ql-bdt-media-gallery';
+    private const MEDIA_GALLERY_PAYLOAD_ATTRIBUTE = 'data-gallery-payload';
+    private const YOUTUBE_VIDEO_ID_PATTERN = '/^[a-zA-Z0-9_-]{6,}$/';
+
     /**
      * Display a listing of the resource.
      */
@@ -591,6 +595,7 @@ class BlogController extends Controller
             $validated['blog_category_id'] ?? null
         );
         $validated['seo_keyword'] = $this->normalizeKeyword($validated['seo_keyword'] ?? null);
+        $validated['content'] = $this->normalizeMediaGalleryBlocks((string) ($validated['content'] ?? ''));
         $validated['is_published'] = array_key_exists('is_published', $validated)
             ? (bool) $validated['is_published']
             : true;
@@ -666,6 +671,10 @@ class BlogController extends Controller
         if (array_key_exists('seo_keyword', $validated)) {
             $validated['seo_keyword'] = $this->normalizeKeyword($validated['seo_keyword']);
             $this->ensureSeoKeywordExists($accountId, $validated['seo_keyword']);
+        }
+
+        if (array_key_exists('content', $validated)) {
+            $validated['content'] = $this->normalizeMediaGalleryBlocks((string) $validated['content']);
         }
 
         if (array_key_exists('blog_category_id', $validated)) {
@@ -1064,6 +1073,341 @@ class BlogController extends Controller
         }
 
         return $default;
+    }
+
+    private function normalizeMediaGalleryBlocks(string $content): string
+    {
+        if (!Str::contains($content, self::MEDIA_GALLERY_BLOCK_CLASS)) {
+            return $content;
+        }
+
+        $wrappedHtml = sprintf('<div id="__bdt_gallery_root__">%s</div>', $content);
+        $dom = new DOMDocument('1.0', 'UTF-8');
+        $options = (defined('LIBXML_HTML_NOIMPLIED') ? LIBXML_HTML_NOIMPLIED : 0)
+            | (defined('LIBXML_HTML_NODEFDTD') ? LIBXML_HTML_NODEFDTD : 0)
+            | LIBXML_NOERROR
+            | LIBXML_NOWARNING;
+
+        $previousLibxmlState = libxml_use_internal_errors(true);
+        try {
+            $dom->loadHTML('<?xml encoding="utf-8" ?>' . mb_convert_encoding($wrappedHtml, 'HTML-ENTITIES', 'UTF-8'), $options);
+        } catch (Throwable) {
+            libxml_clear_errors();
+            libxml_use_internal_errors($previousLibxmlState);
+
+            return $content;
+        }
+
+        $xpath = new DOMXPath($dom);
+        $nodes = $xpath->query(sprintf(
+            '//*[contains(concat(" ", normalize-space(@class), " "), " %s ")]',
+            self::MEDIA_GALLERY_BLOCK_CLASS
+        ));
+
+        if ($nodes !== false) {
+            $galleryNodes = [];
+
+            foreach ($nodes as $node) {
+                $galleryNodes[] = $node;
+            }
+
+            foreach ($galleryNodes as $node) {
+                $this->normalizeMediaGalleryNode($node);
+            }
+        }
+
+        $rootNode = $xpath->query('//*[@id="__bdt_gallery_root__"]')->item(0);
+        $normalizedContent = $rootNode ? $this->extractInnerHtml($rootNode) : $content;
+
+        libxml_clear_errors();
+        libxml_use_internal_errors($previousLibxmlState);
+
+        return $normalizedContent;
+    }
+
+    private function normalizeMediaGalleryNode(\DOMNode $node): void
+    {
+        if (!$node instanceof \DOMElement) {
+            return;
+        }
+
+        $items = $this->decodeMediaGalleryPayload($node->getAttribute(self::MEDIA_GALLERY_PAYLOAD_ATTRIBUTE));
+
+        if (empty($items)) {
+            return;
+        }
+
+        $imageCount = count(array_filter($items, fn (array $item) => ($item['type'] ?? null) === 'image'));
+        $videoCount = count(array_filter($items, fn (array $item) => ($item['type'] ?? null) === 'video'));
+        $summary = $this->buildMediaGallerySummary($imageCount, $videoCount);
+        $payload = $this->encodeMediaGalleryPayload($items);
+        $previewUrl = $this->resolveMediaGalleryPreviewUrl($items);
+
+        $node->setAttribute('contenteditable', 'false');
+        $node->setAttribute('role', 'button');
+        $node->setAttribute('tabindex', '0');
+        $node->setAttribute(self::MEDIA_GALLERY_PAYLOAD_ATTRIBUTE, $payload);
+        $node->setAttribute('data-gallery-count', (string) count($items));
+        $node->setAttribute('data-image-count', (string) $imageCount);
+        $node->setAttribute('data-video-count', (string) $videoCount);
+        $node->setAttribute('data-gallery-summary', $summary);
+        $node->setAttribute('title', 'Nhấn để chỉnh block media gallery');
+        $node->setAttribute('aria-label', $summary . '. Nhấn để chỉnh block media gallery');
+        $node->setAttribute(
+            'style',
+            $previewUrl !== ''
+                ? sprintf('--ql-bdt-media-gallery-preview: url("%s");', str_replace('"', '%22', $previewUrl))
+                : '--ql-bdt-media-gallery-preview: none;'
+        );
+
+        while ($node->firstChild) {
+            $node->removeChild($node->firstChild);
+        }
+
+        $node->appendChild($node->ownerDocument->createTextNode($summary . ' • Nhấn để chỉnh'));
+    }
+
+    private function decodeMediaGalleryPayload(?string $payload): array
+    {
+        $rawPayload = trim((string) $payload);
+
+        if ($rawPayload === '') {
+            return [];
+        }
+
+        $candidates = [rawurldecode($rawPayload), $rawPayload];
+
+        foreach ($candidates as $candidate) {
+            try {
+                $decoded = json_decode($candidate, true, 512, JSON_THROW_ON_ERROR);
+            } catch (Throwable) {
+                continue;
+            }
+
+            $items = is_array($decoded) && array_is_list($decoded)
+                ? $decoded
+                : ($decoded['items'] ?? []);
+
+            $normalizedItems = $this->normalizeMediaGalleryItems($items);
+
+            if (!empty($normalizedItems)) {
+                return $normalizedItems;
+            }
+        }
+
+        return [];
+    }
+
+    private function encodeMediaGalleryPayload(array $items): string
+    {
+        return rawurlencode((string) json_encode([
+            'version' => 1,
+            'items' => array_values($items),
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    private function normalizeMediaGalleryItems($items): array
+    {
+        if (!is_array($items)) {
+            return [];
+        }
+
+        $normalizedItems = [];
+
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $type = trim((string) ($item['type'] ?? 'image'));
+
+            if ($type === 'video') {
+                $normalizedItem = $this->normalizeMediaGalleryVideoItem($item);
+            } else {
+                $normalizedItem = $this->normalizeMediaGalleryImageItem($item);
+            }
+
+            if ($normalizedItem !== null) {
+                $normalizedItems[] = $normalizedItem;
+            }
+        }
+
+        return $normalizedItems;
+    }
+
+    private function normalizeMediaGalleryImageItem(array $item): ?array
+    {
+        $src = trim((string) ($item['src'] ?? $item['url'] ?? ''));
+
+        if ($src === '') {
+            return null;
+        }
+
+        return [
+            'id' => trim((string) ($item['id'] ?? '')) ?: ('image_' . Str::lower(Str::random(10))),
+            'type' => 'image',
+            'src' => $src,
+            'alt' => trim((string) ($item['alt'] ?? $item['title'] ?? '')),
+        ];
+    }
+
+    private function normalizeMediaGalleryVideoItem(array $item): ?array
+    {
+        $source = trim((string) ($item['url'] ?? $item['src'] ?? $item['youtubeId'] ?? ''));
+        $videoId = $this->extractYouTubeVideoId($source);
+
+        if ($videoId === null) {
+            return null;
+        }
+
+        return [
+            'id' => trim((string) ($item['id'] ?? '')) ?: ('video_' . Str::lower(Str::random(10))),
+            'type' => 'video',
+            'url' => 'https://www.youtube.com/watch?v=' . $videoId,
+            'youtubeId' => $videoId,
+            'thumbnail' => 'https://i.ytimg.com/vi/' . $videoId . '/hqdefault.jpg',
+            'title' => trim((string) ($item['title'] ?? '')),
+        ];
+    }
+
+    private function extractYouTubeVideoId(?string $value): ?string
+    {
+        $normalizedValue = $this->normalizeYouTubeCandidate($value);
+
+        if ($normalizedValue === '') {
+            return null;
+        }
+
+        if (preg_match(self::YOUTUBE_VIDEO_ID_PATTERN, $normalizedValue) === 1) {
+            return $normalizedValue;
+        }
+
+        if (preg_match(
+            '/(?:youtube(?:-nocookie)?\.com\/(?:watch\/?\?(?:[^#\s]*&)?(?:v|vi)=|embed\/|live\/|shorts\/|v\/|e\/)|youtu\.be\/)([a-zA-Z0-9_-]{6,})/i',
+            $normalizedValue,
+            $matches
+        ) === 1) {
+            return $matches[1];
+        }
+
+        $parts = parse_url($normalizedValue);
+        if ($parts === false) {
+            return null;
+        }
+
+        $host = Str::lower((string) ($parts['host'] ?? ''));
+        $pathSegments = array_values(array_filter(explode('/', (string) ($parts['path'] ?? '')), fn ($segment) => $segment !== ''));
+
+        parse_str((string) ($parts['query'] ?? ''), $query);
+
+        if (!empty($query['u'])) {
+            $nestedUrl = (string) $query['u'];
+            if (Str::startsWith($nestedUrl, '/')) {
+                $nestedUrl = 'https://www.youtube.com' . $nestedUrl;
+            }
+
+            $nestedVideoId = $this->extractYouTubeVideoId(rawurldecode($nestedUrl));
+            if ($nestedVideoId !== null) {
+                return $nestedVideoId;
+            }
+        }
+
+        if (Str::contains($host, 'youtu.be')) {
+            $candidate = $pathSegments[0] ?? '';
+            return preg_match(self::YOUTUBE_VIDEO_ID_PATTERN, $candidate) === 1 ? $candidate : null;
+        }
+
+        if (Str::contains($host, 'youtube.com') || Str::contains($host, 'youtube-nocookie.com')) {
+            foreach (['v', 'vi'] as $queryKey) {
+                $candidate = trim((string) ($query[$queryKey] ?? ''));
+                if (preg_match(self::YOUTUBE_VIDEO_ID_PATTERN, $candidate) === 1) {
+                    return $candidate;
+                }
+            }
+
+            foreach (['embed', 'live', 'shorts', 'v', 'e'] as $segmentName) {
+                $segmentIndex = array_search($segmentName, $pathSegments, true);
+                if ($segmentIndex !== false) {
+                    $candidate = $pathSegments[$segmentIndex + 1] ?? '';
+                    if (preg_match(self::YOUTUBE_VIDEO_ID_PATTERN, $candidate) === 1) {
+                        return $candidate;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizeYouTubeCandidate(?string $value): string
+    {
+        $normalized = trim(html_entity_decode((string) $value, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+
+        if ($normalized === '') {
+            return '';
+        }
+
+        $decoded = rawurldecode($normalized);
+        if ($decoded !== '') {
+            $normalized = $decoded;
+        }
+
+        $normalized = str_replace('&amp;', '&', $normalized);
+
+        if (Str::startsWith($normalized, '//')) {
+            return 'https:' . $normalized;
+        }
+
+        if (!preg_match('/^https?:\/\//i', $normalized) && preg_match('/(?:youtube(?:-nocookie)?\.com|youtu\.be)/i', $normalized) === 1) {
+            return 'https://' . ltrim($normalized, '/');
+        }
+
+        return $normalized;
+    }
+
+    private function resolveMediaGalleryPreviewUrl(array $items): string
+    {
+        $firstItem = $items[0] ?? null;
+
+        if (!is_array($firstItem)) {
+            return '';
+        }
+
+        if (($firstItem['type'] ?? null) === 'video') {
+            return trim((string) ($firstItem['thumbnail'] ?? ''));
+        }
+
+        return trim((string) ($firstItem['src'] ?? ''));
+    }
+
+    private function buildMediaGallerySummary(int $imageCount, int $videoCount): string
+    {
+        if ($imageCount <= 0 && $videoCount <= 0) {
+            return 'Khối media trống';
+        }
+
+        $parts = ['Block media'];
+
+        if ($imageCount > 0) {
+            $parts[] = $imageCount . ' ảnh';
+        }
+
+        if ($videoCount > 0) {
+            $parts[] = $videoCount . ' video';
+        }
+
+        return implode(' • ', $parts);
+    }
+
+    private function extractInnerHtml(\DOMNode $node): string
+    {
+        $innerHtml = '';
+
+        foreach ($node->childNodes as $childNode) {
+            $innerHtml .= $node->ownerDocument?->saveHTML($childNode) ?? '';
+        }
+
+        return $innerHtml;
     }
 
     private function seoKeywordCollection(?int $accountId, ?Builder $fallbackBaseQuery = null): array

@@ -266,7 +266,6 @@ export default function Footer({ config = {} }) {
         }
 
         .footer-bottom {
-          border-top: 1px solid rgba(255, 255, 255, 0.1);
           padding-top: 2rem;
           display: flex;
           justify-content: space-between;
@@ -293,8 +292,8 @@ export default function Footer({ config = {} }) {
 
           .footer-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 1rem;
-            margin-bottom: 2rem;
+            gap: 1.15rem 1rem;
+            margin-bottom: 1.85rem;
           }
 
           .about-col,
@@ -304,11 +303,13 @@ export default function Footer({ config = {} }) {
 
           .footer-col {
             min-width: 0;
-            padding: 1rem;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 16px;
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(12px);
+            padding: 0;
+            border: none;
+            border-radius: 0;
+            background: transparent;
+            box-shadow: none;
+            outline: none;
+            backdrop-filter: none;
           }
 
           .footer-logo {
@@ -333,10 +334,13 @@ export default function Footer({ config = {} }) {
           }
 
           .footer-contact-item {
-            min-height: 48px;
-            padding: 0.75rem 0.85rem;
-            border-radius: 12px;
-            background: rgba(255, 255, 255, 0.06);
+            min-height: 0;
+            padding: 0;
+            border: none;
+            border-radius: 0;
+            background: transparent;
+            box-shadow: none;
+            outline: none;
             font-size: 0.86rem;
             line-height: 1.45;
           }
@@ -368,9 +372,13 @@ export default function Footer({ config = {} }) {
 
           .footer-col ul li :global(a) {
             display: block;
-            padding: 0.1rem 0;
+            padding: 0;
             font-size: 0.9rem;
             opacity: 0.88;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            outline: none;
           }
 
           .footer-nav-col {
@@ -386,10 +394,13 @@ export default function Footer({ config = {} }) {
           .footer-nav-col ul li :global(a) {
             display: flex;
             align-items: flex-start;
-            min-height: 54px;
-            padding: 0.75rem 0.8rem;
-            border-radius: 12px;
-            background: rgba(255, 255, 255, 0.04);
+            min-height: 0;
+            padding: 0;
+            border: none;
+            border-radius: 0;
+            background: transparent;
+            box-shadow: none;
+            outline: none;
             line-height: 1.4;
           }
 
@@ -409,17 +420,29 @@ export default function Footer({ config = {} }) {
           .newsletter-form input {
             min-width: 0;
             font-size: 0.9rem;
+            padding: 0.25rem 0;
+            background: transparent;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+            outline: none;
           }
 
           .newsletter-form button {
             min-width: 88px;
+            padding: 0.25rem 0;
+            background: transparent;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+            outline: none;
           }
 
           .footer-bottom {
             justify-content: center;
             text-align: center;
             gap: 0.85rem;
-            padding-top: 1.5rem;
+            padding-top: 1.25rem;
             font-size: 0.58rem;
             line-height: 1.7;
           }
@@ -445,11 +468,6 @@ export default function Footer({ config = {} }) {
             gap: 0.9rem;
           }
 
-          .footer-col {
-            padding: 0.95rem;
-            border-radius: 14px;
-          }
-
           .footer-logo {
             align-items: center;
             gap: 0.7rem;
@@ -461,8 +479,6 @@ export default function Footer({ config = {} }) {
           }
 
           .footer-nav-col ul li :global(a) {
-            min-height: 50px;
-            padding: 0.72rem 0.75rem;
             font-size: 0.84rem;
           }
 

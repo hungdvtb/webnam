@@ -13,7 +13,15 @@ import {
 import 'react-quill-new/dist/quill.snow.css';
 
 const Quill = ReactQuill.Quill;
+const Delta = Quill.import('delta');
 registerBlogMediaGalleryBlot(Quill);
+
+const QUILL_FORMATS = [
+    'header',
+    'bold', 'italic', 'underline', 'strike', 'blockquote',
+    'list', 'indent',
+    'link', 'image', 'video', 'mediaGallery',
+];
 
 const BlogForm = () => {
     const { id } = useParams();
@@ -22,6 +30,8 @@ const BlogForm = () => {
     const { showModal, showToast } = useUI();
     const { available: aiAvailable, disabledReason } = useAiAvailability();
     const quillRef = useRef(null);
+    const openMediaModalRef = useRef(() => {});
+    const quillModulesRef = useRef(null);
 
     const [loading, setLoading] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
@@ -45,6 +55,25 @@ const BlogForm = () => {
         published_at: '',
         is_system: false,
     });
+
+    const serializeEditorContent = (editorInstance) => {
+        if (editorInstance?.root?.innerHTML) {
+            return editorInstance.root.innerHTML;
+        }
+
+        if (typeof editorInstance?.getHTML === 'function') {
+            return editorInstance.getHTML() || '';
+        }
+
+        try {
+            const quill = typeof quillRef.current?.getEditor === 'function'
+                ? quillRef.current.getEditor()
+                : null;
+            return quill?.root?.innerHTML || '';
+        } catch {
+            return '';
+        }
+    };
 
     useEffect(() => {
         loadCategories();
@@ -91,14 +120,13 @@ const BlogForm = () => {
     };
 
     const syncEditorContent = (quill) => {
-        if (!quill) {
-            return;
-        }
+        const nextContent = serializeEditorContent(quill);
 
-        setFormData((prev) => ({
-            ...prev,
-            content: quill.root.innerHTML,
-        }));
+        setFormData((prev) => (
+            !nextContent || nextContent === prev.content
+                ? prev
+                : { ...prev, content: nextContent }
+        ));
     };
 
     const openMediaModal = (options = {}) => {
@@ -115,6 +143,40 @@ const BlogForm = () => {
             editing: Boolean(options.editing),
         });
     };
+
+    openMediaModalRef.current = openMediaModal;
+
+    if (!quillModulesRef.current) {
+        quillModulesRef.current = {
+            toolbar: {
+                container: [
+                    [{ header: [1, 2, 3, false] }],
+                    ['bold', 'italic', 'underline', 'strike', 'blockquote'],
+                    [{ list: 'ordered' }, { list: 'bullet' }, { indent: '-1' }, { indent: '+1' }],
+                    ['link', 'image', 'video', 'mediaGallery'],
+                    ['clean'],
+                ],
+                handlers: {
+                    mediaGallery: () => openMediaModalRef.current(),
+                },
+            },
+            clipboard: {
+                matchers: [
+                    [`div.${GALLERY_BLOCK_CLASS}`, (node, delta) => {
+                        const items = readGalleryItemsFromNode(node);
+
+                        if (!items.length) {
+                            return delta;
+                        }
+
+                        return new Delta()
+                            .insert({ mediaGallery: items })
+                            .insert('\n');
+                    }],
+                ],
+            },
+        };
+    }
 
     const openExistingMediaGallery = (galleryNode) => {
         const quill = quillRef.current?.getEditor();
@@ -251,7 +313,7 @@ const BlogForm = () => {
                 blog_category_id: formData.blog_category_id ? Number(formData.blog_category_id) : null,
                 seo_keyword: formData.seo_keyword,
                 excerpt: formData.excerpt,
-                content: formData.content,
+                content: serializeEditorContent() || formData.content,
                 featured_image: formData.featured_image,
                 is_published: formData.is_published,
                 is_starred: formData.is_starred,
@@ -336,28 +398,6 @@ const BlogForm = () => {
             setAiGenerating(false);
         }
     };
-
-    const quillModules = {
-        toolbar: {
-            container: [
-                [{ header: [1, 2, 3, false] }],
-                ['bold', 'italic', 'underline', 'strike', 'blockquote'],
-                [{ list: 'ordered' }, { list: 'bullet' }, { indent: '-1' }, { indent: '+1' }],
-                ['link', 'image', 'video', 'mediaGallery'],
-                ['clean'],
-            ],
-            handlers: {
-                mediaGallery: () => openMediaModal(),
-            },
-        },
-    };
-
-    const quillFormats = [
-        'header',
-        'bold', 'italic', 'underline', 'strike', 'blockquote',
-        'list', 'bullet', 'indent',
-        'link', 'image', 'video', 'mediaGallery',
-    ];
 
     return (
         <>
@@ -509,9 +549,17 @@ const BlogForm = () => {
                                     ref={quillRef}
                                     theme="snow"
                                     value={formData.content}
-                                    onChange={(content) => setFormData((prev) => ({ ...prev, content }))}
-                                    modules={quillModules}
-                                    formats={quillFormats}
+                                    onChange={(content, _delta, _source, editor) => {
+                                        const nextContent = serializeEditorContent(editor) || content || '';
+
+                                        setFormData((prev) => (
+                                            nextContent === prev.content
+                                                ? prev
+                                                : { ...prev, content: nextContent }
+                                        ));
+                                    }}
+                                    modules={quillModulesRef.current}
+                                    formats={QUILL_FORMATS}
                                     className="font-body text-lg"
                                     style={{ height: '500px', marginBottom: '50px' }}
                                 />

@@ -90,6 +90,147 @@ class OrderDraftFlowTest extends TestCase
         $this->assertSame(3, (int) $order->items()->first()->quantity);
     }
 
+    public function test_store_official_order_allows_negative_inventory_when_stock_is_empty(): void
+    {
+        [$account] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham am kho',
+            'sku' => 'NEG-STORE-001',
+            'price' => 150000,
+            'cost_price' => 90000,
+            'expected_cost' => 90000,
+            'stock_quantity' => 0,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', $this->officialOrderPayload($product));
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('order_kind', Order::KIND_OFFICIAL);
+
+        $order = $this->loadOrderWithAllocations((int) $response->json('id'));
+        $product->refresh();
+
+        $this->assertSame(-1, (int) $product->stock_quantity);
+        $this->assertSame(1, $order->items->count());
+        $this->assertSame(1, (int) $order->items->first()->batchAllocations->sum('quantity'));
+        $this->assertSame(1, $this->oversoldAllocatedQuantity($order));
+    }
+
+    public function test_update_official_order_allows_negative_inventory_when_quantity_exceeds_available(): void
+    {
+        [$account] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham sua am kho',
+            'sku' => 'NEG-UPDATE-001',
+            'price' => 170000,
+            'cost_price' => 100000,
+            'expected_cost' => 100000,
+            'stock_quantity' => 1,
+        ]);
+        $this->createInventoryBatch($account, $product, 1, 100000, 'neg-update');
+
+        $storeResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', $this->officialOrderPayload($product));
+
+        $storeResponse->assertCreated();
+
+        $orderId = (int) $storeResponse->json('id');
+
+        $updateResponse = $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$orderId}", $this->officialOrderPayload($product, [
+                'quantity' => 3,
+                'price' => 170000,
+            ]));
+
+        $updateResponse->assertOk();
+
+        $order = $this->loadOrderWithAllocations($orderId);
+        $product->refresh();
+
+        $this->assertSame(-2, (int) $product->stock_quantity);
+        $this->assertSame(3, (int) $order->items->first()->batchAllocations->sum('quantity'));
+        $this->assertSame(2, $this->oversoldAllocatedQuantity($order));
+    }
+
+    public function test_convert_draft_to_official_allows_negative_inventory(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham convert am kho',
+            'sku' => 'NEG-CONVERT-001',
+            'price' => 185000,
+            'cost_price' => 110000,
+            'expected_cost' => 110000,
+        ]);
+
+        $order = $this->createDraftOrder($account, $user, $product, [
+            'order_number' => 'DR20001A0',
+            'customer_name' => 'Draft am kho',
+            'customer_phone' => '0901234509',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson("/api/orders/{$order->id}/convert", [
+                'target_kind' => Order::KIND_OFFICIAL,
+                'region_type' => 'new',
+                'shipping_address' => '123 Nguyen Trai',
+            ]);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('order_kind', Order::KIND_OFFICIAL);
+
+        $order = $this->loadOrderWithAllocations($order->id);
+        $product->refresh();
+
+        $this->assertSame(Order::KIND_OFFICIAL, $order->order_kind);
+        $this->assertSame(-1, (int) $product->stock_quantity);
+        $this->assertSame(1, $this->oversoldAllocatedQuantity($order));
+    }
+
+    public function test_duplicate_official_order_to_official_allows_negative_inventory(): void
+    {
+        [$account] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham duplicate am kho',
+            'sku' => 'NEG-DUP-001',
+            'price' => 195000,
+            'cost_price' => 120000,
+            'expected_cost' => 120000,
+        ]);
+
+        $storeResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', $this->officialOrderPayload($product));
+
+        $storeResponse->assertCreated();
+
+        $originalOrderId = (int) $storeResponse->json('id');
+
+        $duplicateResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson("/api/orders/{$originalOrderId}/duplicate", [
+                'target_kind' => Order::KIND_OFFICIAL,
+            ]);
+
+        $duplicateResponse
+            ->assertOk()
+            ->assertJsonPath('order_kind', Order::KIND_OFFICIAL);
+
+        $duplicatedOrder = $this->loadOrderWithAllocations((int) $duplicateResponse->json('id'));
+        $product->refresh();
+
+        $this->assertNotSame($originalOrderId, (int) $duplicatedOrder->id);
+        $this->assertSame(-2, (int) $product->stock_quantity);
+        $this->assertSame(1, $this->oversoldAllocatedQuantity($duplicatedOrder));
+    }
+
     public function test_convert_official_order_to_draft_resets_shipping_summary_and_uses_manual_source(): void
     {
         [$account, $user] = $this->authenticate();
@@ -415,6 +556,43 @@ class OrderDraftFlowTest extends TestCase
             'status' => 'open',
             'meta' => ['source' => 'test'],
         ]);
+    }
+
+    private function officialOrderPayload(Product $product, array $itemOverrides = [], array $overrides = []): array
+    {
+        return array_merge([
+            'order_kind' => Order::KIND_OFFICIAL,
+            'customer_name' => 'Khach official',
+            'customer_phone' => '0912345678',
+            'customer_email' => 'official@example.com',
+            'shipping_address' => '123 Nguyen Trai',
+            'notes' => 'Ban truoc nhap sau',
+            'source' => 'Website',
+            'type' => 'Le',
+            'shipment_status' => 'Chua giao',
+            'items' => [
+                array_merge([
+                    'product_id' => $product->id,
+                    'quantity' => 1,
+                    'price' => (float) ($product->price ?? 0),
+                ], $itemOverrides),
+            ],
+        ], $overrides);
+    }
+
+    private function loadOrderWithAllocations(int $orderId): Order
+    {
+        return Order::query()
+            ->with(['items.batchAllocations.batch'])
+            ->findOrFail($orderId);
+    }
+
+    private function oversoldAllocatedQuantity(Order $order): int
+    {
+        return (int) $order->items
+            ->flatMap(fn (OrderItem $item) => $item->batchAllocations)
+            ->filter(fn ($allocation) => $allocation->batch?->source_type === 'oversold_reserve')
+            ->sum('quantity');
     }
 
     private function createDraftOrder(Account $account, User $user, Product $product, array $overrides = []): Order

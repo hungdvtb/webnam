@@ -1576,6 +1576,11 @@ class InventoryController extends Controller
         $query = InventoryBatch::query()
             ->select('inventory_batches.*')
             ->leftJoin('products', 'products.id', '=', 'inventory_batches.product_id')
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('inventory_batches.source_type')
+                    ->orWhere('inventory_batches.source_type', '!=', 'oversold_reserve');
+            })
             ->with([
                 'product:id,sku,name,price,expected_cost,cost_price,stock_quantity,damaged_quantity',
                 'import:id,import_number,supplier_name,import_date',

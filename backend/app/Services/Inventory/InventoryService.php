@@ -16,6 +16,7 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Models\Supplier;
 use App\Models\SupplierProductPrice;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Auth;
@@ -24,6 +25,8 @@ use Illuminate\Validation\ValidationException;
 
 class InventoryService
 {
+    private const OVERSOLD_RESERVE_SOURCE = 'oversold_reserve';
+
     public function __construct(
         private readonly ProductPricingService $productPricingService
     ) {
@@ -368,7 +371,7 @@ class InventoryService
             $product = $products->get((int) $item['product_id']);
             $quantity = (int) $item['quantity'];
             $sellingPrice = round((float) ($item['price'] ?? $product->price ?? 0), 2);
-            $allocation = $this->allocateSellableBatches($order->account_id, $product, $quantity);
+            $allocation = $this->allocateOrderSellableBatches($order->account_id, $product, $quantity);
             $avgUnitCost = $quantity > 0 ? round($allocation['total_cost'] / $quantity, 2) : 0;
             $revenue = round($sellingPrice * $quantity, 2);
             $profit = round($revenue - $allocation['total_cost'], 2);
@@ -458,7 +461,7 @@ class InventoryService
             $product = $products->get((int) $item->product_id);
             $quantity = (int) $item->quantity;
             $sellingPrice = round((float) ($item->price ?? 0), 2);
-            $allocation = $this->allocateSellableBatches($order->account_id, $product, $quantity);
+            $allocation = $this->allocateOrderSellableBatches($order->account_id, $product, $quantity);
             $avgUnitCost = $quantity > 0 ? round($allocation['total_cost'] / $quantity, 2) : 0;
             $lineTotalPrice = round($sellingPrice * $quantity, 2);
             $lineProfit = round($lineTotalPrice - $allocation['total_cost'], 2);
@@ -519,9 +522,12 @@ class InventoryService
                 continue;
             }
 
-            $batch->remaining_quantity = (int) $batch->remaining_quantity + (int) $allocation->quantity;
-            $batch->status = $batch->remaining_quantity > 0 ? 'open' : 'depleted';
-            $batch->save();
+            if (!$this->isOversoldReservationBatch($batch)) {
+                $batch->remaining_quantity = (int) $batch->remaining_quantity + (int) $allocation->quantity;
+                $batch->status = $batch->remaining_quantity > 0 ? 'open' : 'depleted';
+                $batch->save();
+            }
+
             $touchedProductIds[] = $batch->product_id;
         }
 
@@ -544,18 +550,33 @@ class InventoryService
         $batches = InventoryBatch::query()
             ->whereIn('product_id', $uniqueProductIds->all())
             ->where('remaining_quantity', '>', 0)
+            ->where(function ($query) {
+                $query
+                    ->whereNull('source_type')
+                    ->orWhere('source_type', '!=', self::OVERSOLD_RESERVE_SOURCE);
+            })
             ->orderBy('received_at')
             ->orderBy('id')
             ->get()
             ->groupBy('product_id');
 
+        $oversoldReservedByProduct = InventoryBatchAllocation::query()
+            ->selectRaw('inventory_batch_allocations.product_id, COALESCE(SUM(inventory_batch_allocations.quantity), 0) AS total_reserved')
+            ->join('inventory_batches', 'inventory_batches.id', '=', 'inventory_batch_allocations.inventory_batch_id')
+            ->whereIn('inventory_batch_allocations.product_id', $uniqueProductIds->all())
+            ->where('inventory_batches.source_type', self::OVERSOLD_RESERVE_SOURCE)
+            ->groupBy('inventory_batch_allocations.product_id')
+            ->pluck('total_reserved', 'inventory_batch_allocations.product_id');
+
         Product::query()
             ->whereIn('id', $uniqueProductIds->all())
             ->lockForUpdate()
             ->get()
-            ->each(function (Product $product) use ($batches) {
+            ->each(function (Product $product) use ($batches, $oversoldReservedByProduct) {
                 $productBatches = $batches->get($product->id, collect());
-                $stock = (int) $productBatches->sum('remaining_quantity');
+                $availableStock = (int) $productBatches->sum('remaining_quantity');
+                $oversoldReserved = (int) ($oversoldReservedByProduct->get($product->id) ?? 0);
+                $stock = $availableStock - $oversoldReserved;
                 $importedQuantityTotal = max(0, (int) ($product->imported_quantity_total ?? 0));
                 $importedValueTotal = round((float) ($product->imported_value_total ?? 0), 2);
                 $currentCost = $importedQuantityTotal > 0
@@ -1657,6 +1678,11 @@ class InventoryService
             ->where('account_id', $accountId)
             ->where('product_id', $product->id)
             ->where('remaining_quantity', '>', 0)
+            ->where(function ($query) {
+                $query
+                    ->whereNull('source_type')
+                    ->orWhere('source_type', '!=', self::OVERSOLD_RESERVE_SOURCE);
+            })
             ->orderBy('received_at')
             ->orderBy('id')
             ->lockForUpdate()
@@ -1702,6 +1728,143 @@ class InventoryService
             'allocations' => $allocations,
             'total_cost' => round($totalCost, 2),
         ];
+    }
+
+    private function allocateOrderSellableBatches(int $accountId, Product $product, int $requestedQty): array
+    {
+        $batches = InventoryBatch::query()
+            ->where('account_id', $accountId)
+            ->where('product_id', $product->id)
+            ->where('remaining_quantity', '>', 0)
+            ->where(function ($query) {
+                $query
+                    ->whereNull('source_type')
+                    ->orWhere('source_type', '!=', self::OVERSOLD_RESERVE_SOURCE);
+            })
+            ->orderBy('received_at')
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
+
+        $remaining = $requestedQty;
+        $totalCost = 0.0;
+        $allocations = [];
+
+        foreach ($batches as $batch) {
+            if ($remaining <= 0) {
+                break;
+            }
+
+            $takeQty = min($remaining, (int) $batch->remaining_quantity);
+            if ($takeQty <= 0) {
+                continue;
+            }
+
+            $batch->remaining_quantity = (int) $batch->remaining_quantity - $takeQty;
+            $batch->status = $batch->remaining_quantity > 0 ? 'open' : 'depleted';
+            $batch->save();
+
+            $lineTotal = round($takeQty * (float) $batch->unit_cost, 2);
+            $totalCost += $lineTotal;
+            $allocations[] = [
+                'inventory_batch_id' => $batch->id,
+                'quantity' => $takeQty,
+                'unit_cost' => round((float) $batch->unit_cost, 2),
+                'total_cost' => $lineTotal,
+            ];
+            $remaining -= $takeQty;
+        }
+
+        if ($remaining > 0) {
+            $fallbackUnitCost = round((float) ($product->cost_price ?? $product->expected_cost ?? 0), 2);
+            $oversoldBatch = $this->resolveOversoldReservationBatch($accountId, $product, $fallbackUnitCost);
+            $lineTotal = round($remaining * $fallbackUnitCost, 2);
+
+            $allocations[] = [
+                'inventory_batch_id' => $oversoldBatch->id,
+                'quantity' => $remaining,
+                'unit_cost' => $fallbackUnitCost,
+                'total_cost' => $lineTotal,
+            ];
+            $totalCost += $lineTotal;
+        }
+
+        return [
+            'allocations' => $allocations,
+            'total_cost' => round($totalCost, 2),
+        ];
+    }
+
+    private function resolveOversoldReservationBatch(int $accountId, Product $product, float $unitCost): InventoryBatch
+    {
+        $batchNumber = $this->oversoldReservationBatchNumber($accountId, (int) $product->id);
+        $normalizedUnitCost = round((float) ($unitCost ?: ($product->cost_price ?? $product->expected_cost ?? 0)), 2);
+
+        $batch = InventoryBatch::query()
+            ->where('batch_number', $batchNumber)
+            ->lockForUpdate()
+            ->first();
+
+        if ($batch instanceof InventoryBatch) {
+            if (
+                (int) $batch->account_id !== $accountId
+                || (int) $batch->product_id !== (int) $product->id
+                || (string) ($batch->source_type ?? '') !== self::OVERSOLD_RESERVE_SOURCE
+                || round((float) ($batch->unit_cost ?? 0), 2) !== $normalizedUnitCost
+            ) {
+                $batch->forceFill([
+                    'account_id' => $accountId,
+                    'product_id' => (int) $product->id,
+                    'source_type' => self::OVERSOLD_RESERVE_SOURCE,
+                    'source_id' => (int) $product->id,
+                    'unit_cost' => $normalizedUnitCost,
+                    'status' => 'oversold',
+                    'meta' => [
+                        'internal' => true,
+                        'source_name' => 'Kho am noi bo',
+                        'source_label' => 'Ban truoc nhap sau',
+                    ],
+                ])->save();
+            }
+
+            return $batch;
+        }
+
+        try {
+            return InventoryBatch::query()->create([
+                'account_id' => $accountId,
+                'product_id' => (int) $product->id,
+                'source_type' => self::OVERSOLD_RESERVE_SOURCE,
+                'source_id' => (int) $product->id,
+                'batch_number' => $batchNumber,
+                'received_at' => now(),
+                'quantity' => 0,
+                'remaining_quantity' => 0,
+                'unit_cost' => $normalizedUnitCost,
+                'status' => 'oversold',
+                'meta' => [
+                    'internal' => true,
+                    'source_name' => 'Kho am noi bo',
+                    'source_label' => 'Ban truoc nhap sau',
+                ],
+            ]);
+        } catch (QueryException $exception) {
+            return InventoryBatch::query()
+                ->where('batch_number', $batchNumber)
+                ->lockForUpdate()
+                ->firstOrFail();
+        }
+    }
+
+    private function oversoldReservationBatchNumber(int $accountId, int $productId): string
+    {
+        return sprintf('OSR-%d-%d', $accountId, $productId);
+    }
+
+    private function isOversoldReservationBatch(?InventoryBatch $batch): bool
+    {
+        return $batch instanceof InventoryBatch
+            && (string) ($batch->source_type ?? '') === self::OVERSOLD_RESERVE_SOURCE;
     }
 
     private function generateImportNumber(int $accountId): string

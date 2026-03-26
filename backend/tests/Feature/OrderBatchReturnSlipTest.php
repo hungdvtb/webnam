@@ -174,6 +174,97 @@ class OrderBatchReturnSlipTest extends TestCase
         ]);
     }
 
+    public function test_managed_batch_return_delete_restore_and_force_delete_keep_parent_and_adjustment_in_sync(): void
+    {
+        [$account, $user] = $this->authenticate();
+
+        $mainProduct = $this->createProduct($account, [
+            'name' => 'San pham batch return trash',
+            'sku' => 'BATCH-RETURN-TRASH-001',
+            'price' => 210000,
+            'cost_price' => 130000,
+            'expected_cost' => 130000,
+        ]);
+
+        $extraProduct = $this->createProduct($account, [
+            'name' => 'San pham chenh lech',
+            'sku' => 'BATCH-RETURN-TRASH-EXTRA',
+            'price' => 95000,
+            'cost_price' => 60000,
+            'expected_cost' => 60000,
+        ]);
+
+        $firstOrder = $this->createOfficialOrder($account, $user, $mainProduct, 3, 'OR-BATCH-TRASH-0001');
+        $secondOrder = $this->createOfficialOrder($account, $user, $mainProduct, 2, 'OR-BATCH-TRASH-0002');
+
+        $this->createExportDocument($account, $firstOrder, $mainProduct, 3, 'PXK-BATCH-TRASH-0001');
+        $this->createExportDocument($account, $secondOrder, $mainProduct, 2, 'PXK-BATCH-TRASH-0002');
+
+        $createResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders/inventory-returns/batch', [
+                'order_ids' => [$firstOrder->id, $secondOrder->id],
+                'document_date' => now()->toDateString(),
+                'notes' => 'Managed return trash test',
+                'items' => [
+                    [
+                        'product_id' => $mainProduct->id,
+                        'quantity' => 4,
+                    ],
+                    [
+                        'product_id' => $extraProduct->id,
+                        'quantity' => 1,
+                    ],
+                ],
+            ]);
+
+        $createResponse->assertCreated();
+
+        $returnDocumentId = (int) $createResponse->json('document.id');
+        $returnDocument = InventoryDocument::query()->findOrFail($returnDocumentId);
+        $adjustmentDocument = InventoryDocument::query()
+            ->where('type', 'adjustment')
+            ->where('parent_document_id', $returnDocumentId)
+            ->first();
+
+        $this->assertNotNull($adjustmentDocument);
+
+        $this->withHeaders($this->headers($account))
+            ->deleteJson("/api/inventory/documents/adjustment/{$adjustmentDocument->id}")
+            ->assertOk();
+
+        $this->assertSoftDeleted('inventory_documents', ['id' => $returnDocumentId]);
+        $this->assertSoftDeleted('inventory_documents', ['id' => $adjustmentDocument->id]);
+
+        $trashRows = collect(
+            $this->withHeaders($this->headers($account))
+                ->getJson('/api/inventory/trash/slips?per_page=100')
+                ->assertOk()
+                ->json('data')
+        );
+
+        $returnRow = $trashRows->firstWhere('code', $returnDocument->document_number);
+        $this->assertSame('return', $returnRow['slip_type_key'] ?? null);
+        $this->assertNull($trashRows->firstWhere('code', $adjustmentDocument->document_number));
+
+        $this->withHeaders($this->headers($account))
+            ->postJson("/api/inventory/documents/return/{$returnDocumentId}/restore")
+            ->assertOk();
+
+        $this->assertFalse(InventoryDocument::withTrashed()->findOrFail($returnDocumentId)->trashed());
+        $this->assertFalse(InventoryDocument::withTrashed()->findOrFail($adjustmentDocument->id)->trashed());
+
+        $this->withHeaders($this->headers($account))
+            ->deleteJson("/api/inventory/documents/return/{$returnDocumentId}")
+            ->assertOk();
+        $this->withHeaders($this->headers($account))
+            ->deleteJson("/api/inventory/documents/return/{$returnDocumentId}/force")
+            ->assertOk();
+
+        $this->assertDatabaseMissing('inventory_documents', ['id' => $returnDocumentId]);
+        $this->assertDatabaseMissing('inventory_documents', ['id' => $adjustmentDocument->id]);
+    }
+
     private function authenticate(): array
     {
         $account = Account::query()->create([

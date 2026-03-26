@@ -239,6 +239,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/inventory/imports', [InventoryController::class, 'imports']);
     Route::post('/inventory/imports', [InventoryController::class, 'storeImport']);
     Route::post('/inventory/imports/bulk-delete', [InventoryController::class, 'bulkDestroyImports']);
+    Route::post('/inventory/imports/bulk-restore', [InventoryController::class, 'bulkRestoreImports']);
+    Route::post('/inventory/imports/bulk-force-delete', [InventoryController::class, 'bulkForceDeleteImports']);
     Route::get('/inventory/imports/{id}/attachments', [InventoryController::class, 'importAttachments'])->whereNumber('id');
     Route::post('/inventory/imports/{id}/attachments', [InventoryController::class, 'storeImportAttachments'])->whereNumber('id');
     Route::post('/inventory/imports/{id}/attachments/{attachmentId}', [InventoryController::class, 'replaceImportAttachment'])->whereNumber('id')->whereNumber('attachmentId');
@@ -246,13 +248,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/inventory/imports/{id}', [InventoryController::class, 'updateImport'])->whereNumber('id');
     Route::delete('/inventory/imports/{id}', [InventoryController::class, 'destroyImport'])->whereNumber('id');
     Route::post('/inventory/imports/{id}/restore', [InventoryController::class, 'restoreImport'])->whereNumber('id');
+    Route::delete('/inventory/imports/{id}/force', [InventoryController::class, 'forceDeleteImport'])->whereNumber('id');
     Route::get('/inventory/imports/{id}', [InventoryController::class, 'showImport'])->whereNumber('id');
     Route::get('/inventory/documents/{type}', [InventoryController::class, 'documents']);
     Route::post('/inventory/documents/{type}', [InventoryController::class, 'storeDocument']);
     Route::post('/inventory/documents/{type}/bulk-delete', [InventoryController::class, 'bulkDestroyDocuments']);
+    Route::post('/inventory/documents/{type}/bulk-restore', [InventoryController::class, 'bulkRestoreDocuments']);
+    Route::post('/inventory/documents/{type}/bulk-force-delete', [InventoryController::class, 'bulkForceDeleteDocuments']);
     Route::put('/inventory/documents/{type}/{id}', [InventoryController::class, 'updateDocument'])->whereNumber('id');
     Route::delete('/inventory/documents/{type}/{id}', [InventoryController::class, 'destroyDocument'])->whereNumber('id');
+    Route::post('/inventory/documents/{type}/{id}/restore', [InventoryController::class, 'restoreDocument'])->whereNumber('id');
+    Route::delete('/inventory/documents/{type}/{id}/force', [InventoryController::class, 'forceDeleteDocument'])->whereNumber('id');
     Route::get('/inventory/documents/{type}/{id}', [InventoryController::class, 'showDocument'])->whereNumber('id');
+    Route::get('/inventory/trash/slips', [InventoryController::class, 'trashedSlips']);
     Route::get('/inventory/batches', [InventoryController::class, 'batches']);
     Route::get('/inventory/exports', [InventoryController::class, 'exports']);
     Route::get('/inventory/exports/{id}', [InventoryController::class, 'showExport'])->whereNumber('id');
@@ -428,4 +436,3 @@ Route::group(['prefix' => 'web-api'], function () {
     Route::get('/categories', [\App\Http\Controllers\StorefrontApi\CategoryController::class, 'index']);
     Route::get('/categories/{slug}', [\App\Http\Controllers\StorefrontApi\CategoryController::class, 'show']);
 });
-

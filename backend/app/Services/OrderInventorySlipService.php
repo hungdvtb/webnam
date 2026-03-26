@@ -330,7 +330,7 @@ class OrderInventorySlipService
 
     public function deleteManagedReturnDocument(InventoryDocument $document): void
     {
-        $managedDocument = $this->loadManagedReturnDocument($document);
+        $managedDocument = $this->loadManagedReturnDocument($document, true);
 
         if (!$this->isManagedReturnDocument($managedDocument)) {
             throw ValidationException::withMessages([
@@ -340,39 +340,71 @@ class OrderInventorySlipService
 
         DB::transaction(function () use ($managedDocument) {
             $this->ensureReturnSlipCanBeDeleted($managedDocument);
-            $touchedProductIds = $managedDocument->items
-                ->pluck('product_id')
-                ->map(fn ($id) => (int) $id)
-                ->filter()
-                ->unique()
-                ->values()
-                ->all();
 
-            $adjustmentDocument = $this->findLinkedAdjustmentDocument($managedDocument);
-            if ($adjustmentDocument) {
+            $adjustmentDocument = $this->findLinkedAdjustmentDocument($managedDocument, true);
+            if ($adjustmentDocument && !$adjustmentDocument->trashed()) {
                 $this->inventoryService->deleteDocument($adjustmentDocument);
             }
 
-            InventoryBatch::query()
-                ->where('source_type', 'document')
-                ->where('source_id', (int) $managedDocument->id)
-                ->delete();
+            if (!$managedDocument->trashed()) {
+                $this->inventoryService->deleteDocument($managedDocument);
+            }
+        });
+    }
 
-            if ($this->hasInventoryDocumentOrderLinksTable()) {
-                InventoryDocumentOrderLink::query()
-                    ->where('inventory_document_id', (int) $managedDocument->id)
-                    ->delete();
+    public function restoreManagedReturnDocument(InventoryDocument $document): array
+    {
+        $managedDocument = $this->loadManagedReturnDocument($document, true);
+
+        if (!$this->isManagedReturnDocument($managedDocument)) {
+            throw ValidationException::withMessages([
+                'document' => ['Phieu hoan nay khong thuoc luong doi chieu theo lo.'],
+            ]);
+        }
+
+        $orders = $managedDocument->orderLinks
+            ->pluck('order')
+            ->filter()
+            ->values();
+
+        if ($orders->isNotEmpty()) {
+            $this->assertOrdersEligibleForManagedReturn($orders);
+            $this->assertNoManagedReturnConflict($orders, (int) $managedDocument->id);
+        }
+
+        DB::transaction(function () use ($managedDocument) {
+            $adjustmentDocument = $this->findLinkedAdjustmentDocument($managedDocument, true);
+            if ($adjustmentDocument && $adjustmentDocument->trashed()) {
+                $this->inventoryService->restoreDocument($adjustmentDocument);
             }
 
-            InventoryDocumentItem::query()
-                ->where('inventory_document_id', (int) $managedDocument->id)
-                ->delete();
-
-            $managedDocument->delete();
-
-            if (!empty($touchedProductIds)) {
-                $this->inventoryService->refreshProducts($touchedProductIds);
+            if ($managedDocument->trashed()) {
+                $this->inventoryService->restoreDocument($managedDocument);
             }
+        });
+
+        return $this->buildManagedReturnDocumentPayload(
+            $this->loadManagedReturnDocument($managedDocument->fresh(), false)
+        );
+    }
+
+    public function forceDeleteManagedReturnDocument(InventoryDocument $document): void
+    {
+        $managedDocument = $this->loadManagedReturnDocument($document, true);
+
+        if (!$this->isManagedReturnDocument($managedDocument)) {
+            throw ValidationException::withMessages([
+                'document' => ['Phieu hoan nay khong thuoc luong doi chieu theo lo.'],
+            ]);
+        }
+
+        DB::transaction(function () use ($managedDocument) {
+            $adjustmentDocument = $this->findLinkedAdjustmentDocument($managedDocument, true);
+            if ($adjustmentDocument) {
+                $this->inventoryService->forceDeleteDocument($adjustmentDocument);
+            }
+
+            $this->inventoryService->forceDeleteDocument($managedDocument);
         });
     }
 
@@ -394,6 +426,44 @@ class OrderInventorySlipService
                             ->exists()
                 )
             );
+    }
+
+    public function isManagedReturnAdjustmentDocument(InventoryDocument $document): bool
+    {
+        if ((string) $document->type !== 'adjustment') {
+            return false;
+        }
+
+        if ((string) ($document->meta['managed_by'] ?? '') === self::MANAGED_RETURN_ADJUSTMENT_SOURCE) {
+            return true;
+        }
+
+        if ((int) ($document->parent_document_id ?? 0) <= 0) {
+            return false;
+        }
+
+        return InventoryDocument::withTrashed()
+            ->whereKey((int) $document->parent_document_id)
+            ->where('type', 'return')
+            ->exists();
+    }
+
+    public function resolveManagedReturnRootDocument(InventoryDocument $document, bool $withTrashed = false): ?InventoryDocument
+    {
+        if ($this->isManagedReturnDocument($document)) {
+            return $this->loadManagedReturnDocument($document, $withTrashed);
+        }
+
+        if (!$this->isManagedReturnAdjustmentDocument($document)) {
+            return null;
+        }
+
+        $query = $withTrashed ? InventoryDocument::withTrashed() : InventoryDocument::query();
+        $parent = $query
+            ->where('type', 'return')
+            ->find((int) $document->parent_document_id);
+
+        return $parent ? $this->loadManagedReturnDocument($parent, $withTrashed) : null;
     }
 
     private function applyActiveDocumentSlipStateFilter($query, string $state, string $type): void
@@ -2091,7 +2161,8 @@ class OrderInventorySlipService
                     'unit_price' => round((float) ($row['unit_price'] ?? 0), 2),
                 ];
             })
-            ->values();
+            ->values()
+            ->all();
 
         $remainingActual = $actualQuantity;
 
@@ -2105,8 +2176,8 @@ class OrderInventorySlipService
             $remainingActual -= $takeQuantity;
         }
 
-        if ($rows->isEmpty()) {
-            $rows->push([
+        if (empty($rows)) {
+            $rows[] = [
                 'order_id' => $primaryOrder['id'] ?? null,
                 'order_number' => $primaryOrder['order_number'] ?? null,
                 'customer_name' => $primaryOrder['customer_name'] ?? null,
@@ -2115,7 +2186,7 @@ class OrderInventorySlipService
                 'discrepancy_quantity' => $actualQuantity,
                 'unit_cost' => 0.0,
                 'unit_price' => 0.0,
-            ]);
+            ];
         } elseif ($remainingActual > 0) {
             $rows[0]['actual_quantity'] = (int) $rows[0]['actual_quantity'] + $remainingActual;
             $remainingActual = 0;
@@ -2126,7 +2197,7 @@ class OrderInventorySlipService
                 - (int) ($rows[$index]['exported_quantity'] ?? 0);
         }
 
-        return $rows->values();
+        return collect($rows)->values();
     }
 
     private function resolveManagedReturnWeightedUnitCost(Collection $allocation): float
@@ -2250,20 +2321,24 @@ class OrderInventorySlipService
         return $this->inventoryService->createDocument('adjustment', $payload, $accountId, $userId);
     }
 
-    private function findLinkedAdjustmentDocument(InventoryDocument $document): ?InventoryDocument
+    private function findLinkedAdjustmentDocument(InventoryDocument $document, bool $withTrashed = false): ?InventoryDocument
     {
-        return InventoryDocument::query()
+        $query = $withTrashed ? InventoryDocument::withTrashed() : InventoryDocument::query();
+
+        return $query
             ->where('type', 'adjustment')
             ->where('parent_document_id', (int) $document->id)
             ->orderByDesc('id')
             ->first();
     }
 
-    private function loadManagedReturnDocument(InventoryDocument $document): InventoryDocument
+    private function loadManagedReturnDocument(InventoryDocument $document, bool $withTrashed = false): InventoryDocument
     {
         $this->ensureManagedReturnLinkTablesExist();
 
-        return InventoryDocument::query()
+        $query = $withTrashed ? InventoryDocument::withTrashed() : InventoryDocument::query();
+
+        return $query
             ->with([
                 'creator:id,name',
                 'orderLinks.order:id,order_number,customer_name,customer_phone,status',

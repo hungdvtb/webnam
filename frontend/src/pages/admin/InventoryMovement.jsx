@@ -44,6 +44,18 @@ const documentTabs = [
     ['damaged', 'Phiếu hỏng'],
     ['adjustments', 'Phiếu điều chỉnh'],
 ];
+const slipSelectionTabKeys = ['imports', 'exports', 'returns', 'damaged', 'adjustments', 'trash'];
+const createEmptySlipSelection = () => slipSelectionTabKeys.reduce((result, key) => {
+    result[key] = {};
+    return result;
+}, {});
+const trashSlipTypeLabels = {
+    import: 'Phiếu nhập',
+    export: 'Phiếu xuất',
+    return: 'Phiếu hoàn',
+    damaged: 'Phiếu hỏng',
+    adjustment: 'Phiếu điều chỉnh',
+};
 
 const defaultProductFilters = { search: '', status: '', cost_source: '', type: '', category_id: '', variant_scope: '', date_from: '', date_to: '' };
 const defaultSupplierFilters = { search: '', status: '', month: '', date_from: '', date_to: '' };
@@ -187,11 +199,12 @@ const getExportInvoiceStatusMeta = (invoiceMeta = {}, fallbackCustomerName = '')
 };
 
 const isDocumentTab = (tabKey) => documentTabs.some(([key]) => key === tabKey);
+const isSlipTab = (tabKey) => isDocumentTab(tabKey) || tabKey === 'trash';
 
 const documentTypeMap = { returns: 'return', damaged: 'damaged', adjustments: 'adjustment' };
 const documentTitleMap = { returns: 'Phiếu hàng hoàn', damaged: 'Phiếu hàng hỏng', adjustments: 'Phiếu điều chỉnh' };
 const pageSizeOptions = [20, 50, 100, 500];
-const inventoryTableStorageVersion = 'v4';
+const inventoryTableStorageVersion = 'v5';
 const emptySortConfig = { key: null, direction: 'none' };
 const getStoredPageSize = (key) => {
     if (typeof window === 'undefined') return 20;
@@ -1403,11 +1416,14 @@ const lotColumns = [
 ];
 
 const trashColumns = [
-    { id: 'code', label: 'Mã', minWidth: 140 },
-    { id: 'product', label: 'Sản phẩm', minWidth: 250 },
+    { id: 'type', label: 'Loại phiếu', minWidth: 150 },
+    { id: 'code', label: 'Mã phiếu', minWidth: 150 },
+    { id: 'party', label: 'Đối tượng', minWidth: 240 },
     { id: 'date', label: 'Ngày xóa', minWidth: 150 },
-    { id: 'price_status', label: 'Trạng thái giá', minWidth: 140 },
-    { id: 'actions', label: 'Thao tác', minWidth: 190, align: 'center' },
+    { id: 'qty', label: 'Số lượng', minWidth: 110, align: 'right' },
+    { id: 'amount', label: 'Giá trị', minWidth: 120, align: 'right' },
+    { id: 'note', label: 'Ghi chú', minWidth: 220 },
+    { id: 'actions', label: 'Thao tác', minWidth: 120, align: 'center' },
 ];
 
 const supplierManagementColumns = [
@@ -1503,9 +1519,13 @@ const inventorySortColumnMaps = {
         source: 'source',
     },
     trash: {
-        code: 'sku',
-        product: 'name',
-        date: 'deleted_at',
+        type: 'type',
+        code: 'code',
+        party: 'party',
+        date: 'date',
+        qty: 'qty',
+        amount: 'amount',
+        note: 'note',
     },
 };
 
@@ -2502,7 +2522,7 @@ const InventoryMovement = () => {
     const [expandedGroups, setExpandedGroups] = useState({});
     const [expandedComparisons, setExpandedComparisons] = useState({});
     const [selectedPriceIds, setSelectedPriceIds] = useState({});
-    const [selectedImportIds, setSelectedImportIds] = useState({});
+    const [selectedSlipIds, setSelectedSlipIds] = useState(() => createEmptySlipSelection());
     const [priceDrafts, setPriceDrafts] = useState({});
     const [codeDrafts, setCodeDrafts] = useState({});
     const [savingPriceIds, setSavingPriceIds] = useState({});
@@ -2733,7 +2753,7 @@ const InventoryMovement = () => {
     };
 
     const openSelectedImportsPrintModal = async () => {
-        const targetRows = imports.filter((row) => Boolean(selectedImportIds[String(row.id)]));
+        const targetRows = imports.filter((row) => Boolean(selectedSlipIds.imports?.[String(row.id)]));
         if (!targetRows.length) {
             showToast({ type: 'warning', message: 'Hãy chọn ít nhất một phiếu nhập để in.' });
             return;
@@ -3623,7 +3643,7 @@ const InventoryMovement = () => {
         return fetchSimple(key, (currentPage, currentPerPage) => inventoryApi.getDocuments(type, { ...filtersOverride, page: currentPage, per_page: currentPerPage, ...buildSortParams(key, sortOverride) }), setter, paginationSetter, page, perPage);
     };
     const fetchLots = (page = 1, perPage = pageSizes.lots, sortOverride = null, filtersOverride = simpleFilters.lots) => fetchSimple('lots', (currentPage, currentPerPage) => inventoryApi.getBatches({ ...filtersOverride, page: currentPage, per_page: currentPerPage, remaining_only: 1, ...buildSortParams('lots', sortOverride) }), setLots, setLotPagination, page, perPage);
-    const fetchTrash = (page = 1, perPage = pageSizes.trash, sortOverride = null, filtersOverride = simpleFilters.trash) => fetchSimple('trash', (currentPage, currentPerPage) => inventoryApi.getProducts({ ...filtersOverride, page: currentPage, per_page: currentPerPage, trash: 1, ...buildSortParams('trash', sortOverride) }), setTrashItems, setTrashPagination, page, perPage);
+    const fetchTrash = (page = 1, perPage = pageSizes.trash, sortOverride = null, filtersOverride = simpleFilters.trash) => fetchSimple('trash', (currentPage, currentPerPage) => inventoryApi.getTrashSlips({ ...filtersOverride, page: currentPage, per_page: currentPerPage, ...buildSortParams('trash', sortOverride) }), setTrashItems, setTrashPagination, page, perPage);
     const handleTableSort = (section, columnId) => {
         const next = nextSortConfig(sortConfigs[section], columnId);
         setSortConfigs((prev) => ({ ...prev, [section]: next }));
@@ -3651,6 +3671,31 @@ const InventoryMovement = () => {
         if (tabKey === 'trash') return fetchTrash(page, perPage, sortOverride, filtersOverride);
         return undefined;
     };
+    const refreshSlipTab = async (tabKey) => {
+        if (tabKey === 'imports') return fetchImports(importPagination.current_page || 1, pageSizes.imports, sortConfigs.imports, simpleFilters.imports);
+        if (tabKey === 'exports') return fetchExports(exportPagination.current_page || 1, pageSizes.exports, sortConfigs.exports, simpleFilters.exports);
+        if (tabKey === 'returns') return fetchDocuments('return', returnPagination.current_page || 1, pageSizes.returns, sortConfigs.returns, simpleFilters.returns);
+        if (tabKey === 'damaged') return fetchDocuments('damaged', damagedPagination.current_page || 1, pageSizes.damaged, sortConfigs.damaged, simpleFilters.damaged);
+        if (tabKey === 'adjustments') return fetchDocuments('adjustment', adjustmentPagination.current_page || 1, pageSizes.adjustments, sortConfigs.adjustments, simpleFilters.adjustments);
+        if (tabKey === 'trash') return fetchTrash(trashPagination.current_page || 1, pageSizes.trash, sortConfigs.trash, simpleFilters.trash);
+        return undefined;
+    };
+    const refreshInventoryCoreViews = async (extraTabs = []) => {
+        const requestedTabs = Array.from(new Set(extraTabs.filter(Boolean)));
+        await Promise.all([
+            ...requestedTabs.map((tabKey) => refreshSlipTab(tabKey)),
+            fetchProducts(productPagination.current_page || 1, pageSizes.products, sortConfigs.products, productFilters),
+            fetchOverview(),
+            fetchLots(lotPagination.current_page || 1, pageSizes.lots, sortConfigs.lots, simpleFilters.lots),
+        ]);
+    };
+    const getRelatedSlipTabs = (tabKey) => {
+        if (tabKey === 'returns') return ['returns', 'adjustments'];
+        if (tabKey === 'adjustments') return ['adjustments', 'returns'];
+        return [tabKey];
+    };
+    const getRefreshTabsAfterSoftDelete = (tabKey) => Array.from(new Set([...getRelatedSlipTabs(tabKey), 'trash']));
+    const getRefreshTabsAfterTrashRestore = (row) => Array.from(new Set([...getRelatedSlipTabs(row?.section_key), 'trash']));
 
     const getCategoryNameById = (categoryId) => categories.find((category) => String(category.id) === String(categoryId))?.name || String(categoryId || '');
     const getImportStatusNameById = (statusId) => importStatuses.find((status) => String(status.id) === String(statusId))?.name || String(statusId || '');
@@ -5003,11 +5048,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         if (!window.confirm(`Xóa phiếu nhập ${row.import_number}?`)) return;
         try {
             await inventoryApi.deleteImport(row.id);
-            showToast({ type: 'success', message: 'Đã xóa phiếu nhập.' });
-            fetchImports(importPagination.current_page || 1);
-            fetchProducts(productPagination.current_page || 1);
-            fetchOverview();
-            fetchLots(lotPagination.current_page || 1);
+            showToast({ type: 'success', message: 'Đã chuyển phiếu nhập vào thùng rác.' });
+            await refreshInventoryCoreViews(getRefreshTabsAfterSoftDelete('imports'));
         } catch (error) {
             fail(error, 'Không thể xóa phiếu nhập.');
         }
@@ -5136,13 +5178,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         if (!window.confirm(`Xóa ${documentTitleMap[tabKey].toLowerCase()} ${row.document_number}?`)) return;
         try {
             await inventoryApi.deleteDocument(documentTypeMap[tabKey], row.id);
-            showToast({ type: 'success', message: 'Đã xóa phiếu kho.' });
-            if (tabKey === 'returns') fetchDocuments('return', returnPagination.current_page || 1);
-            if (tabKey === 'damaged') fetchDocuments('damaged', damagedPagination.current_page || 1);
-            if (tabKey === 'adjustments') fetchDocuments('adjustment', adjustmentPagination.current_page || 1);
-            fetchProducts(productPagination.current_page || 1);
-            fetchOverview();
-            fetchLots(lotPagination.current_page || 1);
+            showToast({ type: 'success', message: 'Đã chuyển phiếu vào thùng rác.' });
+            await refreshInventoryCoreViews(getRefreshTabsAfterSoftDelete(tabKey));
         } catch (error) {
             fail(error, 'Không thể xóa phiếu kho.');
         }
@@ -5167,13 +5204,133 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         if (!window.confirm(`Xóa đơn ${row.order_number}?`)) return;
         try {
             await orderApi.destroy(row.id);
-            showToast({ type: 'success', message: 'Đã xóa phiếu xuất bán.' });
-            fetchExports(exportPagination.current_page || 1);
-            fetchProducts(productPagination.current_page || 1);
-            fetchOverview();
-            fetchLots(lotPagination.current_page || 1);
+            showToast({ type: 'success', message: 'Đã chuyển phiếu xuất vào thùng rác.' });
+            await refreshInventoryCoreViews(getRefreshTabsAfterSoftDelete('exports'));
         } catch (error) {
             fail(error, 'Không thể xóa phiếu xuất bán.');
+        }
+    };
+
+    const bulkDeleteSelectedSlips = async (tabKey) => {
+        const selectedRows = getSelectedSlipRows(tabKey);
+        if (!selectedRows.length) {
+            showToast({ type: 'warning', message: 'Hãy chọn ít nhất một phiếu.' });
+            return;
+        }
+
+        if (!window.confirm(`Chuyển ${formatNumber(selectedRows.length)} phiếu đã chọn vào thùng rác?`)) return;
+
+        try {
+            if (tabKey === 'imports') {
+                await inventoryApi.bulkDeleteImports(selectedRows.map((row) => row.id));
+            } else if (tabKey === 'exports') {
+                await orderApi.bulkDelete(selectedRows.map((row) => row.id));
+            } else if (documentTypeMap[tabKey]) {
+                await inventoryApi.bulkDeleteDocuments(documentTypeMap[tabKey], selectedRows.map((row) => row.id));
+            }
+
+            setSelectedSlipIds((prev) => ({ ...prev, [tabKey]: {} }));
+            showToast({ type: 'success', message: `Đã chuyển ${formatNumber(selectedRows.length)} phiếu vào thùng rác.` });
+            await refreshInventoryCoreViews(getRefreshTabsAfterSoftDelete(tabKey));
+        } catch (error) {
+            fail(error, 'Không thể xóa các phiếu đã chọn.');
+        }
+    };
+
+    const restoreTrashSlip = async (row) => {
+        try {
+            if (row.slip_type_key === 'import') {
+                await inventoryApi.restoreImport(row.id);
+            } else if (row.slip_type_key === 'export') {
+                await orderApi.restore(row.id);
+            } else {
+                await inventoryApi.restoreDocument(row.slip_type_key, row.id);
+            }
+
+            showToast({ type: 'success', message: 'Đã khôi phục phiếu.' });
+            await refreshInventoryCoreViews(getRefreshTabsAfterTrashRestore(row));
+        } catch (error) {
+            fail(error, 'Không thể khôi phục phiếu.');
+        }
+    };
+
+    const forceDeleteTrashSlip = async (row) => {
+        if (!window.confirm(`Xóa vĩnh viễn ${trashSlipTypeLabels[row.slip_type_key] || 'phiếu'} ${row.code}?`)) return;
+
+        try {
+            if (row.slip_type_key === 'import') {
+                await inventoryApi.forceDeleteImport(row.id);
+            } else if (row.slip_type_key === 'export') {
+                await orderApi.forceDelete(row.id);
+            } else {
+                await inventoryApi.forceDeleteDocument(row.slip_type_key, row.id);
+            }
+
+            showToast({ type: 'success', message: 'Đã xóa vĩnh viễn phiếu.' });
+            await refreshInventoryCoreViews(['trash']);
+        } catch (error) {
+            fail(error, 'Không thể xóa vĩnh viễn phiếu.');
+        }
+    };
+
+    const restoreSelectedTrashSlips = async () => {
+        if (!selectedTrashRows.length) {
+            showToast({ type: 'warning', message: 'Hãy chọn ít nhất một phiếu trong thùng rác.' });
+            return;
+        }
+
+        const groupedRows = selectedTrashRows.reduce((result, row) => {
+            if (!result[row.slip_type_key]) result[row.slip_type_key] = [];
+            result[row.slip_type_key].push(row.id);
+            return result;
+        }, {});
+        const refreshTabs = Array.from(new Set(selectedTrashRows.flatMap((row) => getRelatedSlipTabs(row.section_key))));
+
+        try {
+            const tasks = [];
+            if (groupedRows.import?.length) tasks.push(inventoryApi.bulkRestoreImports(groupedRows.import));
+            if (groupedRows.export?.length) tasks.push(orderApi.bulkRestore(groupedRows.export));
+            if (groupedRows.return?.length) tasks.push(inventoryApi.bulkRestoreDocuments('return', groupedRows.return));
+            if (groupedRows.damaged?.length) tasks.push(inventoryApi.bulkRestoreDocuments('damaged', groupedRows.damaged));
+            if (groupedRows.adjustment?.length) tasks.push(inventoryApi.bulkRestoreDocuments('adjustment', groupedRows.adjustment));
+            await Promise.all(tasks);
+
+            setSelectedSlipIds((prev) => ({ ...prev, trash: {} }));
+            showToast({ type: 'success', message: `Đã khôi phục ${formatNumber(selectedTrashRows.length)} phiếu.` });
+            await refreshInventoryCoreViews([...refreshTabs, 'trash']);
+        } catch (error) {
+            fail(error, 'Không thể khôi phục các phiếu đã chọn.');
+        }
+    };
+
+    const forceDeleteSelectedTrashSlips = async () => {
+        if (!selectedTrashRows.length) {
+            showToast({ type: 'warning', message: 'Hãy chọn ít nhất một phiếu trong thùng rác.' });
+            return;
+        }
+
+        if (!window.confirm(`Xóa vĩnh viễn ${formatNumber(selectedTrashRows.length)} phiếu đã chọn?`)) return;
+
+        const groupedRows = selectedTrashRows.reduce((result, row) => {
+            if (!result[row.slip_type_key]) result[row.slip_type_key] = [];
+            result[row.slip_type_key].push(row.id);
+            return result;
+        }, {});
+
+        try {
+            const tasks = [];
+            if (groupedRows.import?.length) tasks.push(inventoryApi.bulkForceDeleteImports(groupedRows.import));
+            if (groupedRows.export?.length) tasks.push(orderApi.bulkDelete(groupedRows.export, true));
+            if (groupedRows.return?.length) tasks.push(inventoryApi.bulkForceDeleteDocuments('return', groupedRows.return));
+            if (groupedRows.damaged?.length) tasks.push(inventoryApi.bulkForceDeleteDocuments('damaged', groupedRows.damaged));
+            if (groupedRows.adjustment?.length) tasks.push(inventoryApi.bulkForceDeleteDocuments('adjustment', groupedRows.adjustment));
+            await Promise.all(tasks);
+
+            setSelectedSlipIds((prev) => ({ ...prev, trash: {} }));
+            showToast({ type: 'success', message: `Đã xóa vĩnh viễn ${formatNumber(selectedTrashRows.length)} phiếu.` });
+            await refreshInventoryCoreViews(['trash']);
+        } catch (error) {
+            fail(error, 'Không thể xóa vĩnh viễn các phiếu đã chọn.');
         }
     };
 
@@ -5233,43 +5390,54 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         ];
     }, [currentSupplier?.imported_amount_total, currentSupplier?.name, priceDrafts, selectedIds.length, supplierRows]);
 
-    const simpleSummaryMap = useMemo(() => ({
-        imports: [
-            { label: 'Tổng phiếu', value: formatNumber(importPagination.total) },
-            { label: 'Số lượng trang', value: formatNumber(imports.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0)) },
-            { label: 'Tiền trang', value: formatCurrency(imports.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)) },
-        ],
-        exports: [
-            { label: 'Tổng phiếu', value: formatNumber(exportPagination.total) },
-            { label: 'Tự tạo từ vận chuyển', value: formatNumber(exportsData.filter((row) => row.export_kind === 'dispatch_auto').length) },
-            { label: 'Phiếu tạo tay', value: formatNumber(exportsData.filter((row) => row.export_kind === 'manual').length) },
-            { label: 'Số lượng trang', value: formatNumber(exportsData.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0)) },
-        ],
-        returns: [
-            { label: 'Tổng phiếu', value: formatNumber(returnPagination.total) },
-            { label: 'Số lượng trang', value: formatNumber(returnsData.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0)) },
-            { label: 'Giá trị trang', value: formatCurrency(returnsData.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)) },
-        ],
-        damaged: [
-            { label: 'Tổng phiếu', value: formatNumber(damagedPagination.total) },
-            { label: 'Số lượng trang', value: formatNumber(damagedData.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0)) },
-            { label: 'Giá trị trang', value: formatCurrency(damagedData.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)) },
-        ],
-        adjustments: [
-            { label: 'Tổng phiếu', value: formatNumber(adjustmentPagination.total) },
-            { label: 'Số lượng trang', value: formatNumber(adjustments.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0)) },
-            { label: 'Giá trị trang', value: formatCurrency(adjustments.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)) },
-        ],
-        lots: [
-            { label: 'Tổng lô', value: formatNumber(lotPagination.total) },
-            { label: 'Tổng số lượng', value: formatNumber(lots.reduce((sum, row) => sum + Number(row.quantity || 0), 0)) },
-            { label: 'Còn lại', value: formatNumber(lots.reduce((sum, row) => sum + Number(row.remaining_quantity || 0), 0)) },
-        ],
-        trash: [
-            { label: 'Tổng sản phẩm', value: formatNumber(trashPagination.total) },
-            { label: 'Trang hiện tại', value: formatNumber(trashItems.length) },
-        ],
-    }), [adjustmentPagination.total, adjustments, damagedData, damagedPagination.total, exportPagination.total, exportsData, importPagination.total, imports, lotPagination.total, lots, returnPagination.total, returnsData, trashItems.length, trashPagination.total]);
+    const simpleSummaryMap = useMemo(() => {
+        const trashCounts = trashItems.reduce((result, row) => {
+            const key = row?.slip_type_key || 'other';
+            result[key] = (result[key] || 0) + 1;
+            return result;
+        }, {});
+
+        return {
+            imports: [
+                { label: 'Tổng phiếu', value: formatNumber(importPagination.total) },
+                { label: 'Số lượng trang', value: formatNumber(imports.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0)) },
+                { label: 'Tiền trang', value: formatCurrency(imports.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)) },
+            ],
+            exports: [
+                { label: 'Tổng phiếu', value: formatNumber(exportPagination.total) },
+                { label: 'Tự tạo từ vận chuyển', value: formatNumber(exportsData.filter((row) => row.export_kind === 'dispatch_auto').length) },
+                { label: 'Phiếu tạo tay', value: formatNumber(exportsData.filter((row) => row.export_kind === 'manual').length) },
+                { label: 'Số lượng trang', value: formatNumber(exportsData.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0)) },
+            ],
+            returns: [
+                { label: 'Tổng phiếu', value: formatNumber(returnPagination.total) },
+                { label: 'Số lượng trang', value: formatNumber(returnsData.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0)) },
+                { label: 'Giá trị trang', value: formatCurrency(returnsData.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)) },
+            ],
+            damaged: [
+                { label: 'Tổng phiếu', value: formatNumber(damagedPagination.total) },
+                { label: 'Số lượng trang', value: formatNumber(damagedData.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0)) },
+                { label: 'Giá trị trang', value: formatCurrency(damagedData.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)) },
+            ],
+            adjustments: [
+                { label: 'Tổng phiếu', value: formatNumber(adjustmentPagination.total) },
+                { label: 'Số lượng trang', value: formatNumber(adjustments.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0)) },
+                { label: 'Giá trị trang', value: formatCurrency(adjustments.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)) },
+            ],
+            lots: [
+                { label: 'Tổng lô', value: formatNumber(lotPagination.total) },
+                { label: 'Tổng số lượng', value: formatNumber(lots.reduce((sum, row) => sum + Number(row.quantity || 0), 0)) },
+                { label: 'Còn lại', value: formatNumber(lots.reduce((sum, row) => sum + Number(row.remaining_quantity || 0), 0)) },
+            ],
+            trash: [
+                { label: 'Tổng phiếu', value: formatNumber(trashPagination.total) },
+                { label: 'Phiếu trên trang', value: formatNumber(trashItems.length) },
+                { label: 'Phiếu nhập', value: formatNumber(trashCounts.import || 0) },
+                { label: 'Phiếu xuất', value: formatNumber(trashCounts.export || 0) },
+                { label: 'Phiếu kho', value: formatNumber((trashCounts.return || 0) + (trashCounts.damaged || 0) + (trashCounts.adjustment || 0)) },
+            ],
+        };
+    }, [adjustmentPagination.total, adjustments, damagedData, damagedPagination.total, exportPagination.total, exportsData, importPagination.total, imports, lotPagination.total, lots, returnPagination.total, returnsData, trashItems, trashPagination.total]);
 
     const productCell = (row, columnId) => {
         if (columnId === 'sku') return <CellText primary={row.sku} secondary={row.is_variant && row.parent_name ? `Thuộc: ${row.parent_name}` : null} mono />;
@@ -5503,16 +5671,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             return (
                 <div className="flex items-center justify-center">
                     <IndeterminateCheckbox
-                        checked={Boolean(selectedImportIds[String(row.id)])}
-                        onChange={(event) => setSelectedImportIds((prev) => {
-                            const next = { ...prev };
-                            if (event.target.checked) {
-                                next[String(row.id)] = true;
-                            } else {
-                                delete next[String(row.id)];
-                            }
-                            return next;
-                        })}
+                        checked={Boolean(selectedSlipIds.imports?.[String(row.id)])}
+                        onChange={(event) => setSlipRowSelected('imports', row, event.target.checked)}
                         title="Chọn phiếu nhập để in"
                     />
                 </div>
@@ -5584,6 +5744,18 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         const sourceLabel = getExportSaleChannelLabel(row.source || (isManualExport ? 'internal' : 'online')) || 'Chưa rõ nguồn';
         const exportKindLabel = row.export_kind_label || (isManualExport ? 'Phiếu tạo tay' : 'Tự tạo từ vận chuyển');
         const exportKindColor = isManualExport ? '#7C3AED' : '#0F766E';
+        if (columnId === 'select') {
+            return (
+                <div className="flex items-center justify-center">
+                    <IndeterminateCheckbox
+                        checked={Boolean(selectedSlipIds.exports?.[String(row.id)])}
+                        onChange={(event) => setSlipRowSelected('exports', row, event.target.checked)}
+                        disabled={!row.can_delete}
+                        title={row.can_delete ? 'Chọn phiếu xuất để xóa' : 'Phiếu xuất tự động không hỗ trợ xóa hàng loạt'}
+                    />
+                </div>
+            );
+        }
         if (columnId === 'code') {
             return (
                 <CellText
@@ -5644,6 +5816,17 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     };
 
     const renderDocumentCell = (row, columnId, tabKey) => {
+        if (columnId === 'select') {
+            return (
+                <div className="flex items-center justify-center">
+                    <IndeterminateCheckbox
+                        checked={Boolean(selectedSlipIds[tabKey]?.[String(row.id)])}
+                        onChange={(event) => setSlipRowSelected(tabKey, row, event.target.checked)}
+                        title={`Chọn ${documentTitleMap[tabKey].toLowerCase()}`}
+                    />
+                </div>
+            );
+        }
         if (columnId === 'code') return <CellText primary={row.document_number} mono />;
         if (columnId === 'supplier') return <CellText primary={row.supplier?.name || '-'} />;
         if (columnId === 'date') return formatDateTime(row.document_date);
@@ -5667,11 +5850,36 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     };
 
     const renderTrashCell = (row, columnId) => {
-        if (columnId === 'code') return <CellText primary={row.sku} mono />;
-        if (columnId === 'product') return <CellText primary={row.name} />;
+        if (columnId === 'select') {
+            return (
+                <div className="flex items-center justify-center">
+                    <IndeterminateCheckbox
+                        checked={Boolean(selectedSlipIds.trash?.[getSlipSelectionKey('trash', row)])}
+                        onChange={(event) => setSlipRowSelected('trash', row, event.target.checked)}
+                        title="Chọn phiếu trong thùng rác"
+                    />
+                </div>
+            );
+        }
+        if (columnId === 'type') return <CellText primary={trashSlipTypeLabels[row.slip_type_key] || row.slip_type_label || '-'} />;
+        if (columnId === 'code') return <CellText primary={row.code || '-'} mono />;
+        if (columnId === 'party') return <CellText primary={row.party_name || '-'} secondary={row.secondary_name || null} />;
         if (columnId === 'date') return formatDateTime(row.deleted_at);
-        if (columnId === 'price_status') return row.price_status || '-';
-        if (columnId === 'actions') return <div className="flex items-center justify-center gap-2"><button type="button" onClick={() => restoreProduct(row.id)} className={ghostButton}>Khôi phục</button><button type="button" onClick={() => forceDeleteProduct(row.id)} className={dangerButton}>Xóa hẳn</button></div>;
+        if (columnId === 'qty') return formatNumber(row.total_quantity || 0);
+        if (columnId === 'amount') return formatCurrency(row.total_amount || 0);
+        if (columnId === 'note') return <CellText primary={row.notes || '-'} />;
+        if (columnId === 'actions') {
+            return (
+                <div className="flex items-center justify-center gap-2">
+                    <button type="button" onClick={() => restoreTrashSlip(row)} className={iconButton(false)} title="Khôi phục phiếu">
+                        <span className="material-symbols-outlined text-[18px]">restore_from_trash</span>
+                    </button>
+                    <button type="button" onClick={() => forceDeleteTrashSlip(row)} className={iconButton(false)} title="Xóa vĩnh viễn">
+                        <span className="material-symbols-outlined text-[18px]">delete_forever</span>
+                    </button>
+                </div>
+            );
+        }
         return '-';
     };
 
@@ -5683,8 +5891,22 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     const renderSimpleTab = (tabKey) => {
         const filters = simpleFilters[tabKey];
         const isImportTab = tabKey === 'imports';
-        const shouldLiftQuickSearch = isDocumentTab(tabKey);
-        const columns = isImportTab ? importListColumns : tabKey === 'exports' ? exportColumns : tabKey === 'lots' ? lotColumns : tabKey === 'trash' ? trashColumns : documentColumns;
+        const isTrashTab = tabKey === 'trash';
+        const shouldLiftQuickSearch = isSlipTab(tabKey);
+        const selectionState = slipSelectionStates[tabKey] || { checked: false, indeterminate: false, count: 0, total: 0 };
+        const columns = isImportTab
+            ? importListColumns
+            : tabKey === 'exports'
+                ? exportListColumns
+                : tabKey === 'lots'
+                    ? lotColumns
+                    : tabKey === 'trash'
+                        ? trashListColumns
+                        : tabKey === 'returns'
+                            ? returnListColumns
+                            : tabKey === 'damaged'
+                                ? damagedListColumns
+                                : adjustmentListColumns;
         const renderCell = isImportTab ? renderImportCell : tabKey === 'exports' ? renderExportCell : tabKey === 'lots' ? renderLotCell : tabKey === 'trash' ? renderTrashCell : (row, columnId) => renderDocumentCell(row, columnId, tabKey);
         const sortMap = ['returns', 'damaged', 'adjustments'].includes(tabKey) ? inventorySortColumnMaps.documents : inventorySortColumnMaps[tabKey];
         const simpleFilterChips = [
@@ -5720,6 +5942,61 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 {['returns', 'damaged', 'adjustments'].includes(tabKey) ? <button type="button" onClick={() => openCreateDocument(tabKey)} className={primaryButton}>Tạo phiếu</button> : null}
             </>
         );
+        const toolbarToggles = [
+            { id: `${tabKey}_filters`, icon: 'filter_alt', label: 'Bộ lọc', active: openPanels[tabKey].filters, onClick: () => togglePanel(tabKey, 'filters') },
+            ...(isSlipTab(tabKey) ? [{
+                id: `${tabKey}_select`,
+                icon: selectionState.checked ? 'check_box' : selectionState.indeterminate ? 'indeterminate_check_box' : 'check_box_outline_blank',
+                label: selectionState.checked ? 'Bỏ chọn trang hiện tại' : 'Chọn trang hiện tại',
+                disabledTitle: 'Không có phiếu khả dụng trên trang hiện tại',
+                active: selectionState.count > 0,
+                disabled: selectionState.total === 0,
+                onClick: () => toggleAllSlipSelections(tabKey, !selectionState.checked),
+            }] : []),
+            ...(isImportTab ? [{
+                id: `${tabKey}_print`,
+                icon: 'print',
+                label: `In ${formatNumber(selectionState.count)} phiếu đã chọn`,
+                disabledTitle: 'Hãy chọn ít nhất một phiếu nhập để in',
+                active: selectionState.count > 0,
+                disabled: importPrintLoading || selectionState.count === 0,
+                onClick: openSelectedImportsPrintModal,
+            }] : []),
+            ...(isSlipTab(tabKey) && !isTrashTab ? [{
+                id: `${tabKey}_delete_selected`,
+                icon: 'delete',
+                label: `Xóa ${formatNumber(selectionState.count)} phiếu đã chọn`,
+                disabledTitle: 'Hãy chọn ít nhất một phiếu để xóa',
+                active: selectionState.count > 0,
+                disabled: selectionState.count === 0,
+                onClick: () => bulkDeleteSelectedSlips(tabKey),
+            }, {
+                id: `${tabKey}_open_trash`,
+                icon: 'delete_sweep',
+                label: 'Mở thùng rác phiếu',
+                active: false,
+                onClick: () => goToTab('trash'),
+            }] : []),
+            ...(isTrashTab ? [{
+                id: `${tabKey}_restore_selected`,
+                icon: 'restore_from_trash',
+                label: `Khôi phục ${formatNumber(selectionState.count)} phiếu`,
+                disabledTitle: 'Hãy chọn ít nhất một phiếu để khôi phục',
+                active: selectionState.count > 0,
+                disabled: selectionState.count === 0,
+                onClick: restoreSelectedTrashSlips,
+            }, {
+                id: `${tabKey}_force_delete_selected`,
+                icon: 'delete_forever',
+                label: `Xóa vĩnh viễn ${formatNumber(selectionState.count)} phiếu`,
+                disabledTitle: 'Hãy chọn ít nhất một phiếu để xóa vĩnh viễn',
+                active: selectionState.count > 0,
+                disabled: selectionState.count === 0,
+                onClick: forceDeleteSelectedTrashSlips,
+            }] : []),
+            { id: `${tabKey}_stats`, icon: 'monitoring', label: 'Thống kê', active: openPanels[tabKey].stats, onClick: () => togglePanel(tabKey, 'stats') },
+            { id: `${tabKey}_columns`, icon: 'view_column', label: 'Cài đặt cột', active: openPanels[tabKey].columns, onClick: () => togglePanel(tabKey, 'columns') },
+        ];
         const filterPanel = openPanels[tabKey].filters ? (
             <FilterPanel actions={<button type="button" onClick={() => tabFetch[tabKey](1)} className={primaryButton}>Lọc</button>}>
                 {!shouldLiftQuickSearch ? quickSearchControl : null}
@@ -5750,29 +6027,16 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             <div className="space-y-3">
                 <div className={panelClass}>
                     <PanelHeader
-                        title={tabKey === 'imports' ? 'Danh sách phiếu nhập' : tabKey === 'exports' ? 'Danh sách phiếu xuất bán' : tabKey === 'lots' ? 'Danh sách lô hàng' : tabKey === 'trash' ? 'Thùng rác sản phẩm' : documentTitleMap[tabKey]}
+                        title={tabKey === 'imports' ? 'Danh sách phiếu nhập' : tabKey === 'exports' ? 'Danh sách phiếu xuất bán' : tabKey === 'lots' ? 'Danh sách lô hàng' : tabKey === 'trash' ? 'Thùng rác phiếu' : documentTitleMap[tabKey]}
                         leadingActions={shouldLiftQuickSearch ? quickSearchControl : null}
                         activeFilterChips={simpleFilterChips}
                         onClearAllFilters={simpleFilterChips.length ? () => clearAllSimpleFilters(tabKey) : null}
-                        toggles={[
-                            { id: `${tabKey}_filters`, icon: 'filter_alt', label: 'Bộ lọc', active: openPanels[tabKey].filters, onClick: () => togglePanel(tabKey, 'filters') },
-                            ...(isImportTab ? [{
-                                id: `${tabKey}_print`,
-                                icon: 'print',
-                                label: `In ${formatNumber(importSelectionState.count)} phiếu đã chọn`,
-                                disabledTitle: 'Hãy chọn ít nhất một phiếu nhập để in',
-                                active: importSelectionState.count > 0,
-                                disabled: importPrintLoading || importSelectionState.count === 0,
-                                onClick: openSelectedImportsPrintModal,
-                            }] : []),
-                            { id: `${tabKey}_stats`, icon: 'monitoring', label: 'Thống kê', active: openPanels[tabKey].stats, onClick: () => togglePanel(tabKey, 'stats') },
-                            { id: `${tabKey}_columns`, icon: 'view_column', label: 'Cài đặt cột', active: openPanels[tabKey].columns, onClick: () => togglePanel(tabKey, 'columns') },
-                        ]}
+                        toggles={toolbarToggles}
                         actions={extraActions}
                     />
                     {filterPanel}
                     {openPanels[tabKey].stats ? <SummaryPanel items={simpleSummaryMap[tabKey] || []} /> : null}
-                    <InventoryTable storageKey={isImportTab ? `inventory_imports_table_${inventoryTableStorageVersion}_selection_v1` : `inventory_${tabKey}_table_${inventoryTableStorageVersion}`} columns={columns} rows={tabRows[tabKey]} renderCell={renderCell} loading={tabLoading[tabKey]} pagination={tabPagination[tabKey]} onPageChange={tabFetch[tabKey]} footer={isImportTab ? `Kết quả: ${formatNumber(tabPagination[tabKey].total)} • Đã chọn: ${formatNumber(importSelectionState.count)} phiếu` : `Kết quả: ${formatNumber(tabPagination[tabKey].total)}`} settingsOpen={openPanels[tabKey].columns} onCloseSettings={() => togglePanel(tabKey, 'columns')} currentPerPage={pageSizes[tabKey]} onPerPageChange={(value) => {
+                    <InventoryTable storageKey={isImportTab ? `inventory_imports_table_${inventoryTableStorageVersion}_selection_v1` : `inventory_${tabKey}_table_${inventoryTableStorageVersion}`} columns={columns} rows={tabRows[tabKey]} renderCell={renderCell} loading={tabLoading[tabKey]} pagination={tabPagination[tabKey]} onPageChange={tabFetch[tabKey]} footer={isSlipTab(tabKey) ? `Kết quả: ${formatNumber(tabPagination[tabKey].total)} • Đã chọn: ${formatNumber(selectionState.count)} phiếu` : `Kết quả: ${formatNumber(tabPagination[tabKey].total)}`} rowKey={tabKey === 'trash' ? (row) => getSlipSelectionKey('trash', row) : 'id'} settingsOpen={openPanels[tabKey].columns} onCloseSettings={() => togglePanel(tabKey, 'columns')} currentPerPage={pageSizes[tabKey]} onPerPageChange={(value) => {
                         const nextSize = updatePageSize(tabKey, value);
                         if (tabKey === 'returns') return fetchDocuments('return', 1, nextSize);
                         if (tabKey === 'damaged') return fetchDocuments('damaged', 1, nextSize);
@@ -6032,31 +6296,93 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         </div>
     );
 
-    useEffect(() => {
-        const visibleImportIds = new Set(imports.map((row) => String(row.id)));
-        setSelectedImportIds((prev) => {
-            const nextEntries = Object.entries(prev).filter(([id, checked]) => checked && visibleImportIds.has(String(id)));
-            if (nextEntries.length === Object.keys(prev).length) {
-                return prev;
-            }
-            return Object.fromEntries(nextEntries);
-        });
-    }, [imports]);
-
-    const selectedImportRows = useMemo(
-        () => imports.filter((row) => Boolean(selectedImportIds[String(row.id)])),
-        [imports, selectedImportIds]
+    const getSlipSelectionKey = (tabKey, row) => (
+        tabKey === 'trash'
+            ? `${row.section_key}:${row.slip_type_key}:${row.id}`
+            : String(row.id)
     );
-    const importSelectionState = useMemo(() => {
-        const totalRows = imports.length;
-        const selectedCount = selectedImportRows.length;
-        return {
-            checked: totalRows > 0 && selectedCount === totalRows,
-            indeterminate: selectedCount > 0 && selectedCount < totalRows,
-            count: selectedCount,
-        };
-    }, [imports, selectedImportRows.length]);
-    const importListColumns = useMemo(() => ([
+    const isSlipRowSelectable = (tabKey, row) => {
+        if (!row) return false;
+        if (tabKey === 'exports') return Boolean(row.can_delete);
+        return true;
+    };
+    const selectableSlipRows = {
+        imports,
+        exports: exportsData,
+        returns: returnsData,
+        damaged: damagedData,
+        adjustments,
+        trash: trashItems,
+    };
+
+    useEffect(() => {
+        setSelectedSlipIds((prev) => {
+            let changed = false;
+            const next = { ...prev };
+
+            slipSelectionTabKeys.forEach((tabKey) => {
+                const currentSelection = prev[tabKey] || {};
+                const allowedKeys = new Set((selectableSlipRows[tabKey] || [])
+                    .filter((row) => isSlipRowSelectable(tabKey, row))
+                    .map((row) => getSlipSelectionKey(tabKey, row)));
+                const filteredSelection = Object.fromEntries(
+                    Object.entries(currentSelection).filter(([key, checked]) => checked && allowedKeys.has(String(key)))
+                );
+
+                if (Object.keys(filteredSelection).length !== Object.keys(currentSelection).length) {
+                    next[tabKey] = filteredSelection;
+                    changed = true;
+                }
+            });
+
+            return changed ? next : prev;
+        });
+    }, [imports, exportsData, returnsData, damagedData, adjustments, trashItems]);
+
+    const getSelectedSlipRows = (tabKey) => (
+        (selectableSlipRows[tabKey] || []).filter((row) => Boolean(selectedSlipIds[tabKey]?.[getSlipSelectionKey(tabKey, row)]))
+    );
+    const selectedImportRows = useMemo(
+        () => getSelectedSlipRows('imports'),
+        [imports, selectedSlipIds]
+    );
+    const selectedTrashRows = useMemo(
+        () => getSelectedSlipRows('trash'),
+        [trashItems, selectedSlipIds]
+    );
+    const slipSelectionStates = useMemo(() => {
+        return slipSelectionTabKeys.reduce((result, tabKey) => {
+            const rows = (selectableSlipRows[tabKey] || []).filter((row) => isSlipRowSelectable(tabKey, row));
+            const selectedCount = rows.filter((row) => Boolean(selectedSlipIds[tabKey]?.[getSlipSelectionKey(tabKey, row)])).length;
+            result[tabKey] = {
+                checked: rows.length > 0 && selectedCount === rows.length,
+                indeterminate: selectedCount > 0 && selectedCount < rows.length,
+                count: selectedCount,
+                total: rows.length,
+            };
+            return result;
+        }, {});
+    }, [imports, exportsData, returnsData, damagedData, adjustments, trashItems, selectedSlipIds]);
+    const setSlipRowSelected = (tabKey, row, checked) => {
+        const selectionKey = getSlipSelectionKey(tabKey, row);
+        setSelectedSlipIds((prev) => {
+            const nextTabSelection = { ...(prev[tabKey] || {}) };
+            if (checked) {
+                nextTabSelection[selectionKey] = true;
+            } else {
+                delete nextTabSelection[selectionKey];
+            }
+            return { ...prev, [tabKey]: nextTabSelection };
+        });
+    };
+    const toggleAllSlipSelections = (tabKey, checked) => {
+        const rows = (selectableSlipRows[tabKey] || []).filter((row) => isSlipRowSelectable(tabKey, row));
+        setSelectedSlipIds((prev) => ({
+            ...prev,
+            [tabKey]: checked ? Object.fromEntries(rows.map((row) => [getSlipSelectionKey(tabKey, row), true])) : {},
+        }));
+    };
+    const buildSelectableColumns = (tabKey, baseColumns, title) => ([
         {
             id: 'select',
             label: 'Chọn',
@@ -6067,23 +6393,41 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             headerRender: () => (
                 <div className="flex items-center justify-center">
                     <IndeterminateCheckbox
-                        checked={importSelectionState.checked}
-                        indeterminate={importSelectionState.indeterminate}
-                        onChange={(event) => {
-                            const checked = event.target.checked;
-                            setSelectedImportIds(() => {
-                                if (!checked) return {};
-                                return Object.fromEntries(imports.map((row) => [String(row.id), true]));
-                            });
-                        }}
-                        disabled={!imports.length}
-                        title="Chọn tất cả phiếu trên trang hiện tại"
+                        checked={Boolean(slipSelectionStates[tabKey]?.checked)}
+                        indeterminate={Boolean(slipSelectionStates[tabKey]?.indeterminate)}
+                        onChange={(event) => toggleAllSlipSelections(tabKey, event.target.checked)}
+                        disabled={!slipSelectionStates[tabKey]?.total}
+                        title={title}
                     />
                 </div>
             ),
         },
-        ...importColumns,
-    ]), [importSelectionState.checked, importSelectionState.indeterminate, imports]);
+        ...baseColumns,
+    ]);
+    const importListColumns = useMemo(
+        () => buildSelectableColumns('imports', importColumns, 'Chọn tất cả phiếu nhập trên trang hiện tại'),
+        [slipSelectionStates.imports]
+    );
+    const exportListColumns = useMemo(
+        () => buildSelectableColumns('exports', exportColumns, 'Chọn tất cả phiếu xuất có thể xóa trên trang hiện tại'),
+        [slipSelectionStates.exports]
+    );
+    const returnListColumns = useMemo(
+        () => buildSelectableColumns('returns', documentColumns, 'Chọn tất cả phiếu hoàn trên trang hiện tại'),
+        [slipSelectionStates.returns]
+    );
+    const damagedListColumns = useMemo(
+        () => buildSelectableColumns('damaged', documentColumns, 'Chọn tất cả phiếu hỏng trên trang hiện tại'),
+        [slipSelectionStates.damaged]
+    );
+    const adjustmentListColumns = useMemo(
+        () => buildSelectableColumns('adjustments', documentColumns, 'Chọn tất cả phiếu điều chỉnh trên trang hiện tại'),
+        [slipSelectionStates.adjustments]
+    );
+    const trashListColumns = useMemo(
+        () => buildSelectableColumns('trash', trashColumns, 'Chọn tất cả phiếu trong thùng rác trên trang hiện tại'),
+        [slipSelectionStates.trash]
+    );
     const buildImportPrintDocument = (form) => {
         const printableItems = (form?.items || [])
             .filter((item) => Number(item.product_id || 0) > 0)
@@ -6130,6 +6474,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         lineCount: importPrintDocuments.reduce((sum, document) => sum + Number(document.items.length || 0), 0),
         total: importPrintDocuments.reduce((sum, document) => sum + Number(document.total || 0), 0),
     }), [importPrintDocuments]);
+    const selectedImportPrintCount = importPrintSummary.documentCount || selectedImportRows.length;
     const importDetailDocument = useMemo(
         () => buildImportPrintDocument(importDetailModal.form),
         [importDetailModal.form, suppliers]
@@ -6890,7 +7235,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             </ModalShell>
             <ModalShell
                 open={importPrintModalOpen}
-                title={importPrintSource.mode === 'selected' && (importPrintSummary.documentCount || importSelectionState.count) > 1 ? `In ${formatNumber(importPrintSummary.documentCount || importSelectionState.count)} phiếu nhập` : 'In phiếu nhập'}
+                title={importPrintSource.mode === 'selected' && selectedImportPrintCount > 1 ? `In ${formatNumber(selectedImportPrintCount)} phiếu nhập` : 'In phiếu nhập'}
                 onClose={closeImportPrintModal}
                 maxWidth="max-w-[1180px]"
                 footer={(

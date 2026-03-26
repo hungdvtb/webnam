@@ -348,13 +348,21 @@ export const inventoryApi = {
     deleteImport: (id) => api.delete(`/inventory/imports/${id}`),
     restoreImport: (id) => api.post(`/inventory/imports/${id}/restore`),
     bulkDeleteImports: (ids) => api.post('/inventory/imports/bulk-delete', { ids }),
+    bulkRestoreImports: (ids) => api.post('/inventory/imports/bulk-restore', { ids }),
+    forceDeleteImport: (id) => api.delete(`/inventory/imports/${id}/force`),
+    bulkForceDeleteImports: (ids) => api.post('/inventory/imports/bulk-force-delete', { ids }),
     getImport: (id) => api.get(`/inventory/imports/${id}`),
     getDocuments: (type, params) => api.get(`/inventory/documents/${type}`, { params }),
     createDocument: (type, data) => api.post(`/inventory/documents/${type}`, data),
     updateDocument: (type, id, data) => api.put(`/inventory/documents/${type}/${id}`, data),
     deleteDocument: (type, id) => api.delete(`/inventory/documents/${type}/${id}`),
     bulkDeleteDocuments: (type, ids) => api.post(`/inventory/documents/${type}/bulk-delete`, { ids }),
+    restoreDocument: (type, id) => api.post(`/inventory/documents/${type}/${id}/restore`),
+    forceDeleteDocument: (type, id) => api.delete(`/inventory/documents/${type}/${id}/force`),
+    bulkRestoreDocuments: (type, ids) => api.post(`/inventory/documents/${type}/bulk-restore`, { ids }),
+    bulkForceDeleteDocuments: (type, ids) => api.post(`/inventory/documents/${type}/bulk-force-delete`, { ids }),
     getDocument: (type, id) => api.get(`/inventory/documents/${type}/${id}`),
+    getTrashSlips: (params) => api.get('/inventory/trash/slips', { params }),
     getBatches: (params) => api.get('/inventory/batches', { params }),
     getExports: (params) => api.get('/inventory/exports', { params }),
     getExport: (id) => api.get(`/inventory/exports/${id}`),
@@ -532,7 +540,7 @@ export const userApi = {
 };
 
 export const mediaApi = {
-    upload: (formData) => api.post('/media/upload', formData, multipartConfig(formData)),
+    upload: (formData) => api.post('/media/upload', formData),
 };
 
 export const quoteTemplateApi = {

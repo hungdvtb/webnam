@@ -305,6 +305,21 @@ class InventoryService
         });
     }
 
+    public function forceDeleteImport(InventoryImport $import): void
+    {
+        DB::transaction(function () use ($import) {
+            if (!$import->trashed()) {
+                $productIds = $import->items()->pluck('product_id')->all();
+                $this->ensureImportCanBeReverted($import);
+                $this->revertImportAggregate($import);
+                $this->revertImportInventory($import);
+                $this->refreshProducts($productIds);
+            }
+
+            $import->forceDelete();
+        });
+    }
+
     public function updateDocument(InventoryDocument $document, string $type, array $payload, int $accountId, ?int $userId = null): InventoryDocument
     {
         return DB::transaction(function () use ($document, $type, $payload, $accountId, $userId) {
@@ -313,7 +328,7 @@ class InventoryService
 
             $this->ensureDocumentCanBeReverted($document);
             $this->revertDocument($document);
-            $document->delete();
+            $document->forceDelete();
 
             $replacement = $this->createDocument($type, $payload, $accountId, $userId);
             $replacement->forceFill([
@@ -321,12 +336,7 @@ class InventoryService
                 'created_at' => $originalCreatedAt,
             ])->save();
 
-            return $replacement->fresh([
-                'supplier:id,name,phone,email',
-                'items.product:id,sku,name',
-                'items.allocations.batch',
-                'creator:id,name',
-            ]);
+            return $this->loadDocumentRelations($replacement->fresh());
         });
     }
 
@@ -334,8 +344,34 @@ class InventoryService
     {
         DB::transaction(function () use ($document) {
             $this->ensureDocumentCanBeReverted($document);
-            $this->revertDocument($document);
+            $this->revertDocument($document, true);
             $document->delete();
+        });
+    }
+
+    public function restoreDocument(InventoryDocument $document): InventoryDocument
+    {
+        return DB::transaction(function () use ($document) {
+            if (!$document->trashed()) {
+                return $this->loadDocumentRelations($document->fresh());
+            }
+
+            $document->restore();
+            $this->applyStoredDocument($document);
+
+            return $this->loadDocumentRelations($document->fresh());
+        });
+    }
+
+    public function forceDeleteDocument(InventoryDocument $document): void
+    {
+        DB::transaction(function () use ($document) {
+            if (!$document->trashed()) {
+                $this->ensureDocumentCanBeReverted($document);
+                $this->revertDocument($document);
+            }
+
+            $document->forceDelete();
         });
     }
 
@@ -1199,6 +1235,16 @@ class InventoryService
         ]);
     }
 
+    private function loadDocumentRelations(InventoryDocument $document): InventoryDocument
+    {
+        return $document->load([
+            'supplier:id,name,phone,email',
+            'items.product:id,sku,name',
+            'items.allocations.batch',
+            'creator:id,name',
+        ]);
+    }
+
     private function importAffectsInventory(?InventoryImportStatus $status): bool
     {
         return (bool) ($status?->affects_inventory ?? false);
@@ -1246,7 +1292,7 @@ class InventoryService
         }
     }
 
-    private function revertDocument(InventoryDocument $document): void
+    private function revertDocument(InventoryDocument $document, bool $preserveItems = false): void
     {
         $document->loadMissing(['items.allocations', 'items.product']);
 
@@ -1306,8 +1352,139 @@ class InventoryService
             }
         }
 
-        InventoryDocumentItem::query()->where('inventory_document_id', $document->id)->delete();
+        if (!$preserveItems) {
+            InventoryDocumentItem::query()->where('inventory_document_id', $document->id)->delete();
+        }
         $this->refreshProducts($productIds);
+    }
+
+    private function applyStoredDocument(InventoryDocument $document): void
+    {
+        $document->loadMissing([
+            'items' => function ($query) {
+                $query->orderBy('id');
+            },
+            'items.product',
+        ]);
+
+        $productIds = $document->items
+            ->pluck('product_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($productIds)) {
+            return;
+        }
+
+        $products = Product::withTrashed()
+            ->whereIn('id', $productIds)
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('id');
+
+        if (count($productIds) !== $products->count()) {
+            throw ValidationException::withMessages([
+                'document' => 'Khong the khoi phuc phieu vi mot hoac nhieu san pham khong con ton tai.',
+            ]);
+        }
+
+        $documentDate = Carbon::parse($document->document_date ?? now());
+        $touchedProductIds = [];
+
+        foreach ($document->items as $index => $item) {
+            $product = $products->get((int) $item->product_id);
+            if (!$product) {
+                continue;
+            }
+
+            $quantity = max(0, (int) ($item->quantity ?? 0));
+            if ($quantity <= 0) {
+                continue;
+            }
+
+            $stockBucket = (string) ($item->stock_bucket ?? 'sellable');
+            $direction = (string) ($item->direction ?? 'in');
+
+            if ($stockBucket === 'sellable' && $direction === 'in') {
+                $this->createSellableBatch(
+                    (int) $document->account_id,
+                    $product,
+                    (string) $document->document_number,
+                    (int) $document->id,
+                    $documentDate,
+                    $quantity,
+                    round((float) ($item->unit_cost ?? 0), 2),
+                    $index + 1,
+                    $this->storedDocumentBatchMeta($document, $item)
+                );
+            } elseif ($stockBucket === 'sellable' && $direction === 'out') {
+                $allowOversold = (bool) data_get($item->meta, 'allow_oversold', false);
+                $allocation = $allowOversold
+                    ? $this->allocateOrderSellableBatches((int) $document->account_id, $product, $quantity)
+                    : $this->allocateSellableBatches((int) $document->account_id, $product, $quantity);
+
+                InventoryDocumentAllocation::query()
+                    ->where('inventory_document_item_id', (int) $item->id)
+                    ->delete();
+
+                foreach ($allocation['allocations'] as $row) {
+                    InventoryDocumentAllocation::create([
+                        'account_id' => (int) $document->account_id,
+                        'inventory_document_item_id' => (int) $item->id,
+                        'inventory_batch_id' => $row['inventory_batch_id'],
+                        'product_id' => $product->id,
+                        'quantity' => $row['quantity'],
+                        'unit_cost' => $row['unit_cost'],
+                        'total_cost' => $row['total_cost'],
+                        'allocated_at' => now(),
+                    ]);
+                }
+
+                $item->forceFill([
+                    'unit_cost' => $quantity > 0 ? round((float) $allocation['total_cost'] / $quantity, 2) : 0,
+                    'total_cost' => round((float) $allocation['total_cost'], 2),
+                ])->save();
+            } elseif ($stockBucket === 'damaged' && $direction === 'in') {
+                $product->damaged_quantity = (int) ($product->damaged_quantity ?? 0) + $quantity;
+                $product->save();
+            } elseif ($stockBucket === 'damaged' && $direction === 'out') {
+                $currentDamaged = (int) ($product->damaged_quantity ?? 0);
+                if ($currentDamaged < $quantity) {
+                    throw ValidationException::withMessages([
+                        'document' => "San pham {$product->sku} - {$product->name} khong du ton hong de khoi phuc phieu.",
+                    ]);
+                }
+
+                $product->damaged_quantity = $currentDamaged - $quantity;
+                $product->save();
+            }
+
+            $touchedProductIds[] = (int) $product->id;
+        }
+
+        $this->finalizeDocumentTotals($document);
+        $this->refreshProducts($touchedProductIds);
+    }
+
+    private function storedDocumentBatchMeta(InventoryDocument $document, InventoryDocumentItem $item): array
+    {
+        $sourceName = match ((string) $document->type) {
+            'return' => (string) $document->reference_type === 'order' ? 'Phieu hoan don hang' : 'Phieu hang hoan',
+            'adjustment' => 'Phieu dieu chinh',
+            default => 'Phieu kho',
+        };
+
+        $baseMeta = is_array($item->meta) ? $item->meta : [];
+
+        return array_merge($baseMeta, [
+            'source_name' => $baseMeta['source_name'] ?? $sourceName,
+            'source_label' => $baseMeta['source_label'] ?? $document->document_number,
+            'document_type' => $baseMeta['document_type'] ?? $document->type,
+            'document_item_id' => $baseMeta['document_item_id'] ?? (int) $item->id,
+        ]);
     }
 
     private function createReturnDocument(array $payload, int $accountId, ?int $userId): InventoryDocument
@@ -1513,6 +1690,7 @@ class InventoryService
                     'unit_cost' => $unitCost,
                     'total_cost' => $totalCost,
                     'notes' => $item['notes'] ?? null,
+                    'meta' => $allowOversold ? ['allow_oversold' => true] : null,
                 ]);
 
                 if ($stockBucket === 'sellable' && $direction === 'in') {

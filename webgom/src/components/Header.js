@@ -785,12 +785,12 @@ export default function Header({
                   isOrderConfirmMode ? "mobile-bottom-item-order-confirm" : ""
                 }`;
                 const itemTitle = isOrderEntryMode
-                  ? "Nhập thông tin nhận hàng"
+                  ? "Địa chỉ nhận hàng"
                   : isOrderConfirmMode
                     ? "Xác nhận đơn hàng"
                     : item.title;
                 const itemLabelLines = isOrderEntryMode
-                  ? ["Nhập thông tin", "nhận hàng"]
+                  ? ["Địa chỉ", "nhận hàng"]
                   : isOrderConfirmMode
                     ? ["Xác nhận", "đơn hàng"]
                     : [item.shortLabel];
@@ -1884,8 +1884,8 @@ export default function Header({
             align-items: center;
             justify-content: center;
             width: 100%;
-            min-height: 18px;
-            flex: 0 0 18px;
+            min-height: 20px;
+            flex: 0 0 20px;
             transition: min-height 180ms ease;
           }
 
@@ -1897,9 +1897,9 @@ export default function Header({
             gap: 1px;
             max-width: 100%;
             width: 100%;
-            font-size: 8px;
+            font-size: 14px;
             font-weight: 700;
-            line-height: 1.15;
+            line-height: 1.1;
             text-align: center;
             white-space: nowrap;
             margin: 0;
@@ -1989,12 +1989,12 @@ export default function Header({
           }
 
           .mobile-bottom-item__label-wrap {
-            min-height: 16px;
-            flex-basis: 16px;
+            min-height: 20px;
+            flex-basis: 20px;
           }
 
           .mobile-bottom-item__label {
-            font-size: 7.1px;
+            font-size: 14px;
           }
 
           .mobile-bottom-item__label-multiline {

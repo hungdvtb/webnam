@@ -4,6 +4,7 @@ namespace App\Services\Reports;
 
 use App\Models\Order;
 use App\Models\OrderStatus;
+use App\Services\OrderInventorySlipService;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Illuminate\Support\Collection;
@@ -12,26 +13,37 @@ use Illuminate\Support\Str;
 
 class ProductSalesByDayReportService
 {
+    public function __construct(
+        private readonly OrderInventorySlipService $orderInventorySlipService,
+    ) {
+    }
+
     public function build(int $accountId, array $filters = []): array
     {
-        [$from, $to] = $this->resolveDateRange($filters);
+        $normalizedFilters = $this->normalizeFilters($filters);
+        [$from, $to] = $this->resolveDateRange($normalizedFilters);
         $dates = $this->buildDateHeaders($from, $to);
-        $search = trim((string) ($filters['search'] ?? ''));
-        $effectiveStatuses = $this->resolveEffectiveStatuses($accountId);
-        $effectiveStatusOptions = $this->validStatusOptions($accountId)
-            ->whereIn('code', $effectiveStatuses)
-            ->values()
-            ->all();
+        $search = $normalizedFilters['search'];
+        $requestedStatuses = $normalizedFilters['status'];
+        $effectiveStatuses = $requestedStatuses !== []
+            ? $requestedStatuses
+            : $this->resolveEffectiveStatuses($accountId);
+        $effectiveStatusOptions = $requestedStatuses !== []
+            ? $this->statusOptionsForCodes($accountId, $effectiveStatuses)
+            : $this->validStatusOptions($accountId)
+                ->whereIn('code', $effectiveStatuses)
+                ->values()
+                ->all();
 
         if ($accountId <= 0 || $effectiveStatuses === []) {
-            return $this->emptyResponse($from, $to, $search, $dates, $effectiveStatusOptions);
+            return $this->emptyResponse($normalizedFilters, $from, $to, $dates, $effectiveStatusOptions);
         }
 
         $dateKeys = collect($dates)->pluck('date')->all();
-        $aggregatedRows = $this->aggregatedRowsQuery($accountId, $from, $to, $search, $effectiveStatuses)->get();
+        $aggregatedRows = $this->aggregatedRowsQuery($accountId, $from, $to, $normalizedFilters, $effectiveStatuses)->get();
 
         if ($aggregatedRows->isEmpty()) {
-            return $this->emptyResponse($from, $to, $search, $dates, $effectiveStatusOptions);
+            return $this->emptyResponse($normalizedFilters, $from, $to, $dates, $effectiveStatusOptions);
         }
 
         $totalMetrics = $this->zeroMetric();
@@ -133,11 +145,7 @@ class ProductSalesByDayReportService
         $sortedTopLevelRows = $this->sortRows(collect($topLevelRows))->values()->all();
 
         return [
-            'filters' => [
-                'date_from' => $from->toDateString(),
-                'date_to' => $to->toDateString(),
-                'search' => $search,
-            ],
+            'filters' => $this->serializeFilters($normalizedFilters, $from, $to),
             'dates' => $dates,
             'summary_row' => [
                 'label' => 'Tong cong toan bang',
@@ -163,9 +171,10 @@ class ProductSalesByDayReportService
         int $accountId,
         Carbon $from,
         Carbon $to,
-        string $search,
+        array $filters,
         array $effectiveStatuses
     ) {
+        $search = $filters['search'];
         $completedAtSubquery = DB::table('order_status_logs')
             ->selectRaw('order_id, MAX(created_at) AS completed_at')
             ->where('to_status', 'completed')
@@ -222,13 +231,81 @@ class ProductSalesByDayReportService
 
             $query->where(function ($searchQuery) use ($like) {
                 $searchQuery
-                    ->where('orders.notes', 'like', $like)
+                    ->where('orders.order_number', 'like', $like)
+                    ->orWhere('orders.customer_name', 'like', $like)
+                    ->orWhere('orders.customer_phone', 'like', $like)
+                    ->orWhere('orders.shipping_address', 'like', $like)
+                    ->orWhere('orders.notes', 'like', $like)
+                    ->orWhere('orders.shipping_tracking_code', 'like', $like)
                     ->orWhere('order_items.product_name_snapshot', 'like', $like)
                     ->orWhere('order_items.product_sku_snapshot', 'like', $like)
                     ->orWhere('child_products.name', 'like', $like)
                     ->orWhere('child_products.sku', 'like', $like)
                     ->orWhere('parent_products.name', 'like', $like)
                     ->orWhere('parent_products.sku', 'like', $like);
+            });
+        }
+
+        if ($filters['customer_name'] !== '') {
+            $query->where('orders.customer_name', 'like', '%' . $filters['customer_name'] . '%');
+        }
+
+        if ($filters['order_number'] !== '') {
+            $query->where('orders.order_number', 'like', $filters['order_number'] . '%');
+        }
+
+        if ($filters['customer_phone'] !== '') {
+            $query->where('orders.customer_phone', 'like', $filters['customer_phone'] . '%');
+        }
+
+        if ($filters['shipping_address'] !== '') {
+            $query->where('orders.shipping_address', 'like', '%' . $filters['shipping_address'] . '%');
+        }
+
+        if ($filters['created_at_from'] !== '') {
+            $query->whereDate('orders.created_at', '>=', $filters['created_at_from']);
+        }
+
+        if ($filters['created_at_to'] !== '') {
+            $query->whereDate('orders.created_at', '<=', $filters['created_at_to']);
+        }
+
+        if ($filters['shipping_carrier_code'] !== '') {
+            $query->where('orders.shipping_carrier_code', $filters['shipping_carrier_code']);
+        }
+
+        if ($filters['shipping_dispatched_from'] !== '') {
+            $query->whereDate('orders.shipping_dispatched_at', '>=', $filters['shipping_dispatched_from']);
+        }
+
+        if ($filters['shipping_dispatched_to'] !== '') {
+            $query->whereDate('orders.shipping_dispatched_at', '<=', $filters['shipping_dispatched_to']);
+        }
+
+        if ($filters['export_slip_state'] !== '') {
+            $this->orderInventorySlipService->applyExportSlipStateFilter($query, $filters['export_slip_state']);
+        }
+
+        if ($filters['return_slip_state'] !== '') {
+            $this->orderInventorySlipService->applyReturnSlipStateFilter($query, $filters['return_slip_state']);
+        }
+
+        if ($filters['damaged_slip_state'] !== '') {
+            $this->orderInventorySlipService->applyDamagedSlipStateFilter($query, $filters['damaged_slip_state']);
+        }
+
+        foreach ($filters['attributes'] as $attributeId => $values) {
+            $query->whereExists(function ($attributeQuery) use ($attributeId, $values) {
+                $attributeQuery
+                    ->select(DB::raw(1))
+                    ->from('order_attribute_values')
+                    ->whereRaw('order_attribute_values.order_id = orders.id')
+                    ->where('attribute_id', $attributeId)
+                    ->where(function ($valueQuery) use ($values) {
+                        foreach ($values as $value) {
+                            $valueQuery->orWhere('value', 'like', '%' . $value . '%');
+                        }
+                    });
             });
         }
 
@@ -267,13 +344,89 @@ class ProductSalesByDayReportService
             : now();
         $from = !empty($filters['date_from'])
             ? Carbon::parse($filters['date_from'])
-            : $to->copy()->subDays(7);
+            : $to->copy()->subDays(6);
 
         if ($from->gt($to)) {
             [$from, $to] = [$to->copy(), $from->copy()];
         }
 
         return [$from->startOfDay(), $to->endOfDay()];
+    }
+
+    private function normalizeFilters(array $filters): array
+    {
+        $status = collect(is_array($filters['status'] ?? null) ? $filters['status'] : explode(',', (string) ($filters['status'] ?? '')))
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $attributes = [];
+        foreach ($filters as $key => $value) {
+            if (!str_starts_with((string) $key, 'attr_order_')) {
+                continue;
+            }
+
+            $attributeId = (int) str_replace('attr_order_', '', (string) $key);
+            if ($attributeId <= 0) {
+                continue;
+            }
+
+            $values = collect(is_array($value) ? $value : explode(',', (string) $value))
+                ->map(fn ($item) => trim((string) $item))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            if ($values !== []) {
+                $attributes[$attributeId] = $values;
+            }
+        }
+
+        return [
+            'date_from' => trim((string) ($filters['date_from'] ?? '')),
+            'date_to' => trim((string) ($filters['date_to'] ?? '')),
+            'search' => trim((string) ($filters['search'] ?? '')),
+            'status' => $status,
+            'customer_name' => trim((string) ($filters['customer_name'] ?? '')),
+            'order_number' => trim((string) ($filters['order_number'] ?? '')),
+            'customer_phone' => trim((string) ($filters['customer_phone'] ?? '')),
+            'shipping_address' => trim((string) ($filters['shipping_address'] ?? '')),
+            'created_at_from' => trim((string) ($filters['created_at_from'] ?? '')),
+            'created_at_to' => trim((string) ($filters['created_at_to'] ?? '')),
+            'shipping_carrier_code' => trim((string) ($filters['shipping_carrier_code'] ?? '')),
+            'export_slip_state' => trim((string) ($filters['export_slip_state'] ?? '')),
+            'return_slip_state' => trim((string) ($filters['return_slip_state'] ?? '')),
+            'damaged_slip_state' => trim((string) ($filters['damaged_slip_state'] ?? '')),
+            'shipping_dispatched_from' => trim((string) ($filters['shipping_dispatched_from'] ?? '')),
+            'shipping_dispatched_to' => trim((string) ($filters['shipping_dispatched_to'] ?? '')),
+            'attributes' => $attributes,
+        ];
+    }
+
+    private function serializeFilters(array $filters, Carbon $from, Carbon $to): array
+    {
+        return [
+            'date_from' => $from->toDateString(),
+            'date_to' => $to->toDateString(),
+            'search' => $filters['search'],
+            'status' => $filters['status'],
+            'customer_name' => $filters['customer_name'],
+            'order_number' => $filters['order_number'],
+            'customer_phone' => $filters['customer_phone'],
+            'shipping_address' => $filters['shipping_address'],
+            'created_at_from' => $filters['created_at_from'],
+            'created_at_to' => $filters['created_at_to'],
+            'shipping_carrier_code' => $filters['shipping_carrier_code'],
+            'export_slip_state' => $filters['export_slip_state'],
+            'return_slip_state' => $filters['return_slip_state'],
+            'damaged_slip_state' => $filters['damaged_slip_state'],
+            'shipping_dispatched_from' => $filters['shipping_dispatched_from'],
+            'shipping_dispatched_to' => $filters['shipping_dispatched_to'],
+            'attributes' => $filters['attributes'],
+        ];
     }
 
     private function buildDateHeaders(Carbon $from, Carbon $to): array
@@ -335,6 +488,37 @@ class ProductSalesByDayReportService
                 'color' => null,
             ])
             ->values();
+    }
+
+    private function statusOptionsForCodes(int $accountId, array $codes): array
+    {
+        $normalizedCodes = collect($codes)
+            ->map(fn ($code) => trim((string) $code))
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($normalizedCodes->isEmpty()) {
+            return [];
+        }
+
+        $configuredStatuses = OrderStatus::query()
+            ->where('account_id', $accountId)
+            ->whereIn('code', $normalizedCodes->all())
+            ->get(['code', 'name', 'color'])
+            ->keyBy('code');
+
+        return $normalizedCodes
+            ->map(function (string $code) use ($configuredStatuses) {
+                $configured = $configuredStatuses->get($code);
+
+                return [
+                    'code' => $code,
+                    'name' => (string) ($configured?->name ?? Str::headline(str_replace('_', ' ', $code))),
+                    'color' => $configured?->color,
+                ];
+            })
+            ->all();
     }
 
     private function isInvalidStatus(?string $code, ?string $name): bool
@@ -477,16 +661,12 @@ class ProductSalesByDayReportService
         return 'parent-' . $productId;
     }
 
-    private function emptyResponse(Carbon $from, Carbon $to, string $search, array $dates, array $effectiveStatuses): array
+    private function emptyResponse(array $filters, Carbon $from, Carbon $to, array $dates, array $effectiveStatuses): array
     {
         $dateKeys = collect($dates)->pluck('date')->all();
 
         return [
-            'filters' => [
-                'date_from' => $from->toDateString(),
-                'date_to' => $to->toDateString(),
-                'search' => $search,
-            ],
+            'filters' => $this->serializeFilters($filters, $from, $to),
             'dates' => $dates,
             'summary_row' => [
                 'label' => 'Tong cong toan bang',

@@ -42,7 +42,26 @@ class ReportController extends Controller
             'date_from' => 'nullable|date',
             'date_to' => 'nullable|date',
             'search' => 'nullable|string|max:255',
+            'status' => 'nullable',
+            'customer_name' => 'nullable|string|max:255',
+            'order_number' => 'nullable|string|max:255',
+            'customer_phone' => 'nullable|string|max:50',
+            'shipping_address' => 'nullable|string|max:255',
+            'created_at_from' => 'nullable|date',
+            'created_at_to' => 'nullable|date',
+            'shipping_carrier_code' => 'nullable|string|max:100',
+            'export_slip_state' => 'nullable|string|max:50',
+            'return_slip_state' => 'nullable|string|max:50',
+            'damaged_slip_state' => 'nullable|string|max:50',
+            'shipping_dispatched_from' => 'nullable|date',
+            'shipping_dispatched_to' => 'nullable|date',
         ]);
+
+        foreach ($request->all() as $key => $value) {
+            if (str_starts_with((string) $key, 'attr_order_')) {
+                $validated[$key] = $value;
+            }
+        }
 
         return response()->json(
             $productSalesByDayReportService->build(

@@ -30,6 +30,33 @@ export async function getBlogPosts(params = {}) {
   }
 }
 
+export async function getBlogCategories() {
+  try {
+    const res = await fetch(`${config.apiUrl}/blog/categories`, {
+      headers: { 'Accept': 'application/json', 'X-Site-Code': config.siteCode },
+      cache: 'no-store',
+    });
+
+    if (!res.ok) {
+      return [];
+    }
+
+    const payload = await res.json();
+
+    if (Array.isArray(payload?.data)) {
+      return payload.data;
+    }
+
+    if (Array.isArray(payload)) {
+      return payload;
+    }
+
+    return [];
+  } catch {
+    return [];
+  }
+}
+
 export async function getBlogPost(id) {
   const slugOrId = encodeURIComponent(String(id ?? ''));
   if (!slugOrId) return null;

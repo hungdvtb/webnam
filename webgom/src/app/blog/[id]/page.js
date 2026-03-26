@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { getBlogPost, getBlogPosts } from '@/lib/blogApi';
+import { getBlogCategories, getBlogPost, getBlogPosts } from '@/lib/blogApi';
 import { buildBlogContentMarkup } from '@/lib/blogContent';
 import BlogMediaGalleryEnhancer from '@/components/blog/BlogMediaGalleryEnhancer';
 import ResponsiveArticleTitle from '@/components/blog/ResponsiveArticleTitle';
@@ -70,6 +70,59 @@ function getPostCategory(post) {
   return 'Kiến thức gốm';
 }
 
+function normalizeBlogCategory(category, index) {
+  return {
+    id: category?.id ?? index,
+    name: String(category?.name || '').trim(),
+    slug: String(category?.slug || '').trim(),
+    sortOrder: Number(category?.sort_order || index + 1),
+  };
+}
+
+function extractCategories(payload) {
+  if (Array.isArray(payload?.categories)) return payload.categories;
+  if (Array.isArray(payload?.data?.categories)) return payload.data.categories;
+  if (Array.isArray(payload?.data) && payload.data.every((item) => item?.name && item?.slug && !item?.title)) {
+    return payload.data;
+  }
+  if (Array.isArray(payload) && payload.every((item) => item?.name && item?.slug && !item?.title)) {
+    return payload;
+  }
+  return [];
+}
+
+function buildBlogCategoryHref(categorySlug = '') {
+  if (!categorySlug) {
+    return '/blog';
+  }
+
+  return `/blog?category=${encodeURIComponent(String(categorySlug).trim())}`;
+}
+
+function resolveCurrentCategory(post, categories) {
+  if (!post || !Array.isArray(categories) || categories.length === 0) {
+    return null;
+  }
+
+  const categorySlug = String(post?.category?.slug || '').trim();
+  if (categorySlug) {
+    return categories.find((category) => category.slug === categorySlug) || null;
+  }
+
+  const categoryId = Number(post?.blog_category_id || post?.category?.id || 0);
+  if (categoryId > 0) {
+    return categories.find((category) => Number(category.id) === categoryId) || null;
+  }
+
+  const categoryName = post?.category?.name || (typeof post?.category === 'string' ? post.category.trim() : '');
+  if (categoryName) {
+    const normalizedName = categoryName.toLowerCase();
+    return categories.find((category) => category.name.toLowerCase() === normalizedName) || null;
+  }
+
+  return null;
+}
+
 function stripHtml(html) {
   return String(html || '')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -125,13 +178,25 @@ export default async function BlogPostPage({ params }) {
 
   let post = null;
   let related = [];
+  let blogCategories = [];
 
   try {
     post = await getBlogPost(slugOrId);
 
     if (post) {
-      const response = await getBlogPosts({ per_page: 10 });
+      const [response, categoriesResponse] = await Promise.all([
+        getBlogPosts({ per_page: 10 }),
+        getBlogCategories(),
+      ]);
       const allPosts = extractPosts(response);
+      const categorySource = Array.isArray(categoriesResponse) && categoriesResponse.length > 0
+        ? categoriesResponse
+        : extractCategories(response);
+
+      blogCategories = categorySource
+        .map(normalizeBlogCategory)
+        .filter((category) => category.name && category.slug)
+        .filter((category, index, list) => list.findIndex((item) => item.slug === category.slug) === index);
 
       related = allPosts
         .filter((item) => String(item.id) !== String(post.id) && String(item.slug || '') !== String(post.slug || slugOrId))
@@ -140,6 +205,7 @@ export default async function BlogPostPage({ params }) {
   } catch {
     post = null;
     related = [];
+    blogCategories = [];
   }
 
   if (!post) {
@@ -186,7 +252,8 @@ export default async function BlogPostPage({ params }) {
   const contentMarkup = buildBlogContentMarkup(rawContent);
   const hasContent = Boolean(contentMarkup.__html.trim());
   const relatedPosts = related.length > 0 ? related : FALLBACK_RELATED_POSTS;
-  const articleCategory = post?.category?.name || post?.category || post?.tag
+  const currentBlogCategory = resolveCurrentCategory(post, blogCategories);
+  const articleCategory = currentBlogCategory?.name || post?.category?.name || post?.category || post?.tag
     || (Array.isArray(post?.tags) && post.tags.length > 0
       ? (typeof post.tags[0] === 'string' ? post.tags[0] : post.tags[0]?.name)
       : '');
@@ -196,6 +263,29 @@ export default async function BlogPostPage({ params }) {
       <div className="bdt-container">
         <article>
           <header className="bdt-article-header">
+            {blogCategories.length > 0 ? (
+              <div className="bdt-header-tools">
+                <nav className="bdt-category-nav" aria-label="Danh mục bài viết">
+                  <Link
+                    href={buildBlogCategoryHref()}
+                    className={`bdt-category-chip${currentBlogCategory?.slug ? '' : ' active'}`}
+                  >
+                    Tất cả
+                  </Link>
+
+                  {blogCategories.map((category) => (
+                    <Link
+                      key={category.id || category.slug || category.name}
+                      href={buildBlogCategoryHref(category.slug)}
+                      className={`bdt-category-chip${currentBlogCategory?.slug === category.slug ? ' active' : ''}`}
+                    >
+                      {category.name}
+                    </Link>
+                  ))}
+                </nav>
+              </div>
+            ) : null}
+
             {articleCategory ? (
               <div className="bdt-category-badge">{articleCategory}</div>
             ) : null}
@@ -349,6 +439,56 @@ export default async function BlogPostPage({ params }) {
         .bdt-article-header {
           text-align: center;
           margin-bottom: 1.9rem;
+        }
+
+        .bdt-header-tools {
+          width: 100%;
+          margin-bottom: 0.95rem;
+        }
+
+        .bdt-category-nav {
+          display: flex;
+          width: 100%;
+          gap: 0.65rem;
+          overflow-x: auto;
+          padding: 0.05rem 0 0.4rem;
+          scrollbar-width: none;
+          scroll-snap-type: x proximity;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        .bdt-category-nav::-webkit-scrollbar {
+          display: none;
+        }
+
+        .bdt-category-chip {
+          flex: 0 0 auto;
+          scroll-snap-align: start;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 2.55rem;
+          padding: 0.62rem 1rem;
+          border: 1px solid rgba(27, 54, 93, 0.1);
+          border-radius: 999px;
+          background: rgba(255, 255, 255, 0.96);
+          box-shadow: 0 8px 20px rgba(27, 54, 93, 0.05);
+          color: #1B365D;
+          font-family: var(--font-sans, 'Segoe UI', sans-serif);
+          font-size: 0.84rem;
+          font-weight: 700;
+          line-height: 1;
+          text-decoration: none;
+          white-space: nowrap;
+          transition: transform 0.2s ease, border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+        }
+
+        .bdt-category-chip:hover,
+        .bdt-category-chip.active {
+          border-color: #1B365D;
+          background: #1B365D;
+          color: #ffffff;
+          transform: translateY(-1px);
         }
 
         .bdt-category-badge {
@@ -682,6 +822,14 @@ export default async function BlogPostPage({ params }) {
           border-radius: 1.45rem;
           background: linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(241, 234, 223, 0.92));
           box-shadow: 0 18px 38px rgba(27, 54, 93, 0.09);
+        }
+
+        .bdt-content :where(.bdt-inline-media, .bdt-embedded-video, .bdt-media-gallery) + :where(h2, h3, h4, p, ul, ol, blockquote, figure) {
+          margin-top: clamp(1.05rem, 2.2vw, 1.45rem);
+        }
+
+        .bdt-content :where(h2, h3, h4, p, ul, ol, blockquote, figure) + :where(.bdt-inline-media, .bdt-embedded-video, .bdt-media-gallery) {
+          margin-top: clamp(1.05rem, 2.2vw, 1.45rem);
         }
 
         .bdt-content .bdt-media-gallery-main {
@@ -1094,6 +1242,10 @@ export default async function BlogPostPage({ params }) {
             padding: 1.2rem 1rem 2.5rem;
           }
 
+          .bdt-header-tools {
+            margin-bottom: 0.78rem;
+          }
+
           .bdt-hero-img-wrap {
             margin-bottom: 2.7rem;
           }
@@ -1111,6 +1263,17 @@ export default async function BlogPostPage({ params }) {
         }
 
         @media (max-width: 600px) {
+          .bdt-category-nav {
+            gap: 0.55rem;
+            padding-bottom: 0.3rem;
+          }
+
+          .bdt-category-chip {
+            min-height: 2.45rem;
+            padding: 0.58rem 0.9rem;
+            font-size: 0.8rem;
+          }
+
           .bdt-title {
             font-size: clamp(1.42rem, 5.95vw, 2rem);
             line-height: 1.08;

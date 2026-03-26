@@ -857,6 +857,9 @@ class OrderController extends Controller
             'is_repeat_customer_phone' => false,
             'repeat_phone_previous_count' => 0,
             'normalized_phone' => null,
+            'has_duplicate_phone' => false,
+            'has_duplicate_phone_with_matching_product' => false,
+            'duplicate_phone_color' => 'default',
         ];
     }
 

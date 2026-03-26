@@ -97,15 +97,11 @@ function extractPagination(payload, fallbackPage) {
   };
 }
 
-function buildBlogHref({ category = '', search = '', page = 1 } = {}) {
+function buildBlogHref({ category = '', page = 1 } = {}) {
   const query = new URLSearchParams();
 
   if (category) {
     query.set('category', category);
-  }
-
-  if (search) {
-    query.set('search', search);
   }
 
   if (page > 1) {
@@ -142,7 +138,6 @@ function buildVisiblePages(currentPage, lastPage) {
 export default async function BlogPage({ searchParams }) {
   const resolvedSearchParams = await searchParams;
   const activeCategorySlug = String(resolvedSearchParams?.category || '').trim();
-  const searchTerm = String(resolvedSearchParams?.search || '').trim();
   const currentPage = Math.max(1, Number.parseInt(String(resolvedSearchParams?.page || '1'), 10) || 1);
 
   let posts = [];
@@ -155,7 +150,6 @@ export default async function BlogPage({ searchParams }) {
       per_page: BLOG_POSTS_PER_PAGE,
       page: currentPage,
       ...(activeCategorySlug ? { category_slug: activeCategorySlug } : {}),
-      ...(searchTerm ? { search: searchTerm } : {}),
     });
 
     posts = extractPosts(response);
@@ -169,7 +163,7 @@ export default async function BlogPage({ searchParams }) {
     apiLoaded = false;
   }
 
-  if (!apiLoaded && !activeCategorySlug && !searchTerm && currentPage === 1) {
+  if (!apiLoaded && !activeCategorySlug && currentPage === 1) {
     posts = FALLBACK_POSTS;
   }
 
@@ -183,7 +177,7 @@ export default async function BlogPage({ searchParams }) {
     .filter((category, index, list) => list.findIndex((item) => item.slug === category.slug) === index);
 
   const visiblePages = buildVisiblePages(pagination.currentPage, pagination.lastPage);
-  const hasFilters = Boolean(activeCategorySlug || searchTerm);
+  const hasFilters = Boolean(activeCategorySlug);
 
   return (
     <main className="blog-page">
@@ -191,12 +185,12 @@ export default async function BlogPage({ searchParams }) {
         <section className="blog-header">
           <div className="blog-title-wrap">
             <h1 className="blog-title">Kiến thức gốm</h1>
-            <p className="blog-subtitle">Khám phá bài viết từ hệ thống admin với tìm kiếm nhanh theo từ khóa.</p>
+            <p className="blog-subtitle">Khám phá bài viết từ hệ thống admin theo từng danh mục nội dung.</p>
           </div>
 
           <nav className="blog-category-nav" aria-label="Danh mục blog">
             <Link
-              href={buildBlogHref({ search: searchTerm })}
+              href={buildBlogHref()}
               aria-current={activeCategorySlug === '' ? 'page' : undefined}
               className={`blog-cat-btn${activeCategorySlug === '' ? ' active' : ''}`}
             >
@@ -206,7 +200,7 @@ export default async function BlogPage({ searchParams }) {
             {normalizedCategories.map((category) => (
               <Link
                 key={category.id || category.slug || category.name}
-                href={buildBlogHref({ category: category.slug, search: searchTerm })}
+                href={buildBlogHref({ category: category.slug })}
                 aria-current={activeCategorySlug === category.slug ? 'page' : undefined}
                 className={`blog-cat-btn${activeCategorySlug === category.slug ? ' active' : ''}`}
               >
@@ -214,50 +208,6 @@ export default async function BlogPage({ searchParams }) {
               </Link>
             ))}
           </nav>
-
-          <div className="blog-search-shell">
-            <form action="/blog" method="get" className="blog-search-form" role="search">
-              {activeCategorySlug ? <input type="hidden" name="category" value={activeCategorySlug} /> : null}
-              <span className="material-symbols-outlined blog-search-icon">search</span>
-              <input
-                type="search"
-                name="search"
-                defaultValue={searchTerm}
-                className="blog-search-input"
-                placeholder="Tìm theo tiêu đề, slug, nội dung bài viết..."
-                aria-label="Tìm kiếm bài viết"
-              />
-              <button type="submit" className="blog-search-submit">Tìm kiếm</button>
-              {searchTerm ? (
-                <Link
-                  href={buildBlogHref({ category: activeCategorySlug })}
-                  className="blog-search-reset"
-                >
-                  Xóa
-                </Link>
-              ) : null}
-            </form>
-
-            <div className="blog-search-meta" aria-live="polite">
-              {searchTerm ? (
-                <p>
-                  Tìm thấy <strong>{pagination.total}</strong> bài viết cho từ khóa <strong>&quot;{searchTerm}&quot;</strong>.
-                </p>
-              ) : (
-                <p>
-                  {pagination.total > 0 ? `Hiển thị ${pagination.total} bài viết.` : 'Sẵn sàng tìm kiếm bài viết.'}
-                </p>
-              )}
-
-              {activeCategorySlug ? (
-                <p className="blog-search-chip">
-                  Đang lọc theo danh mục:
-                  {' '}
-                  <strong>{normalizedCategories.find((category) => category.slug === activeCategorySlug)?.name || activeCategorySlug}</strong>
-                </p>
-              ) : null}
-            </div>
-          </div>
         </section>
 
         <section className="blog-posts" aria-label="Danh sách bài viết">
@@ -331,7 +281,6 @@ export default async function BlogPage({ searchParams }) {
             <Link
               href={buildBlogHref({
                 category: activeCategorySlug,
-                search: searchTerm,
                 page: Math.max(1, pagination.currentPage - 1),
               })}
               aria-disabled={pagination.currentPage <= 1}
@@ -349,7 +298,6 @@ export default async function BlogPage({ searchParams }) {
                     key={item}
                     href={buildBlogHref({
                       category: activeCategorySlug,
-                      search: searchTerm,
                       page: item,
                     })}
                     aria-current={item === pagination.currentPage ? 'page' : undefined}
@@ -366,7 +314,6 @@ export default async function BlogPage({ searchParams }) {
             <Link
               href={buildBlogHref({
                 category: activeCategorySlug,
-                search: searchTerm,
                 page: Math.min(pagination.lastPage, pagination.currentPage + 1),
               })}
               aria-disabled={pagination.currentPage >= pagination.lastPage}
@@ -458,97 +405,6 @@ export default async function BlogPage({ searchParams }) {
           background: var(--primary);
           color: var(--white);
           transform: translateY(-1px);
-        }
-
-        .blog-search-shell {
-          margin-top: 0.9rem;
-          padding: 0.9rem;
-          border: 1px solid rgba(27, 54, 93, 0.08);
-          border-radius: 1.25rem;
-          background: rgba(255, 255, 255, 0.88);
-          box-shadow: 0 14px 28px rgba(27, 54, 93, 0.05);
-        }
-
-        .blog-search-form {
-          display: flex;
-          align-items: center;
-          gap: 0.55rem;
-          flex-wrap: wrap;
-        }
-
-        .blog-search-icon {
-          color: #6b7d92;
-          font-size: 1.15rem;
-        }
-
-        .blog-search-input {
-          flex: 1 1 220px;
-          min-width: 0;
-          min-height: 2.85rem;
-          border: 1px solid rgba(27, 54, 93, 0.12);
-          border-radius: 0.95rem;
-          padding: 0.8rem 0.95rem;
-          background: #fff;
-          color: var(--text-main);
-          font-family: var(--font-sans);
-          font-size: 0.95rem;
-        }
-
-        .blog-search-input:focus {
-          outline: none;
-          border-color: rgba(197, 160, 101, 0.9);
-          box-shadow: 0 0 0 3px rgba(197, 160, 101, 0.16);
-        }
-
-        .blog-search-submit,
-        .blog-search-reset {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          min-height: 2.85rem;
-          padding: 0.78rem 1.05rem;
-          border-radius: 0.95rem;
-          font-family: var(--font-sans);
-          font-size: 0.84rem;
-          font-weight: 700;
-          cursor: pointer;
-          transition: transform 0.2s ease, border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease;
-        }
-
-        .blog-search-submit {
-          border: 1px solid var(--primary);
-          background: var(--primary);
-          color: var(--white);
-        }
-
-        .blog-search-submit:hover,
-        .blog-search-reset:hover {
-          transform: translateY(-1px);
-        }
-
-        .blog-search-reset {
-          border: 1px solid rgba(27, 54, 93, 0.14);
-          background: rgba(27, 54, 93, 0.04);
-          color: var(--primary);
-        }
-
-        .blog-search-meta {
-          margin-top: 0.8rem;
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.4rem 1rem;
-          color: #5f6f83;
-          font-family: var(--font-sans);
-          font-size: 0.84rem;
-          line-height: 1.5;
-        }
-
-        .blog-search-meta p {
-          margin: 0;
-        }
-
-        .blog-search-chip strong {
-          color: var(--primary);
         }
 
         .blog-posts {
@@ -803,22 +659,9 @@ export default async function BlogPage({ searchParams }) {
           color: #6b7d92;
         }
 
-        @media (max-width: 520px) {
-          .blog-search-shell {
-            padding: 0.8rem;
-          }
-
-          .blog-search-form {
-            align-items: stretch;
-          }
-
-          .blog-search-icon {
+        @media (max-width: 639px) {
+          .blog-title-wrap {
             display: none;
-          }
-
-          .blog-search-submit,
-          .blog-search-reset {
-            flex: 1 1 calc(50% - 0.3rem);
           }
         }
 

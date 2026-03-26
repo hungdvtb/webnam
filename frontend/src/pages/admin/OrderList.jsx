@@ -341,6 +341,18 @@ const playShippingNotificationSound = (settings) => {
     beep();
 };
 
+const getOrderCustomerPhoneTextClass = (order) => {
+    if (order?.has_duplicate_phone_with_matching_product || order?.duplicate_phone_color === 'blue') {
+        return 'text-blue-700';
+    }
+
+    if (order?.has_duplicate_phone || order?.duplicate_phone_color === 'red') {
+        return 'text-red-600';
+    }
+
+    return 'text-[#111]';
+};
+
 const ShippingAlertsPopover = ({ alerts, unreadCount, onClose, onOpenOrder, onMarkAllSeen }) => (
     <div className="absolute top-full left-0 mt-2 w-[360px] rounded-sm border border-primary/15 bg-white shadow-2xl z-[70] overflow-hidden">
         <div className="px-4 py-3 border-b border-primary/10 flex items-center justify-between gap-3">
@@ -2045,7 +2057,7 @@ const OrderList = () => {
                                                         </button>
                                                     </div>
                                                     <div className="flex items-center justify-between group/phone_c">
-                                                        <span className="text-[11px] text-orange-600 font-black truncate">{o.customer_phone}</span>
+                                                        <span className={`text-[11px] font-black truncate ${getOrderCustomerPhoneTextClass(o)}`}>{o.customer_phone}</span>
                                                         <button onClick={(e) => { e.stopPropagation(); handleCopy(o.customer_phone, e); }} className={`opacity-0 group-hover/phone_c:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === o.customer_phone ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
                                                             <span className="material-symbols-outlined text-[12px]">{copiedText === o.customer_phone ? 'check' : 'content_copy'}</span>
                                                         </button>

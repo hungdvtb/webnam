@@ -14,7 +14,126 @@ class RepeatCustomerPhoneService
 
     public function buildOrderMeta(Collection $orders, int $accountId): array
     {
-        return $this->buildMeta($orders, $accountId, 'order', 'customer_phone', fn ($order) => $order->created_at);
+        if ($accountId <= 0 || $orders->isEmpty()) {
+            return [];
+        }
+
+        $targets = $orders
+            ->filter(fn ($order) => !empty($order?->id))
+            ->map(function ($order) {
+                $normalizedPhone = $this->normalizePhone((string) ($order->customer_phone ?? ''));
+
+                return [
+                    'key' => $this->recordKey('order', (int) $order->id),
+                    'order_id' => (int) $order->id,
+                    'normalized_phone' => $normalizedPhone,
+                    'is_trashed' => method_exists($order, 'trashed') ? $order->trashed() : !empty($order->deleted_at),
+                ];
+            })
+            ->values();
+
+        if ($targets->isEmpty()) {
+            return [];
+        }
+
+        $defaultMeta = $targets
+            ->mapWithKeys(function (array $target) {
+                return [
+                    $target['key'] => [
+                        'is_repeat_customer_phone' => false,
+                        'repeat_phone_previous_count' => 0,
+                        'normalized_phone' => $target['normalized_phone'] ?: null,
+                        'has_duplicate_phone' => false,
+                        'has_duplicate_phone_with_matching_product' => false,
+                        'duplicate_phone_color' => 'default',
+                    ],
+                ];
+            })
+            ->all();
+
+        $activePhones = $targets
+            ->filter(fn (array $target) => !$target['is_trashed'] && $target['normalized_phone'] !== '')
+            ->pluck('normalized_phone')
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($activePhones)) {
+            return $defaultMeta;
+        }
+
+        $activeOrderRows = $this->loadActiveOrderDuplicateRows($accountId, $activePhones);
+        if ($activeOrderRows->isEmpty()) {
+            return $defaultMeta;
+        }
+
+        $orderIdsByPhone = [];
+        $productKeysByPhoneAndOrder = [];
+
+        foreach ($activeOrderRows as $row) {
+            $phone = $row['normalized_phone'];
+            $orderId = (int) $row['order_id'];
+            $productKey = $row['product_key'];
+
+            if ($phone === '') {
+                continue;
+            }
+
+            $orderIdsByPhone[$phone][$orderId] = true;
+
+            if ($productKey !== '') {
+                $productKeysByPhoneAndOrder[$phone][$orderId][$productKey] = true;
+            }
+        }
+
+        $orderSignatureByPhoneAndOrder = [];
+        $orderIdsByPhoneAndSignature = [];
+
+        foreach ($productKeysByPhoneAndOrder as $phone => $ordersByProductKey) {
+            foreach ($ordersByProductKey as $orderId => $productKeyMap) {
+                $signature = $this->buildOrderProductSignature(array_keys($productKeyMap));
+
+                if ($signature === '') {
+                    continue;
+                }
+
+                $orderSignatureByPhoneAndOrder[$phone][$orderId] = $signature;
+                $orderIdsByPhoneAndSignature[$phone][$signature][$orderId] = true;
+            }
+        }
+
+        return $targets
+            ->mapWithKeys(function (array $target) use ($defaultMeta, $orderIdsByPhone, $orderSignatureByPhoneAndOrder, $orderIdsByPhoneAndSignature) {
+                $meta = $defaultMeta[$target['key']];
+                $phone = $target['normalized_phone'];
+
+                if ($target['is_trashed'] || $phone === '' || empty($orderIdsByPhone[$phone])) {
+                    return [$target['key'] => $meta];
+                }
+
+                $matchingOrderIds = array_keys($orderIdsByPhone[$phone]);
+                $otherOrderIds = array_values(array_diff($matchingOrderIds, [$target['order_id']]));
+                $hasDuplicatePhone = !empty($otherOrderIds);
+                $targetSignature = $orderSignatureByPhoneAndOrder[$phone][$target['order_id']] ?? '';
+                $sameSignatureOrderIds = array_keys($orderIdsByPhoneAndSignature[$phone][$targetSignature] ?? []);
+                $hasMatchingProduct = $hasDuplicatePhone
+                    && $targetSignature !== ''
+                    && count($sameSignatureOrderIds) > 1
+                    && count($sameSignatureOrderIds) === count($matchingOrderIds);
+
+                return [
+                    $target['key'] => array_merge($meta, [
+                        'is_repeat_customer_phone' => $hasDuplicatePhone,
+                        'repeat_phone_previous_count' => count($otherOrderIds),
+                        'has_duplicate_phone' => $hasDuplicatePhone,
+                        'has_duplicate_phone_with_matching_product' => $hasMatchingProduct,
+                        'duplicate_phone_color' => $hasMatchingProduct
+                            ? 'blue'
+                            : ($hasDuplicatePhone ? 'red' : 'default'),
+                    ]),
+                ];
+            })
+            ->all();
     }
 
     protected function buildMeta(Collection $records, int $accountId, string $recordType, string $phoneField, callable $dateResolver): array
@@ -138,6 +257,42 @@ class RepeatCustomerPhoneService
             });
     }
 
+    protected function loadActiveOrderDuplicateRows(int $accountId, array $normalizedPhones): Collection
+    {
+        if ($accountId <= 0 || empty($normalizedPhones)) {
+            return collect();
+        }
+
+        $orderPhoneSql = $this->normalizedPhoneSql('orders.customer_phone');
+
+        return DB::table('orders')
+            ->leftJoin('order_items', 'order_items.order_id', '=', 'orders.id')
+            ->selectRaw('orders.id as order_id')
+            ->selectRaw("{$orderPhoneSql} as normalized_phone")
+            ->selectRaw('order_items.product_id as product_id')
+            ->selectRaw('order_items.product_sku_snapshot as product_sku_snapshot')
+            ->where('orders.account_id', $accountId)
+            ->whereNull('orders.deleted_at')
+            ->where(function ($query) use ($orderPhoneSql, $normalizedPhones) {
+                foreach ($normalizedPhones as $phone) {
+                    $query->orWhereRaw("{$orderPhoneSql} = ?", [$phone]);
+                }
+            })
+            ->get()
+            ->map(function ($row) {
+                return [
+                    'order_id' => (int) $row->order_id,
+                    'normalized_phone' => (string) ($row->normalized_phone ?? ''),
+                    'product_key' => $this->buildOrderProductKey(
+                        (int) ($row->product_id ?? 0),
+                        (string) ($row->product_sku_snapshot ?? '')
+                    ),
+                ];
+            })
+            ->filter(fn (array $row) => $row['normalized_phone'] !== '')
+            ->values();
+    }
+
     protected function recordKey(string $recordType, int $id): string
     {
         return "{$recordType}:{$id}";
@@ -155,6 +310,33 @@ class RepeatCustomerPhoneService
         }
 
         return $digits;
+    }
+
+    protected function normalizeSku(string $value): string
+    {
+        return strtoupper(trim($value));
+    }
+
+    protected function buildOrderProductKey(int $productId, string $skuSnapshot): string
+    {
+        $normalizedSku = $this->normalizeSku($skuSnapshot);
+        if ($normalizedSku !== '') {
+            return "sku:{$normalizedSku}";
+        }
+
+        if ($productId > 0) {
+            return "product:{$productId}";
+        }
+
+        return '';
+    }
+
+    protected function buildOrderProductSignature(array $productKeys): string
+    {
+        $normalizedKeys = array_values(array_unique(array_filter($productKeys, fn ($key) => is_string($key) && $key !== '')));
+        sort($normalizedKeys, SORT_STRING);
+
+        return implode('|', $normalizedKeys);
     }
 
     protected function normalizedPhoneSql(string $column): string

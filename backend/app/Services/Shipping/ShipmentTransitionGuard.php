@@ -53,6 +53,11 @@ class ShipmentTransitionGuard
             return ['allowed' => true, 'reason' => null, 'requires_override' => false];
         }
 
+        // Manual admin correction can override lifecycle ordering and terminal locks.
+        if ($isAdminOverride) {
+            return ['allowed' => true, 'reason' => 'Admin override chỉnh tay trạng thái vận đơn', 'requires_override' => true];
+        }
+
         // delivery_failed -> out_for_delivery retry is always allowed
         if ($fromStatus === 'delivery_failed' && in_array($toStatus, ['out_for_delivery', 'returning', 'returned', 'canceled'])) {
             return ['allowed' => true, 'reason' => null, 'requires_override' => false];

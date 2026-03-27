@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { orderApi, orderStatusApi } from '../../services/api';
+import { getOrderTypeMeta, isSpecialOrderType } from '../../config/orderTypes';
+
+const moneyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
+const formatMoney = (value) => `${moneyFormatter.format(Number(value || 0))}đ`;
 
 const OrderDetail = () => {
     const { id } = useParams();
@@ -59,6 +63,10 @@ const OrderDetail = () => {
         return {};
     };
 
+    const orderTypeMeta = getOrderTypeMeta(order?.order_type);
+    const specialOrderType = isSpecialOrderType(order?.order_type);
+    const supplementItems = order?.supplement_items || order?.supplementItems || [];
+
     if (loading) return <div className="p-8 text-center italic text-primary">Đang tải chi tiết đơn hàng...</div>;
     if (!order) return <div className="p-8 text-center text-brick">Không tìm thấy đơn hàng.</div>;
 
@@ -70,6 +78,15 @@ const OrderDetail = () => {
                         <button onClick={() => navigate('/admin/orders')} className="text-primary/60 hover:text-primary transition-colors">
                             <span className="material-symbols-outlined">arrow_back</span>
                         </button>
+                        <div>
+                            <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/40">Chi tiết đơn hàng</div>
+                            <div className="mt-1 flex items-center gap-2 flex-wrap">
+                                <span className="text-[18px] font-black text-primary">{order.order_number}</span>
+                                <span className="inline-flex items-center rounded-sm border border-primary/15 bg-primary/[0.03] px-2 py-1 text-[11px] font-black text-primary/70">
+                                    {orderTypeMeta.label}
+                                </span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -161,6 +178,50 @@ const OrderDetail = () => {
                         </table>
                     </div>
 
+                    {specialOrderType && (
+                        <div className="bg-white border border-primary/10 shadow-xl overflow-hidden rounded-sm">
+                            <div className="p-4 border-b border-primary/10 bg-amber-50">
+                                <h3 className="font-display font-bold text-lg text-primary">{orderTypeMeta.sectionTitle}</h3>
+                                <p className="mt-1 text-[12px] text-primary/55">{orderTypeMeta.sectionDescription}</p>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left border-collapse">
+                                    <thead className="bg-primary/5 font-ui text-[10px] font-bold text-primary/60 uppercase tracking-widest border-b border-primary/10">
+                                        <tr>
+                                            <th className="p-4">Sản phẩm</th>
+                                            <th className="p-4 text-center">Số lượng</th>
+                                            <th className="p-4 text-right">Đơn giá</th>
+                                            <th className="p-4 text-right">Giá vốn</th>
+                                            <th className="p-4">Ghi chú</th>
+                                            <th className="p-4 text-right">Thành tiền</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="font-body">
+                                        {supplementItems.length > 0 ? supplementItems.map((item) => (
+                                            <tr key={item.id || `${item.product_id}-${item.notes || ''}`} className="border-b border-primary/5">
+                                                <td className="p-4">
+                                                    <div className="font-bold text-primary">{item.product?.name || item.product_name_snapshot || item.name || `Sản phẩm #${item.product_id}`}</div>
+                                                    <div className="mt-1 text-[10px] font-black uppercase tracking-widest text-orange-600/70">
+                                                        SKU: {item.product?.sku || item.product_sku_snapshot || item.sku || 'N/A'}
+                                                    </div>
+                                                </td>
+                                                <td className="p-4 text-center font-bold text-sm">x{item.quantity}</td>
+                                                <td className="p-4 text-right text-sm">{formatMoney(item.price)}</td>
+                                                <td className="p-4 text-right text-sm">{formatMoney(item.cost_price)}</td>
+                                                <td className="p-4 text-sm text-primary/70">{item.notes || '-'}</td>
+                                                <td className="p-4 text-right font-bold text-brick">{formatMoney(item.total_price ?? (Number(item.price || 0) * Number(item.quantity || 0)))}</td>
+                                            </tr>
+                                        )) : (
+                                            <tr>
+                                                <td colSpan="6" className="p-6 text-center text-sm text-primary/40 italic">Chưa có sản phẩm khai báo bổ sung.</td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Custom Attributes (EAV) */}
                     {order.attribute_values?.length > 0 && (
                         <div className="bg-white border border-primary/10 shadow-xl overflow-hidden rounded-sm">
@@ -233,11 +294,48 @@ const OrderDetail = () => {
                                 <span className="font-bold text-primary">{order.user?.name || "Khách vãng lai"}</span>
                             </div>
                             <div className="flex justify-between border-b border-primary/5 pb-2">
+                                <span className="text-primary/40">Loại đơn:</span>
+                                <span className="font-bold text-primary">{orderTypeMeta.label}</span>
+                            </div>
+                            {specialOrderType && (
+                                <div className="flex justify-between border-b border-primary/5 pb-2">
+                                    <span className="text-primary/40">{orderTypeMeta.settlementLabel}:</span>
+                                    <span className={`font-bold ${Number(order.settlement_delta || 0) >= 0 ? 'text-emerald-700' : 'text-brick'}`}>
+                                        {formatMoney(order.settlement_delta)}
+                                    </span>
+                                </div>
+                            )}
+                            <div className="flex justify-between border-b border-primary/5 pb-2">
                                 <span className="text-primary/40">Lần cập nhật cuối:</span>
                                 <span className="font-bold text-primary">{new Date(order.updated_at).toLocaleDateString('vi-VN')}</span>
                             </div>
                         </div>
                     </div>
+                    {specialOrderType && (
+                        <div className="bg-amber-50 border border-amber-200 p-6 shadow-xl">
+                            <h3 className="font-ui font-black text-[10px] uppercase tracking-[0.2em] text-amber-700/60 mb-4 text-center">Chỉ số báo cáo</h3>
+                            <div className="space-y-3 text-xs">
+                                <div className="flex justify-between border-b border-amber-200/70 pb-2">
+                                    <span className="text-amber-900/60">Doanh thu báo cáo:</span>
+                                    <span className="font-bold text-amber-900">{formatMoney(order.report_revenue_total)}</span>
+                                </div>
+                                <div className="flex justify-between border-b border-amber-200/70 pb-2">
+                                    <span className="text-amber-900/60">Giá vốn báo cáo:</span>
+                                    <span className="font-bold text-amber-900">{formatMoney(order.report_cost_total)}</span>
+                                </div>
+                                <div className="flex justify-between border-b border-amber-200/70 pb-2">
+                                    <span className="text-amber-900/60">Giá trị hàng khai báo:</span>
+                                    <span className="font-bold text-amber-900">{formatMoney(order.supplement_items_total_price)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-amber-900/60">Lãi / lỗ báo cáo:</span>
+                                    <span className={`font-bold ${Number(order.report_profit_total || 0) >= 0 ? 'text-emerald-700' : 'text-brick'}`}>
+                                        {formatMoney(order.report_profit_total)}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

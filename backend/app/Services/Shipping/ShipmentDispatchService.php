@@ -167,7 +167,7 @@ class ShipmentDispatchService
     {
         $carrierReceived = $this->extractCarrierReceivedAmount($shipment);
         if ($carrierReceived === null) {
-            throw new RuntimeException('Van don chua co du lieu carrier de doi soat.');
+            throw new RuntimeException('Vận đơn chưa có dữ liệu hãng vận chuyển để đối soát.');
         }
 
         $expected = (float) $shipment->actual_received_amount;
@@ -220,7 +220,7 @@ class ShipmentDispatchService
                 'carrier_code' => $integration->carrier_code,
                 'response' => $response,
             ]);
-            throw new RuntimeException('ViettelPost khong tra ve ma van don.');
+            throw new RuntimeException('ViettelPost không trả về mã vận đơn.');
         }
 
         $shipment = Shipment::create([
@@ -281,7 +281,7 @@ class ShipmentDispatchService
             'to_status' => 'waiting_pickup',
             'changed_by' => $userId,
             'change_source' => 'api',
-            'reason' => 'Gui don sang don vi van chuyen',
+            'reason' => 'Gửi đơn sang đơn vị vận chuyển',
         ]);
 
         $order->update([
@@ -310,7 +310,7 @@ class ShipmentDispatchService
             return $this->viettelPostClient->createOrder($integration, $payload);
         }
 
-        throw new RuntimeException("Hang '{$integration->carrier_code}' chua ho tro gui API trong phien ban nay.");
+        throw new RuntimeException("Hãng '{$integration->carrier_code}' chưa hỗ trợ gửi API trong phiên bản này.");
     }
 
     private function prepareDispatchData(Order $order, ShippingIntegration $integration, ?Warehouse $warehouse = null): array
@@ -340,7 +340,7 @@ class ShipmentDispatchService
             $productWeight = (float) ($item->product?->weight ?? 0);
 
             return [
-                'PRODUCT_NAME' => $item->product_name_snapshot ?: 'Don hang website',
+                'PRODUCT_NAME' => $item->product_name_snapshot ?: 'Đơn hàng website',
                 'PRODUCT_QUANTITY' => max(1, (int) $item->quantity),
                 'PRODUCT_PRICE' => (int) round(max(0, $unitPrice)),
                 'PRODUCT_WEIGHT' => max(1, (int) round(max(1, $productWeight))),
@@ -351,7 +351,7 @@ class ShipmentDispatchService
             'ORDER_NUMBER' => $order->order_number,
             'ORDER_REFERENCE' => $order->order_number,
             'ORDER_PAYMENT' => 3,
-            'ORDER_NOTE' => $order->notes ?: 'Don tu he thong quan ly ban hang',
+            'ORDER_NOTE' => $order->notes ?: 'Đơn từ hệ thống quản lý bán hàng',
             'SENDER_FULLNAME' => $senderProfile['name'],
             'SENDER_PHONE' => $senderProfile['phone'],
             'SENDER_ADDRESS' => $senderProfile['address'],
@@ -364,8 +364,8 @@ class ShipmentDispatchService
             'RECEIVER_PROVINCE' => $receiver['province_id'],
             'RECEIVER_DISTRICT' => $receiver['district_id'],
             'RECEIVER_WARD' => $receiver['ward_id'],
-            'PRODUCT_NAME' => $productName ?: ($firstItem?->product_name_snapshot ?: 'Don hang website'),
-            'PRODUCT_DESCRIPTION' => $productName ?: ($firstItem?->product_name_snapshot ?: 'Don hang website'),
+            'PRODUCT_NAME' => $productName ?: ($firstItem?->product_name_snapshot ?: 'Đơn hàng website'),
+            'PRODUCT_DESCRIPTION' => $productName ?: ($firstItem?->product_name_snapshot ?: 'Đơn hàng website'),
             'PRODUCT_QUANTITY' => max(1, (int) $items->sum('quantity')),
             'PRODUCT_PRICE' => (int) round((float) $order->total_price),
             'PRODUCT_WEIGHT' => $totalWeight,
@@ -402,31 +402,31 @@ class ShipmentDispatchService
         $senderProfile = $this->resolveSenderProfile($integration, $warehouse);
 
         if (!$integration->is_enabled) {
-            throw new RuntimeException('Ket noi van chuyen chua duoc bat.');
+            throw new RuntimeException('Kết nối vận chuyển chưa được bật.');
         }
 
         if ($order->hasActiveShipment()) {
-            throw new RuntimeException('Don da co van don dang hoat dong.');
+            throw new RuntimeException('Đơn đã có vận đơn đang hoạt động.');
         }
 
         if (!$order->customer_name || !$order->customer_phone || !$order->shipping_address) {
-            throw new RuntimeException('Thieu ho ten, so dien thoai hoac dia chi giao hang.');
+            throw new RuntimeException('Thiếu họ tên, số điện thoại hoặc địa chỉ giao hàng.');
         }
 
         if (!$order->province || !$order->ward) {
-            throw new RuntimeException('Thieu tinh/thanh hoac phuong/xa cua don hang.');
+            throw new RuntimeException('Thiếu tỉnh/thành hoặc phường/xã của đơn hàng.');
         }
 
         if (!$order->items()->exists()) {
-            throw new RuntimeException('Don hang khong co san pham de gui.');
+            throw new RuntimeException('Đơn hàng không có sản phẩm để gửi.');
         }
 
         if (!$senderProfile['name'] || !$senderProfile['phone'] || !$senderProfile['address']) {
-            throw new RuntimeException('Thieu thong tin nguoi gui mac dinh trong cau hinh van chuyen.');
+            throw new RuntimeException('Thiếu thông tin người gửi mặc định trong cấu hình vận chuyển.');
         }
 
         if (!$senderProfile['province_name'] || !$senderProfile['ward_name']) {
-            throw new RuntimeException('Thieu tinh/thanh hoac phuong/xa kho gui trong cau hinh van chuyen.');
+            throw new RuntimeException('Thiếu tỉnh/thành hoặc phường/xã của kho gửi trong cấu hình vận chuyển.');
         }
     }
 
@@ -438,7 +438,7 @@ class ShipmentDispatchService
             ->first();
 
         if (!$integration) {
-            throw new RuntimeException('Don vi van chuyen chua duoc cau hinh cho tai khoan nay.');
+            throw new RuntimeException('Đơn vị vận chuyển chưa được cấu hình cho tài khoản này.');
         }
 
         return $integration;
@@ -456,11 +456,11 @@ class ShipmentDispatchService
             ->find($targetWarehouseId);
 
         if (!$warehouse) {
-            throw new RuntimeException('Khong tim thay kho gui duoc chon cho tai khoan hien tai.');
+            throw new RuntimeException('Không tìm thấy kho gửi đã chọn cho tài khoản hiện tại.');
         }
 
         if (!$warehouse->is_active) {
-            throw new RuntimeException('Kho gui duoc chon hien dang tam ngung hoat dong.');
+            throw new RuntimeException('Kho gửi đã chọn hiện đang tạm ngừng hoạt động.');
         }
 
         return $warehouse;
@@ -489,7 +489,7 @@ class ShipmentDispatchService
         }
 
         if ($integration->carrier_code !== 'viettel_post') {
-            throw new RuntimeException('Chua cau hinh ma dich vu mac dinh cho don vi van chuyen.');
+            throw new RuntimeException('Chưa cấu hình mã dịch vụ mặc định cho đơn vị vận chuyển.');
         }
 
         $pricePayload = $payload;
@@ -510,7 +510,7 @@ class ShipmentDispatchService
                 'response' => $priceResponse,
                 'candidates' => $candidates,
             ]);
-            throw new RuntimeException('Khong tu dong lay duoc ma dich vu ViettelPost. Vui long cau hinh ma dich vu mac dinh.');
+            throw new RuntimeException('Không tự động lấy được mã dịch vụ ViettelPost. Vui lòng cấu hình mã dịch vụ mặc định.');
         }
 
         return [

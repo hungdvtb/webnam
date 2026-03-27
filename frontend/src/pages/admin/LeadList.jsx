@@ -3575,7 +3575,7 @@ const LeadList = () => {
                                                 : 'cursor-not-allowed opacity-40 hover:border-primary/10 hover:text-primary/70'
                                         }`}
                                     >
-                                        <span className="material-symbols-outlined text-[18px]">delete</span>
+                                        <span className="material-symbols-outlined text-[18px]">delete_sweep</span>
                                     </button>
 
                                     <button
@@ -3585,7 +3585,7 @@ const LeadList = () => {
                                         aria-label="Thùng rác"
                                         className={iconButtonClassName}
                                     >
-                                        <span className="material-symbols-outlined text-[18px]">inventory_2</span>
+                                        <span className="material-symbols-outlined text-[18px]">delete</span>
                                     </button>
                                 </>
                             ) : (

@@ -498,7 +498,16 @@ class FinanceReadService
             ->where('account_id', $accountId)
             ->whereBetween('created_at', [$from, $to])
             ->orderBy('created_at')
-            ->get(['id', 'total_price', 'cost_total', 'status', 'created_at']);
+            ->get([
+                'id',
+                'order_type',
+                'total_price',
+                'cost_total',
+                'status',
+                'created_at',
+                'report_revenue_total',
+                'report_cost_total',
+            ]);
 
         $ordersByDate = $orders
             ->filter(fn (Order $order) => !in_array(mb_strtolower((string) $order->status), ['cancelled', 'canceled'], true))
@@ -524,9 +533,21 @@ class FinanceReadService
                 'effective_date' => null,
             ]);
 
-            $revenue = round((float) $dayOrders->sum('total_price'), 2);
+            $revenue = round((float) $dayOrders->sum(
+                fn (Order $order) => (float) (
+                    $order->getNormalizedOrderType() === Order::TYPE_STANDARD
+                        ? ($order->total_price ?? 0)
+                        : ($order->report_revenue_total ?? 0)
+                )
+            ), 2);
             $orderCount = (int) $dayOrders->count();
-            $costGoods = round((float) $dayOrders->sum('cost_total'), 2);
+            $costGoods = round((float) $dayOrders->sum(
+                fn (Order $order) => (float) (
+                    $order->getNormalizedOrderType() === Order::TYPE_STANDARD
+                        ? ($order->cost_total ?? 0)
+                        : ($order->report_cost_total ?? 0)
+                )
+            ), 2);
             $returnFactor = max(0, 1 - ((float) ($config['return_rate'] ?? 0) / 100));
             $revenueActual = round($revenue * $returnFactor, 2);
             $costGoodsActual = round($costGoods * $returnFactor, 2);

@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { authApi } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 const Login = () => {
     const [credentials, setCredentials] = useState({ email: '', password: '' });
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
+    const { setUser } = useAuth();
 
     const resolveLoginError = (err) => {
         if (!err?.response) {
@@ -32,6 +34,7 @@ const Login = () => {
             const response = await authApi.login(credentials);
             localStorage.setItem('token', response.data.token);
             localStorage.setItem('user', JSON.stringify(response.data.user));
+            setUser(response.data.user);
             
             if (response.data.user.is_admin) {
                 navigate('/admin');

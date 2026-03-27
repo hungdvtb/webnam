@@ -1056,7 +1056,7 @@ const ProductList = () => {
                             className={`p-1.5 border rounded-sm w-9 h-9 transition-all relative ${isTrashView ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white text-primary/60 border border-primary/20 hover:text-primary hover:border-primary'}`}
                             title={isTrashView ? "Quay lại sản phẩm hiện có" : "Xem sản phẩm đã xóa"}
                         >
-                            <span className="material-symbols-outlined text-[18px]">{isTrashView ? 'arrow_back' : 'inventory_2'}</span>
+                            <span className="material-symbols-outlined text-[18px]">{isTrashView ? 'arrow_back' : 'delete'}</span>
                         </button>
                     </div>
 

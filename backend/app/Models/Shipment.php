@@ -102,6 +102,11 @@ class Shipment extends Model
         return $this->hasMany(ShipmentNote::class)->orderBy('created_at', 'desc');
     }
 
+    public function latestNote()
+    {
+        return $this->hasOne(ShipmentNote::class)->latestOfMany();
+    }
+
     public function statusLogs()
     {
         return $this->hasMany(ShipmentStatusLog::class)->orderBy('created_at', 'desc');

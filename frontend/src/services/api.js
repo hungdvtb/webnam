@@ -104,8 +104,8 @@ export const productApi = {
     getAll: (params, signal) => api.get('/products', { params, signal }),
     getOne: (id) => api.get(`/products/${id}`),
     refreshOrderItems: (data) => api.post('/products/refresh-order-items', data),
-    store: (data) => api.post('/products', data),
-    update: (id, data) => api.post(`/products/${id}`, data), // POST for multipart support
+    store: (data) => api.post('/products', data, multipartConfig(data)),
+    update: (id, data) => api.post(`/products/${id}`, data, multipartConfig(data)), // POST for multipart support
     destroy: (id) => api.delete(`/products/${id}`),
     duplicate: (id) => api.post(`/products/${id}/duplicate`),
     restore: (id) => api.post(`/products/${id}/restore`),
@@ -222,7 +222,12 @@ export const orderApi = {
         invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
         return response;
     }),
-    updateStatus: (id, status) => api.put(`/orders/${id}/status`, { status }),
+    updateStatus: (id, payloadOrStatus) => {
+        const payload = (payloadOrStatus && typeof payloadOrStatus === 'object')
+            ? payloadOrStatus
+            : { status: payloadOrStatus };
+        return api.put(`/orders/${id}/status`, payload);
+    },
     duplicate: (id, data = {}) => api.post(`/orders/${id}/duplicate`, data),
     convert: (id, data) => api.post(`/orders/${id}/convert`, data).then((response) => {
         invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
@@ -348,13 +353,21 @@ export const inventoryApi = {
     deleteImport: (id) => api.delete(`/inventory/imports/${id}`),
     restoreImport: (id) => api.post(`/inventory/imports/${id}/restore`),
     bulkDeleteImports: (ids) => api.post('/inventory/imports/bulk-delete', { ids }),
+    bulkRestoreImports: (ids) => api.post('/inventory/imports/bulk-restore', { ids }),
+    forceDeleteImport: (id) => api.delete(`/inventory/imports/${id}/force`),
+    bulkForceDeleteImports: (ids) => api.post('/inventory/imports/bulk-force-delete', { ids }),
     getImport: (id) => api.get(`/inventory/imports/${id}`),
     getDocuments: (type, params) => api.get(`/inventory/documents/${type}`, { params }),
     createDocument: (type, data) => api.post(`/inventory/documents/${type}`, data),
     updateDocument: (type, id, data) => api.put(`/inventory/documents/${type}/${id}`, data),
     deleteDocument: (type, id) => api.delete(`/inventory/documents/${type}/${id}`),
     bulkDeleteDocuments: (type, ids) => api.post(`/inventory/documents/${type}/bulk-delete`, { ids }),
+    restoreDocument: (type, id) => api.post(`/inventory/documents/${type}/${id}/restore`),
+    forceDeleteDocument: (type, id) => api.delete(`/inventory/documents/${type}/${id}/force`),
+    bulkRestoreDocuments: (type, ids) => api.post(`/inventory/documents/${type}/bulk-restore`, { ids }),
+    bulkForceDeleteDocuments: (type, ids) => api.post(`/inventory/documents/${type}/bulk-force-delete`, { ids }),
     getDocument: (type, id) => api.get(`/inventory/documents/${type}/${id}`),
+    getTrashSlips: (params) => api.get('/inventory/trash/slips', { params }),
     getBatches: (params) => api.get('/inventory/batches', { params }),
     getExports: (params) => api.get('/inventory/exports', { params }),
     getExport: (id) => api.get(`/inventory/exports/${id}`),
@@ -532,7 +545,7 @@ export const userApi = {
 };
 
 export const mediaApi = {
-    upload: (formData) => api.post('/media/upload', formData, multipartConfig(formData)),
+    upload: (formData) => api.post('/media/upload', formData),
 };
 
 export const quoteTemplateApi = {

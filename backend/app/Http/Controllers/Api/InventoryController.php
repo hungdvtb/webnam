@@ -1368,6 +1368,14 @@ class InventoryController extends Controller
         );
     }
 
+    public function forceDeleteImport(int $id)
+    {
+        $import = InventoryImport::withTrashed()->findOrFail($id);
+        $this->inventoryService->forceDeleteImport($import);
+
+        return response()->json(['message' => 'Da xoa vinh vien phieu nhap.']);
+    }
+
     public function bulkDestroyImports(Request $request)
     {
         $validated = $request->validate([
@@ -1392,6 +1400,56 @@ class InventoryController extends Controller
         ]);
     }
 
+    public function bulkRestoreImports(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer|distinct',
+        ]);
+
+        $ids = collect($validated['ids'])->map(fn ($id) => (int) $id)->unique()->values();
+        $imports = InventoryImport::withTrashed()->whereIn('id', $ids)->get();
+
+        if ($imports->count() !== $ids->count()) {
+            return response()->json(['message' => 'Co phieu nhap khong ton tai hoac khong con kha dung.'], 422);
+        }
+
+        foreach ($imports as $import) {
+            if ($import->trashed()) {
+                $this->inventoryService->restoreImport($import);
+            }
+        }
+
+        return response()->json([
+            'message' => 'Da khoi phuc cac phieu nhap da chon.',
+            'restored_count' => $imports->count(),
+        ]);
+    }
+
+    public function bulkForceDeleteImports(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer|distinct',
+        ]);
+
+        $ids = collect($validated['ids'])->map(fn ($id) => (int) $id)->unique()->values();
+        $imports = InventoryImport::withTrashed()->whereIn('id', $ids)->get();
+
+        if ($imports->count() !== $ids->count()) {
+            return response()->json(['message' => 'Co phieu nhap khong ton tai hoac khong con kha dung.'], 422);
+        }
+
+        foreach ($imports as $import) {
+            $this->inventoryService->forceDeleteImport($import);
+        }
+
+        return response()->json([
+            'message' => 'Da xoa vinh vien cac phieu nhap da chon.',
+            'deleted_count' => $imports->count(),
+        ]);
+    }
+
     public function documents(Request $request, string $type)
     {
         $type = $this->normalizeDocumentType($type);
@@ -1399,6 +1457,10 @@ class InventoryController extends Controller
             ->where('type', $type)
             ->with(['supplier:id,name', 'creator:id,name'])
             ->withCount('items');
+
+        if ($request->boolean('trash')) {
+            $query->onlyTrashed();
+        }
 
         if ($request->filled('search')) {
             $search = trim((string) $request->input('search'));
@@ -1470,6 +1532,11 @@ class InventoryController extends Controller
             $rules['items.*.unit_cost'] = 'nullable|numeric|min:0';
         }
 
+        if ($type === 'export') {
+            $rules['items.*.unit_price'] = 'nullable|numeric|min:0';
+            $rules['items.*.allow_oversold'] = 'nullable|boolean';
+        }
+
         if ($type === 'adjustment') {
             $rules['items.*.stock_bucket'] = ['required', Rule::in(['sellable', 'damaged'])];
             $rules['items.*.direction'] = ['required', Rule::in(['in', 'out'])];
@@ -1526,6 +1593,11 @@ class InventoryController extends Controller
             $rules['items.*.unit_cost'] = 'nullable|numeric|min:0';
         }
 
+        if ($type === 'export') {
+            $rules['items.*.unit_price'] = 'nullable|numeric|min:0';
+            $rules['items.*.allow_oversold'] = 'nullable|boolean';
+        }
+
         if ($type === 'adjustment') {
             $rules['items.*.stock_bucket'] = ['required', Rule::in(['sellable', 'damaged'])];
             $rules['items.*.direction'] = ['required', Rule::in(['in', 'out'])];
@@ -1552,8 +1624,9 @@ class InventoryController extends Controller
             ->where('type', $type)
             ->findOrFail($id);
 
-        if ($type === 'return' && $this->orderInventorySlipService->isManagedReturnDocument($document)) {
-            $this->orderInventorySlipService->deleteManagedReturnDocument($document);
+        $managedRoot = $this->orderInventorySlipService->resolveManagedReturnRootDocument($document);
+        if ($managedRoot) {
+            $this->orderInventorySlipService->deleteManagedReturnDocument($managedRoot);
 
             return response()->json(['message' => 'Đã xóa phiếu kho.']);
         }
@@ -1561,6 +1634,44 @@ class InventoryController extends Controller
         $this->inventoryService->deleteDocument($document);
 
         return response()->json(['message' => 'Đã xóa phiếu kho.']);
+    }
+
+    public function restoreDocument(string $type, int $id)
+    {
+        $type = $this->normalizeDocumentType($type);
+        $document = InventoryDocument::withTrashed()
+            ->where('type', $type)
+            ->findOrFail($id);
+
+        $managedRoot = $this->orderInventorySlipService->resolveManagedReturnRootDocument($document, true);
+        if ($managedRoot) {
+            return response()->json(
+                $this->orderInventorySlipService->restoreManagedReturnDocument($managedRoot)
+            );
+        }
+
+        return response()->json(
+            $this->inventoryService->restoreDocument($document)
+        );
+    }
+
+    public function forceDeleteDocument(string $type, int $id)
+    {
+        $type = $this->normalizeDocumentType($type);
+        $document = InventoryDocument::withTrashed()
+            ->where('type', $type)
+            ->findOrFail($id);
+
+        $managedRoot = $this->orderInventorySlipService->resolveManagedReturnRootDocument($document, true);
+        if ($managedRoot) {
+            $this->orderInventorySlipService->forceDeleteManagedReturnDocument($managedRoot);
+
+            return response()->json(['message' => 'Da xoa vinh vien phieu kho.']);
+        }
+
+        $this->inventoryService->forceDeleteDocument($document);
+
+        return response()->json(['message' => 'Da xoa vinh vien phieu kho.']);
     }
 
     public function bulkDestroyDocuments(Request $request, string $type)
@@ -1581,7 +1692,20 @@ class InventoryController extends Controller
             return response()->json(['message' => 'Có phiếu kho không tồn tại hoặc không đúng loại.'], 422);
         }
 
+        $processedManagedRoots = [];
         foreach ($documents as $document) {
+            $managedRoot = $this->orderInventorySlipService->resolveManagedReturnRootDocument($document);
+            if ($managedRoot) {
+                $managedRootId = (int) $managedRoot->id;
+                if (isset($processedManagedRoots[$managedRootId])) {
+                    continue;
+                }
+
+                $this->orderInventorySlipService->deleteManagedReturnDocument($managedRoot);
+                $processedManagedRoots[$managedRootId] = true;
+                continue;
+            }
+
             $this->inventoryService->deleteDocument($document);
         }
 
@@ -1589,6 +1713,219 @@ class InventoryController extends Controller
             'message' => 'Đã xóa các phiếu kho đã chọn.',
             'deleted_count' => $documents->count(),
         ]);
+    }
+
+    public function bulkRestoreDocuments(Request $request, string $type)
+    {
+        $type = $this->normalizeDocumentType($type);
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer|distinct',
+        ]);
+
+        $ids = collect($validated['ids'])->map(fn ($id) => (int) $id)->unique()->values();
+        $documents = InventoryDocument::withTrashed()
+            ->where('type', $type)
+            ->whereIn('id', $ids)
+            ->get();
+
+        if ($documents->count() !== $ids->count()) {
+            return response()->json(['message' => 'Co phieu kho khong ton tai hoac khong dung loai.'], 422);
+        }
+
+        $processedManagedRoots = [];
+        foreach ($documents as $document) {
+            $managedRoot = $this->orderInventorySlipService->resolveManagedReturnRootDocument($document, true);
+            if ($managedRoot) {
+                $managedRootId = (int) $managedRoot->id;
+                if (isset($processedManagedRoots[$managedRootId])) {
+                    continue;
+                }
+
+                $this->orderInventorySlipService->restoreManagedReturnDocument($managedRoot);
+                $processedManagedRoots[$managedRootId] = true;
+                continue;
+            }
+
+            if ($document->trashed()) {
+                $this->inventoryService->restoreDocument($document);
+            }
+        }
+
+        return response()->json([
+            'message' => 'Da khoi phuc cac phieu kho da chon.',
+            'restored_count' => $documents->count(),
+        ]);
+    }
+
+    public function bulkForceDeleteDocuments(Request $request, string $type)
+    {
+        $type = $this->normalizeDocumentType($type);
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer|distinct',
+        ]);
+
+        $ids = collect($validated['ids'])->map(fn ($id) => (int) $id)->unique()->values();
+        $documents = InventoryDocument::withTrashed()
+            ->where('type', $type)
+            ->whereIn('id', $ids)
+            ->get();
+
+        if ($documents->count() !== $ids->count()) {
+            return response()->json(['message' => 'Co phieu kho khong ton tai hoac khong dung loai.'], 422);
+        }
+
+        $processedManagedRoots = [];
+        foreach ($documents as $document) {
+            $managedRoot = $this->orderInventorySlipService->resolveManagedReturnRootDocument($document, true);
+            if ($managedRoot) {
+                $managedRootId = (int) $managedRoot->id;
+                if (isset($processedManagedRoots[$managedRootId])) {
+                    continue;
+                }
+
+                $this->orderInventorySlipService->forceDeleteManagedReturnDocument($managedRoot);
+                $processedManagedRoots[$managedRootId] = true;
+                continue;
+            }
+
+            $this->inventoryService->forceDeleteDocument($document);
+        }
+
+        return response()->json([
+            'message' => 'Da xoa vinh vien cac phieu kho da chon.',
+            'deleted_count' => $documents->count(),
+        ]);
+    }
+
+    public function trashedSlips(Request $request)
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+        $perPage = min(max((int) $request->input('per_page', 20), 20), 500);
+        $search = trim((string) $request->input('search', ''));
+
+        $importsQuery = InventoryImport::onlyTrashed()
+            ->where('imports.account_id', $accountId)
+            ->leftJoin('suppliers', 'suppliers.id', '=', 'imports.supplier_id')
+            ->selectRaw("
+                'imports' as section_key,
+                'import' as slip_type_key,
+                'Phieu nhap' as slip_type_label,
+                imports.id as id,
+                imports.import_number as code,
+                COALESCE(suppliers.name, imports.supplier_name, '') as party_name,
+                '' as secondary_name,
+                imports.total_quantity as total_quantity,
+                imports.total_amount as total_amount,
+                imports.notes as notes,
+                imports.deleted_at as deleted_at
+            ");
+
+        $documentsQuery = InventoryDocument::onlyTrashed()
+            ->where('inventory_documents.account_id', $accountId)
+            ->whereIn('inventory_documents.type', ['export', 'return', 'damaged', 'adjustment'])
+            ->where(function ($builder) {
+                $builder
+                    ->where('inventory_documents.type', '!=', 'adjustment')
+                    ->orWhereNull('inventory_documents.parent_document_id');
+            })
+            ->leftJoin('suppliers', 'suppliers.id', '=', 'inventory_documents.supplier_id')
+            ->selectRaw("
+                CASE inventory_documents.type
+                    WHEN 'export' THEN 'exports'
+                    WHEN 'return' THEN 'returns'
+                    WHEN 'damaged' THEN 'damaged'
+                    ELSE 'adjustments'
+                END as section_key,
+                inventory_documents.type as slip_type_key,
+                CASE inventory_documents.type
+                    WHEN 'export' THEN 'Phieu xuat'
+                    WHEN 'return' THEN 'Phieu hoan'
+                    WHEN 'damaged' THEN 'Phieu hong'
+                    ELSE 'Phieu dieu chinh'
+                END as slip_type_label,
+                inventory_documents.id as id,
+                inventory_documents.document_number as code,
+                COALESCE(suppliers.name, '') as party_name,
+                '' as secondary_name,
+                inventory_documents.total_quantity as total_quantity,
+                inventory_documents.total_amount as total_amount,
+                inventory_documents.notes as notes,
+                inventory_documents.deleted_at as deleted_at
+            ");
+
+        $exportTotals = OrderItem::query()
+            ->selectRaw('order_id, COALESCE(SUM(quantity), 0) as total_quantity')
+            ->groupBy('order_id');
+
+        $exportsQuery = Order::onlyTrashed()
+            ->where('orders.account_id', $accountId)
+            ->where('orders.type', 'inventory_export')
+            ->leftJoinSub($exportTotals, 'order_item_totals', function ($join) {
+                $join->on('order_item_totals.order_id', '=', 'orders.id');
+            })
+            ->selectRaw("
+                'exports' as section_key,
+                'export' as slip_type_key,
+                'Phieu xuat' as slip_type_label,
+                orders.id as id,
+                orders.order_number as code,
+                COALESCE(orders.customer_name, '') as party_name,
+                COALESCE(orders.shipping_tracking_code, '') as secondary_name,
+                COALESCE(order_item_totals.total_quantity, 0) as total_quantity,
+                orders.total_price as total_amount,
+                orders.notes as notes,
+                orders.deleted_at as deleted_at
+            ");
+
+        $trashQuery = DB::query()->fromSub(
+            $importsQuery
+                ->unionAll($documentsQuery)
+                ->unionAll($exportsQuery),
+            'inventory_slip_trash'
+        );
+
+        if ($search !== '') {
+            $needle = '%' . mb_strtolower($search) . '%';
+            $trashQuery->where(function ($builder) use ($needle) {
+                $builder
+                    ->whereRaw('LOWER(code) LIKE ?', [$needle])
+                    ->orWhereRaw('LOWER(party_name) LIKE ?', [$needle])
+                    ->orWhereRaw('LOWER(secondary_name) LIKE ?', [$needle])
+                    ->orWhereRaw('LOWER(notes) LIKE ?', [$needle])
+                    ->orWhereRaw('LOWER(slip_type_label) LIKE ?', [$needle]);
+            });
+        }
+
+        if ($request->filled('date_from')) {
+            $trashQuery->whereDate('deleted_at', '>=', $request->input('date_from'));
+        }
+
+        if ($request->filled('date_to')) {
+            $trashQuery->whereDate('deleted_at', '<=', $request->input('date_to'));
+        }
+
+        $sortMap = [
+            'type' => 'slip_type_label',
+            'code' => 'code',
+            'party' => 'party_name',
+            'date' => 'deleted_at',
+            'qty' => 'total_quantity',
+            'amount' => 'total_amount',
+            'note' => 'notes',
+        ];
+
+        $sortBy = $sortMap[(string) $request->input('sort_by', '')] ?? 'deleted_at';
+        $sortOrder = strtolower((string) $request->input('sort_order', 'desc')) === 'asc' ? 'asc' : 'desc';
+
+        $trashQuery
+            ->orderBy($sortBy, $sortOrder)
+            ->orderBy('id', $sortOrder === 'asc' ? 'asc' : 'desc');
+
+        return response()->json(
+            $trashQuery->paginate($perPage)
+        );
     }
 
     public function batches(Request $request)
@@ -1876,6 +2213,7 @@ class InventoryController extends Controller
     private function normalizeDocumentType(string $type): string
     {
         return match ($type) {
+            'export', 'exports' => 'export',
             'return', 'returns' => 'return',
             'damaged', 'damage' => 'damaged',
             'adjustment', 'adjustments' => 'adjustment',

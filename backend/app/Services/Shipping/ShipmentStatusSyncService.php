@@ -89,6 +89,21 @@ class ShipmentStatusSyncService
         $mapped = $this->mapper->mapCarrierStatus($carrierCode, $carrierRawStatus, $accountId);
 
         if (!$mapped['shipment_status']) {
+            if (!empty($mapped['blocked_by_disabled_mapping'])) {
+                Log::info("Carrier status mapping disabled: {$carrierCode}:{$carrierRawStatus}", [
+                    'shipment_id' => $shipment->id,
+                    'mapping_id' => $mapped['mapping_id'] ?? null,
+                ]);
+
+                return [
+                    'success' => false,
+                    'message' => "Trang thai tu hang '{$carrierRawStatus}' dang bi tat mapping nen se khong tu dong dong bo.",
+                    'shipment' => $shipment,
+                    'order_synced' => false,
+                    'mapping_disabled' => true,
+                ];
+            }
+
             CarrierRawStatus::updateOrCreate(
                 [
                     'account_id' => $accountId,
@@ -143,31 +158,57 @@ class ShipmentStatusSyncService
         return $result;
     }
 
-    public function syncOrderFromShipment(Shipment $shipment, string $source = 'shipment_sync', ?int $changedBy = null): bool
+    public function syncOrderFromShipment(
+        Shipment $shipment,
+        string $source = 'shipment_sync',
+        ?int $changedBy = null,
+        bool $syncOrderStatus = true
+    ): bool
     {
         $order = $shipment->order;
         if (!$order) {
             return false;
         }
 
-        $newOrderStatus = $this->mapper->shipmentToOrderStatus($shipment->shipment_status);
-        if (!$newOrderStatus) {
-            return false;
-        }
+        $shouldUseRawStatus = $source === 'carrier_sync';
+        $orderSync = $this->mapper->resolveOrderStatusSync(
+            $shipment->carrier_code,
+            $shipment->shipment_status,
+            $shipment->account_id,
+            $shouldUseRawStatus ? $shipment->carrier_status_raw : null
+        );
 
         $oldOrderStatus = $order->status;
+        $shouldSyncOrderStatus = $syncOrderStatus && ($orderSync['should_sync_order_status'] ?? false);
+        $newOrderStatus = $shouldSyncOrderStatus
+            ? ($orderSync['order_status'] ?? $oldOrderStatus)
+            : $oldOrderStatus;
         $oldShippingStatus = $order->shipping_status;
         $newShippingStatus = $shipment->shipment_status;
-        $statusChanged = $oldOrderStatus !== $newOrderStatus;
+        $statusChanged = $shouldSyncOrderStatus
+            && $newOrderStatus
+            && $oldOrderStatus !== $newOrderStatus;
         $shippingChanged = $oldShippingStatus !== $newShippingStatus;
 
         [$problemCode, $problemMessage] = $this->resolveProblemSummary($shipment);
+        $trackingCode = $shipment->carrier_tracking_code ?: $shipment->tracking_number;
+        $expectedDispatchedAt = $shipment->shipped_at ?: $order->shipping_dispatched_at;
+        $dispatchedMatches = (!$expectedDispatchedAt && !$order->shipping_dispatched_at)
+            || (
+                $expectedDispatchedAt
+                && $order->shipping_dispatched_at
+                && $order->shipping_dispatched_at->equalTo($expectedDispatchedAt)
+            );
 
         if (
             !$statusChanged
             && !$shippingChanged
             && $order->shipping_issue_code === $problemCode
-            && $order->shipping_tracking_code === ($shipment->carrier_tracking_code ?: $shipment->tracking_number)
+            && $order->shipping_issue_message === $problemMessage
+            && $order->shipping_tracking_code === $trackingCode
+            && $order->shipping_carrier_code === $shipment->carrier_code
+            && $order->shipping_carrier_name === $shipment->carrier_name
+            && $dispatchedMatches
         ) {
             return false;
         }

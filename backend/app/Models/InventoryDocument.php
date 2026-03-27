@@ -2,11 +2,12 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\OptionalSoftDeletes;
 use Illuminate\Database\Eloquent\Model;
 
 class InventoryDocument extends Model
 {
-    use \App\Traits\BelongsToAccount;
+    use \App\Traits\BelongsToAccount, OptionalSoftDeletes;
 
     protected $fillable = [
         'account_id',
@@ -44,12 +45,12 @@ class InventoryDocument extends Model
 
     public function parentDocument()
     {
-        return $this->belongsTo(self::class, 'parent_document_id');
+        return $this->belongsTo(self::class, 'parent_document_id')->withTrashed();
     }
 
     public function childDocuments()
     {
-        return $this->hasMany(self::class, 'parent_document_id');
+        return $this->hasMany(self::class, 'parent_document_id')->withTrashed();
     }
 
     public function orderLinks()

@@ -1914,7 +1914,7 @@ const OrderForm = () => {
         }
 
         if (formData.customer_phone && !validateVietnamesePhone(formData.customer_phone)) {
-            alert('S? ?i?n tho?i kh?ng h?p l?.');
+            alert('Số điện thoại không hợp lệ.');
             return;
         }
 
@@ -1973,7 +1973,7 @@ const OrderForm = () => {
             if (error.response?.data?.errors) {
                 console.table(error.response.data.errors);
                 const firstError = Object.values(error.response.data.errors)[0][0];
-                alert('L?i: ' + firstError);
+                alert('Lỗi: ' + firstError);
             } else {
                 alert('Có lỗi xảy ra khi lưu đơn hàng. Vui lòng kiểm tra console để biết chi tiết.');
             }

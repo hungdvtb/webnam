@@ -1813,7 +1813,7 @@ class OrderController extends Controller
         $order = $this->findScopedOrder($request, (int) $id, true);
 
         if ($order->trashed()) {
-            return response()->json(['message' => 'Order is already in trash.'], 422);
+            return response()->json(['message' => 'Đơn hàng đã ở trong thùng rác.'], 422);
         }
 
         DB::transaction(function () use ($order) {
@@ -1821,7 +1821,7 @@ class OrderController extends Controller
             $order->delete();
         });
 
-        return response()->json(['message' => 'Order moved to trash successfully']);
+        return response()->json(['message' => 'Đã chuyển đơn hàng vào thùng rác.']);
     }
 
     public function forceDelete(Request $request, $id)
@@ -1836,7 +1836,7 @@ class OrderController extends Controller
             $order->forceDelete();
         });
 
-        return response()->json(['message' => 'Order permanently deleted successfully']);
+        return response()->json(['message' => 'Đã xóa vĩnh viễn đơn hàng.']);
     }
 
     public function duplicate(Request $request, $id)
@@ -1878,14 +1878,17 @@ class OrderController extends Controller
     public function updateStatus(Request $request, $id)
     {
         try {
-            $request->validate(['status' => 'required|string']);
+            $request->validate([
+                'status' => 'required|string',
+                'allow_shipping_override' => 'nullable|boolean',
+            ]);
             
             return DB::transaction(function () use ($request, $id) {
                 $order = $this->findScopedOrder($request, (int) $id);
 
                 if (!$this->shouldManageInventory((string) $order->order_kind)) {
                     return response()->json([
-                        'message' => 'Đơn mẫu và đơn nháp không dùng cập nhật trạng thái giao hàng.',
+                        'message' => 'Đơn mẫu và đơn nháp không hỗ trợ cập nhật trạng thái giao hàng.',
                     ], 422);
                 }
 
@@ -1907,7 +1910,8 @@ class OrderController extends Controller
 
                 // Check if shipping-related statuses are locked by active shipment
                 $shippingLockedStatuses = ['shipping', 'completed', 'pending_return', 'returned'];
-                if (in_array($newStatus, $shippingLockedStatuses) && $order->hasActiveShipment()) {
+                $allowShippingOverride = $request->boolean('allow_shipping_override');
+                if (!$allowShippingOverride && in_array($newStatus, $shippingLockedStatuses) && $order->hasActiveShipment()) {
                     $syncService = app(\App\Services\Shipping\ShipmentStatusSyncService::class);
                     $canEdit = $syncService->canManuallyEditOrderShipping($order);
                     
@@ -1947,7 +1951,7 @@ class OrderController extends Controller
         $order = $this->findScopedOrder($request, (int) $id, true);
 
         if (!$order->trashed()) {
-            return response()->json(['message' => 'Order is already active.'], 422);
+            return response()->json(['message' => 'Đơn hàng đang hoạt động.'], 422);
         }
 
         DB::transaction(function () use ($order) {
@@ -1961,7 +1965,7 @@ class OrderController extends Controller
             );
         });
 
-        return response()->json(['message' => 'Order restored successfully']);
+        return response()->json(['message' => 'Đã khôi phục đơn hàng.']);
     }
 
     public function bulkDelete(Request $request)
@@ -1973,7 +1977,7 @@ class OrderController extends Controller
             ->values();
 
         if ($ids->isEmpty()) {
-            return response()->json(['message' => 'No IDs provided'], 400);
+            return response()->json(['message' => 'Chưa chọn đơn hàng nào.'], 400);
         }
 
         $orders = $this->scopedOrderQuery($request, true)
@@ -1982,7 +1986,7 @@ class OrderController extends Controller
             ->get();
 
         if ($orders->isEmpty()) {
-            return response()->json(['message' => 'No orders found for the selected IDs.'], 404);
+            return response()->json(['message' => 'Không tìm thấy đơn hàng nào theo danh sách đã chọn.'], 404);
         }
 
         $forceDelete = $request->boolean('force');
@@ -2009,8 +2013,8 @@ class OrderController extends Controller
 
         return response()->json([
             'message' => $forceDelete
-                ? 'Orders permanently deleted successfully'
-                : 'Orders moved to trash successfully',
+                ? 'Đã xóa vĩnh viễn các đơn hàng đã chọn.'
+                : 'Đã chuyển các đơn hàng đã chọn vào thùng rác.',
         ]);
     }
 
@@ -2023,7 +2027,7 @@ class OrderController extends Controller
             ->values();
 
         if ($ids->isEmpty()) {
-            return response()->json(['message' => 'No IDs provided'], 400);
+            return response()->json(['message' => 'Chưa chọn đơn hàng nào.'], 400);
         }
 
         $orders = $this->scopedOrderQuery($request, true)
@@ -2032,7 +2036,7 @@ class OrderController extends Controller
             ->get();
 
         if ($orders->isEmpty()) {
-            return response()->json(['message' => 'No orders found for the selected IDs.'], 404);
+            return response()->json(['message' => 'Không tìm thấy đơn hàng nào theo danh sách đã chọn.'], 404);
         }
 
         DB::transaction(function () use ($orders) {
@@ -2051,7 +2055,7 @@ class OrderController extends Controller
             }
         });
 
-        return response()->json(['message' => 'Orders restored successfully']);
+        return response()->json(['message' => 'Đã khôi phục các đơn hàng đã chọn.']);
     }
 
     public function bulkDuplicate(Request $request)
@@ -2063,7 +2067,7 @@ class OrderController extends Controller
             ->values();
 
         if ($ids->isEmpty()) {
-            return response()->json(['message' => 'No IDs provided'], 400);
+            return response()->json(['message' => 'Chưa chọn đơn hàng nào.'], 400);
         }
 
         $duplicatedCount = 0;
@@ -2084,7 +2088,7 @@ class OrderController extends Controller
             }
         });
 
-        return response()->json(['message' => $duplicatedCount . ' orders duplicated successfully']);
+        return response()->json(['message' => "Đã sao chép {$duplicatedCount} đơn hàng thành công."]);
     }
 
     public function bulkConvert(Request $request)
@@ -2112,7 +2116,7 @@ class OrderController extends Controller
             ->get();
 
         if ($orders->isEmpty()) {
-            return response()->json(['message' => 'No orders found for the selected IDs.'], 404);
+            return response()->json(['message' => 'Không tìm thấy đơn hàng nào theo danh sách đã chọn.'], 404);
         }
 
         $convertedCount = 0;
@@ -2124,7 +2128,7 @@ class OrderController extends Controller
         });
 
         return response()->json([
-            'message' => $convertedCount . ' orders converted successfully',
+            'message' => "Đã chuyển nhóm {$convertedCount} đơn hàng thành công.",
         ]);
     }
 
@@ -2138,7 +2142,7 @@ class OrderController extends Controller
             ->all();
 
         if (empty($ids)) {
-            return response()->json(['message' => 'Chua chon don hang nao.'], 400);
+            return response()->json(['message' => 'Chưa chọn đơn hàng nào.'], 400);
         }
 
         $data = $request->only([
@@ -2164,7 +2168,7 @@ class OrderController extends Controller
             }
         });
 
-        return response()->json(['message' => 'Cap nhat hang loat thanh cong']);
+        return response()->json(['message' => 'Cập nhật hàng loạt thành công.']);
     }
 
     public function dispatchPreview(Request $request, ShipmentDispatchService $dispatchService)
@@ -2188,7 +2192,7 @@ class OrderController extends Controller
             ->get();
 
         if ($orders->isEmpty()) {
-            return response()->json(['message' => 'Khong tim thay don hang can gui.'], 404);
+            return response()->json(['message' => 'Không tìm thấy đơn hàng cần gửi vận chuyển.'], 404);
         }
 
         return response()->json(
@@ -2217,7 +2221,7 @@ class OrderController extends Controller
             ->get();
 
         if ($orders->isEmpty()) {
-            return response()->json(['message' => 'Khong tim thay don hang can gui.'], 404);
+            return response()->json(['message' => 'Không tìm thấy đơn hàng cần gửi vận chuyển.'], 404);
         }
 
         return response()->json(
@@ -2242,7 +2246,7 @@ class OrderController extends Controller
             ->get();
 
         if ($orders->isEmpty()) {
-            return response()->json(['message' => 'Khong tim thay don hang can huy gui van chuyen.'], 404);
+            return response()->json(['message' => 'Không tìm thấy đơn hàng cần hủy gửi vận chuyển.'], 404);
         }
 
         return response()->json(

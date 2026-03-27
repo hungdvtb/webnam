@@ -222,7 +222,12 @@ export const orderApi = {
         invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
         return response;
     }),
-    updateStatus: (id, status) => api.put(`/orders/${id}/status`, { status }),
+    updateStatus: (id, payloadOrStatus) => {
+        const payload = (payloadOrStatus && typeof payloadOrStatus === 'object')
+            ? payloadOrStatus
+            : { status: payloadOrStatus };
+        return api.put(`/orders/${id}/status`, payload);
+    },
     duplicate: (id, data = {}) => api.post(`/orders/${id}/duplicate`, data),
     convert: (id, data) => api.post(`/orders/${id}/convert`, data).then((response) => {
         invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
@@ -243,6 +248,13 @@ export const orderApi = {
     quickDispatch: (data) => api.post('/orders/quick-dispatch', data),
     getShippingAlerts: (params) => api.get('/orders/shipping-alerts', { params }),
     getConnectedCarriers: () => api.get('/orders/connected-carriers'),
+};
+
+export const returnOrderApi = {
+    getAll: (params, signal) => api.get('/return-orders', { params, signal }),
+    getOne: (id) => api.get(`/return-orders/${id}`),
+    store: (data) => api.post('/return-orders', data),
+    updateStatus: (id, data) => api.put(`/return-orders/${id}/status`, data),
 };
 
 export const leadApi = {

@@ -190,7 +190,7 @@ const OrderProductsPortal = ({
                                     {price ? (
                                         <span className="text-[15px] text-brick font-black tracking-tighter">{price}</span>
                                     ) : (
-                                        <span className="text-[12px] text-primary/30 italic">Li?n h?</span>
+                                        <span className="text-[12px] text-primary/30 italic">Liên hệ</span>
                                     )}
                                 </div>
                             </div>
@@ -200,9 +200,9 @@ const OrderProductsPortal = ({
 
                 {/* Footer */}
                 <div className="px-6 py-3 border-t border-primary/10 bg-primary/5 flex justify-between items-center rounded-b-sm">
-                    <span className="text-[10px] text-primary/40 font-black uppercase tracking-[0.1em]">Nh?n ESC ho?c click v?ng x?m ?? ??ng</span>
+                    <span className="text-[10px] text-primary/40 font-black uppercase tracking-[0.1em]">Nhấn ESC hoặc click vùng xám để đóng</span>
                     <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-primary/40 font-black uppercase">T?ng s?n ph?m:</span>
+                        <span className="text-[10px] text-primary/40 font-black uppercase">Tổng sản phẩm:</span>
                         <span className="text-[13px] text-primary font-black px-2 py-0.5 bg-white border border-primary/20 rounded-sm">{items.length}</span>
                     </div>
                 </div>
@@ -530,7 +530,7 @@ const ShippingDispatchModal = ({
             <div className="relative w-full max-w-4xl rounded-sm bg-white shadow-2xl border border-primary/10 overflow-hidden">
                 <div className="px-6 py-4 border-b border-primary/10 flex items-center justify-between gap-4 bg-primary/[0.02]">
                     <div>
-                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/40">G?i ??n v? v?n chuy?n</p>
+                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/40">Gửi đơn vị vận chuyển</p>
                         <h3 className="text-[18px] font-black text-primary mt-1">Chọn hãng và gửi hàng loạt</h3>
                     </div>
                     <button type="button" onClick={onClose} className="text-primary/30 hover:text-primary">
@@ -540,7 +540,7 @@ const ShippingDispatchModal = ({
                 <div className="p-6 space-y-5">
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                         <div>
-                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">??n v? v?n chuy?n</label>
+                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Đơn vị vận chuyển</label>
                             <div className="grid grid-cols-1 gap-3">
                                 {carriers.map((carrier) => (
                                     <button
@@ -606,11 +606,11 @@ const ShippingDispatchModal = ({
                             <div className="space-y-4">
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                     <div className="rounded-sm border border-green-200 bg-green-50 px-4 py-3">
-                                        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-green-700/60">C? th? g?i</p>
+                                        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-green-700/60">Có thể gửi</p>
                                         <p className="text-[20px] font-black text-green-700 mt-1">{preview.valid_count || 0}</p>
                                     </div>
                                     <div className="rounded-sm border border-red-200 bg-red-50 px-4 py-3">
-                                        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-red-700/60">L?i d? li?u</p>
+                                        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-red-700/60">Lỗi dữ liệu</p>
                                         <p className="text-[20px] font-black text-red-700 mt-1">{preview.invalid_count || 0}</p>
                                     </div>
                                     <div className="rounded-sm border border-primary/10 bg-white px-4 py-3">
@@ -621,11 +621,11 @@ const ShippingDispatchModal = ({
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                     <div className="rounded-sm border border-primary/10 bg-white">
                                         <div className="px-4 py-3 border-b border-primary/10">
-                                            <p className="text-[12px] font-black text-primary uppercase tracking-wide">??n h?p l?</p>
+                                            <p className="text-[12px] font-black text-primary uppercase tracking-wide">Đơn hợp lệ</p>
                                         </div>
                                         <div className="max-h-56 overflow-y-auto custom-scrollbar divide-y divide-primary/10">
                                             {(preview.valid_orders || []).length === 0 ? (
-                                                <div className="px-4 py-6 text-[13px] text-primary/40">Kh?ng c? ??n h?p l?.</div>
+                                                <div className="px-4 py-6 text-[13px] text-primary/40">Không có đơn hợp lệ.</div>
                                             ) : (
                                                 (preview.valid_orders || []).map((item) => (
                                                     <div key={item.id} className="px-4 py-3">
@@ -638,11 +638,11 @@ const ShippingDispatchModal = ({
                                     </div>
                                     <div className="rounded-sm border border-primary/10 bg-white">
                                         <div className="px-4 py-3 border-b border-primary/10">
-                                            <p className="text-[12px] font-black text-primary uppercase tracking-wide">??n ch?a th? g?i</p>
+                                            <p className="text-[12px] font-black text-primary uppercase tracking-wide">Đơn chưa thể gửi</p>
                                         </div>
                                         <div className="max-h-56 overflow-y-auto custom-scrollbar divide-y divide-primary/10">
                                             {(preview.invalid_orders || []).length === 0 ? (
-                                                <div className="px-4 py-6 text-[13px] text-primary/40">T?t c? ??n ?? s?n s?ng.</div>
+                                                <div className="px-4 py-6 text-[13px] text-primary/40">Tất cả đơn đã sẵn sàng.</div>
                                             ) : (
                                                 (preview.invalid_orders || []).map((item) => (
                                                     <div key={item.id} className="px-4 py-3">
@@ -656,7 +656,7 @@ const ShippingDispatchModal = ({
                                 </div>
                             </div>
                         ) : (
-                            <div className="py-10 text-center text-[13px] font-bold text-primary/40">?ang chu?n b? danh s?ch ??n g?i v?n chuy?n...</div>
+                            <div className="py-10 text-center text-[13px] font-bold text-primary/40">Đang chuẩn bị danh sách đơn gửi vận chuyển...</div>
                         )}
                     </div>
                 </div>
@@ -1017,14 +1017,14 @@ const OrderList = () => {
 
             return {
                 id,
-                order_number: order?.order_number || `??n #${id}`,
+                order_number: order?.order_number || `Đơn #${id}`,
                 customer_name: order?.customer_name || '',
                 tracking_number: row.tracking_number ?? '',
                 carrier_name: row.carrier_name ?? '',
                 shipping_cost: row.shipping_cost ?? '',
                 locked: Boolean(activeShipment),
                 locked_message: activeShipment
-                    ? `?? c? v?n ??n ${activeShipment.shipment_number || activeShipment.carrier_tracking_code || ''}`.trim()
+                    ? `Đã có vận đơn ${activeShipment.shipment_number || activeShipment.carrier_tracking_code || ''}`.trim()
                     : '',
             };
         }),
@@ -1076,8 +1076,8 @@ const OrderList = () => {
                 order,
                 eligible: Boolean(order) && isOfficial,
                 reason: !order
-                    ? 'Khong tim thay don hang trong danh sach hien tai.'
-                    : (!isOfficial ? 'Chi don hang chinh moi lap phieu hoan theo lo.' : ''),
+                    ? 'Không tìm thấy đơn hàng trong danh sách hiện tại.'
+                    : (!isOfficial ? 'Chỉ đơn hàng chính mới được lập phiếu hoàn theo lô.' : ''),
             };
         });
 
@@ -1227,7 +1227,7 @@ const OrderList = () => {
         } catch (error) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
             console.error("Error fetching orders", error);
-            setNotification({ type: 'error', message: 'Kh?ng th? t?i danh s?ch ??n h?ng' });
+            setNotification({ type: 'error', message: 'Không thể tải danh sách đơn hàng.' });
         } finally {
             if (orderRequestAbortRef.current === controller) {
                 orderRequestAbortRef.current = null;
@@ -1323,7 +1323,7 @@ const OrderList = () => {
                 playShippingNotificationSound(shippingSoundSettings);
                 setNotification({
                     type: 'error',
-                    message: `${newUnread.length} ??n c? c?nh b?o v?n chuy?n m?i.`,
+                    message: `${newUnread.length} đơn có cảnh báo vận chuyển mới.`,
                 });
             }
             previousUnreadRef.current = unread;
@@ -1364,7 +1364,7 @@ const OrderList = () => {
                 setDispatchPreview(null);
                 setNotification({
                     type: 'error',
-                    message: error.response?.data?.message || 'Kh?ng th? t?i preview g?i v?n chuy?n.',
+                    message: error.response?.data?.message || 'Không thể tải bản xem trước gửi vận chuyển.',
                 });
             } finally {
                 setDispatchPreviewLoading(false);
@@ -1453,7 +1453,7 @@ const OrderList = () => {
             setConnectedCarriers(carriers);
             setDispatchWarehouses(warehouses);
             if (!carriers.length) {
-                setNotification({ type: 'error', message: 'Ch?a c? ??n v? v?n chuy?n n?o ???c k?t n?i API.' });
+                setNotification({ type: 'error', message: 'Chưa có đơn vị vận chuyển nào được kết nối API.' });
                 return;
             }
             const fallbackCarrier = carriers.find((carrier) => carrier.carrier_code === selectedCarrierCode) || carriers[0];
@@ -1461,7 +1461,7 @@ const OrderList = () => {
             setSelectedWarehouseId(fallbackCarrier.default_warehouse_id ? String(fallbackCarrier.default_warehouse_id) : '');
             setDispatchModalOpen(true);
         } catch (error) {
-            setNotification({ type: 'error', message: error.response?.data?.message || 'Kh?ng th? t?i danh s?ch ??n v? v?n chuy?n.' });
+            setNotification({ type: 'error', message: error.response?.data?.message || 'Không thể tải danh sách đơn vị vận chuyển.' });
         }
     };
 
@@ -1485,14 +1485,14 @@ const OrderList = () => {
             const firstFailed = results.find((item) => item.success === false && item.message);
             setNotification({
                 type: failed_count > 0 ? 'error' : 'success',
-                message: `?? g?i ${success_count} ??n sang v?n chuy?n${failed_count > 0 ? `, ${failed_count} ??n l?i` : ''}.${firstFailed ? ` ${firstFailed.order_number}: ${firstFailed.message}` : ''}`,
+                message: `Đã gửi ${success_count} đơn sang vận chuyển${failed_count > 0 ? `, ${failed_count} đơn lỗi` : ''}.${firstFailed ? ` ${firstFailed.order_number}: ${firstFailed.message}` : ''}`,
             });
             setSelectedIds([]);
             closeDispatchModal();
             fetchOrders(pagination.current_page);
             fetchShippingAlerts();
         } catch (error) {
-            setNotification({ type: 'error', message: error.response?.data?.message || 'Kh?ng th? g?i ??n sang ??n v? v?n chuy?n.' });
+            setNotification({ type: 'error', message: error.response?.data?.message || 'Không thể gửi đơn sang đơn vị vận chuyển.' });
         } finally {
             setDispatchSubmitting(false);
         }
@@ -1582,7 +1582,7 @@ const OrderList = () => {
         } catch (error) {
             setNotification({
                 type: 'error',
-                message: error.response?.data?.message || 'Kh?ng th? t?i danh s?ch ??n v? v?n chuy?n g?i ?.',
+                message: error.response?.data?.message || 'Không thể tải danh sách đơn vị vận chuyển gợi ý.',
             });
         } finally {
             setQuickDispatchModalOpen(true);
@@ -1615,7 +1615,7 @@ const OrderList = () => {
         if (invalidRow) {
             setNotification({
                 type: 'error',
-                message: 'Vui l?ng nh?p ??y ?? m? v?n ??n, ??n v? v?n chuy?n v? ti?n ship h?p l? cho t?ng ??n.',
+                message: 'Vui lòng nhập đầy đủ mã vận đơn, đơn vị vận chuyển và tiền ship hợp lệ cho từng đơn.',
             });
             return;
         }
@@ -1635,7 +1635,7 @@ const OrderList = () => {
 
             setNotification({
                 type: failedCount > 0 ? 'error' : 'success',
-                message: `?? g?i v?n chuy?n nhanh ${successCount} ??n${failedCount > 0 ? `, ${failedCount} ??n l?i` : ''}.${firstFailed ? ` ${firstFailed.order_number || `#${firstFailed.order_id}`}: ${firstFailed.message}` : ''}`,
+                message: `Đã gửi vận chuyển nhanh ${successCount} đơn${failedCount > 0 ? `, ${failedCount} đơn lỗi` : ''}.${firstFailed ? ` ${firstFailed.order_number || `#${firstFailed.order_id}`}: ${firstFailed.message}` : ''}`,
             });
 
             if (successCount > 0) {
@@ -1654,7 +1654,7 @@ const OrderList = () => {
         } catch (error) {
             setNotification({
                 type: 'error',
-                message: error.response?.data?.message || 'Kh?ng th? l?u g?i v?n chuy?n nhanh.',
+                message: error.response?.data?.message || 'Không thể lưu gửi vận chuyển nhanh.',
             });
         } finally {
             setQuickDispatchSubmitting(false);
@@ -1693,10 +1693,10 @@ const OrderList = () => {
             await orderApi.updateStatus(id, s);
             await fetchOrders(pagination.current_page || 1, filters, pagination.per_page, sortConfig);
             setStatusMenuOrderId(null);
-            setNotification({ type: 'success', message: '?? c?p nh?t tr?ng th?i ??n h?ng' });
+            setNotification({ type: 'success', message: 'Đã cập nhật trạng thái đơn hàng.' });
         } catch (e) {
             console.error("Status update error", e);
-            const errorMsg = e.response?.data?.message || 'L?i c?p nh?t tr?ng th?i';
+            const errorMsg = e.response?.data?.message || 'Lỗi cập nhật trạng thái.';
             setNotification({ type: 'error', message: errorMsg });
         }
     };
@@ -1789,14 +1789,14 @@ const OrderList = () => {
 
     const handleBulkDelete = async () => {
         if (!selectedIds.length) return;
-        if (!window.confirm('X?a ??n h?ng ?? ch?n?')) return;
+        if (!window.confirm('Xóa đơn hàng đã chọn?')) return;
         try {
             setLoading(true);
             await orderApi.bulkDelete(selectedIds, false);
-            setNotification({ type: 'success', message: `?? x?a ${selectedIds.length} ??n` });
+            setNotification({ type: 'success', message: `Đã xóa ${selectedIds.length} đơn.` });
             setSelectedIds([]);
             fetchOrders(1);
-        } catch (e) { setNotification({ type: 'error', message: 'L?i x?a' }); } finally { setLoading(false); }
+        } catch (e) { setNotification({ type: 'error', message: 'Lỗi xóa đơn hàng.' }); } finally { setLoading(false); }
     };
 
     const handleBulkRestore = async () => {
@@ -1804,22 +1804,22 @@ const OrderList = () => {
         try {
             setLoading(true);
             await orderApi.bulkRestore(selectedIds);
-            setNotification({ type: 'success', message: `?? kh?i ph?c ${selectedIds.length} ??n` });
+            setNotification({ type: 'success', message: `Đã khôi phục ${selectedIds.length} đơn.` });
             setSelectedIds([]);
             fetchOrders(1);
-        } catch (e) { setNotification({ type: 'error', message: 'L?i kh?i ph?c' }); } finally { setLoading(false); }
+        } catch (e) { setNotification({ type: 'error', message: 'Lỗi khôi phục đơn hàng.' }); } finally { setLoading(false); }
     };
 
     const handleBulkForceDelete = async () => {
         if (!selectedIds.length) return;
-        if (!window.confirm('X?a v?nh vi?n?')) return;
+        if (!window.confirm('Xóa vĩnh viễn các đơn đã chọn?')) return;
         try {
             setLoading(true);
             await orderApi.bulkDelete(selectedIds, true);
-            setNotification({ type: 'success', message: `?? x?a v?nh vi?n ${selectedIds.length} ??n` });
+            setNotification({ type: 'success', message: `Đã xóa vĩnh viễn ${selectedIds.length} đơn.` });
             setSelectedIds([]);
             fetchOrders(1);
-        } catch (e) { setNotification({ type: 'error', message: 'L?i x?a' }); } finally { setLoading(false); }
+        } catch (e) { setNotification({ type: 'error', message: 'Lỗi xóa đơn hàng.' }); } finally { setLoading(false); }
     };
 
     const handleBulkDuplicate = useCallback(async () => {
@@ -1999,7 +1999,7 @@ const OrderList = () => {
                                     ? <button onClick={() => handleBulkConvert(MAIN_ORDER_KIND)} disabled={selectedIds.length === 0} title="Chốt thành đơn chính" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary border-primary/20 hover:bg-primary hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>
                                     : <button onClick={() => handleBulkConvert(DRAFT_ORDER_KIND)} disabled={selectedIds.length === 0} title="Chuyển sang đơn nháp" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-700 hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">drive_file_move</span></button>}
                                 <button onClick={handleBulkPrint} disabled={selectedIds.length === 0 || printingOrders} title="In đơn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !printingOrders ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${printingOrders ? 'animate-refresh-spin' : ''}`}>{printingOrders ? 'progress_activity' : 'local_printshop'}</span></button>
-                                <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Chuyển vào thùng rác" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete</span></button>
+                                <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Chuyển vào thùng rác" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_sweep</span></button>
                             </>
                         )}
 
@@ -2022,10 +2022,10 @@ const OrderList = () => {
                                 disabled={!selectedBatchReturnState.canSubmit}
                                 title={
                                     selectedIds.length === 0
-                                        ? 'Chon don de tao phieu hoan theo lo'
+                                        ? 'Chọn đơn để tạo phiếu hoàn theo lô'
                                         : selectedBatchReturnState.canSubmit
-                                            ? 'Tao phieu hoan theo lo'
-                                            : (selectedBatchReturnState.firstInvalidReason || 'Danh sach don da chon khong hop le de lap phieu hoan theo lo')
+                                            ? 'Tạo phiếu hoàn theo lô'
+                                            : (selectedBatchReturnState.firstInvalidReason || 'Danh sách đơn đã chọn không hợp lệ để lập phiếu hoàn theo lô')
                                 }
                                 className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${
                                     selectedBatchReturnState.canSubmit
@@ -2279,7 +2279,7 @@ const OrderList = () => {
                     {(filters.created_at_from || filters.created_at_to) && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">Ngày:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.created_at_from || '?'} â†’ {filters.created_at_to || '?'}</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.created_at_from || '?'} → {filters.created_at_to || '?'}</span>
                             <button onClick={() => removeFilter('date')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     )}
@@ -2317,7 +2317,7 @@ const OrderList = () => {
                             </div>
                         );
                     })}
-                    <button onClick={handleReset} className="ml-auto text-[13px] font-bold text-brick hover:underline px-2 pr-1 border-primary/20">X?a t?t c? b? l?c</button>
+                    <button onClick={handleReset} className="ml-auto text-[13px] font-bold text-brick hover:underline px-2 pr-1 border-primary/20">Xóa tất cả bộ lọc</button>
                 </div>
             )}
 
@@ -2362,7 +2362,7 @@ const OrderList = () => {
                                                 onClick={(e) => e.stopPropagation()}
                                                 onChange={() => toggleSelectOrder(o.id)}
                                                 className="size-4 accent-primary cursor-pointer"
-                                                aria-label={`Ch?n ??n ${o.order_number}`}
+                                                aria-label={`Chọn đơn ${o.order_number}`}
                                             />
                                         </div>
                                     </td>

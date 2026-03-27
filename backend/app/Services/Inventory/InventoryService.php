@@ -179,6 +179,7 @@ class InventoryService
     public function createDocument(string $type, array $payload, int $accountId, ?int $userId = null): InventoryDocument
     {
         return match ($type) {
+            'export' => $this->createExportDocument($payload, $accountId, $userId),
             'return' => $this->createReturnDocument($payload, $accountId, $userId),
             'damaged' => $this->createDamagedDocument($payload, $accountId, $userId),
             'adjustment' => $this->createAdjustmentDocument($payload, $accountId, $userId),
@@ -1472,6 +1473,7 @@ class InventoryService
     private function storedDocumentBatchMeta(InventoryDocument $document, InventoryDocumentItem $item): array
     {
         $sourceName = match ((string) $document->type) {
+            'export' => 'Phieu xuat',
             'return' => (string) $document->reference_type === 'order' ? 'Phieu hoan don hang' : 'Phieu hang hoan',
             'adjustment' => 'Phieu dieu chinh',
             default => 'Phieu kho',
@@ -1485,6 +1487,86 @@ class InventoryService
             'document_type' => $baseMeta['document_type'] ?? $document->type,
             'document_item_id' => $baseMeta['document_item_id'] ?? (int) $item->id,
         ]);
+    }
+
+    private function createExportDocument(array $payload, int $accountId, ?int $userId): InventoryDocument
+    {
+        return DB::transaction(function () use ($payload, $accountId, $userId) {
+            $items = collect($payload['items'] ?? [])
+                ->filter(fn ($item) => (int) ($item['quantity'] ?? 0) > 0)
+                ->values();
+
+            if ($items->isEmpty()) {
+                throw ValidationException::withMessages([
+                    'items' => 'Phieu xuat can co it nhat 1 dong hop le.',
+                ]);
+            }
+
+            $productIds = $items->pluck('product_id')->map(fn ($id) => (int) $id)->unique()->values()->all();
+            $products = Product::query()
+                ->whereIn('id', $productIds)
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+
+            if (count($productIds) !== $products->count()) {
+                throw ValidationException::withMessages([
+                    'items' => 'Co san pham trong phieu xuat khong ton tai.',
+                ]);
+            }
+
+            $documentDate = Carbon::parse($payload['document_date'] ?? now());
+            $document = $this->createDocumentHead('export', $payload, $accountId, $userId, $documentDate);
+            $touchedProductIds = [];
+
+            foreach ($items as $item) {
+                $product = $products->get((int) $item['product_id']);
+                $quantity = (int) $item['quantity'];
+                $allowOversold = (bool) ($item['allow_oversold'] ?? $payload['allow_oversold'] ?? false);
+                $allocation = $allowOversold
+                    ? $this->allocateOrderSellableBatches($accountId, $product, $quantity)
+                    : $this->allocateSellableBatches($accountId, $product, $quantity);
+                $avgUnitCost = $quantity > 0 ? round((float) $allocation['total_cost'] / $quantity, 2) : 0;
+                $unitPrice = round((float) ($item['unit_price'] ?? $product->price ?? 0), 2);
+
+                $documentItem = InventoryDocumentItem::create([
+                    'account_id' => $accountId,
+                    'inventory_document_id' => $document->id,
+                    'product_id' => $product->id,
+                    'product_name_snapshot' => $product->name,
+                    'product_sku_snapshot' => $product->sku,
+                    'quantity' => $quantity,
+                    'stock_bucket' => 'sellable',
+                    'direction' => 'out',
+                    'unit_cost' => $avgUnitCost,
+                    'total_cost' => round((float) $allocation['total_cost'], 2),
+                    'unit_price' => $unitPrice,
+                    'total_price' => round($unitPrice * $quantity, 2),
+                    'notes' => $item['notes'] ?? null,
+                    'meta' => $allowOversold ? ['allow_oversold' => true] : null,
+                ]);
+
+                foreach ($allocation['allocations'] as $row) {
+                    InventoryDocumentAllocation::create([
+                        'account_id' => $accountId,
+                        'inventory_document_item_id' => $documentItem->id,
+                        'inventory_batch_id' => $row['inventory_batch_id'],
+                        'product_id' => $product->id,
+                        'quantity' => $row['quantity'],
+                        'unit_cost' => $row['unit_cost'],
+                        'total_cost' => $row['total_cost'],
+                        'allocated_at' => now(),
+                    ]);
+                }
+
+                $touchedProductIds[] = $product->id;
+            }
+
+            $this->finalizeDocumentTotals($document);
+            $this->refreshProducts($touchedProductIds);
+
+            return $document->load(['items.product:id,sku,name', 'creator:id,name']);
+        });
     }
 
     private function createReturnDocument(array $payload, int $accountId, ?int $userId): InventoryDocument
@@ -1777,9 +1859,13 @@ class InventoryService
 
     private function finalizeDocumentTotals(InventoryDocument $document): void
     {
+        $totalAmount = (string) $document->type === 'export'
+            ? round((float) $document->items()->selectRaw('COALESCE(SUM(COALESCE(total_price, total_cost)), 0) as aggregate')->value('aggregate'), 2)
+            : round((float) $document->items()->sum('total_cost'), 2);
+
         $document->forceFill([
             'total_quantity' => (int) $document->items()->sum('quantity'),
-            'total_amount' => round((float) $document->items()->sum('total_cost'), 2),
+            'total_amount' => $totalAmount,
         ])->save();
     }
 
@@ -2070,6 +2156,7 @@ class InventoryService
     private function generateDocumentNumber(string $type, int $accountId): string
     {
         $prefix = match ($type) {
+            'export' => 'PXK',
             'return' => 'PHH',
             'damaged' => 'PHK',
             'adjustment' => 'PDC',

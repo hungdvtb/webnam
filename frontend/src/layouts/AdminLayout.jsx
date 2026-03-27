@@ -10,7 +10,7 @@ const AdminLayout = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const [isSettingsOpen, setIsSettingsOpen] = React.useState(location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users') || location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/shipping-settings'));
-    const [isOrdersOpen, setIsOrdersOpen] = React.useState(location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads'));
+    const [isOrdersOpen, setIsOrdersOpen] = React.useState(location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/return-orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads'));
     const [isDesignOpen, setIsDesignOpen] = React.useState(location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/blog'));
     const [isInventoryOpen, setIsInventoryOpen] = React.useState(location.pathname.startsWith('/admin/inventory'));
 
@@ -18,7 +18,7 @@ const AdminLayout = () => {
 
     React.useEffect(() => {
         if (location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users') || location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/shipping-settings')) setIsSettingsOpen(true);
-        if (location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads')) setIsOrdersOpen(true);
+        if (location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/return-orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads')) setIsOrdersOpen(true);
         if (location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/blog')) setIsDesignOpen(true);
         if (location.pathname.startsWith('/admin/inventory')) setIsInventoryOpen(true);
     }, [location.pathname]);
@@ -59,6 +59,7 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/products')) return 'products';
         if (path.startsWith('/admin/categories')) return 'categories';
         if (path.startsWith('/admin/orders')) return 'orders';
+        if (path.startsWith('/admin/return-orders')) return 'orders';
         if (path.startsWith('/admin/customers')) return 'customers';
         if (path.startsWith('/admin/inventory')) return 'inventory';
         if (path.startsWith('/admin/reports')) return 'reports';
@@ -212,6 +213,13 @@ const AdminLayout = () => {
                                             >
                                                 <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/orders' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>receipt_long</span>
                                                 <span className="font-sans text-xs font-medium tracking-wide">Đơn hàng</span>
+                                            </Link>
+                                            <Link 
+                                                to="/admin/return-orders" 
+                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname.startsWith('/admin/return-orders') ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
+                                            >
+                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname.startsWith('/admin/return-orders') ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>assignment_return</span>
+                                                <span className="font-sans text-xs font-medium tracking-wide">Đơn đổi trả</span>
                                             </Link>
                                             <Link 
                                                 to="/admin/shipments" 

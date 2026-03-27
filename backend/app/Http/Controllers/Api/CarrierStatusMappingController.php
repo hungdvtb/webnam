@@ -5,10 +5,15 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Carrier;
 use App\Models\CarrierStatusMapping;
+use App\Services\Shipping\CarrierStatusMapper;
 use Illuminate\Http\Request;
 
 class CarrierStatusMappingController extends Controller
 {
+    public function __construct(private CarrierStatusMapper $carrierStatusMapper)
+    {
+    }
+
     public function index(Request $request)
     {
         $accountId = $request->header('X-Account-Id');
@@ -27,14 +32,12 @@ class CarrierStatusMappingController extends Controller
 
         $mappings = $query->get();
 
-        // Dynamic order statuses from database
         $orderStatuses = \App\Models\OrderStatus::query()
-            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+            ->when($accountId, fn ($q) => $q->where('account_id', $accountId))
             ->where('is_active', true)
             ->orderBy('sort_order')
             ->get(['id', 'code', 'name', 'color', 'sort_order', 'is_system']);
 
-        // Preparation for unknown statuses discovery (for specific carrier if requested or all)
         $discoveredStatuses = \App\Models\CarrierRawStatus::query()
             ->where(function ($scoped) use ($accountId) {
                 $scoped->where('account_id', $accountId)
@@ -63,7 +66,7 @@ class CarrierStatusMappingController extends Controller
     public function updateCarrier(Request $request, $code)
     {
         $carrier = Carrier::where('code', $code)->firstOrFail();
-        
+
         $request->validate([
             'name' => 'sometimes|string|max:255',
             'color' => 'sometimes|string|max:20',
@@ -80,13 +83,13 @@ class CarrierStatusMappingController extends Controller
     public function store(Request $request)
     {
         $request->validate([
-            'carrier_code'             => 'required|string|max:50',
-            'carrier_raw_status'       => 'required|string',
+            'carrier_code' => 'required|string|max:50',
+            'carrier_raw_status' => 'required|string',
             'internal_shipment_status' => 'required|string|max:50',
-            'mapped_order_status'      => 'nullable|string|max:50',
-            'is_terminal'              => 'boolean',
-            'sort_order'               => 'integer',
-            'description'              => 'nullable|string',
+            'mapped_order_status' => 'nullable|string|max:50',
+            'is_terminal' => 'boolean',
+            'sort_order' => 'integer',
+            'description' => 'nullable|string',
         ]);
 
         $exists = CarrierStatusMapping::where('carrier_code', $request->carrier_code)
@@ -98,17 +101,22 @@ class CarrierStatusMappingController extends Controller
             ->exists();
 
         if ($exists) {
-            return response()->json(['message' => 'Mapping này đã tồn tại cho hãng VC này.'], 422);
+            return response()->json(['message' => 'Mapping nay da ton tai cho hang VC nay.'], 422);
         }
 
         $mapping = CarrierStatusMapping::create(array_merge($request->only([
-            'carrier_code', 'carrier_raw_status', 'internal_shipment_status',
-            'mapped_order_status', 'is_terminal', 'sort_order', 'is_active', 'description',
+            'carrier_code',
+            'carrier_raw_status',
+            'internal_shipment_status',
+            'mapped_order_status',
+            'is_terminal',
+            'sort_order',
+            'is_active',
+            'description',
         ]), [
             'account_id' => $request->header('X-Account-Id'),
         ]));
 
-        // If this was a discovered status, mark it as mapped
         \App\Models\CarrierRawStatus::where('carrier_code', $request->carrier_code)
             ->where('raw_status', $request->carrier_raw_status)
             ->where(function ($scoped) use ($request) {
@@ -116,6 +124,8 @@ class CarrierStatusMappingController extends Controller
                     ->orWhereNull('account_id');
             })
             ->update(['is_mapped' => true, 'mapping_id' => $mapping->id]);
+
+        $this->carrierStatusMapper->clearCache($mapping->carrier_code);
 
         return response()->json($mapping, 201);
     }
@@ -125,41 +135,53 @@ class CarrierStatusMappingController extends Controller
         $mapping = CarrierStatusMapping::findOrFail($id);
 
         $request->validate([
-            'carrier_raw_status'       => 'sometimes|string',
+            'carrier_raw_status' => 'sometimes|string',
             'internal_shipment_status' => 'sometimes|string|max:50',
-            'mapped_order_status'      => 'nullable|string|max:50',
-            'is_terminal'              => 'boolean',
-            'sort_order'               => 'integer',
-            'is_active'                => 'boolean',
-            'description'              => 'nullable|string',
+            'mapped_order_status' => 'nullable|string|max:50',
+            'is_terminal' => 'boolean',
+            'sort_order' => 'integer',
+            'is_active' => 'boolean',
+            'description' => 'nullable|string',
         ]);
 
         $mapping->update($request->only([
-            'carrier_raw_status', 'internal_shipment_status',
-            'mapped_order_status', 'is_terminal', 'sort_order', 'is_active', 'description',
+            'carrier_raw_status',
+            'internal_shipment_status',
+            'mapped_order_status',
+            'is_terminal',
+            'sort_order',
+            'is_active',
+            'description',
         ]));
+
+        $this->carrierStatusMapper->clearCache($mapping->carrier_code);
 
         return response()->json($mapping);
     }
 
     public function destroy($id)
     {
-        CarrierStatusMapping::findOrFail($id)->delete();
-        return response()->json(['message' => 'Đã xóa mapping']);
+        $mapping = CarrierStatusMapping::findOrFail($id);
+        $carrierCode = $mapping->carrier_code;
+        $mapping->delete();
+
+        $this->carrierStatusMapper->clearCache($carrierCode);
+
+        return response()->json(['message' => 'Da xoa mapping']);
     }
 
     public function updateCarriersSort(Request $request)
     {
         $request->validate([
             'order' => 'required|array',
-            'order.*' => 'string', // carrier codes
+            'order.*' => 'string',
         ]);
 
         foreach ($request->order as $index => $code) {
             Carrier::where('code', $code)->update(['sort_order' => $index]);
         }
 
-        return response()->json(['message' => 'Đã cập nhật thứ tự']);
+        return response()->json(['message' => 'Da cap nhat thu tu']);
     }
 
     public function toggleCarrierVisibility(Request $request, $code)

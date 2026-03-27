@@ -19,6 +19,20 @@ use Illuminate\Support\Facades\DB;
 
 class ShipmentController extends Controller
 {
+    private const VALID_SHIPMENT_STATUSES = [
+        'created',
+        'waiting_pickup',
+        'picked_up',
+        'shipped',
+        'in_transit',
+        'out_for_delivery',
+        'delivered',
+        'delivery_failed',
+        'returning',
+        'returned',
+        'canceled',
+    ];
+
     private ShipmentStatusSyncService $syncService;
 
     public function __construct(ShipmentStatusSyncService $syncService)
@@ -31,71 +45,128 @@ class ShipmentController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Shipment::with(['order:id,order_number,customer_name,customer_phone,status,total_price,shipping_status,shipping_status_source,shipping_issue_code,shipping_issue_message', 'warehouse:id,name', 'carrier:id,code,name,logo', 'integration:id,carrier_code,carrier_name,connection_status']);
+        $query = Shipment::query()
+            ->with([
+                'order:id,order_number,customer_name,customer_phone,status,total_price,shipping_status,shipping_status_source,shipping_carrier_code,shipping_carrier_name,shipping_tracking_code,shipping_dispatched_at,shipping_issue_code,shipping_issue_message',
+                'warehouse:id,name',
+                'carrier:id,code,name,logo',
+                'integration:id,carrier_code,carrier_name,connection_status',
+            ]);
 
         // Search
-        if ($search = $request->search) {
+        if ($search = trim((string) $request->input('search', ''))) {
             $query->where(function ($q) use ($search) {
                 $q->where('shipment_number', 'like', "%{$search}%")
                   ->orWhere('tracking_number', 'like', "%{$search}%")
                   ->orWhere('carrier_tracking_code', 'like', "%{$search}%")
                   ->orWhere('customer_name', 'like', "%{$search}%")
                   ->orWhere('customer_phone', 'like', "%{$search}%")
-                  ->orWhere('order_code', 'like', "%{$search}%");
+                  ->orWhere('customer_address', 'like', "%{$search}%")
+                  ->orWhere('order_code', 'like', "%{$search}%")
+                  ->orWhereHas('order', function ($orderQuery) use ($search) {
+                      $orderQuery->where('order_number', 'like', "%{$search}%")
+                          ->orWhere('status', 'like', "%{$search}%");
+                  });
             });
         }
 
         // Filters
-        if ($request->shipment_status) {
-            $statuses = explode(',', $request->shipment_status);
+        if ($request->filled('shipment_number')) {
+            $query->where('shipment_number', 'like', '%' . trim((string) $request->input('shipment_number')) . '%');
+        }
+        if ($request->filled('order_code')) {
+            $query->where('order_code', 'like', '%' . trim((string) $request->input('order_code')) . '%');
+        }
+        if ($request->filled('customer_name')) {
+            $query->where('customer_name', 'like', '%' . trim((string) $request->input('customer_name')) . '%');
+        }
+        if ($request->filled('customer_phone')) {
+            $query->where('customer_phone', 'like', '%' . trim((string) $request->input('customer_phone')) . '%');
+        }
+        if ($request->filled('customer_address')) {
+            $query->where('customer_address', 'like', '%' . trim((string) $request->input('customer_address')) . '%');
+        }
+        if ($request->filled('order_status')) {
+            $orderStatuses = array_filter(explode(',', (string) $request->input('order_status')));
+            $query->whereHas('order', function ($orderQuery) use ($orderStatuses) {
+                $orderQuery->whereIn('status', $orderStatuses);
+            });
+        }
+        if ($request->filled('shipment_status')) {
+            $statuses = array_filter(explode(',', (string) $request->input('shipment_status')));
             $query->whereIn('shipment_status', $statuses);
         }
-        if ($request->reconciliation_status) {
-            $query->where('reconciliation_status', $request->reconciliation_status);
+        if ($request->filled('reconciliation_status')) {
+            $query->where('reconciliation_status', $request->input('reconciliation_status'));
         }
-        if ($request->cod_status) {
-            $query->where('cod_status', $request->cod_status);
+        if ($request->filled('cod_status')) {
+            $query->where('cod_status', $request->input('cod_status'));
         }
-        if ($request->carrier_code) {
-            $query->where('carrier_code', $request->carrier_code);
+        if ($request->filled('carrier_code')) {
+            $query->where('carrier_code', $request->input('carrier_code'));
         }
-        if ($request->customer_province) {
-            $query->where('customer_province', 'like', "%{$request->customer_province}%");
+        if ($request->filled('customer_province')) {
+            $query->where('customer_province', 'like', '%' . trim((string) $request->input('customer_province')) . '%');
         }
-        if ($request->assigned_to) {
-            $query->where('assigned_to', $request->assigned_to);
+        if ($request->filled('assigned_to')) {
+            $query->where('assigned_to', $request->input('assigned_to'));
         }
-        if ($request->risk_flag) {
-            $query->where('risk_flag', $request->risk_flag);
+        if ($request->filled('risk_flag')) {
+            $query->where('risk_flag', $request->input('risk_flag'));
         }
 
         // Date ranges
-        if ($request->created_from) {
-            $query->whereDate('created_at', '>=', $request->created_from);
+        $createdFrom = $request->input('created_at_from', $request->input('created_from'));
+        $createdTo = $request->input('created_at_to', $request->input('created_to'));
+        $shippingDispatchedFrom = $request->input('shipping_dispatched_from', $request->input('shipped_from'));
+        $shippingDispatchedTo = $request->input('shipping_dispatched_to', $request->input('shipped_to'));
+
+        if ($createdFrom) {
+            $query->whereDate('created_at', '>=', $createdFrom);
         }
-        if ($request->created_to) {
-            $query->whereDate('created_at', '<=', $request->created_to);
+        if ($createdTo) {
+            $query->whereDate('created_at', '<=', $createdTo);
         }
-        if ($request->shipped_from) {
-            $query->whereDate('shipped_at', '>=', $request->shipped_from);
+        if ($shippingDispatchedFrom) {
+            $query->whereDate('shipped_at', '>=', $shippingDispatchedFrom);
         }
-        if ($request->shipped_to) {
-            $query->whereDate('shipped_at', '<=', $request->shipped_to);
+        if ($shippingDispatchedTo) {
+            $query->whereDate('shipped_at', '<=', $shippingDispatchedTo);
         }
 
         // COD range
-        if ($request->cod_min) {
-            $query->where('cod_amount', '>=', $request->cod_min);
+        if ($request->filled('cod_min')) {
+            $query->where('cod_amount', '>=', $request->input('cod_min'));
         }
-        if ($request->cod_max) {
-            $query->where('cod_amount', '<=', $request->cod_max);
+        if ($request->filled('cod_max')) {
+            $query->where('cod_amount', '<=', $request->input('cod_max'));
         }
 
         // Sorting
-        $sortBy = $request->get('sort_by', 'created_at');
-        $sortOrder = $request->get('sort_order', 'desc');
-        $allowedSorts = ['created_at', 'shipment_number', 'cod_amount', 'shipping_cost', 'shipment_status', 'delivered_at', 'customer_name'];
-        if (in_array($sortBy, $allowedSorts)) {
+        $sortBy = (string) $request->get('sort_by', 'created_at');
+        $sortOrder = strtolower((string) $request->get('sort_order', 'desc')) === 'asc' ? 'asc' : 'desc';
+        $allowedSorts = [
+            'created_at',
+            'shipment_number',
+            'order_code',
+            'carrier_name',
+            'customer_name',
+            'customer_phone',
+            'shipment_status',
+            'cod_amount',
+            'shipping_cost',
+            'actual_received_amount',
+            'shipped_at',
+        ];
+        if ($sortBy === 'order_status') {
+            $query->orderBy(
+                Order::query()
+                    ->select('status')
+                    ->whereColumn('orders.id', 'shipments.order_id')
+                    ->limit(1),
+                $sortOrder
+            );
+        } elseif (in_array($sortBy, $allowedSorts, true)) {
             $query->orderBy($sortBy, $sortOrder);
         } else {
             $query->latest();
@@ -106,7 +177,7 @@ class ShipmentController extends Controller
             $query->onlyTrashed();
         }
 
-        $perPage = $request->get('per_page', 20);
+        $perPage = min(max((int) $request->get('per_page', 20), 1), 100);
         return response()->json($query->paginate($perPage));
     }
 
@@ -119,7 +190,7 @@ class ShipmentController extends Controller
 
         $stats = [
             'total' => (clone $base)->count(),
-            'in_transit' => (clone $base)->whereIn('shipment_status', ['in_transit', 'out_for_delivery'])->count(),
+            'in_transit' => (clone $base)->whereIn('shipment_status', ['shipped', 'in_transit', 'out_for_delivery'])->count(),
             'delivered' => (clone $base)->where('shipment_status', 'delivered')->count(),
             'delivery_failed' => (clone $base)->where('shipment_status', 'delivery_failed')->count(),
             'returning' => (clone $base)->whereIn('shipment_status', ['returning', 'returned'])->count(),
@@ -269,10 +340,8 @@ class ShipmentController extends Controller
      */
     public function updateStatus(Request $request, $id)
     {
-        $validStatuses = ['created','waiting_pickup','picked_up','in_transit','out_for_delivery','delivered','delivery_failed','returning','returned','canceled'];
-
         $request->validate([
-            'status' => 'required|string|in:' . implode(',', $validStatuses),
+            'status' => 'required|string|in:' . implode(',', self::VALID_SHIPMENT_STATUSES),
             'reason' => 'nullable|string',
             'failed_reason' => 'nullable|string',
             'admin_override' => 'nullable|boolean',
@@ -313,15 +382,50 @@ class ShipmentController extends Controller
     {
         $shipment = Shipment::findOrFail($id);
 
+        $request->validate([
+            'tracking_number' => 'nullable|string|max:100',
+            'carrier_code' => 'nullable|string|max:50',
+            'carrier_name' => 'nullable|string|max:255',
+            'carrier_tracking_code' => 'nullable|string|max:100',
+            'cod_amount' => 'nullable|numeric|min:0',
+            'shipping_cost' => 'nullable|numeric|min:0',
+            'service_fee' => 'nullable|numeric|min:0',
+            'return_fee' => 'nullable|numeric|min:0',
+            'insurance_fee' => 'nullable|numeric|min:0',
+            'other_fee' => 'nullable|numeric|min:0',
+            'internal_note' => 'nullable|string',
+            'assigned_to' => 'nullable|integer',
+            'priority_level' => 'nullable|string|max:20',
+            'risk_flag' => 'nullable|string|max:30',
+            'customer_name' => 'nullable|string|max:255',
+            'customer_phone' => 'nullable|string|max:30',
+            'customer_address' => 'nullable|string',
+            'customer_ward' => 'nullable|string|max:255',
+            'customer_district' => 'nullable|string|max:255',
+            'customer_province' => 'nullable|string|max:255',
+            'shipped_at' => 'nullable|date',
+        ]);
+
         $fillable = [
             'tracking_number', 'carrier_code', 'carrier_name', 'carrier_tracking_code',
             'cod_amount', 'shipping_cost', 'service_fee', 'return_fee', 'insurance_fee', 'other_fee',
             'internal_note', 'assigned_to', 'priority_level', 'risk_flag',
             'customer_name', 'customer_phone', 'customer_address',
             'customer_ward', 'customer_district', 'customer_province',
+            'shipped_at',
         ];
 
         $data = $request->only($fillable);
+
+        if (array_key_exists('tracking_number', $data) && !array_key_exists('carrier_tracking_code', $data)) {
+            $data['carrier_tracking_code'] = $data['tracking_number'];
+        }
+        if (array_key_exists('carrier_tracking_code', $data) && !array_key_exists('tracking_number', $data)) {
+            $data['tracking_number'] = $data['carrier_tracking_code'];
+        }
+        if (array_key_exists('shipped_at', $data) && blank($data['shipped_at'])) {
+            $data['shipped_at'] = null;
+        }
 
         // Recalculate actual_received
         if (isset($data['cod_amount']) || isset($data['shipping_cost']) || isset($data['service_fee']) || isset($data['return_fee']) || isset($data['other_fee'])) {
@@ -334,6 +438,8 @@ class ShipmentController extends Controller
         }
 
         $shipment->update($data);
+        $shipment->load('order');
+        $this->syncService->syncOrderFromShipment($shipment, 'manual_shipment_update', auth()->id(), false);
 
         return response()->json($shipment->fresh(['order', 'carrier']));
     }
@@ -373,11 +479,14 @@ class ShipmentController extends Controller
     {
         $request->validate([
             'ids' => 'required|array|min:1',
-            'status' => 'required|string',
+            'status' => 'required|string|in:' . implode(',', self::VALID_SHIPMENT_STATUSES),
             'reason' => 'nullable|string',
+            'admin_override' => 'nullable|boolean',
         ]);
 
         $results = ['updated' => 0, 'failed' => 0, 'errors' => []];
+        $isAdmin = auth()->user()?->is_admin ?? false;
+        $isOverride = $request->boolean('admin_override') && $isAdmin;
 
         foreach ($request->ids as $id) {
             $shipment = Shipment::find($id);
@@ -388,7 +497,9 @@ class ShipmentController extends Controller
                 $request->status,
                 'manual',
                 auth()->id(),
-                $request->reason ?? 'Cập nhật hàng loạt'
+                $request->reason ?? 'Cập nhật hàng loạt',
+                null,
+                $isOverride
             );
 
             if ($result['success']) {
@@ -549,7 +660,7 @@ class ShipmentController extends Controller
 
         $query = Shipment::query();
         if (($validated['mode'] ?? 'selected') === 'active') {
-            $query->whereIn('shipment_status', ['waiting_pickup', 'picked_up', 'in_transit', 'out_for_delivery', 'delivery_failed', 'returning']);
+            $query->whereIn('shipment_status', ['waiting_pickup', 'picked_up', 'shipped', 'in_transit', 'out_for_delivery', 'delivery_failed', 'returning']);
         } elseif (!empty($validated['shipment_ids'])) {
             $query->whereIn('id', $validated['shipment_ids']);
         } else {
@@ -598,6 +709,15 @@ class ShipmentController extends Controller
             return response()->json(['message' => 'Không tìm thấy vận đơn tương ứng.'], 404);
         }
 
+        $codAmount = is_numeric($payload['MONEY_COLLECTION'] ?? null) ? (float) $payload['MONEY_COLLECTION'] : (float) $shipment->cod_amount;
+        $shippingCost = is_numeric($payload['MONEY_TOTAL'] ?? null) ? (float) $payload['MONEY_TOTAL'] : (float) $shipment->shipping_cost;
+        $serviceFee = is_numeric($payload['MONEY_FEECOD'] ?? null) ? (float) $payload['MONEY_FEECOD'] : (float) $shipment->service_fee;
+        $actualReceivedAmount = $codAmount
+            - $shippingCost
+            - $serviceFee
+            - (float) $shipment->return_fee
+            - (float) $shipment->other_fee;
+
         $shipment->forceFill([
             'tracking_number' => $shipment->tracking_number ?: $trackingNumber,
             'carrier_tracking_code' => $shipment->carrier_tracking_code ?: $trackingNumber,
@@ -605,9 +725,10 @@ class ShipmentController extends Controller
             'carrier_status_text' => 'Webhook ViettelPost',
             'raw_tracking_payload' => $payload,
             'last_webhook_received_at' => now(),
-            'cod_amount' => is_numeric($payload['MONEY_COLLECTION'] ?? null) ? (float) $payload['MONEY_COLLECTION'] : $shipment->cod_amount,
-            'shipping_cost' => is_numeric($payload['MONEY_TOTAL'] ?? null) ? (float) $payload['MONEY_TOTAL'] : $shipment->shipping_cost,
-            'service_fee' => is_numeric($payload['MONEY_FEECOD'] ?? null) ? (float) $payload['MONEY_FEECOD'] : $shipment->service_fee,
+            'cod_amount' => $codAmount,
+            'shipping_cost' => $shippingCost,
+            'service_fee' => $serviceFee,
+            'actual_received_amount' => round($actualReceivedAmount, 2),
             'last_synced_at' => now(),
         ])->save();
 

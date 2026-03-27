@@ -5964,7 +5964,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             }] : []),
             ...(isSlipTab(tabKey) && !isTrashTab ? [{
                 id: `${tabKey}_delete_selected`,
-                icon: 'delete',
+                icon: 'delete_sweep',
                 label: `Xóa ${formatNumber(selectionState.count)} phiếu đã chọn`,
                 disabledTitle: 'Hãy chọn ít nhất một phiếu để xóa',
                 active: selectionState.count > 0,
@@ -5972,7 +5972,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 onClick: () => bulkDeleteSelectedSlips(tabKey),
             }, {
                 id: `${tabKey}_open_trash`,
-                icon: 'delete_sweep',
+                icon: 'delete',
                 label: 'Mở thùng rác phiếu',
                 active: false,
                 onClick: () => goToTab('trash'),

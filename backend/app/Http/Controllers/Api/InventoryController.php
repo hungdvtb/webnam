@@ -1532,6 +1532,11 @@ class InventoryController extends Controller
             $rules['items.*.unit_cost'] = 'nullable|numeric|min:0';
         }
 
+        if ($type === 'export') {
+            $rules['items.*.unit_price'] = 'nullable|numeric|min:0';
+            $rules['items.*.allow_oversold'] = 'nullable|boolean';
+        }
+
         if ($type === 'adjustment') {
             $rules['items.*.stock_bucket'] = ['required', Rule::in(['sellable', 'damaged'])];
             $rules['items.*.direction'] = ['required', Rule::in(['in', 'out'])];
@@ -1586,6 +1591,11 @@ class InventoryController extends Controller
 
         if ($type === 'return') {
             $rules['items.*.unit_cost'] = 'nullable|numeric|min:0';
+        }
+
+        if ($type === 'export') {
+            $rules['items.*.unit_price'] = 'nullable|numeric|min:0';
+            $rules['items.*.allow_oversold'] = 'nullable|boolean';
         }
 
         if ($type === 'adjustment') {
@@ -1814,7 +1824,7 @@ class InventoryController extends Controller
 
         $documentsQuery = InventoryDocument::onlyTrashed()
             ->where('inventory_documents.account_id', $accountId)
-            ->whereIn('inventory_documents.type', ['return', 'damaged', 'adjustment'])
+            ->whereIn('inventory_documents.type', ['export', 'return', 'damaged', 'adjustment'])
             ->where(function ($builder) {
                 $builder
                     ->where('inventory_documents.type', '!=', 'adjustment')
@@ -1823,12 +1833,14 @@ class InventoryController extends Controller
             ->leftJoin('suppliers', 'suppliers.id', '=', 'inventory_documents.supplier_id')
             ->selectRaw("
                 CASE inventory_documents.type
+                    WHEN 'export' THEN 'exports'
                     WHEN 'return' THEN 'returns'
                     WHEN 'damaged' THEN 'damaged'
                     ELSE 'adjustments'
                 END as section_key,
                 inventory_documents.type as slip_type_key,
                 CASE inventory_documents.type
+                    WHEN 'export' THEN 'Phieu xuat'
                     WHEN 'return' THEN 'Phieu hoan'
                     WHEN 'damaged' THEN 'Phieu hong'
                     ELSE 'Phieu dieu chinh'
@@ -2201,6 +2213,7 @@ class InventoryController extends Controller
     private function normalizeDocumentType(string $type): string
     {
         return match ($type) {
+            'export', 'exports' => 'export',
             'return', 'returns' => 'return',
             'damaged', 'damage' => 'damaged',
             'adjustment', 'adjustments' => 'adjustment',

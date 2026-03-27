@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductGroupController;
 use App\Http\Controllers\Api\ProductImageController;
+use App\Http\Controllers\Api\ReturnOrderController;
 use App\Http\Controllers\Api\AIController;
 use App\Http\Controllers\Api\MediaController;
 use Illuminate\Http\Request;
@@ -147,6 +148,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/bulk-restore', [\App\Http\Controllers\Api\OrderController::class , 'bulkRestore']);
     Route::post('/orders/bulk-convert', [\App\Http\Controllers\Api\OrderController::class , 'bulkConvert']);
     Route::post('/orders/bulk-duplicate', [\App\Http\Controllers\Api\OrderController::class , 'bulkDuplicate']);
+
+    // Return / exchange orders
+    Route::get('/return-orders', [ReturnOrderController::class, 'index']);
+    Route::post('/return-orders', [ReturnOrderController::class, 'store']);
+    Route::get('/return-orders/{id}', [ReturnOrderController::class, 'show'])->whereNumber('id');
+    Route::put('/return-orders/{id}/status', [ReturnOrderController::class, 'updateStatus'])->whereNumber('id');
 
     // Order Statuses
     Route::get('/order-statuses', [\App\Http\Controllers\Api\OrderStatusController::class , 'index']);

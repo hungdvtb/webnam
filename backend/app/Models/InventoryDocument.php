@@ -2,12 +2,12 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\OptionalSoftDeletes;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
 
 class InventoryDocument extends Model
 {
-    use \App\Traits\BelongsToAccount, SoftDeletes;
+    use \App\Traits\BelongsToAccount, OptionalSoftDeletes;
 
     protected $fillable = [
         'account_id',

@@ -4,7 +4,8 @@ title Webnam Backend API :8003
 
 cd /d "%~dp0backend"
 
-set "PHP_EXE=C:\xampp\php\php.exe"
+set "PHP_EXE=C:\xampp\htdocs\webnam\php84\php.exe"
+if not exist "%PHP_EXE%" set "PHP_EXE=C:\xampp\php\php.exe"
 if not exist "%PHP_EXE%" set "PHP_EXE=php"
 
 echo.

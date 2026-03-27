@@ -5,6 +5,14 @@ import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
 import SearchableSelect from '../../components/SearchableSelect';
+import OrderSupplementItemsSection from '../../components/admin/OrderSupplementItemsSection';
+import {
+    ORDER_TYPE_OPTIONS,
+    ORDER_TYPE_STANDARD,
+    getOrderTypeMeta,
+    isSpecialOrderType,
+    normalizeOrderType,
+} from '../../config/orderTypes';
 import { writeLeadListReturnHint } from '../../utils/leadListViewState';
 import { VN_REGIONS } from '../../data/regions';
 import {
@@ -268,6 +276,14 @@ const parseMoneyNumber = (value, fallback = null) => {
     return Number.isFinite(numericValue) ? numericValue : fallback;
 };
 const calculateItemsCostTotal = (items = []) => items.reduce(
+    (sum, item) => sum + ((parseMoneyNumber(item?.cost_price, 0) || 0) * (parseMoneyNumber(item?.quantity, 0) || 0)),
+    0
+);
+const calculateSupplementItemsTotal = (items = []) => items.reduce(
+    (sum, item) => sum + ((parseMoneyNumber(item?.price, 0) || 0) * (parseMoneyNumber(item?.quantity, 0) || 0)),
+    0
+);
+const calculateSupplementItemsCostTotal = (items = []) => items.reduce(
     (sum, item) => sum + ((parseMoneyNumber(item?.cost_price, 0) || 0) * (parseMoneyNumber(item?.quantity, 0) || 0)),
     0
 );
@@ -602,6 +618,7 @@ const OrderForm = () => {
     const [isRefreshingItems, setIsRefreshingItems] = useState(false);
     const [quoteSettings, setQuoteSettings] = useState(defaultQuoteSettings);
     const [quoteTemplates, setQuoteTemplates] = useState([]);
+    const [showSupplementItemsModal, setShowSupplementItemsModal] = useState(false);
     const [showQuoteTemplatePicker, setShowQuoteTemplatePicker] = useState(false);
     const [quoteTemplateSearch, setQuoteTemplateSearch] = useState('');
     const [quoteCaptureTemplate, setQuoteCaptureTemplate] = useState(null);
@@ -693,10 +710,13 @@ const OrderForm = () => {
         district: '',
         ward: '',
         source: 'Website',
+        order_type: ORDER_TYPE_STANDARD,
+        settlement_delta: 0,
         type: 'Lẻ',
         shipment_status: 'Chưa giao',
         notes: '',
         items: [],
+        supplement_items: [],
         custom_attributes: {},
         shipping_fee: 0,
         discount: 0,
@@ -713,6 +733,7 @@ const OrderForm = () => {
     const useNewAddress = regionType === 'new';
     const isWardsLoading = false;
     const isDistrictsLoading = false;
+
     useEffect(() => {
         if (productQuickFilterAttributes.length === 0) {
             return;
@@ -1173,6 +1194,7 @@ const OrderForm = () => {
             const response = await orderApi.getOneCached(targetId);
             const order = response.data;
             const nextOrderKind = getNormalizedOrderKind(order.order_kind);
+            const nextOrderType = normalizeOrderType(order.order_type);
 
             const customAttrValues = {};
             order.attribute_values?.forEach(av => {
@@ -1197,6 +1219,15 @@ const OrderForm = () => {
                 price: parseMoneyNumber(item.price, 0) || 0,
                 cost_price: resolveOrderItemCostPrice(item, shouldUseCurrentProductCost)
             })) || [];
+            const mappedSupplementItems = (order.supplement_items || order.supplementItems || []).map((item) => ({
+                product_id: item.product_id,
+                name: item.product?.name || item.product_name_snapshot || `Sản phẩm #${item.product_id}`,
+                sku: item.product?.sku || item.product_sku_snapshot || 'N/A',
+                quantity: parseMoneyNumber(item.quantity, 0) || 0,
+                price: parseMoneyNumber(item.price, 0) || 0,
+                cost_price: parseMoneyNumber(item.cost_price, 0) || 0,
+                notes: item.notes || '',
+            }));
             const mappedCostTotal = shouldUseCurrentProductCost
                 ? (parseMoneyNumber(order.current_cost_total, calculateItemsCostTotal(mappedItems)) || 0)
                 : (parseMoneyNumber(order.cost_total, calculateItemsCostTotal(mappedItems)) || 0);
@@ -1213,6 +1244,8 @@ const OrderForm = () => {
                 }),
                 shipping_address: order.shipping_address || '',
                 notes: order.notes || '',
+                order_type: nextOrderType,
+                settlement_delta: isDuplicating ? 0 : (parseMoneyNumber(order.settlement_delta, 0) || 0),
                 items: order.items?.map(item => ({
                     product_id: item.product_id,
                     name: item.product?.name || item.product_name_snapshot || `Sản phẩm #${item.product_id}`,
@@ -1221,6 +1254,7 @@ const OrderForm = () => {
                     price: item.price,
                     cost_price: item.cost_price || item.product?.cost_price || item.product?.expected_cost || 0
                 })) || [],
+                supplement_items: mappedSupplementItems,
                 custom_attributes: customAttrValues,
                 shipping_fee: order.shipping_fee || 0,
                 discount: order.discount || 0,
@@ -1237,6 +1271,7 @@ const OrderForm = () => {
                 ...prev,
                 items: mappedItems,
                 cost_total: mappedCostTotal,
+                supplement_items: mappedSupplementItems,
             }));
             setRegionType(order.district ? 'old' : 'new');
 
@@ -1298,10 +1333,13 @@ const OrderForm = () => {
                 ward: draft.ward || '',
                 province: draft.province || '',
                 source: draft.source || 'Website',
+                order_type: ORDER_TYPE_STANDARD,
+                settlement_delta: 0,
                 type: draft.type || 'Lẻ',
                 shipment_status: draft.shipment_status || 'Chưa giao',
                 notes: draft.notes || '',
                 items: draftItems,
+                supplement_items: [],
                 custom_attributes: draft.custom_attributes || {},
                 shipping_fee: Number(draft.shipping_fee) || 0,
                 discount: Number(draft.discount) || 0,
@@ -1370,6 +1408,25 @@ const OrderForm = () => {
         }
 
         setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleOrderTypeChange = (event) => {
+        const nextOrderType = normalizeOrderType(event.target.value);
+
+        setFormData((prev) => ({
+            ...prev,
+            order_type: nextOrderType,
+            settlement_delta: nextOrderType === ORDER_TYPE_STANDARD ? 0 : (parseMoneyNumber(prev.settlement_delta, 0) || 0),
+            supplement_items: nextOrderType === ORDER_TYPE_STANDARD ? [] : (Array.isArray(prev.supplement_items) ? prev.supplement_items : []),
+        }));
+    };
+
+    const handleSettlementDeltaChange = (event) => {
+        const numericValue = Number(event.target.value);
+        setFormData((prev) => ({
+            ...prev,
+            settlement_delta: Number.isFinite(numericValue) ? numericValue : 0,
+        }));
     };
 
     const handleShippingAddressChange = (e) => {
@@ -1455,6 +1512,28 @@ const OrderForm = () => {
     const calculateTotal = () => {
         return calculateSubtotal() + Number(formData.shipping_fee) - Number(formData.discount);
     };
+
+    const normalizedOrderType = normalizeOrderType(formData.order_type);
+    const orderTypeMeta = getOrderTypeMeta(normalizedOrderType);
+    const specialOrderType = isSpecialOrderType(normalizedOrderType);
+    const supplementItemsTotal = calculateSupplementItemsTotal(formData.supplement_items);
+    const supplementItemsCostTotal = calculateSupplementItemsCostTotal(formData.supplement_items);
+    const reportRevenueTotal = specialOrderType
+        ? (calculateTotal() - supplementItemsTotal + (parseMoneyNumber(formData.settlement_delta, 0) || 0))
+        : calculateTotal();
+    const reportCostTotal = specialOrderType
+        ? ((parseMoneyNumber(formData.cost_total, 0) || 0) - supplementItemsCostTotal)
+        : (parseMoneyNumber(formData.cost_total, 0) || 0);
+    const reportProfitTotal = reportRevenueTotal - reportCostTotal;
+    const supplementDeclarationCount = Array.isArray(formData.supplement_items)
+        ? formData.supplement_items.length
+        : 0;
+
+    useEffect(() => {
+        if (!specialOrderType) {
+            setShowSupplementItemsModal(false);
+        }
+    }, [specialOrderType]);
 
     const captureQuoteImage = async (template) => {
         if (!template) return;
@@ -1920,9 +1999,23 @@ const OrderForm = () => {
 
         setSaving(true);
         try {
+            const normalizedSupplementItems = specialOrderType
+                ? (Array.isArray(formData.supplement_items) ? formData.supplement_items : []).map((item) => ({
+                    product_id: Number(item.product_id) || 0,
+                    quantity: Math.max(0, Number(item.quantity) || 0),
+                    price: Math.max(0, Number(item.price) || 0),
+                    cost_price: Math.max(0, Number(item.cost_price) || 0),
+                    name: item.name || '',
+                    sku: item.sku || '',
+                    notes: item.notes || '',
+                })).filter((item) => item.product_id && item.quantity > 0)
+                : [];
             const payload = {
                 ...formData,
                 order_kind: isEdit ? normalizedOrderKind : MAIN_ORDER_KIND,
+                order_type: normalizedOrderType,
+                settlement_delta: specialOrderType ? (parseMoneyNumber(formData.settlement_delta, 0) || 0) : 0,
+                supplement_items: normalizedSupplementItems,
                 region_type: regionType,
                 lead_id: leadId ? Number(leadId) : undefined,
                 address_detail: effectiveAddressDetail,
@@ -2105,6 +2198,21 @@ const OrderForm = () => {
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap justify-end">
+                        {specialOrderType && (
+                            <button
+                                type="button"
+                                onClick={() => setShowSupplementItemsModal(true)}
+                                className="px-3 h-9 bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-500 hover:border-amber-500 hover:text-white text-[12px] font-semibold rounded-sm transition-all shadow-sm flex items-center gap-2"
+                            >
+                                <span className="material-symbols-outlined text-[16px]">inventory_2</span>
+                                Khai báo
+                                {supplementDeclarationCount > 0 && (
+                                    <span className="inline-flex min-w-[18px] items-center justify-center rounded-full bg-white/80 px-1.5 py-0.5 text-[10px] font-black leading-none text-amber-700">
+                                        {supplementDeclarationCount}
+                                    </span>
+                                )}
+                            </button>
+                        )}
                         {isEdit && isDraftOrderKind(orderKind) && (
                             <button type="button" onClick={() => handleConvertCurrentOrder(MAIN_ORDER_KIND)} className="px-3 h-9 bg-white border border-primary/10 text-primary hover:bg-primary hover:text-white text-[12px] font-semibold rounded-sm transition-all">
                                 Chốt thành đơn chính
@@ -2728,6 +2836,51 @@ const OrderForm = () => {
                                 )}
                             </select>
                         </Field>
+                        <Field label="Loại đơn">
+                            <select
+                                name="order_type"
+                                value={normalizedOrderType}
+                                onChange={handleOrderTypeChange}
+                                className={adminInputClassName}
+                            >
+                                {ORDER_TYPE_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                            </select>
+                        </Field>
+                        {specialOrderType && (
+                            <div className="rounded-sm border border-amber-200 bg-amber-50 px-3 py-3 space-y-3">
+                                <p className="text-[12px] font-semibold text-amber-800">
+                                    {orderTypeMeta.sectionDescription}
+                                </p>
+                                <Field label={orderTypeMeta.settlementLabel}>
+                                    <input
+                                        type="number"
+                                        step="1000"
+                                        value={Number(formData.settlement_delta || 0)}
+                                        onChange={handleSettlementDeltaChange}
+                                        className={adminInputClassName}
+                                        placeholder="Nhập số dương hoặc âm"
+                                    />
+                                </Field>
+                                <div className="rounded-sm border border-amber-200/80 bg-white/70 px-3 py-2">
+                                    <div className="flex items-center justify-between gap-3 text-[12px] font-bold">
+                                        <span className="text-amber-900/60">Doanh thu báo cáo</span>
+                                        <span className="text-amber-900">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(reportRevenueTotal)}đ</span>
+                                    </div>
+                                    <div className="mt-1 flex items-center justify-between gap-3 text-[12px] font-bold">
+                                        <span className="text-amber-900/60">Giá vốn báo cáo</span>
+                                        <span className="text-amber-900">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(reportCostTotal)}đ</span>
+                                    </div>
+                                    <div className="mt-1 flex items-center justify-between gap-3 text-[12px] font-bold">
+                                        <span className="text-amber-900/60">Lãi / lỗ báo cáo</span>
+                                        <span className={reportProfitTotal >= 0 ? 'text-emerald-700' : 'text-brick'}>
+                                            {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(reportProfitTotal)}đ
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                         {addressDetection && (
                             <div className={`rounded-sm border px-3 py-2 text-[12px] ${addressDetection.type === 'success' ? 'border-green-200 bg-green-50 text-green-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
                                 {addressDetection.message}
@@ -2921,6 +3074,17 @@ const OrderForm = () => {
                     {leadConversionCard}
                 </div>
             </form>
+
+            <OrderSupplementItemsSection
+                open={showSupplementItemsModal}
+                orderType={normalizedOrderType}
+                items={formData.supplement_items}
+                onChange={(supplementItems) => setFormData((prev) => ({
+                    ...prev,
+                    supplement_items: supplementItems,
+                }))}
+                onClose={() => setShowSupplementItemsModal(false)}
+            />
 
             <AnimatePresence>
                 {showQuoteTemplatePicker && (

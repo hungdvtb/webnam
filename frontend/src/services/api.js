@@ -250,13 +250,6 @@ export const orderApi = {
     getConnectedCarriers: () => api.get('/orders/connected-carriers'),
 };
 
-export const returnOrderApi = {
-    getAll: (params, signal) => api.get('/return-orders', { params, signal }),
-    getOne: (id) => api.get(`/return-orders/${id}`),
-    store: (data) => api.post('/return-orders', data),
-    updateStatus: (id, data) => api.put(`/return-orders/${id}/status`, data),
-};
-
 export const leadApi = {
     getAll: (params, signal) => api.get('/leads', { params, signal }),
     getOne: (id) => api.get(`/leads/${id}`),

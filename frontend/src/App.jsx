@@ -35,8 +35,6 @@ import ShipmentList from './pages/admin/ShipmentList';
 import OrderList from './pages/admin/OrderList';
 import OrderDetail from './pages/admin/OrderDetail';
 import OrderForm from './pages/admin/OrderForm';
-import ReturnOrderList from './pages/admin/ReturnOrderList';
-import ReturnOrderDetail from './pages/admin/ReturnOrderDetail';
 import InventoryMovement from './pages/admin/InventoryMovement';
 import CustomerManagement from './pages/admin/CustomerManagement';
 import FinanceTracking from './pages/admin/FinanceTracking';
@@ -151,8 +149,6 @@ function App() {
                 <Route path="orders" element={<OrderList />} />
                 <Route path="orders/new" element={<OrderForm />} />
                 <Route path="orders/edit/:id" element={<OrderForm />} />
-                <Route path="return-orders" element={<ReturnOrderList />} />
-                <Route path="return-orders/:id" element={<ReturnOrderDetail />} />
                 <Route path="inventory" element={<InventoryMovement />} />
                 <Route path="inventory/:section" element={<InventoryMovement />} />
                 <Route path="customers" element={<CustomerManagement />} />

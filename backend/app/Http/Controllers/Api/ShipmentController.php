@@ -14,11 +14,30 @@ use App\Models\ShippingIntegration;
 use App\Services\Shipping\ShipmentDispatchService;
 use App\Services\Shipping\ShipmentStatusSyncService;
 use App\Services\Shipping\ShipmentTransitionGuard;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class ShipmentController extends Controller
 {
+    private const ACTIVE_DELIVERY_STATUSES = [
+        'waiting_pickup',
+        'picked_up',
+        'shipped',
+        'in_transit',
+        'out_for_delivery',
+    ];
+
+    private const RETURN_PENDING_STATUSES = [
+        'returning',
+        'returned',
+    ];
+
+    private const RECONCILIATION_DONE_STATUSES = [
+        'reconciled',
+        'mismatch',
+    ];
+
     private const VALID_SHIPMENT_STATUSES = [
         'created',
         'waiting_pickup',
@@ -45,102 +64,18 @@ class ShipmentController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Shipment::query()
+        $query = $this->applyFilters(
+            Shipment::query()
             ->with([
-                'order:id,order_number,customer_name,customer_phone,status,total_price,shipping_status,shipping_status_source,shipping_carrier_code,shipping_carrier_name,shipping_tracking_code,shipping_dispatched_at,shipping_issue_code,shipping_issue_message',
+                'order:id,order_number,order_kind,customer_name,customer_email,customer_phone,status,total_price,source,type,notes,shipping_fee,discount,cost_total,profit_total,shipping_status,shipping_status_source,shipping_carrier_code,shipping_carrier_name,shipping_tracking_code,shipping_dispatched_at,shipping_issue_code,shipping_issue_message,created_at,updated_at',
                 'warehouse:id,name',
                 'carrier:id,code,name,logo',
                 'integration:id,carrier_code,carrier_name,connection_status',
-            ]);
-
-        // Search
-        if ($search = trim((string) $request->input('search', ''))) {
-            $query->where(function ($q) use ($search) {
-                $q->where('shipment_number', 'like', "%{$search}%")
-                  ->orWhere('tracking_number', 'like', "%{$search}%")
-                  ->orWhere('carrier_tracking_code', 'like', "%{$search}%")
-                  ->orWhere('customer_name', 'like', "%{$search}%")
-                  ->orWhere('customer_phone', 'like', "%{$search}%")
-                  ->orWhere('customer_address', 'like', "%{$search}%")
-                  ->orWhere('order_code', 'like', "%{$search}%")
-                  ->orWhereHas('order', function ($orderQuery) use ($search) {
-                      $orderQuery->where('order_number', 'like', "%{$search}%")
-                          ->orWhere('status', 'like', "%{$search}%");
-                  });
-            });
-        }
-
-        // Filters
-        if ($request->filled('shipment_number')) {
-            $query->where('shipment_number', 'like', '%' . trim((string) $request->input('shipment_number')) . '%');
-        }
-        if ($request->filled('order_code')) {
-            $query->where('order_code', 'like', '%' . trim((string) $request->input('order_code')) . '%');
-        }
-        if ($request->filled('customer_name')) {
-            $query->where('customer_name', 'like', '%' . trim((string) $request->input('customer_name')) . '%');
-        }
-        if ($request->filled('customer_phone')) {
-            $query->where('customer_phone', 'like', '%' . trim((string) $request->input('customer_phone')) . '%');
-        }
-        if ($request->filled('customer_address')) {
-            $query->where('customer_address', 'like', '%' . trim((string) $request->input('customer_address')) . '%');
-        }
-        if ($request->filled('order_status')) {
-            $orderStatuses = array_filter(explode(',', (string) $request->input('order_status')));
-            $query->whereHas('order', function ($orderQuery) use ($orderStatuses) {
-                $orderQuery->whereIn('status', $orderStatuses);
-            });
-        }
-        if ($request->filled('shipment_status')) {
-            $statuses = array_filter(explode(',', (string) $request->input('shipment_status')));
-            $query->whereIn('shipment_status', $statuses);
-        }
-        if ($request->filled('reconciliation_status')) {
-            $query->where('reconciliation_status', $request->input('reconciliation_status'));
-        }
-        if ($request->filled('cod_status')) {
-            $query->where('cod_status', $request->input('cod_status'));
-        }
-        if ($request->filled('carrier_code')) {
-            $query->where('carrier_code', $request->input('carrier_code'));
-        }
-        if ($request->filled('customer_province')) {
-            $query->where('customer_province', 'like', '%' . trim((string) $request->input('customer_province')) . '%');
-        }
-        if ($request->filled('assigned_to')) {
-            $query->where('assigned_to', $request->input('assigned_to'));
-        }
-        if ($request->filled('risk_flag')) {
-            $query->where('risk_flag', $request->input('risk_flag'));
-        }
-
-        // Date ranges
-        $createdFrom = $request->input('created_at_from', $request->input('created_from'));
-        $createdTo = $request->input('created_at_to', $request->input('created_to'));
-        $shippingDispatchedFrom = $request->input('shipping_dispatched_from', $request->input('shipped_from'));
-        $shippingDispatchedTo = $request->input('shipping_dispatched_to', $request->input('shipped_to'));
-
-        if ($createdFrom) {
-            $query->whereDate('created_at', '>=', $createdFrom);
-        }
-        if ($createdTo) {
-            $query->whereDate('created_at', '<=', $createdTo);
-        }
-        if ($shippingDispatchedFrom) {
-            $query->whereDate('shipped_at', '>=', $shippingDispatchedFrom);
-        }
-        if ($shippingDispatchedTo) {
-            $query->whereDate('shipped_at', '<=', $shippingDispatchedTo);
-        }
-
-        // COD range
-        if ($request->filled('cod_min')) {
-            $query->where('cod_amount', '>=', $request->input('cod_min'));
-        }
-        if ($request->filled('cod_max')) {
-            $query->where('cod_amount', '<=', $request->input('cod_max'));
-        }
+                'latestNote.createdByUser:id,name',
+            ])
+            ->withCount('notes'),
+            $request
+        );
 
         // Sorting
         $sortBy = (string) $request->get('sort_by', 'created_at');
@@ -186,32 +121,171 @@ class ShipmentController extends Controller
      */
     public function stats(Request $request)
     {
-        $base = Shipment::query();
+        $base = $this->applyFilters(Shipment::query(), $request);
 
-        $stats = [
-            'total' => (clone $base)->count(),
-            'in_transit' => (clone $base)->whereIn('shipment_status', ['shipped', 'in_transit', 'out_for_delivery'])->count(),
+        $countStats = [
+            'total_orders' => (clone $base)->count(),
+            'in_delivery' => (clone $base)->whereIn('shipment_status', self::ACTIVE_DELIVERY_STATUSES)->count(),
             'delivered' => (clone $base)->where('shipment_status', 'delivered')->count(),
-            'delivery_failed' => (clone $base)->where('shipment_status', 'delivery_failed')->count(),
-            'returning' => (clone $base)->whereIn('shipment_status', ['returning', 'returned'])->count(),
-            'total_cod' => (clone $base)->sum('cod_amount'),
-            'pending_reconciliation' => (clone $base)->where('reconciliation_status', 'pending')->where('shipment_status', 'delivered')->count(),
-            'reconciliation_mismatch' => (clone $base)->where('reconciliation_status', 'mismatch')->count(),
-            'created_today' => (clone $base)->whereDate('created_at', today())->count(),
-            'waiting_pickup' => (clone $base)->where('shipment_status', 'waiting_pickup')->count(),
-            // Phase 3: Performance metrics
-            'delivery_success_rate' => (function() use ($base) {
-                $completed = (clone $base)->whereIn('shipment_status', ['delivered', 'delivery_failed'])->count();
-                $delivered = (clone $base)->where('shipment_status', 'delivered')->count();
-                return $completed > 0 ? round(($delivered / $completed) * 100, 1) : 0;
-            })(),
-            'total_cod_collected' => (clone $base)->where('cod_status', 'collected')->sum('cod_amount'),
-            'total_mismatch_amount' => (clone $base)->where('reconciliation_status', 'mismatch')->sum(DB::raw('ABS(reconciliation_diff_amount)')),
-            'high_risk_count' => (clone $base)->where(function ($q) { $q->where('cod_amount', '>=', 5000000)->orWhere('attempt_delivery_count', '>=', 2)->orWhere('risk_flag', 'high'); })->count(),
-            'canceled' => (clone $base)->where('shipment_status', 'canceled')->count(),
+            'pending_return' => (clone $base)
+                ->whereIn('shipment_status', self::RETURN_PENDING_STATUSES)
+                ->where('reconciliation_status', 'pending')
+                ->count(),
         ];
 
-        return response()->json($stats);
+        $reconciliationTotal = (clone $base)
+            ->where(function (Builder $query) {
+                $query->where('shipment_status', 'delivered')
+                    ->orWhereIn('reconciliation_status', self::RECONCILIATION_DONE_STATUSES);
+            })
+            ->count();
+
+        $reconciliationDone = (clone $base)
+            ->whereIn('reconciliation_status', self::RECONCILIATION_DONE_STATUSES)
+            ->count();
+
+        $totalRevenue = round((float) (clone $base)->sum('cod_amount'), 2);
+        $carrierCollected = round((float) ((clone $base)
+            ->selectRaw("
+                COALESCE(SUM(
+                    CASE
+                        WHEN reconciliation_status IN ('reconciled', 'mismatch') AND reconciled_amount > 0 THEN reconciled_amount
+                        WHEN shipment_status = 'delivered' THEN actual_received_amount
+                        ELSE 0
+                    END
+                ), 0) AS aggregate
+            ")
+            ->value('aggregate')), 2);
+        $shippingServiceFees = round((float) ((clone $base)
+            ->selectRaw('COALESCE(SUM(shipping_cost + service_fee + return_fee + insurance_fee + other_fee), 0) AS aggregate')
+            ->value('aggregate')), 2);
+        $pendingReturnAmount = round((float) ((clone $base)
+            ->whereIn('shipment_status', self::RETURN_PENDING_STATUSES)
+            ->where('reconciliation_status', 'pending')
+            ->sum('cod_amount')), 2);
+
+        return response()->json([
+            'counts' => array_merge($countStats, [
+                'reconciliation_total' => $reconciliationTotal,
+                'reconciliation_done' => $reconciliationDone,
+                'reconciliation_pending' => max($reconciliationTotal - $reconciliationDone, 0),
+            ]),
+            'amounts' => [
+                'total_revenue' => $totalRevenue,
+                'carrier_collected' => $carrierCollected,
+                'shipping_service_fees' => $shippingServiceFees,
+                'pending_return_amount' => $pendingReturnAmount,
+                'percentages' => [
+                    'total_revenue' => $totalRevenue > 0 ? 100.0 : 0.0,
+                    'carrier_collected' => $this->percentageOf($carrierCollected, $totalRevenue),
+                    'shipping_service_fees' => $this->percentageOf($shippingServiceFees, $totalRevenue),
+                    'pending_return_amount' => $this->percentageOf($pendingReturnAmount, $totalRevenue),
+                ],
+            ],
+        ]);
+    }
+
+    private function applyFilters(Builder $query, Request $request): Builder
+    {
+        if ($search = trim((string) $request->input('search', ''))) {
+            $query->where(function (Builder $builder) use ($search) {
+                $builder->where('shipment_number', 'like', "%{$search}%")
+                    ->orWhere('tracking_number', 'like', "%{$search}%")
+                    ->orWhere('carrier_tracking_code', 'like', "%{$search}%")
+                    ->orWhere('customer_name', 'like', "%{$search}%")
+                    ->orWhere('customer_phone', 'like', "%{$search}%")
+                    ->orWhere('customer_address', 'like', "%{$search}%")
+                    ->orWhere('order_code', 'like', "%{$search}%")
+                    ->orWhereHas('order', function (Builder $orderQuery) use ($search) {
+                        $orderQuery->where('order_number', 'like', "%{$search}%")
+                            ->orWhere('status', 'like', "%{$search}%");
+                    });
+            });
+        }
+
+        if ($request->filled('shipment_number')) {
+            $query->where('shipment_number', 'like', '%' . trim((string) $request->input('shipment_number')) . '%');
+        }
+        if ($request->filled('order_code')) {
+            $query->where('order_code', 'like', '%' . trim((string) $request->input('order_code')) . '%');
+        }
+        if ($request->filled('customer_name')) {
+            $query->where('customer_name', 'like', '%' . trim((string) $request->input('customer_name')) . '%');
+        }
+        if ($request->filled('customer_phone')) {
+            $query->where('customer_phone', 'like', '%' . trim((string) $request->input('customer_phone')) . '%');
+        }
+        if ($request->filled('customer_address')) {
+            $query->where('customer_address', 'like', '%' . trim((string) $request->input('customer_address')) . '%');
+        }
+        if ($request->filled('order_status')) {
+            $orderStatuses = array_values(array_filter(explode(',', (string) $request->input('order_status'))));
+            if ($orderStatuses !== []) {
+                $query->whereHas('order', function (Builder $orderQuery) use ($orderStatuses) {
+                    $orderQuery->whereIn('status', $orderStatuses);
+                });
+            }
+        }
+        if ($request->filled('shipment_status')) {
+            $statuses = array_values(array_filter(explode(',', (string) $request->input('shipment_status'))));
+            if ($statuses !== []) {
+                $query->whereIn('shipment_status', $statuses);
+            }
+        }
+        if ($request->filled('reconciliation_status')) {
+            $query->where('reconciliation_status', $request->input('reconciliation_status'));
+        }
+        if ($request->filled('cod_status')) {
+            $query->where('cod_status', $request->input('cod_status'));
+        }
+        if ($request->filled('carrier_code')) {
+            $query->where('carrier_code', $request->input('carrier_code'));
+        }
+        if ($request->filled('customer_province')) {
+            $query->where('customer_province', 'like', '%' . trim((string) $request->input('customer_province')) . '%');
+        }
+        if ($request->filled('assigned_to')) {
+            $query->where('assigned_to', $request->input('assigned_to'));
+        }
+        if ($request->filled('risk_flag')) {
+            $query->where('risk_flag', $request->input('risk_flag'));
+        }
+
+        $createdFrom = $request->input('created_at_from', $request->input('created_from'));
+        $createdTo = $request->input('created_at_to', $request->input('created_to'));
+        $shippingDispatchedFrom = $request->input('shipping_dispatched_from', $request->input('shipped_from'));
+        $shippingDispatchedTo = $request->input('shipping_dispatched_to', $request->input('shipped_to'));
+
+        if ($createdFrom) {
+            $query->whereDate('created_at', '>=', $createdFrom);
+        }
+        if ($createdTo) {
+            $query->whereDate('created_at', '<=', $createdTo);
+        }
+        if ($shippingDispatchedFrom) {
+            $query->whereDate('shipped_at', '>=', $shippingDispatchedFrom);
+        }
+        if ($shippingDispatchedTo) {
+            $query->whereDate('shipped_at', '<=', $shippingDispatchedTo);
+        }
+
+        if ($request->filled('cod_min')) {
+            $query->where('cod_amount', '>=', $request->input('cod_min'));
+        }
+        if ($request->filled('cod_max')) {
+            $query->where('cod_amount', '<=', $request->input('cod_max'));
+        }
+
+        return $query;
+    }
+
+    private function percentageOf(float $amount, float $base): float
+    {
+        if ($base <= 0) {
+            return 0.0;
+        }
+
+        return round(($amount / $base) * 100, 1);
     }
 
     /**
@@ -320,7 +394,9 @@ class ShipmentController extends Controller
     {
         $shipment = Shipment::with([
             'order.items.product',
+            'order.attributeValues.attribute',
             'order.statusLogs',
+            'order.user:id,name',
             'items.orderItem.product',
             'warehouse',
             'carrier',

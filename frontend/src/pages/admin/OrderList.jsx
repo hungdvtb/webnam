@@ -7,6 +7,12 @@ import { useAuth } from '../../context/AuthContext';
 import Pagination from '../../components/Pagination';
 import { useTableColumns } from '../../hooks/useTableColumns';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
+import {
+    ORDER_TYPE_OPTIONS,
+    ORDER_TYPE_STANDARD,
+    getOrderTypeMeta,
+    normalizeOrderType,
+} from '../../config/orderTypes';
 import SortIndicator from '../../components/SortIndicator';
 import { SHIPPING_SOUND_STORAGE_KEY, defaultSoundSettings, beep } from '../../components/admin/ShippingSettingsPanel';
 import OrderInventorySlipDrawer from '../../components/admin/OrderInventorySlipDrawer';
@@ -53,6 +59,12 @@ const INVENTORY_SLIP_FILTERS = [
     { key: 'return_slip_state', label: 'Phiếu hoàn', options: RETURN_SLIP_FILTER_OPTIONS },
     { key: 'damaged_slip_state', label: 'Phiếu hỏng', options: DAMAGED_SLIP_FILTER_OPTIONS },
 ];
+
+const ORDER_TYPE_BADGE_CLASSNAMES = {
+    standard: 'border-primary/15 bg-primary/[0.03] text-primary/60',
+    exchange_return: 'border-amber-200 bg-amber-50 text-amber-800',
+    partial_delivery: 'border-sky-200 bg-sky-50 text-sky-700',
+};
 
 /**
  * Hover card that shows full product list for an order.
@@ -931,6 +943,7 @@ const OrderList = () => {
         created_at_from: '',
         created_at_to: '',
         customer_phone: '',
+        order_type: '',
         shipping_address: '',
         shipping_carrier_code: '',
         export_slip_state: '',
@@ -1201,6 +1214,7 @@ const OrderList = () => {
             if (currentFilters.customer_name?.trim()) params.customer_name = currentFilters.customer_name.trim();
             if (currentFilters.order_number) params.order_number = currentFilters.order_number;
             if (currentFilters.customer_phone) params.customer_phone = currentFilters.customer_phone;
+            if (currentFilters.order_type) params.order_type = currentFilters.order_type;
             if (currentFilters.shipping_address) params.shipping_address = currentFilters.shipping_address;
             if (currentFilters.created_at_from) params.created_at_from = currentFilters.created_at_from;
             if (currentFilters.created_at_to) params.created_at_to = currentFilters.created_at_to;
@@ -1265,13 +1279,6 @@ const OrderList = () => {
         }, 250);
         return () => clearTimeout(timer);
     }, [filters.search]);
-
-    useEffect(() => {
-        setSelectedIds([]);
-        setStatusMenuOrderId(null);
-        setProductPopupOrderId(null);
-        setInventorySlipOrderId(null);
-    }, [currentView]);
 
     useEffect(() => { fetchOrders(1); }, [currentView]);
 
@@ -1416,6 +1423,7 @@ const OrderList = () => {
             created_at_from: '',
             created_at_to: '',
             customer_phone: '',
+            order_type: '',
             shipping_address: '',
             shipping_carrier_code: '',
             export_slip_state: '',
@@ -1909,6 +1917,7 @@ const OrderList = () => {
         if (filters.customer_name) c++;
         if (filters.order_number) c++;
         if (filters.customer_phone) c++;
+        if (filters.order_type) c++;
         if (filters.shipping_carrier_code) c++;
         INVENTORY_SLIP_FILTERS.forEach(({ key }) => {
             if (filters[key]) c++;
@@ -1981,16 +1990,6 @@ const OrderList = () => {
                                 <span className="material-symbols-outlined text-[18px]">delete</span>
                             </button>
                         </div>
-
-                        <button
-                            type="button"
-                            onClick={() => navigate('/admin/return-orders')}
-                            title="Mở module đơn đổi trả"
-                            className="h-9 px-3 rounded-sm border border-amber-200 bg-amber-50 text-amber-700 flex items-center gap-1.5 transition-all hover:bg-amber-500 hover:text-white shadow-sm"
-                        >
-                            <span className="material-symbols-outlined text-[18px]">assignment_return</span>
-                            <span className="text-[12px] font-semibold whitespace-nowrap">Đơn đổi trả</span>
-                        </button>
 
                         <div className="w-[1px] h-6 bg-primary/20 mx-1"></div>
 
@@ -2127,6 +2126,25 @@ const OrderList = () => {
                                 <select name="status" className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer appearance-none" value={tempFilters.status[0] || ''} onChange={(e) => setTempFilters({ ...tempFilters, status: e.target.value ? [e.target.value] : [] })}>
                                     <option value="">Tất cả</option>
                                     {orderStatuses.map(s => <option key={s.id} value={s.code}>{s.name}</option>)}
+                                </select>
+                                <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 pointer-events-none text-[18px]">
+                                    expand_more
+                                </span>
+                            </div>
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Loại đơn</label>
+                            <div className="relative">
+                                <select
+                                    name="order_type"
+                                    className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer appearance-none"
+                                    value={tempFilters.order_type || ''}
+                                    onChange={handleTempFilterChange}
+                                >
+                                    <option value="">Tất cả</option>
+                                    {ORDER_TYPE_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
                                 </select>
                                 <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 pointer-events-none text-[18px]">
                                     expand_more
@@ -2286,6 +2304,13 @@ const OrderList = () => {
                             <button onClick={() => removeFilter('customer_name')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     )}
+                    {filters.order_type && (
+                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                            <span className="text-[11px] text-primary/40">Loại đơn:</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{getOrderTypeMeta(filters.order_type).label}</span>
+                            <button onClick={() => removeFilter('order_type')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                        </div>
+                    )}
                     {(filters.created_at_from || filters.created_at_to) && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">Ngày:</span>
@@ -2383,6 +2408,9 @@ const OrderList = () => {
                                                 <div className="flex items-center justify-between gap-2">
                                                     <div className="min-w-0 flex flex-col">
                                                         <span className="truncate">{o.order_number}</span>
+                                                        <span className={`mt-1 inline-flex w-fit items-center rounded-sm border px-1.5 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] ${ORDER_TYPE_BADGE_CLASSNAMES[normalizeOrderType(o.order_type)] || ORDER_TYPE_BADGE_CLASSNAMES[ORDER_TYPE_STANDARD]}`}>
+                                                            {getOrderTypeMeta(o.order_type).shortLabel}
+                                                        </span>
                                                     </div>
                                                     <button onClick={(e) => handleCopy(o.order_number, e)} className={`opacity-0 group-hover:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === o.order_number ? 'text-green-500 opacity-100' : 'text-primary/20'}`}><span className="material-symbols-outlined text-[14px]">{copiedText === o.order_number ? 'check' : 'content_copy'}</span></button>
                                                 </div>

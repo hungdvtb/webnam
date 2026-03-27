@@ -53,19 +53,23 @@ function reload_nginx() {
 }
 
 case "$1" in
-    full)
+    full|rebuild)
+        git pull origin master
         deploy_backend
         deploy_admin
         deploy_website
         reload_nginx
         ;;
     backend)
+        git pull origin master
         deploy_backend
         ;;
     admin)
+        git pull origin master
         deploy_admin
         ;;
     website)
+        git pull origin master
         deploy_website
         ;;
     nginx)
@@ -78,6 +82,6 @@ case "$1" in
         pm2 logs webnam-website
         ;;
     *)
-        echo "Usage: $0 {full|backend|admin|website|nginx|pm2|logs}"
+        echo "Usage: $0 {full|rebuild|backend|admin|website|nginx|pm2|logs}"
         exit 1
 esac

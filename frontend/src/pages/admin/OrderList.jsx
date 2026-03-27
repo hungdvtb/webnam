@@ -1982,6 +1982,16 @@ const OrderList = () => {
                             </button>
                         </div>
 
+                        <button
+                            type="button"
+                            onClick={() => navigate('/admin/return-orders')}
+                            title="Mở module đơn đổi trả"
+                            className="h-9 px-3 rounded-sm border border-amber-200 bg-amber-50 text-amber-700 flex items-center gap-1.5 transition-all hover:bg-amber-500 hover:text-white shadow-sm"
+                        >
+                            <span className="material-symbols-outlined text-[18px]">assignment_return</span>
+                            <span className="text-[12px] font-semibold whitespace-nowrap">Đơn đổi trả</span>
+                        </button>
+
                         <div className="w-[1px] h-6 bg-primary/20 mx-1"></div>
 
                         <button data-filter-btn onClick={() => { if (!showFilters) setTempFilters({ ...filters }); setShowFilters(!showFilters); }} className={`p-1.5 border transition-all rounded-sm w-9 h-9 flex items-center justify-center ${showFilters || activeCount() > 0 ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`} title="Bộ lọc nâng cao"><span className="material-symbols-outlined text-[18px]">filter_alt</span></button>

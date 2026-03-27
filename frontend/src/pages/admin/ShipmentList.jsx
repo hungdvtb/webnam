@@ -36,13 +36,13 @@ const DEFAULT_COLUMNS = [
     { id: 'carrier_name', label: 'Hãng VC', minWidth: '124px' },
     { id: 'customer_name', label: 'Khách hàng', minWidth: '152px' },
     { id: 'customer_phone', label: 'SĐT', minWidth: '116px' },
-    { id: 'customer_info', label: 'Thông tin khách hàng', minWidth: '142px', align: 'center' },
-    { id: 'order_status', label: 'Trạng thái đơn hàng', minWidth: '164px', align: 'center' },
-    { id: 'shipment_status', label: 'Trạng thái vận đơn', minWidth: '164px', align: 'center' },
-    { id: 'cod_amount', label: 'COD', minWidth: '124px', align: 'right' },
-    { id: 'shipping_cost', label: 'Phí ship', minWidth: '124px', align: 'right' },
-    { id: 'actual_received_amount', label: 'Thực nhận', minWidth: '128px', align: 'right' },
-    { id: 'reconciliation_status', label: 'Đối soát', minWidth: '118px', align: 'center' },
+    { id: 'customer_info', label: 'Thông tin khách hàng', minWidth: '142px' },
+    { id: 'order_status', label: 'Trạng thái đơn hàng', minWidth: '164px' },
+    { id: 'shipment_status', label: 'Trạng thái vận đơn', minWidth: '164px' },
+    { id: 'cod_amount', label: 'COD', minWidth: '124px' },
+    { id: 'shipping_cost', label: 'Phí ship', minWidth: '124px' },
+    { id: 'actual_received_amount', label: 'Thực nhận', minWidth: '128px' },
+    { id: 'reconciliation_status', label: 'Đối soát', minWidth: '118px' },
     { id: 'shipped_at', label: 'Ngày gửi vận chuyển', minWidth: '132px' },
     { id: 'created_at', label: 'Ngày tạo', minWidth: '112px' },
 ];
@@ -256,6 +256,115 @@ const StatusDropdownPortal = ({ title, options, currentValue, onSelect, anchorRe
     );
 };
 
+const CustomerInfoPopoverPortal = ({ customerInfo, anchorRef, visible, onClose, popoverRef }) => {
+    const [position, setPosition] = useState(null);
+
+    useEffect(() => {
+        if (!visible || !anchorRef.current) return undefined;
+
+        const updatePosition = () => {
+            const rect = anchorRef.current.getBoundingClientRect();
+            const viewportHeight = window.innerHeight;
+            const viewportWidth = window.innerWidth;
+            const width = Math.min(460, viewportWidth - 20);
+            const estimatedHeight = Math.min(420, viewportHeight * 0.72);
+
+            let top = rect.bottom + 8;
+            let left = rect.left;
+            let placement = 'bottom';
+
+            if (viewportHeight - rect.bottom < estimatedHeight + 12 && rect.top > viewportHeight - rect.bottom) {
+                top = rect.top - 8;
+                placement = 'top';
+            }
+
+            left = Math.max(10, Math.min(left, viewportWidth - width - 10));
+
+            setPosition({ top, left, width, placement });
+        };
+
+        updatePosition();
+        window.addEventListener('scroll', updatePosition, true);
+        window.addEventListener('resize', updatePosition);
+
+        return () => {
+            window.removeEventListener('scroll', updatePosition, true);
+            window.removeEventListener('resize', updatePosition);
+        };
+    }, [visible, anchorRef, customerInfo?.loading, customerInfo?.products?.length]);
+
+    if (!visible || !customerInfo) return null;
+
+    return createPortal(
+        <div
+            ref={popoverRef}
+            style={{
+                position: 'fixed',
+                top: position?.top || 0,
+                left: position?.left || 0,
+                width: position?.width || 420,
+                transform: position?.placement === 'top' ? 'translateY(-100%)' : 'none',
+                zIndex: 999998,
+                opacity: position ? 1 : 0,
+            }}
+            className={`overflow-hidden rounded-2xl border border-primary/10 bg-white shadow-2xl ${position?.placement === 'top' ? 'origin-bottom' : 'origin-top'} animate-in fade-in zoom-in-95 duration-200`}
+            onClick={(event) => event.stopPropagation()}
+        >
+            <div className="flex items-start justify-between border-b border-primary/10 p-4">
+                <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-stone/40">Thông tin khách hàng</p>
+                    <h3 className="mt-1 text-base font-black text-primary">{customerInfo.shipmentNumber || 'Vận đơn'}</h3>
+                </div>
+                <button type="button" onClick={onClose} className="flex size-8 items-center justify-center rounded-full text-stone/40 transition-colors hover:bg-stone/5 hover:text-stone-800">
+                    <span className="material-symbols-outlined text-[18px]">close</span>
+                </button>
+            </div>
+            <div className="custom-scrollbar max-h-[70vh] space-y-4 overflow-y-auto p-4">
+                <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-xl border border-stone/10 bg-stone/5 p-3">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-stone/40">Tên khách</p>
+                        <p className="mt-1 text-[14px] font-black text-primary">{customerInfo.customerName || '-'}</p>
+                    </div>
+                    <div className="rounded-xl border border-stone/10 bg-stone/5 p-3">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-stone/40">SĐT</p>
+                        <p className="mt-1 text-[14px] font-black text-primary">{customerInfo.customerPhone || '-'}</p>
+                    </div>
+                </div>
+                <div className="rounded-xl border border-stone/10 bg-stone/5 p-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-stone/40">Địa chỉ</p>
+                    <p className="mt-1 text-[13px] font-bold leading-relaxed text-primary">{customerInfo.customerAddress || '-'}</p>
+                </div>
+                <div className="rounded-xl border border-stone/10 bg-stone/5 p-3">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-stone/40">Sản phẩm khách đặt</p>
+                        {customerInfo.loading && <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-primary" />}
+                    </div>
+                    {customerInfo.products?.length > 0 ? (
+                        <div className="space-y-2">
+                            {customerInfo.products.map((product) => (
+                                <div key={product.id} className="rounded-lg border border-white bg-white px-3 py-2 shadow-sm">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <p className="truncate text-[13px] font-black text-primary">{product.name}</p>
+                                            {product.sku && <p className="mt-0.5 truncate font-mono text-[10px] text-stone/40">SKU: {product.sku}</p>}
+                                        </div>
+                                        <span className="shrink-0 rounded-full border border-primary/10 bg-primary/5 px-2 py-0.5 text-[10px] font-black text-primary">x{product.quantity}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="rounded-lg border border-dashed border-stone/15 bg-white px-4 py-5 text-center text-[12px] font-bold text-stone/35">
+                            {customerInfo.loading ? 'Đang tải danh sách sản phẩm...' : (customerInfo.error || 'Chưa có dữ liệu sản phẩm.')}
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>,
+        document.body,
+    );
+};
+
 const StatsCards = ({ stats, loading }) => {
     const cards = [
         { key: 'total', label: 'Tổng vận đơn', icon: 'package_2', color: '#6366f1', value: stats.total },
@@ -291,6 +400,8 @@ const ShipmentList = () => {
     const searchContainerRef = useRef(null);
     const statusMenuRef = useRef(null);
     const statusMenuAnchorRef = useRef(null);
+    const customerInfoPopoverRef = useRef(null);
+    const customerInfoAnchorRef = useRef(null);
     const abortRef = useRef(null);
     const copyFeedbackTimeoutRef = useRef(null);
 
@@ -357,7 +468,10 @@ const ShipmentList = () => {
         setNoteText('');
         setReconcileForm({ amount: '', note: '' });
     }, []);
-    const closeCustomerInfo = useCallback(() => setCustomerInfoModal(null), []);
+    const closeCustomerInfo = useCallback(() => {
+        setCustomerInfoModal(null);
+        customerInfoAnchorRef.current = null;
+    }, []);
 
     const showToast = useCallback((type, message) => setNotification({ type, message }), []);
 
@@ -476,11 +590,12 @@ const ShipmentList = () => {
             if (filterRef.current && !filterRef.current.contains(event.target) && !event.target.closest('[data-filter-btn]')) setShowFilters(false);
             if (columnSettingsRef.current && !columnSettingsRef.current.contains(event.target) && !event.target.closest('[data-column-settings-btn]')) setShowColumnSettings(false);
             if (statusMenuRef.current && !statusMenuRef.current.contains(event.target) && !event.target.closest('[data-status-edit-btn]')) setStatusMenu(null);
+            if (customerInfoPopoverRef.current && !customerInfoPopoverRef.current.contains(event.target) && !event.target.closest('[data-customer-info-btn]')) closeCustomerInfo();
             if (searchContainerRef.current && !searchContainerRef.current.contains(event.target)) setShowSearchHistory(false);
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
+    }, [closeCustomerInfo]);
     useEffect(() => {
         const handleEscape = (event) => {
             if (event.key !== 'Escape') return;
@@ -594,6 +709,13 @@ const ShipmentList = () => {
     const handleRefresh = () => { fetchShipments(pagination.current_page || 1); fetchStats(); };
     const openCustomerInfo = useCallback(async (shipment, event) => {
         event?.stopPropagation?.();
+        if (customerInfoModal?.shipmentId === shipment.id) {
+            closeCustomerInfo();
+            return;
+        }
+
+        customerInfoAnchorRef.current = event?.currentTarget || null;
+
         const fallbackData = {
             shipmentId: shipment.id,
             shipmentNumber: shipment.shipment_number,
@@ -630,7 +752,7 @@ const ShipmentList = () => {
             } : previous);
             showToast('error', 'Không thể tải thông tin khách hàng.');
         }
-    }, [detailShipment, showToast]);
+    }, [closeCustomerInfo, customerInfoModal?.shipmentId, detailShipment, showToast]);
     const openDetail = async (id) => {
         setDetailLoading(true);
         setDetailShipment(null);
@@ -796,17 +918,17 @@ const ShipmentList = () => {
         const copyLabel = field === 'cod_amount' ? 'giá trị COD' : 'phí ship';
         if (isEditing) {
             return (
-                <div className="flex items-center justify-end gap-1" onClick={(event) => event.stopPropagation()}>
-                    <input type="number" min="0" step="1000" autoFocus value={moneyEditor.value} onChange={(event) => setMoneyEditor((previous) => ({ ...previous, value: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter') saveMoneyEditor(); if (event.key === 'Escape') setMoneyEditor(null); }} className="h-9 w-28 rounded-sm border border-primary/20 px-2 text-right text-[13px] font-bold text-primary focus:border-primary focus:outline-none" />
+                <div className="flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
+                    <input type="number" min="0" step="1000" autoFocus value={moneyEditor.value} onChange={(event) => setMoneyEditor((previous) => ({ ...previous, value: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter') saveMoneyEditor(); if (event.key === 'Escape') setMoneyEditor(null); }} className="h-9 w-28 rounded-sm border border-primary/20 px-2 text-[13px] font-bold text-primary focus:border-primary focus:outline-none" />
                     <button type="button" onClick={saveMoneyEditor} disabled={moneyEditor.saving} className="flex h-9 w-9 items-center justify-center rounded-sm border border-primary/20 text-primary transition-all hover:bg-primary/5 disabled:opacity-40" title="Lưu"><span className="material-symbols-outlined text-[16px]">{moneyEditor.saving ? 'progress_activity' : 'check'}</span></button>
                     <button type="button" onClick={() => setMoneyEditor(null)} className="flex h-9 w-9 items-center justify-center rounded-sm border border-primary/10 text-primary/40 transition-all hover:border-brick/20 hover:bg-brick/5 hover:text-brick" title="Hủy"><span className="material-symbols-outlined text-[16px]">close</span></button>
                 </div>
             );
         }
         return (
-            <div className="group/money flex flex-col items-end">
-                <div className="flex items-center justify-end gap-1">
-                    <span className={`text-right ${className}`}>{formattedValue}</span>
+            <div className="group/money flex flex-col items-start">
+                <div className="flex items-center gap-1">
+                    <span className={className}>{formattedValue}</span>
                     <button type="button" onClick={(event) => handleCopy(formattedValue, event, copyId, copyLabel)} className={`inline-flex size-5 items-center justify-center rounded-sm transition-all ${copiedCellId === copyId ? 'text-green-600 opacity-100' : 'text-primary/20 opacity-0 group-hover/money:opacity-100 hover:text-primary'}`} title={`Sao chép ${copyLabel}`}>
                         <span className="material-symbols-outlined text-[13px]">{copiedCellId === copyId ? 'check' : 'content_copy'}</span>
                     </button>
@@ -983,10 +1105,10 @@ const ShipmentList = () => {
                                 </label>
                             </th>
                             {renderedColumns.map((column, index) => (
-                                <th key={column.id} draggable onDragStart={(event) => handleHeaderDragStart(event, index)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => handleHeaderDrop(event, index)} onDoubleClick={() => handleSort(column.id)} className={`group relative border border-primary/10 bg-[#fcfcfa] px-3 py-2.5 cursor-move transition-colors hover:bg-primary/5 ${column.align === 'center' ? 'text-center' : column.align === 'right' ? 'text-right' : ''}`} style={{ width: columnWidths[column.id] || column.minWidth }}>
-                                    <div className={`flex items-center gap-1.5 ${column.align === 'center' ? 'justify-center' : column.align === 'right' ? 'justify-end' : ''}`}>
+                                <th key={column.id} draggable onDragStart={(event) => handleHeaderDragStart(event, index)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => handleHeaderDrop(event, index)} onDoubleClick={() => handleSort(column.id)} className="group relative border border-primary/10 bg-[#fcfcfa] px-3 py-2.5 text-left cursor-move transition-colors hover:bg-primary/5" style={{ width: columnWidths[column.id] || column.minWidth }}>
+                                    <div className="flex items-center gap-1.5">
                                         <span className="material-symbols-outlined text-[14px] text-primary opacity-20 transition-opacity group-hover:opacity-100">drag_indicator</span>
-                                        <span className={`font-black text-primary ${['created_at', 'shipped_at', 'customer_info'].includes(column.id) ? 'leading-[1.05]' : 'truncate'}`}>{['created_at', 'shipped_at', 'customer_info'].includes(column.id) ? <span className="flex flex-col"><span className="whitespace-nowrap">{getCompactColumnLabelLines(column.id, column.label)[0]}</span><span className="whitespace-nowrap">{getCompactColumnLabelLines(column.id, column.label)[1]}</span></span> : column.label}</span>
+                                        <span className={`text-[12px] font-black text-primary ${['created_at', 'shipped_at', 'customer_info'].includes(column.id) ? 'leading-[1.05]' : 'truncate'}`}>{['created_at', 'shipped_at', 'customer_info'].includes(column.id) ? <span className="flex flex-col"><span className="whitespace-nowrap">{getCompactColumnLabelLines(column.id, column.label)[0]}</span><span className="whitespace-nowrap">{getCompactColumnLabelLines(column.id, column.label)[1]}</span></span> : column.label}</span>
                                         <SortIndicator colId={column.id} sortConfig={sortConfig} />
                                     </div>
                                     <div onMouseDown={(event) => handleColumnResize(column.id, event)} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize transition-colors hover:bg-primary/20" />
@@ -1029,13 +1151,13 @@ const ShipmentList = () => {
                                             if (column.id === 'customer_phone') {
                                                 return <td key={column.id} style={cellStyle} className="overflow-hidden border border-primary/20 px-3 py-2"><ShipmentCopyableCell copyValue={customerPhoneValue} copyId={`${shipment.id}-customer_phone`} copyLabel="số điện thoại khách hàng" copiedCellId={copiedCellId} onCopy={handleCopy}><span className="min-w-0 truncate text-[13px] font-bold text-stone/80">{customerPhoneValue}</span></ShipmentCopyableCell></td>;
                                             }
-                                            if (column.id === 'customer_info') return <td key={column.id} style={cellStyle} className="border border-primary/20 px-3 py-2 text-center"><button type="button" onClick={(event) => openCustomerInfo(shipment, event)} className="inline-flex items-center justify-center rounded-sm border border-primary/15 bg-primary/5 px-3 py-1.5 text-[11px] font-black text-primary transition-all hover:border-primary/30 hover:bg-primary/10 hover:text-primary" title="Xem thông tin khách hàng">Chi tiết</button></td>;
-                                            if (column.id === 'order_status') return <td key={column.id} style={cellStyle} className="relative border border-primary/20 px-3 py-2 text-center"><ShipmentCopyableCell copyValue={orderStatusName} copyId={`${shipment.id}-order_status`} copyLabel="trạng thái đơn hàng" copiedCellId={copiedCellId} onCopy={handleCopy} iconTopClassName="top-1/2 -translate-y-1/2" className="mx-auto max-w-full">{shipment.order?.id ? <button type="button" data-status-edit-btn onClick={(event) => { event.stopPropagation(); toggleStatusMenu(shipment.id, 'order', event.currentTarget); }} className="inline-flex max-w-full items-center gap-1 rounded-sm border px-2 py-1 text-[11px] font-black shadow-sm transition-all hover:scale-[1.03] active:scale-95" style={orderStatusStyle}><span className="truncate">{orderStatusName}</span><span className="material-symbols-outlined text-[16px] leading-none opacity-40">expand_more</span></button> : <span className="inline-flex rounded-sm border border-primary/10 bg-primary/5 px-2 py-1 text-[11px] font-black text-primary/40">-</span>}</ShipmentCopyableCell></td>;
-                                            if (column.id === 'shipment_status') return <td key={column.id} style={cellStyle} className="relative border border-primary/20 px-3 py-2 text-center"><ShipmentCopyableCell copyValue={[shipmentStatus.label, shipment.carrier_status_text && shipment.carrier_status_text !== shipmentStatus.label ? shipment.carrier_status_text : null].filter(Boolean).join('\n')} copyId={`${shipment.id}-shipment_status`} copyLabel="trạng thái vận đơn" copiedCellId={copiedCellId} onCopy={handleCopy} iconTopClassName="top-1/2 -translate-y-1/2" className="mx-auto max-w-full"><button type="button" data-status-edit-btn onClick={(event) => { event.stopPropagation(); toggleStatusMenu(shipment.id, 'shipment', event.currentTarget); }} className="inline-flex max-w-full items-center gap-1 rounded-sm border px-2 py-1 text-[11px] font-black shadow-sm transition-all hover:scale-[1.03] active:scale-95" style={{ backgroundColor: `${shipmentStatus.color}12`, color: shipmentStatus.color, borderColor: `${shipmentStatus.color}30` }}><span className="truncate">{shipmentStatus.label}</span><span className="material-symbols-outlined text-[16px] leading-none opacity-40">expand_more</span></button>{shipment.carrier_status_text && shipment.carrier_status_text !== shipmentStatus.label && <p className="mt-1 truncate text-[9px] font-black uppercase tracking-wider text-stone/25">{shipment.carrier_status_text}</p>}</ShipmentCopyableCell></td>;
-                                            if (column.id === 'cod_amount') return <td key={column.id} style={cellStyle} className="border border-primary/20 px-3 py-2 text-right">{renderMoneyCell(shipment, 'cod_amount', shipment.cod_amount, 'text-[13px] font-black tracking-tight text-brick')}</td>;
-                                            if (column.id === 'shipping_cost') return <td key={column.id} style={cellStyle} className="border border-primary/20 px-3 py-2 text-right">{renderMoneyCell(shipment, 'shipping_cost', shipment.shipping_cost, 'text-[13px] font-black tracking-tight text-stone-600')}</td>;
-                                            if (column.id === 'actual_received_amount') return <td key={column.id} style={cellStyle} className="border border-primary/20 px-3 py-2 text-right"><ShipmentCopyableCell copyValue={fmtMoney(shipment.actual_received_amount)} copyId={`${shipment.id}-actual_received_amount`} copyLabel="số tiền thực nhận" copiedCellId={copiedCellId} onCopy={handleCopy} iconTopClassName="top-1/2 -translate-y-1/2" className="flex justify-end"><span className="text-[13px] font-black text-primary">{fmtMoney(shipment.actual_received_amount)}</span></ShipmentCopyableCell></td>;
-                                            if (column.id === 'reconciliation_status') return <td key={column.id} style={cellStyle} className="overflow-hidden border border-primary/20 px-3 py-2 text-center"><ShipmentCopyableCell copyValue={getStatus(shipment.reconciliation_status, RECONCILIATION_STATUSES).label} copyId={`${shipment.id}-reconciliation_status`} copyLabel="trạng thái đối soát" copiedCellId={copiedCellId} onCopy={handleCopy} iconTopClassName="top-1/2 -translate-y-1/2" className="mx-auto max-w-full"><StatusBadge code={shipment.reconciliation_status} list={RECONCILIATION_STATUSES} className="mx-auto" /></ShipmentCopyableCell></td>;
+                                            if (column.id === 'customer_info') return <td key={column.id} style={cellStyle} className="border border-primary/20 px-3 py-2"><button type="button" data-customer-info-btn onClick={(event) => openCustomerInfo(shipment, event)} className="inline-flex items-center rounded-sm border border-primary/15 bg-primary/5 px-3 py-1.5 text-[11px] font-black text-primary transition-all hover:border-primary/30 hover:bg-primary/10 hover:text-primary" title="Xem thông tin khách hàng">Chi tiết</button></td>;
+                                            if (column.id === 'order_status') return <td key={column.id} style={cellStyle} className="relative border border-primary/20 px-3 py-2"><ShipmentCopyableCell copyValue={orderStatusName} copyId={`${shipment.id}-order_status`} copyLabel="trạng thái đơn hàng" copiedCellId={copiedCellId} onCopy={handleCopy} iconTopClassName="top-1/2 -translate-y-1/2" className="max-w-full">{shipment.order?.id ? <button type="button" data-status-edit-btn onClick={(event) => { event.stopPropagation(); toggleStatusMenu(shipment.id, 'order', event.currentTarget); }} className="inline-flex max-w-full items-center gap-1 rounded-sm border px-2 py-1 text-[11px] font-black shadow-sm transition-all hover:scale-[1.03] active:scale-95" style={orderStatusStyle}><span className="truncate">{orderStatusName}</span><span className="material-symbols-outlined text-[16px] leading-none opacity-40">expand_more</span></button> : <span className="inline-flex rounded-sm border border-primary/10 bg-primary/5 px-2 py-1 text-[11px] font-black text-primary/40">-</span>}</ShipmentCopyableCell></td>;
+                                            if (column.id === 'shipment_status') return <td key={column.id} style={cellStyle} className="relative border border-primary/20 px-3 py-2"><ShipmentCopyableCell copyValue={[shipmentStatus.label, shipment.carrier_status_text && shipment.carrier_status_text !== shipmentStatus.label ? shipment.carrier_status_text : null].filter(Boolean).join('\n')} copyId={`${shipment.id}-shipment_status`} copyLabel="trạng thái vận đơn" copiedCellId={copiedCellId} onCopy={handleCopy} iconTopClassName="top-1/2 -translate-y-1/2" className="max-w-full"><button type="button" data-status-edit-btn onClick={(event) => { event.stopPropagation(); toggleStatusMenu(shipment.id, 'shipment', event.currentTarget); }} className="inline-flex max-w-full items-center gap-1 rounded-sm border px-2 py-1 text-[11px] font-black shadow-sm transition-all hover:scale-[1.03] active:scale-95" style={{ backgroundColor: `${shipmentStatus.color}12`, color: shipmentStatus.color, borderColor: `${shipmentStatus.color}30` }}><span className="truncate">{shipmentStatus.label}</span><span className="material-symbols-outlined text-[16px] leading-none opacity-40">expand_more</span></button>{shipment.carrier_status_text && shipment.carrier_status_text !== shipmentStatus.label && <p className="mt-1 truncate text-[9px] font-black uppercase tracking-wider text-stone/25">{shipment.carrier_status_text}</p>}</ShipmentCopyableCell></td>;
+                                            if (column.id === 'cod_amount') return <td key={column.id} style={cellStyle} className="border border-primary/20 px-3 py-2">{renderMoneyCell(shipment, 'cod_amount', shipment.cod_amount, 'text-[13px] font-black tracking-tight text-brick')}</td>;
+                                            if (column.id === 'shipping_cost') return <td key={column.id} style={cellStyle} className="border border-primary/20 px-3 py-2">{renderMoneyCell(shipment, 'shipping_cost', shipment.shipping_cost, 'text-[13px] font-black tracking-tight text-stone-600')}</td>;
+                                            if (column.id === 'actual_received_amount') return <td key={column.id} style={cellStyle} className="border border-primary/20 px-3 py-2"><ShipmentCopyableCell copyValue={fmtMoney(shipment.actual_received_amount)} copyId={`${shipment.id}-actual_received_amount`} copyLabel="số tiền thực nhận" copiedCellId={copiedCellId} onCopy={handleCopy} iconTopClassName="top-1/2 -translate-y-1/2" className="max-w-full"><span className="text-[13px] font-black text-primary">{fmtMoney(shipment.actual_received_amount)}</span></ShipmentCopyableCell></td>;
+                                            if (column.id === 'reconciliation_status') return <td key={column.id} style={cellStyle} className="overflow-hidden border border-primary/20 px-3 py-2"><ShipmentCopyableCell copyValue={getStatus(shipment.reconciliation_status, RECONCILIATION_STATUSES).label} copyId={`${shipment.id}-reconciliation_status`} copyLabel="trạng thái đối soát" copiedCellId={copiedCellId} onCopy={handleCopy} iconTopClassName="top-1/2 -translate-y-1/2" className="max-w-full"><StatusBadge code={shipment.reconciliation_status} list={RECONCILIATION_STATUSES} /></ShipmentCopyableCell></td>;
                                             if (column.id === 'shipped_at') return <td key={column.id} style={cellStyle} className="overflow-hidden border border-primary/20 px-3 py-2 text-[13px] text-stone"><ShipmentCopyableCell copyValue={shippedAtValue} copyId={`${shipment.id}-shipped_at`} copyLabel="ngày gửi vận chuyển" copiedCellId={copiedCellId} onCopy={handleCopy}><div className="flex flex-col"><span>{shippedAtParts.date}</span>{shippedAtParts.time && <span className="text-[10px] text-stone/35">{shippedAtParts.time}</span>}</div></ShipmentCopyableCell></td>;
                                             if (column.id === 'created_at') return <td key={column.id} style={cellStyle} className="overflow-hidden border border-primary/20 px-3 py-2 text-[13px] text-stone"><ShipmentCopyableCell copyValue={createdAtValue} copyId={`${shipment.id}-created_at`} copyLabel="ngày tạo vận đơn" copiedCellId={copiedCellId} onCopy={handleCopy}><div className="flex flex-col"><span>{createdAtParts.date}</span>{createdAtParts.time && <span className="text-[10px] text-stone/35">{createdAtParts.time}</span>}</div></ShipmentCopyableCell></td>;
                                             return <td key={column.id} style={cellStyle} className="border border-primary/20" />;

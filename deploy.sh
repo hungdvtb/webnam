@@ -52,7 +52,9 @@ function reload_nginx() {
     echo -e "${GREEN}Nginx reloaded.${NC}"
 }
 
-case "$1" in
+COMMAND=${1:-full}
+
+case "$COMMAND" in
     full|rebuild)
         git pull origin master
         deploy_backend

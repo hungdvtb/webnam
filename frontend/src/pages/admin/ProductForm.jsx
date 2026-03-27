@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { productApi, categoryApi, attributeApi, productImageApi, aiApi, blogApi, mediaApi, cmsApi, inventoryApi } from '../../services/api';
@@ -7,10 +7,11 @@ import useAiAvailability from '../../hooks/useAiAvailability';
 import ReactQuill from 'react-quill-new';
 import mammoth from 'mammoth';
 import 'react-quill-new/dist/quill.snow.css';
-import ImageResize from 'quill-image-resize-module-react';
 
-ReactQuill.Quill.register('modules/imageResize', ImageResize);
+import QuillResizeImage from 'quill-resize-module';
 window.Quill = ReactQuill.Quill;
+ReactQuill.Quill.register('modules/resize', QuillResizeImage);
+
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { PRODUCT_TYPE_FORM_META } from '../../config/productTypes';
@@ -1000,7 +1001,10 @@ const ProductForm = () => {
                     const res = await mediaApi.upload(formData);
                     const url = res.data.url;
                     
-                    const quill = quillRef.current.getEditor();
+                    let quill;
+                    try {
+                        quill = quillRef.current.getEditor();
+                    } catch (e) { return; }
                     const range = quill.getSelection();
                     quill.insertEmbed(range.index, 'image', url);
                     
@@ -1031,7 +1035,10 @@ const ProductForm = () => {
             embedUrl = `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=0`;
         }
 
-        const quill = quillRef.current.getEditor();
+        let quill;
+        try {
+            quill = quillRef.current.getEditor();
+        } catch(e) { return; }
         const range = quill.getSelection();
         quill.insertEmbed(range.index, 'video', embedUrl);
         quill.setSelection(range.index + 1);
@@ -1054,10 +1061,14 @@ const ProductForm = () => {
                 fullscreen: () => setIsEditorFullscreen(prev => !prev)
             }
         },
-        imageResize: {
-            parchment: ReactQuill.Quill.import('parchment'),
-            modules: ['Resize', 'DisplaySize', 'Toolbar'],
-            video: true
+        resize: {
+            locale: {
+                altTip: "Nhấn chuột vào đây để thay đổi thuộc tính ảnh",
+                floatLeft: "Căn trái",
+                floatRight: "Căn phải",
+                center: "Căn giữa",
+                restore: "Trở về mặc định",
+            }
         }
     }), [imageHandler, videoHandler]);
 
@@ -1134,7 +1145,10 @@ const ProductForm = () => {
     // Handle replacement and actions for images and videos
     useEffect(() => {
         if (!quillRef.current) return;
-        const quill = quillRef.current.getEditor();
+        let quill;
+        try {
+            quill = quillRef.current.getEditor();
+        } catch (e) { return; }
         const editorRoot = quill.root;
         const editorContainer = editorRoot.closest('.quill');
 

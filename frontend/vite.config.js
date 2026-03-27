@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   optimizeDeps: {
-    include: ['quill-image-resize-module-react', 'react-quill-new'],
+    include: ['quill-resize-module', 'react-quill-new'],
   },
   server: {
     host: 'localhost',

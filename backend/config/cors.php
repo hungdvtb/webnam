@@ -19,7 +19,7 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['https://gomdaithanh.com', 'https://admin.gomdaithanh.com', 'https://www.gomdaithanh.com', 'http://localhost:3000', 'http://localhost:5173'],
+    'allowed_origins' => explode(',', env('ALLOWED_ORIGINS', 'https://gomdaithanh.com,https://admin.gomdaithanh.com,https://www.gomdaithanh.com,http://localhost:3000,http://localhost:5173')),
 
     'allowed_origins_patterns' => [],
 

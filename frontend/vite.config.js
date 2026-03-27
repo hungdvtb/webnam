@@ -8,14 +8,11 @@ export default defineConfig({
     include: ['quill-image-resize-module-react', 'react-quill-new'],
   },
   server: {
-    host: 'localhost',
+    // Listen on all interfaces so Vite can serve both localhost and LAN access.
+    // Leaving HMR host unset lets the client reuse the actual browser origin
+    // instead of always forcing ws://localhost:3003.
+    host: true,
     port: 3003,
     strictPort: true,
-    hmr: {
-      host: 'localhost',
-      port: 3003,
-      clientPort: 3003,
-      protocol: 'ws',
-    },
   },
 })

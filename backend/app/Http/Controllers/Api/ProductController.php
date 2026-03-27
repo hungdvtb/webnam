@@ -1258,14 +1258,14 @@ class ProductController extends Controller
 
             $order = (strtolower($sortOrder) === 'asc') ? 'asc' : 'desc';
 
-            // Ưu tiên đưa sản phẩm có biến thể lên đầu nếu cùng tiêu chí sắp xếp (giúp dễ quản lý)
+            // Tôn trọng tiêu chí sắp xếp từ bảng quản lý sản phẩm; mặc định là mới nhất lên đầu.
             if ($searchRankingSql !== null) {
                 $query->orderByRaw("{$searchRankingSql} DESC", $searchRankingBindings)
-                    ->orderByRaw("CASE WHEN type = 'configurable' THEN 0 ELSE 1 END")
-                    ->orderBy('name', 'asc');
+                    ->orderBy($field, $order)
+                    ->orderByDesc('id');
             } else {
-                $query->orderByRaw("CASE WHEN type = 'configurable' THEN 0 ELSE 1 END")
-                    ->orderBy($field, $order);
+                $query->orderBy($field, $order)
+                    ->orderByDesc('id');
             }
         }
 

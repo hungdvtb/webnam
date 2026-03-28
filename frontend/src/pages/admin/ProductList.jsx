@@ -10,6 +10,7 @@ import { useTableColumns } from '../../hooks/useTableColumns';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
 import SortIndicator from '../../components/SortIndicator';
 import { ACTIVE_PRODUCT_TYPE_KEYS, ACTIVE_PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_META, sanitizeActiveProductTypeValues } from '../../config/productTypes';
+import { formatWholeMoneyInput, normalizeWholeMoneyDraft, normalizeWholeMoneyNumber } from '../../utils/money';
 
 const TYPE_LABELS = PRODUCT_TYPE_META;
 
@@ -17,7 +18,7 @@ const DEFAULT_COLUMNS = [
     { id: 'sku', label: 'Mã SP', minWidth: '130px', fixed: true },
     { id: 'name', label: 'Tên Sản Phẩm', minWidth: '220px', fixed: true },
     { id: 'specifications', label: 'Thông số', minWidth: '150px' },
-    { id: 'cost_price', label: 'Giá nhập', minWidth: '120px' },
+    { id: 'cost_price', label: 'Giá dự kiến', minWidth: '120px' },
     { id: 'price', label: 'Giá bán', minWidth: '120px' },
     { id: 'images', label: 'Ảnh', minWidth: '80px' },
     { id: 'type', label: 'Loại hình', minWidth: '110px' },
@@ -118,22 +119,22 @@ const ProductList = () => {
     const [openAttrId, setOpenAttrId] = useState(null);
 
     const [editingProductId, setEditingProductId] = useState(null);
-    const [editForm, setEditForm] = useState({ price: '', cost_price: '' });
+    const [editForm, setEditForm] = useState({ price: '', expected_cost: '' });
     const [savingId, setSavingId] = useState(null);
 
     const handleStartQuickEdit = (p, e) => {
         e.stopPropagation();
         setEditingProductId(p.id);
         setEditForm({
-            price: Math.floor(p.price || 0),
-            cost_price: Math.floor(p.expected_cost ?? p.cost_price ?? 0)
+            price: normalizeWholeMoneyDraft(p.price),
+            expected_cost: normalizeWholeMoneyDraft(p.expected_cost ?? p.cost_price)
         });
     };
 
     const handleCancelQuickEdit = (e) => {
         if (e) e.stopPropagation();
         setEditingProductId(null);
-        setEditForm({ price: '', cost_price: '' });
+        setEditForm({ price: '', expected_cost: '' });
     };
 
     const handleSaveQuickEdit = async (e) => {
@@ -142,24 +143,20 @@ const ProductList = () => {
         
         setSavingId(editingProductId);
         try {
-            const response = await productApi.update(editingProductId, {
-                price: editForm.price,
-                expected_cost: editForm.cost_price
+            const nextPrice = normalizeWholeMoneyNumber(editForm.price);
+            const nextExpectedCost = normalizeWholeMoneyNumber(editForm.expected_cost);
+
+            if (nextPrice === null || nextExpectedCost === null) {
+                setNotification({ type: 'error', message: 'Vui lòng nhập đầy đủ giá bán và giá dự kiến.' });
+                return;
+            }
+
+            await productApi.update(editingProductId, {
+                price: nextPrice,
+                expected_cost: nextExpectedCost,
             });
-            
-            // Update local state
-            setProducts(prev => prev.map(p => {
-                if (p.id === editingProductId) return { ...p, ...response.data };
-                if (p.linked_products) {
-                    return {
-                        ...p,
-                        linked_products: p.linked_products.map(child => 
-                            child.id === editingProductId ? { ...child, ...response.data } : child
-                        )
-                    };
-                }
-                return p;
-            }));
+
+            await fetchProducts(pagination.current_page, filters, sortConfig, pagination.per_page);
             
             setNotification({ type: 'success', message: 'Cập nhật giá thành công' });
             setTimeout(() => setNotification(null), 3000);
@@ -692,7 +689,7 @@ const ProductList = () => {
 
     const handleBulkUpdateAttributesSubmit = async () => {
         // Separate basic info from attributes
-        const basicInfoFields = ['category_id', 'category_ids', 'price', 'cost_price', 'stock_quantity', 'supplier_ids', 'is_featured', 'is_new', 'status', 'type'];
+        const basicInfoFields = ['category_id', 'category_ids', 'price', 'expected_cost', 'stock_quantity', 'supplier_ids', 'is_featured', 'is_new', 'status', 'type'];
         const basic_info = {};
         const attributes = {};
         
@@ -771,8 +768,10 @@ const ProductList = () => {
         
         const typeLabel = TYPE_LABELS[p.type]?.label || p.type;
         const catName = p.category?.name || '-';
-        const price = p.price ? `${new Intl.NumberFormat('vi-VN').format(p.price)}₫` : '0₫';
-        const costPrice = p.cost_price ? `${new Intl.NumberFormat('vi-VN').format(p.cost_price)}₫` : '0₫';
+        const priceValue = normalizeWholeMoneyNumber(p.price) ?? 0;
+        const expectedCostValue = normalizeWholeMoneyNumber(p.expected_cost ?? p.cost_price) ?? 0;
+        const price = `${new Intl.NumberFormat('vi-VN').format(priceValue)}₫`;
+        const costPrice = `${new Intl.NumberFormat('vi-VN').format(expectedCostValue)}₫`;
         const stock = p.stock_quantity || 0;
         
         let attrsStr = '';
@@ -789,7 +788,7 @@ const ProductList = () => {
             }).join('\n');
         }
 
-        const text = `Tên SP: ${p.name}\nMã SP: ${p.sku}\nLoại: ${typeLabel}\nDanh mục: ${catName}\nGiá bán: ${price}\nGiá nhập: ${costPrice}\nKho: ${stock}\nThông số: ${p.specifications || '-'}${attrsStr}`;
+        const text = `Tên SP: ${p.name}\nMã SP: ${p.sku}\nLoại: ${typeLabel}\nDanh mục: ${catName}\nGiá bán: ${price}\nGiá dự kiến: ${costPrice}\nKho: ${stock}\nThông số: ${p.specifications || '-'}${attrsStr}`;
         
         navigator.clipboard.writeText(text);
         setCopiedText('all_' + p.id);
@@ -803,8 +802,18 @@ const ProductList = () => {
         const { id, field } = editingCell;
         try {
             setLoading(true);
-            await productApi.update(id, { [field]: editValue });
-            setProducts(prev => prev.map(p => p.id === id ? { ...p, [field]: editValue } : p));
+            const payloadField = field === 'cost_price' ? 'expected_cost' : field;
+            const payloadValue = field === 'price' || field === 'cost_price'
+                ? normalizeWholeMoneyNumber(editValue)
+                : editValue;
+
+            if ((field === 'price' || field === 'cost_price') && payloadValue === null) {
+                setNotification({ type: 'error', message: 'Giá phải là số hợp lệ.' });
+                return;
+            }
+
+            await productApi.update(id, { [payloadField]: payloadValue });
+            await fetchProducts(pagination.current_page, filters, sortConfig, pagination.per_page);
             setJustUpdatedId(id);
             setTimeout(() => setJustUpdatedId(null), 2000);
         } catch (error) { alert("Lỗi!"); } finally { setEditingCell(null); setLoading(false); }
@@ -1571,7 +1580,7 @@ const ProductList = () => {
                                     const pIsChild = isSubRow || p.parent_products?.length > 0;
                                     
                                     // Custom aggregate price display for parent products
-                                    let displayCostPrice = p.cost_price ?? p.expected_cost ?? null;
+                                    let displayCostPrice = p.expected_cost ?? p.cost_price ?? null;
                                     let displayPrice = p.price;
                                     const pVariants = p.variations || [];
                                     
@@ -1580,7 +1589,7 @@ const ProductList = () => {
                                             const components = p.grouped_items || [];
                                             if (components.length > 0) {
                                                 // Calculate sum of cost prices for Grouped Product
-                                                displayCostPrice = components.reduce((sum, item) => sum + (Number(item.cost_price ?? item.expected_cost ?? 0) * (item.pivot?.quantity || 1)), 0);
+                                                displayCostPrice = components.reduce((sum, item) => sum + (Number(item.expected_cost ?? item.cost_price ?? 0) * (item.pivot?.quantity || 1)), 0);
                                                 
                                                 // Calculate sum of selling prices (if price_type is 'sum')
                                                 if (p.price_type === 'sum') {
@@ -1589,7 +1598,7 @@ const ProductList = () => {
                                             }
                                         } else if (pVariants.length > 0) {
                                             // Existing logic for Configurable products
-                                            const vCostPrices = pVariants.map(v => v.cost_price ?? v.expected_cost);
+                                            const vCostPrices = pVariants.map(v => v.expected_cost ?? v.cost_price);
                                             const firstCost = vCostPrices[0];
                                             const allCostSame = vCostPrices.every(cp => cp !== null && cp !== undefined && Number(cp) === Number(firstCost));
                                             displayCostPrice = allCostSame ? firstCost : null;
@@ -1685,7 +1694,7 @@ const ProductList = () => {
                                                             <div className="flex items-center justify-between">
                                                                 {isEditing ? (
                                                                     <div className="flex flex-col gap-1">
-                                                                        <input type="number" className="w-24 border border-primary/20 rounded px-1.5 py-0.5 text-[11px] font-bold outline-none focus:border-primary" value={editForm.cost_price} onChange={(e) => setEditForm(prev => ({...prev, cost_price: e.target.value}))} onKeyDown={(e) => e.key === 'Enter' && handleSaveQuickEdit(e)} autoFocus />
+                                                                        <input type="text" className="w-24 border border-primary/20 rounded px-1.5 py-0.5 text-[11px] font-bold outline-none focus:border-primary" value={formatWholeMoneyInput(editForm.expected_cost)} onChange={(e) => setEditForm(prev => ({...prev, expected_cost: normalizeWholeMoneyDraft(e.target.value)}))} onKeyDown={(e) => e.key === 'Enter' && handleSaveQuickEdit(e)} autoFocus />
                                                                         <div className="flex gap-2">
                                                                             <button onClick={handleSaveQuickEdit} className="text-green-600 text-[10px] font-bold uppercase">Lưu</button>
                                                                             <button onClick={handleCancelQuickEdit} className="text-brick text-[10px] font-bold uppercase">Hủy</button>
@@ -1693,15 +1702,15 @@ const ProductList = () => {
                                                                     </div>
                                                                 ) : (
                                                                     <React.Fragment>
-                                                                        <span>{displayCostPrice ? new Intl.NumberFormat('vi-VN').format(Math.floor(displayCostPrice)) + '₫' : (pIsParent && pVariants.length > 0 ? '--' : (p.cost_price ? new Intl.NumberFormat('vi-VN').format(Math.floor(p.cost_price)) + '₫' : '--'))}</span>
+                                                                        <span>{displayCostPrice != null ? new Intl.NumberFormat('vi-VN').format(Math.floor(displayCostPrice)) + '₫' : (pIsParent && pVariants.length > 0 ? '--' : '--')}</span>
                                                                         <div className="flex gap-1 shrink-0">
                                                                             {pIsChild && !isEditing && (
-                                                                                <button onClick={(e) => handleStartQuickEdit(p, e)} className="quick-edit-btn opacity-0 group-hover/cell:opacity-100" title="Sửa nhanh giá nhập">
+                                                                                <button onClick={(e) => handleStartQuickEdit(p, e)} className="quick-edit-btn opacity-0 group-hover/cell:opacity-100" title="Sửa nhanh giá dự kiến">
                                                                                     <span className="material-symbols-outlined text-[16px]">edit</span>
                                                                                 </button>
                                                                             )}
-                                                                            {p.cost_price && (
-                                                                                <button onClick={(e) => handleCopy(String(Math.floor(displayCostPrice || p.cost_price)), 'giá nhập', e, `${p.id}-cost`)} className={`${copiedText === `${p.id}-cost` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all ml-1`} title="Sao chép giá nhập">
+                                                                            {displayCostPrice != null && (
+                                                                                <button onClick={(e) => handleCopy(String(Math.floor(displayCostPrice)), 'giá dự kiến', e, `${p.id}-cost`)} className={`${copiedText === `${p.id}-cost` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all ml-1`} title="Sao chép giá dự kiến">
                                                                                     <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-cost` ? 'check' : 'content_copy'}</span>
                                                                                 </button>
                                                                             )}
@@ -1720,11 +1729,11 @@ const ProductList = () => {
                                                             <div className="flex items-center justify-between">
                                                                 {isEditing ? (
                                                                     <div className="flex items-center gap-1 w-full">
-                                                                        <input 
-                                                                            type="number" 
+                                                                        <input
+                                                                            type="text"
                                                                             className="quick-edit-input" 
-                                                                            value={editForm.price} 
-                                                                            onChange={e => setEditForm({...editForm, price: Math.floor(e.target.value)})}
+                                                                            value={formatWholeMoneyInput(editForm.price)}
+                                                                            onChange={e => setEditForm({...editForm, price: normalizeWholeMoneyDraft(e.target.value)})}
                                                                             onClick={e => e.stopPropagation()}
                                                                             onDoubleClick={e => { e.stopPropagation(); e.target.select(); }}
                                                                         />
@@ -1989,23 +1998,23 @@ const ProductList = () => {
 
                                 <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                                     <div className="space-y-1">
-                                        <label className="text-[13px] font-bold text-primary/80">Giá nhập</label>
-                                        <input 
-                                            type="number" 
+                                        <label className="text-[13px] font-bold text-primary/80">Giá dự kiến</label>
+                                        <input
+                                            type="text"
                                             className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
                                             placeholder="VNĐ"
-                                            value={bulkUpdateData.cost_price || ''} 
-                                            onChange={e => setBulkUpdateData({...bulkUpdateData, cost_price: e.target.value})}
+                                            value={formatWholeMoneyInput(bulkUpdateData.expected_cost)}
+                                            onChange={e => setBulkUpdateData({...bulkUpdateData, expected_cost: normalizeWholeMoneyDraft(e.target.value)})}
                                         />
                                     </div>
                                     <div className="space-y-1">
                                         <label className="text-[13px] font-bold text-primary/80">Giá bán</label>
-                                        <input 
-                                            type="number" 
+                                        <input
+                                            type="text"
                                             className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
                                             placeholder="VNĐ"
-                                            value={bulkUpdateData.price || ''} 
-                                            onChange={e => setBulkUpdateData({...bulkUpdateData, price: e.target.value})}
+                                            value={formatWholeMoneyInput(bulkUpdateData.price)}
+                                            onChange={e => setBulkUpdateData({...bulkUpdateData, price: normalizeWholeMoneyDraft(e.target.value)})}
                                         />
                                     </div>
                                     <div className="space-y-1">

@@ -8,6 +8,8 @@ import SearchableSelect from '../../components/SearchableSelect';
 import OrderSupplementItemsSection from '../../components/admin/OrderSupplementItemsSection';
 import {
     ORDER_TYPE_OPTIONS,
+    ORDER_TYPE_EXCHANGE_RETURN,
+    ORDER_TYPE_PARTIAL_DELIVERY,
     ORDER_TYPE_STANDARD,
     getOrderTypeMeta,
     isSpecialOrderType,
@@ -70,11 +72,40 @@ const defaultQuoteSettings = {
 };
 const productSearchHistoryStorageKey = 'order_form_product_search_history';
 const productQuickFilterAttributeStorageKey = 'order_form_product_quick_filter_attribute_id';
+const productQuickSetupStorageKey = 'order_form_product_quick_setup_map_v1';
+const productQuickSetupLimit = 15;
 const supportedProductQuickFilterTypes = new Set(['select', 'multiselect']);
+const autoOpenSupplementItemOrderTypes = new Set([
+    ORDER_TYPE_EXCHANGE_RETURN,
+    ORDER_TYPE_PARTIAL_DELIVERY,
+]);
 const quoteCurrencyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
 const quoteCanvasFontFamily = '"Tahoma", "Arial", sans-serif';
+const shouldAutoOpenSupplementItemsModal = (value) => autoOpenSupplementItemOrderTypes.has(normalizeOrderType(value));
+const sortQuoteTemplates = (templates = []) => [...(Array.isArray(templates) ? templates : [])].sort((a, b) => {
+    const sortA = Number(a?.sort_order) || 0;
+    const sortB = Number(b?.sort_order) || 0;
+    if (sortA !== sortB) return sortA - sortB;
+    return String(a?.name || '').localeCompare(String(b?.name || ''), 'vi');
+});
 
 const normalizeCanvasText = (value) => String(value ?? '').normalize('NFC').trim();
+const appendUrlVersion = (url, version) => {
+    const normalizedUrl = String(url ?? '').trim();
+    const normalizedVersion = String(version ?? '').trim();
+
+    if (!normalizedUrl || !normalizedVersion || normalizedUrl.startsWith('data:')) {
+        return normalizedUrl;
+    }
+
+    const hashIndex = normalizedUrl.indexOf('#');
+    const baseUrl = hashIndex >= 0 ? normalizedUrl.slice(0, hashIndex) : normalizedUrl;
+    const hash = hashIndex >= 0 ? normalizedUrl.slice(hashIndex) : '';
+    const separator = baseUrl.includes('?') ? '&' : '?';
+
+    return `${baseUrl}${separator}v=${encodeURIComponent(normalizedVersion)}${hash}`;
+};
+const getQuoteTemplateImageUrl = (template) => appendUrlVersion(template?.image_url, template?.updated_at);
 const escapeHtml = (value) => String(value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -119,6 +150,63 @@ const getStoredProductQuickFilterAttributeId = () => {
         console.error('Unable to read product quick filter attribute', error);
         return '';
     }
+};
+const resolveProductQuickSetupNamespace = () => {
+    if (typeof window === 'undefined') return 'server';
+
+    try {
+        const activeAccountId = window.localStorage.getItem('activeAccountId') || 'default';
+        const activeSiteCode = window.localStorage.getItem('activeSiteCode') || 'default';
+
+        return `${activeAccountId}::${activeSiteCode}`;
+    } catch (error) {
+        console.error('Unable to resolve product quick setup namespace', error);
+        return 'default::default';
+    }
+};
+const buildProductQuickSetupKey = (attributeId, attributeValue) => {
+    const normalizedAttributeId = String(attributeId ?? '').trim();
+    const normalizedAttributeValue = normalizeQuickFilterOptionValue(attributeValue).toLocaleLowerCase('vi');
+
+    return normalizedAttributeId && normalizedAttributeValue
+        ? `${normalizedAttributeId}::${normalizedAttributeValue}`
+        : '';
+};
+const getStoredProductQuickSetupStore = () => {
+    if (typeof window === 'undefined') return {};
+
+    try {
+        const raw = window.localStorage.getItem(productQuickSetupStorageKey);
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (error) {
+        console.error('Unable to read product quick setup store', error);
+        return {};
+    }
+};
+const normalizeStoredProductQuickSetupItems = (items = []) => {
+    const seenProductIds = new Set();
+
+    return (Array.isArray(items) ? items : [])
+        .map((item) => {
+            const productId = Number(item?.product_id ?? item?.id ?? 0);
+            if (!Number.isFinite(productId) || productId <= 0) return null;
+            if (seenProductIds.has(productId)) return null;
+            seenProductIds.add(productId);
+
+            return {
+                id: productId,
+                product_id: productId,
+                sku: String(item?.sku ?? '').trim(),
+                name: String(item?.name ?? '').trim(),
+                price: Number(item?.price ?? 0) || 0,
+                cost_price: Number(item?.cost_price ?? item?.expected_cost ?? 0) || 0,
+                main_image: String(item?.main_image ?? '').trim(),
+                type: String(item?.type ?? '').trim(),
+            };
+        })
+        .filter(Boolean)
+        .slice(0, productQuickSetupLimit);
 };
 const normalizeQuickFilterOptionValue = (value) => String(value ?? '').trim();
 const parseProductAttributeValueList = (value) => {
@@ -470,7 +558,7 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                                             </div>
                                             <div className="mt-4 flex-1 w-full bg-white/10 border border-white/15 p-3">
                                                 {template?.image_url ? (
-                                                    <img src={template.image_url} alt={template.name} className="h-[220px] w-full object-contain" />
+                                                    <img src={getQuoteTemplateImageUrl(template)} alt={template.name} className="h-[220px] w-full object-contain" />
                                                 ) : (
                                                     <div className="h-[220px] w-full border border-dashed border-white/30 flex items-center justify-center text-[12px] uppercase tracking-[0.16em]">
                                                         Chưa có ảnh mẫu
@@ -500,7 +588,6 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
 };
 
 const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null }) => {
-    const skuRef = useRef(null);
     const nameRef = useRef(null);
     const [hasTruncation, setHasTruncation] = useState(false);
     const [isHovered, setIsHovered] = useState(false);
@@ -510,9 +597,8 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null })
     );
 
     const checkTruncation = useCallback(() => {
-        const skuTruncated = skuRef.current && skuRef.current.scrollWidth > skuRef.current.clientWidth + 1;
         const nameTruncated = nameRef.current && nameRef.current.scrollWidth > nameRef.current.clientWidth + 1;
-        return Boolean(skuTruncated || nameTruncated);
+        return Boolean(nameTruncated);
     }, []);
 
     useEffect(() => {
@@ -529,7 +615,7 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null })
             window.cancelAnimationFrame(frameId);
             window.removeEventListener('resize', handleResize);
         };
-    }, [checkTruncation, product.name, product.sku]);
+    }, [checkTruncation, product.name]);
 
     const handleMouseEnter = () => {
         setHasTruncation(checkTruncation());
@@ -547,35 +633,31 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null })
             <div className="size-8 bg-primary/5 rounded-sm flex items-center justify-center text-primary/10 overflow-hidden shrink-0">
                 {product.main_image ? <img src={product.main_image} alt="" className="size-full object-cover" /> : <span className="material-symbols-outlined text-sm">image</span>}
             </div>
-            <div className="flex-1 min-w-0">
-                <div className="flex justify-between items-center mb-0.5 gap-3">
-                    <span ref={skuRef} className="text-[13px] font-bold text-primary truncate tracking-tight">{product.sku || '---'}</span>
-                    <span className="text-[14px] font-extrabold text-blue-600 shrink-0 ml-4">{new Intl.NumberFormat('vi-VN').format(product.price)}₫</span>
+            <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                    <p ref={nameRef} className="truncate text-[13px] font-bold tracking-tight text-primary">{product.name || '---'}</p>
+                    {quickFilterAttribute && quickFilterValues.length > 0 && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                            {quickFilterValues.slice(0, 2).map((value) => (
+                                <span
+                                    key={`${product.id}-${quickFilterAttribute.id}-${value}`}
+                                    className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2 py-0.5 text-[10px] font-bold text-primary/70"
+                                >
+                                    {value}
+                                </span>
+                            ))}
+                            {quickFilterValues.length > 2 && (
+                                <span className="text-[10px] font-bold text-primary/35">+{quickFilterValues.length - 2}</span>
+                            )}
+                        </div>
+                    )}
                 </div>
-                <p ref={nameRef} className="text-[12px] text-primary/50 truncate font-medium">{product.name || '---'}</p>
-                {quickFilterAttribute && quickFilterValues.length > 0 && (
-                    <div className="mt-1 flex flex-wrap items-center gap-1">
-                        {quickFilterValues.slice(0, 2).map((value) => (
-                            <span
-                                key={`${product.id}-${quickFilterAttribute.id}-${value}`}
-                                className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2 py-0.5 text-[10px] font-bold text-primary/70"
-                            >
-                                {value}
-                            </span>
-                        ))}
-                        {quickFilterValues.length > 2 && (
-                            <span className="text-[10px] font-bold text-primary/35">+{quickFilterValues.length - 2}</span>
-                        )}
-                    </div>
-                )}
+                <span className="shrink-0 pt-0.5 text-[14px] font-extrabold text-blue-600">{new Intl.NumberFormat('vi-VN').format(product.price)}₫</span>
             </div>
 
             {isHovered && hasTruncation && (
                 <div className="pointer-events-none absolute left-11 right-3 top-1/2 z-[120] -translate-y-1/2 rounded-sm border border-primary/10 bg-white/95 px-3 py-2 shadow-[0_18px_40px_rgba(15,23,42,0.16)] ring-1 ring-black/5 backdrop-blur-sm">
-                    <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45 break-all">
-                        {product.sku || '---'}
-                    </div>
-                    <div className="mt-1 text-[12px] font-semibold leading-5 text-[#0F172A] break-words">
+                    <div className="text-[12px] font-semibold leading-5 text-[#0F172A] break-words">
                         {product.name || '---'}
                     </div>
                 </div>
@@ -612,6 +694,12 @@ const OrderForm = () => {
     const [productQuickFilterAttributes, setProductQuickFilterAttributes] = useState([]);
     const [productQuickFilterAttributeId, setProductQuickFilterAttributeId] = useState(() => getStoredProductQuickFilterAttributeId());
     const [productQuickFilterValues, setProductQuickFilterValues] = useState([]);
+    const [productQuickSetupStore, setProductQuickSetupStore] = useState(() => getStoredProductQuickSetupStore());
+    const [productQuickModeEnabled, setProductQuickModeEnabled] = useState(false);
+    const [showProductQuickSetupPanel, setShowProductQuickSetupPanel] = useState(false);
+    const [productQuickSetupSearchTerm, setProductQuickSetupSearchTerm] = useState('');
+    const [debouncedProductQuickSetupSearchTerm, setDebouncedProductQuickSetupSearchTerm] = useState('');
+    const [productQuickSetupProducts, setProductQuickSetupProducts] = useState([]);
     const [showProductQuickFilterPanel, setShowProductQuickFilterPanel] = useState(false);
     const [showColumnConfig, setShowColumnConfig] = useState(false);
     const [isCapturing, setIsCapturing] = useState(false);
@@ -627,10 +715,14 @@ const OrderForm = () => {
     const [copiedText, setCopiedText] = useState(null);
     const captureRef = useRef(null);
     const quoteCaptureRef = useRef(null);
+    const lastAutoOpenedSupplementOrderTypeRef = useRef('');
+    const lastVisitedProductQuickSetupKeyRef = useRef('');
     const copyFeedbackTimeoutRef = useRef(null);
     const copyNotificationTimeoutRef = useRef(null);
     const productSearchAbortRef = useRef(null);
     const productSearchCacheRef = useRef(new Map());
+    const productQuickSetupAbortRef = useRef(null);
+    const productQuickSetupCacheRef = useRef(new Map());
     const activeProductQuickFilterAttribute = useMemo(
         () => productQuickFilterAttributes.find((attribute) => String(attribute.id) === String(productQuickFilterAttributeId)) || null,
         [productQuickFilterAttributeId, productQuickFilterAttributes]
@@ -645,6 +737,20 @@ const OrderForm = () => {
         return `${activeProductQuickFilterAttribute.name}: ${normalizedProductQuickFilterValues[0]}`;
     }, [activeProductQuickFilterAttribute, normalizedProductQuickFilterValues]);
     const hasActiveProductQuickFilter = normalizedProductQuickFilterValues.length > 0;
+    const activeProductQuickSetupKey = useMemo(() => (
+        hasActiveProductQuickFilter
+            ? buildProductQuickSetupKey(activeProductQuickFilterAttribute?.id, normalizedProductQuickFilterValues[0])
+            : ''
+    ), [activeProductQuickFilterAttribute, hasActiveProductQuickFilter, normalizedProductQuickFilterValues]);
+    const activeProductQuickSetupItems = useMemo(() => {
+        if (!activeProductQuickSetupKey) return [];
+
+        const namespace = resolveProductQuickSetupNamespace();
+        return normalizeStoredProductQuickSetupItems(
+            productQuickSetupStore?.[namespace]?.[activeProductQuickSetupKey] || []
+        );
+    }, [activeProductQuickSetupKey, productQuickSetupStore]);
+    const isProductQuickModeActive = productQuickModeEnabled && activeProductQuickSetupItems.length > 0;
     const shouldShowProductQuickFilterPanel = showSearchDropdown && showProductQuickFilterPanel && productQuickFilterAttributes.length > 0;
 
     const navigateBack = useCallback(() => {
@@ -724,6 +830,10 @@ const OrderForm = () => {
         status: 'new',
         province: ''
     });
+    const selectedQuickSetupProductIds = useMemo(
+        () => new Set(activeProductQuickSetupItems.map((item) => Number(item.product_id)).filter(Boolean)),
+        [activeProductQuickSetupItems]
+    );
 
     const [provinces, setProvinces] = useState([]);
     const [districts, setDistricts] = useState([]);
@@ -1086,6 +1196,7 @@ const OrderForm = () => {
         setProductQuickFilterAttributeId(nextAttributeId);
         setProductQuickFilterValues([]);
         setShowProductQuickFilterPanel(true);
+        setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
     }, []);
@@ -1093,6 +1204,7 @@ const OrderForm = () => {
     const openProductQuickFilterPanel = useCallback((event) => {
         event?.stopPropagation?.();
         setShowProductQuickFilterPanel(true);
+        setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
     }, []);
@@ -1111,12 +1223,146 @@ const OrderForm = () => {
     const clearProductQuickFilterValues = useCallback(() => {
         setProductQuickFilterValues([]);
         setShowProductQuickFilterPanel(false);
+        setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
     }, []);
 
+    const saveActiveProductQuickSetupItems = useCallback((items) => {
+        if (!activeProductQuickSetupKey) return;
+
+        const namespace = resolveProductQuickSetupNamespace();
+        const normalizedItems = normalizeStoredProductQuickSetupItems(items);
+
+        setProductQuickSetupStore((prev) => {
+            const next = { ...prev };
+            const nextNamespaceStore = { ...(next[namespace] || {}) };
+
+            if (normalizedItems.length > 0) {
+                nextNamespaceStore[activeProductQuickSetupKey] = normalizedItems;
+                next[namespace] = nextNamespaceStore;
+                return next;
+            }
+
+            delete nextNamespaceStore[activeProductQuickSetupKey];
+            if (Object.keys(nextNamespaceStore).length > 0) {
+                next[namespace] = nextNamespaceStore;
+            } else {
+                delete next[namespace];
+            }
+
+            return next;
+        });
+    }, [activeProductQuickSetupKey]);
+
+    const handleAddProductToQuickSetup = useCallback((product) => {
+        if (!product) return;
+
+        const nextItems = normalizeStoredProductQuickSetupItems([
+            ...activeProductQuickSetupItems,
+            {
+                product_id: product.id,
+                sku: product.sku,
+                name: product.name,
+                price: product.price,
+                cost_price: product.cost_price ?? product.expected_cost ?? 0,
+                main_image: product.main_image,
+                type: product.type,
+            },
+        ]);
+
+        saveActiveProductQuickSetupItems(nextItems);
+        setProductQuickModeEnabled(true);
+    }, [activeProductQuickSetupItems, saveActiveProductQuickSetupItems]);
+
+    const handleRemoveProductFromQuickSetup = useCallback((productId) => {
+        saveActiveProductQuickSetupItems(
+            activeProductQuickSetupItems.filter((item) => Number(item.product_id) !== Number(productId))
+        );
+    }, [activeProductQuickSetupItems, saveActiveProductQuickSetupItems]);
+
+    const toggleProductQuickMode = useCallback(() => {
+        if (activeProductQuickSetupItems.length === 0) return;
+
+        setProductQuickModeEnabled((prev) => !prev);
+        setShowSearchDropdown(true);
+        setShowSearchHistory(false);
+    }, [activeProductQuickSetupItems.length]);
+
+    const disableProductQuickMode = useCallback((event) => {
+        event?.stopPropagation?.();
+        setProductQuickModeEnabled(false);
+        setShowProductQuickSetupPanel(false);
+        setShowSearchDropdown(true);
+        setShowSearchHistory(false);
+    }, []);
+
+    const toggleProductQuickSetupPanel = useCallback((event) => {
+        event?.stopPropagation?.();
+        setShowProductQuickSetupPanel((prev) => !prev);
+        setShowSearchDropdown(false);
+        setShowSearchHistory(false);
+    }, []);
+
+    const fetchProductQuickSetupProducts = useCallback(async (term = '') => {
+        const activeFilterAttributeId = activeProductQuickFilterAttribute?.id;
+        const activeFilterValue = normalizedProductQuickFilterValues[0];
+        if (!activeFilterAttributeId || !activeFilterValue) {
+            setProductQuickSetupProducts([]);
+            return;
+        }
+
+        const params = {
+            per_page: 24,
+            picker: 1,
+            [`attributes[${activeFilterAttributeId}]`]: activeFilterValue,
+        };
+
+        if (term) {
+            params.search = term;
+        }
+
+        const activeAccountId = typeof window === 'undefined'
+            ? 'default'
+            : (window.localStorage.getItem('activeAccountId') || 'default');
+        const cacheKey = JSON.stringify({ quick_setup: true, account_id: activeAccountId, ...params });
+        const cachedProducts = productQuickSetupCacheRef.current.get(cacheKey);
+        if (cachedProducts) {
+            setProductQuickSetupProducts(cachedProducts);
+            return;
+        }
+
+        productQuickSetupAbortRef.current?.abort();
+        const controller = new AbortController();
+        productQuickSetupAbortRef.current = controller;
+
+        try {
+            const response = await productApi.getAll(params, controller.signal);
+            if (controller.signal.aborted) return;
+
+            const nextProducts = response.data.data || [];
+            productQuickSetupCacheRef.current.set(cacheKey, nextProducts);
+            setProductQuickSetupProducts(nextProducts);
+        } catch (error) {
+            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+            console.error('Error fetching quick setup products', error);
+            setProductQuickSetupProducts([]);
+        } finally {
+            if (productQuickSetupAbortRef.current === controller) {
+                productQuickSetupAbortRef.current = null;
+            }
+        }
+    }, [activeProductQuickFilterAttribute, normalizedProductQuickFilterValues]);
+
+    const searchableProducts = useMemo(
+        () => (isProductQuickModeActive ? activeProductQuickSetupItems : products),
+        [activeProductQuickSetupItems, isProductQuickModeActive, products]
+    );
+
     const rankedSearchProducts = useMemo(() => {
-        const availableProducts = products.filter((product) => !formData.items.some((item) => item.product_id === product.id));
+        const availableProducts = searchableProducts.filter(
+            (product) => !formData.items.some((item) => Number(item.product_id) === Number(product.id ?? product.product_id))
+        );
 
         if (!searchTerm.trim()) {
             return availableProducts.slice(0, 50);
@@ -1133,7 +1379,7 @@ const OrderForm = () => {
                 || String(left.name || '').localeCompare(String(right.name || ''), 'vi')
             ))
             .slice(0, 50);
-    }, [formData.items, products, searchTerm]);
+    }, [formData.items, searchableProducts, searchTerm]);
 
     useEffect(() => {
         const timerId = setTimeout(() => {
@@ -1146,6 +1392,18 @@ const OrderForm = () => {
     }, [searchTerm]);
 
     useEffect(() => {
+        const timerId = setTimeout(() => {
+            setDebouncedProductQuickSetupSearchTerm(productQuickSetupSearchTerm);
+        }, 250);
+
+        return () => {
+            clearTimeout(timerId);
+        };
+    }, [productQuickSetupSearchTerm]);
+
+    useEffect(() => {
+        if (isProductQuickModeActive) return;
+
         if (showSearchDropdown || debouncedSearchTerm.trim() !== '' || hasActiveProductQuickFilter) {
             fetchProducts(debouncedSearchTerm);
         }
@@ -1153,9 +1411,24 @@ const OrderForm = () => {
         fetchProducts,
         debouncedSearchTerm,
         hasActiveProductQuickFilter,
+        isProductQuickModeActive,
         productQuickFilterAttributeId,
         normalizedProductQuickFilterValues,
         showSearchDropdown
+    ]);
+
+    useEffect(() => {
+        if (!showProductQuickSetupPanel || !hasActiveProductQuickFilter) {
+            setProductQuickSetupProducts([]);
+            return;
+        }
+
+        fetchProductQuickSetupProducts(debouncedProductQuickSetupSearchTerm);
+    }, [
+        debouncedProductQuickSetupSearchTerm,
+        fetchProductQuickSetupProducts,
+        hasActiveProductQuickFilter,
+        showProductQuickSetupPanel,
     ]);
 
     useEffect(() => {
@@ -1163,8 +1436,51 @@ const OrderForm = () => {
         pushSearchHistory(debouncedSearchTerm);
     }, [debouncedSearchTerm, pushSearchHistory, showSearchDropdown]);
 
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        try {
+            window.localStorage.setItem(productQuickSetupStorageKey, JSON.stringify(productQuickSetupStore));
+        } catch (error) {
+            console.error('Unable to persist product quick setup store', error);
+        }
+    }, [productQuickSetupStore]);
+
+    useEffect(() => {
+        if (!hasActiveProductQuickFilter) {
+            lastVisitedProductQuickSetupKeyRef.current = '';
+            setProductQuickModeEnabled(false);
+            setShowProductQuickSetupPanel(false);
+            setProductQuickSetupSearchTerm('');
+            setProductQuickSetupProducts([]);
+            return;
+        }
+
+        if (lastVisitedProductQuickSetupKeyRef.current !== activeProductQuickSetupKey) {
+            lastVisitedProductQuickSetupKeyRef.current = activeProductQuickSetupKey;
+            setProductQuickModeEnabled(activeProductQuickSetupItems.length > 0);
+            setShowProductQuickSetupPanel(false);
+            return;
+        }
+
+        if (productQuickModeEnabled && activeProductQuickSetupItems.length === 0) {
+            setProductQuickModeEnabled(false);
+        }
+    }, [
+        activeProductQuickSetupItems.length,
+        activeProductQuickSetupKey,
+        hasActiveProductQuickFilter,
+        productQuickModeEnabled,
+    ]);
+
+    useEffect(() => {
+        setProductQuickSetupSearchTerm('');
+        setProductQuickSetupProducts([]);
+    }, [activeProductQuickSetupKey]);
+
     useEffect(() => () => {
         productSearchAbortRef.current?.abort();
+        productQuickSetupAbortRef.current?.abort();
     }, []);
 
     const fetchInitialData = useCallback(async () => {
@@ -1176,16 +1492,22 @@ const OrderForm = () => {
             setAttributes(bootstrap.order_attributes || []);
             setProductQuickFilterAttributes(buildProductQuickFilterAttributes(bootstrap.product_attributes || []));
             setQuoteSettings((prev) => ({ ...prev, ...(bootstrap.quote_settings || {}) }));
-            setQuoteTemplates((bootstrap.quote_templates || []).sort((a, b) => {
-                const sortA = Number(a.sort_order) || 0;
-                const sortB = Number(b.sort_order) || 0;
-                if (sortA !== sortB) return sortA - sortB;
-                return String(a.name || '').localeCompare(String(b.name || ''), 'vi');
-            }));
+            setQuoteTemplates(sortQuoteTemplates(bootstrap.quote_templates || []));
         } catch (error) {
             setProductQuickFilterAttributes([]);
             console.error("Error fetching order form bootstrap", error);
         }
+    }, []);
+
+    const refreshQuoteBootstrap = useCallback(async () => {
+        const response = await orderApi.getBootstrap({ mode: 'form' });
+        const bootstrap = response.data || {};
+        const nextQuoteTemplates = sortQuoteTemplates(bootstrap.quote_templates || []);
+
+        setQuoteSettings((prev) => ({ ...prev, ...(bootstrap.quote_settings || {}) }));
+        setQuoteTemplates(nextQuoteTemplates);
+
+        return nextQuoteTemplates;
     }, []);
 
     const fetchOrder = async (targetId, isDuplicating = false) => {
@@ -1416,8 +1738,6 @@ const OrderForm = () => {
         setFormData((prev) => ({
             ...prev,
             order_type: nextOrderType,
-            settlement_delta: nextOrderType === ORDER_TYPE_STANDARD ? 0 : (parseMoneyNumber(prev.settlement_delta, 0) || 0),
-            supplement_items: nextOrderType === ORDER_TYPE_STANDARD ? [] : (Array.isArray(prev.supplement_items) ? prev.supplement_items : []),
         }));
     };
 
@@ -1451,34 +1771,49 @@ const OrderForm = () => {
         detectAdministrativeAddress(e.target.value);
     };
 
+    const appendProductToOrder = useCallback((product, options = {}) => {
+        const targetProductId = parseInt(product?.target_product_id ?? product?.product_id ?? product?.id, 10);
+        if (!targetProductId) return;
 
-    const addProductById = (productId) => {
+        if (options.trackSearch && searchTerm.trim()) {
+            pushSearchHistory(searchTerm);
+        }
+
+        setFormData((prev) => {
+            if (prev.items.some((item) => Number(item.product_id) === targetProductId)) {
+                return prev;
+            }
+
+            const nextItems = [...prev.items, {
+                product_id: targetProductId,
+                name: product?.display_name || product?.name || `Sản phẩm #${targetProductId}`,
+                sku: product?.display_sku || product?.sku || 'N/A',
+                quantity: 1,
+                price: Number(product?.price ?? 0) || 0,
+                cost_price: Number(product?.cost_price ?? product?.expected_cost ?? 0) || 0,
+            }];
+            const costTotal = nextItems.reduce((sum, item) => sum + (item.cost_price * item.quantity), 0);
+
+            return {
+                ...prev,
+                items: nextItems,
+                cost_total: costTotal,
+            };
+        });
+
+        setShowSearchHistory(false);
+    }, [pushSearchHistory, searchTerm]);
+
+    const addProductById = useCallback((productId) => {
         if (!productId) return;
-        const product = products.find(p => p.id === parseInt(productId));
+
+        const normalizedProductId = parseInt(productId, 10);
+        const product = searchableProducts.find((entry) => Number(entry.id ?? entry.product_id) === normalizedProductId);
         if (!product) return;
 
-        if (formData.items.some(item => item.product_id === product.id)) return;
-        if (searchTerm.trim()) pushSearchHistory(searchTerm);
-
-        const newItems = [...formData.items, {
-            product_id: product.id,
-            name: product.name,
-            sku: product.sku,
-            quantity: 1,
-            price: product.price,
-            cost_price: product.cost_price ?? product.expected_cost ?? 0
-        }];
-
-        const costTotal = newItems.reduce((sum, item) => sum + (item.cost_price * item.quantity), 0);
-
-        setFormData(prev => ({
-            ...prev,
-            items: newItems,
-            cost_total: costTotal
-        }));
-        setShowSearchHistory(false);
+        appendProductToOrder(product, { trackSearch: true });
         // Keep search term and dropdown open for consecutive selections
-    };
+    }, [appendProductToOrder, searchableProducts]);
 
     const updateItem = React.useCallback((index, field, value) => {
         setFormData(prev => {
@@ -1528,12 +1863,32 @@ const OrderForm = () => {
     const supplementDeclarationCount = Array.isArray(formData.supplement_items)
         ? formData.supplement_items.length
         : 0;
+    const supplementDeclarationSkus = Array.from(new Set(
+        (Array.isArray(formData.supplement_items) ? formData.supplement_items : [])
+            .map((item) => String(item?.sku || '').trim() || (item?.product_id ? `SP#${item.product_id}` : ''))
+            .filter(Boolean)
+    ));
 
     useEffect(() => {
         if (!specialOrderType) {
+            lastAutoOpenedSupplementOrderTypeRef.current = '';
             setShowSupplementItemsModal(false);
         }
     }, [specialOrderType]);
+
+    useEffect(() => {
+        if (!shouldAutoOpenSupplementItemsModal(normalizedOrderType)) return;
+
+        if (showSupplementItemsModal) {
+            lastAutoOpenedSupplementOrderTypeRef.current = normalizedOrderType;
+            return;
+        }
+
+        if (lastAutoOpenedSupplementOrderTypeRef.current === normalizedOrderType) return;
+
+        lastAutoOpenedSupplementOrderTypeRef.current = normalizedOrderType;
+        setShowSupplementItemsModal(true);
+    }, [normalizedOrderType, showSupplementItemsModal]);
 
     const captureQuoteImage = async (template) => {
         if (!template) return;
@@ -1590,7 +1945,7 @@ const OrderForm = () => {
 
             const [logoImage, templateImage] = await Promise.all([
                 loadCanvasImage(quoteSettings.quote_logo_url),
-                loadCanvasImage(template.image_url)
+                loadCanvasImage(getQuoteTemplateImageUrl(template))
             ]);
 
             ctx.direction = 'ltr';
@@ -1823,7 +2178,15 @@ const OrderForm = () => {
     const handleScreenshot = async () => {
         if (formData.items.length === 0 || isCapturing) return;
 
-        const availableTemplates = quoteTemplates.filter((template) => template.is_active !== false);
+        let nextTemplates = quoteTemplates;
+
+        try {
+            nextTemplates = await refreshQuoteBootstrap();
+        } catch (error) {
+            console.error('Error refreshing quote bootstrap', error);
+        }
+
+        const availableTemplates = nextTemplates.filter((template) => template.is_active !== false);
 
         if (availableTemplates.length === 0) {
             showModal({
@@ -2205,7 +2568,7 @@ const OrderForm = () => {
                                 className="px-3 h-9 bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-500 hover:border-amber-500 hover:text-white text-[12px] font-semibold rounded-sm transition-all shadow-sm flex items-center gap-2"
                             >
                                 <span className="material-symbols-outlined text-[16px]">inventory_2</span>
-                                Khai báo
+                                Khai báo sp đổi trả
                                 {supplementDeclarationCount > 0 && (
                                     <span className="inline-flex min-w-[18px] items-center justify-center rounded-full bg-white/80 px-1.5 py-0.5 text-[10px] font-black leading-none text-amber-700">
                                         {supplementDeclarationCount}
@@ -2267,11 +2630,16 @@ const OrderForm = () => {
                                             value={searchTerm}
                                             onChange={(e) => {
                                                 setSearchTerm(e.target.value);
+                                                setShowProductQuickSetupPanel(false);
                                                 setShowSearchDropdown(true);
                                                 setShowSearchHistory(false);
                                             }}
-                                            onFocus={() => setShowSearchDropdown(true)}
+                                            onFocus={() => {
+                                                setShowProductQuickSetupPanel(false);
+                                                setShowSearchDropdown(true);
+                                            }}
                                             onClick={() => {
+                                                setShowProductQuickSetupPanel(false);
                                                 setShowSearchDropdown(true);
                                                 setShowSearchHistory(false);
                                             }}
@@ -2292,6 +2660,7 @@ const OrderForm = () => {
                                             type="button"
                                             onClick={(e) => {
                                                 e.stopPropagation();
+                                                setShowProductQuickSetupPanel(false);
                                                 setShowSearchDropdown(true);
                                                 setShowProductQuickFilterPanel(false);
                                                 setShowSearchHistory((prev) => !prev);
@@ -2327,7 +2696,7 @@ const OrderForm = () => {
                                     </div>
 
                                     {hasActiveProductQuickFilter && activeProductQuickFilterSummary && (
-                                        <div className="mt-2 flex items-center gap-2">
+                                        <div className="mt-2 grid items-start gap-2 lg:grid-cols-[max-content_minmax(0,1fr)_max-content]">
                                             <button
                                                 type="button"
                                                 onClick={openProductQuickFilterPanel}
@@ -2339,22 +2708,115 @@ const OrderForm = () => {
                                                     {activeProductQuickFilterSummary}
                                                 </span>
                                             </button>
+                                            <div className="relative min-w-0 w-full max-w-[880px] justify-self-start lg:min-w-[760px]">
+                                                <div className="rounded-sm border border-primary/10 bg-white shadow-sm">
+                                                    <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                                                        <div className="flex items-center gap-2 min-w-0">
+                                                            <span className="material-symbols-outlined text-[14px] text-primary/40">bolt</span>
+                                                            <span className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                                                {'Lọc nhanh hơn'}
+                                                            </span>
+                                                            <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[10px] font-bold text-primary/55">
+                                                                {`${activeProductQuickSetupItems.length} SP`}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            <button
+                                                                type="button"
+                                                                onClick={toggleProductQuickSetupPanel}
+                                                                className="inline-flex items-center gap-1 rounded-full border border-primary/10 bg-white px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
+                                                            >
+                                                                <span className="material-symbols-outlined text-[12px]">playlist_add</span>
+                                                                {showProductQuickSetupPanel ? 'Đóng' : (activeProductQuickSetupItems.length > 0 ? 'Sửa DS' : 'Khai báo nhanh')}
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={toggleProductQuickMode}
+                                                                disabled={activeProductQuickSetupItems.length === 0}
+                                                                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] shadow-sm transition-all ${isProductQuickModeActive ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary/45 hover:border-primary/25 hover:text-primary'} disabled:cursor-not-allowed disabled:opacity-40`}
+                                                            >
+                                                                <span className="material-symbols-outlined text-[12px]">{isProductQuickModeActive ? 'flash_on' : 'flash_off'}</span>
+                                                                {isProductQuickModeActive ? 'Đang bật' : 'Đang tắt'}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {showProductQuickSetupPanel && (
+                                                    <div className="absolute left-0 top-full z-[115] mt-2 w-full overflow-hidden rounded-sm border border-primary/10 bg-white shadow-[0_20px_50px_rgba(15,23,42,0.18)]">
+                                                        <div className="px-3 py-3">
+                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                <div className="flex min-w-[180px] flex-1 items-center rounded-sm border border-primary/10 bg-white px-3 h-9 shadow-sm">
+                                                                    <span className="material-symbols-outlined text-[15px] text-primary/35 mr-2">search</span>
+                                                                    <input
+                                                                        type="text"
+                                                                        value={productQuickSetupSearchTerm}
+                                                                        onChange={(event) => setProductQuickSetupSearchTerm(event.target.value)}
+                                                                        placeholder={`Tìm SP trong ${normalizedProductQuickFilterValues[0]}...`}
+                                                                        className="w-full bg-transparent text-[12px] font-semibold text-[#0F172A] placeholder:text-primary/25 focus:outline-none"
+                                                                    />
+                                                                </div>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setShowProductQuickSetupPanel(false)}
+                                                                    className="h-9 px-3 rounded-sm border border-primary/10 bg-white text-[11px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
+                                                                >
+                                                                    {'Xong'}
+                                                                </button>
+                                                            </div>
+
+                                                            <div className="mt-2 text-[10px] font-semibold text-primary/40">
+                                                                {activeProductQuickSetupItems.length > 0
+                                                                    ? 'Danh sách này sẽ được dùng cho lớp lọc nhanh của thuộc tính đang chọn.'
+                                                                    : 'Chọn vài sản phẩm để tạo lớp lọc nhanh cho thuộc tính đang chọn.'}
+                                                            </div>
+
+                                                            <div className="mt-3 max-h-[420px] overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                                                                {productQuickSetupProducts.length > 0 ? productQuickSetupProducts.map((product) => {
+                                                                    const isSelected = selectedQuickSetupProductIds.has(Number(product.id));
+
+                                                                    return (
+                                                                        <button
+                                                                            key={`setup-product-${product.id}`}
+                                                                            type="button"
+                                                                            onClick={() => (isSelected ? handleRemoveProductFromQuickSetup(product.id) : handleAddProductToQuickSetup(product))}
+                                                                            className={`w-full rounded-sm border px-3 py-2 text-left transition-all ${isSelected ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary hover:border-primary/25 hover:bg-white'}`}
+                                                                        >
+                                                                            <div className="flex items-center justify-between gap-3">
+                                                                                <div className="min-w-0">
+                                                                                    <div className="truncate text-[12px] font-semibold text-[#0F172A]">
+                                                                                        {product.name || '---'}
+                                                                                    </div>
+                                                                                </div>
+                                                                                <div className="shrink-0 text-right">
+                                                                                    <div className="text-[11px] font-black text-blue-600">
+                                                                                        {quoteCurrencyFormatter.format(Number(product.price || 0))}đ
+                                                                                    </div>
+                                                                                    <div className="mt-1 text-[10px] font-black uppercase tracking-[0.12em]">
+                                                                                        {isSelected ? 'Đã chọn' : 'Thêm'}
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
+                                                                        </button>
+                                                                    );
+                                                                }) : (
+                                                                    <div className="rounded-sm border border-dashed border-primary/10 bg-white px-3 py-6 text-center text-[11px] italic text-primary/35">
+                                                                        {'Không có sản phẩm phù hợp với bộ lọc hiện tại.'}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
                                             <button
                                                 type="button"
-                                                onClick={openProductQuickFilterPanel}
-                                                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/10 bg-white px-2.5 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
-                                                title={'Đổi thuộc tính lọc nhanh'}
+                                                onClick={disableProductQuickMode}
+                                                disabled={!isProductQuickModeActive}
+                                                className="inline-flex size-6 shrink-0 items-center justify-center self-center rounded-full border border-primary/10 bg-white text-primary/35 shadow-sm transition-all hover:border-brick/20 hover:text-brick disabled:cursor-not-allowed disabled:opacity-40 lg:size-10"
+                                                title={'Tắt lọc nhanh hơn'}
                                             >
-                                                <span className="material-symbols-outlined text-[12px]">swap_horiz</span>
-                                                {'Đổi thuộc tính'}
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={clearProductQuickFilterValues}
-                                                className="inline-flex size-6 shrink-0 items-center justify-center rounded-full border border-primary/10 bg-white text-primary/35 shadow-sm transition-all hover:border-brick/20 hover:text-brick"
-                                                title={'Xóa lọc nhanh'}
-                                            >
-                                                <span className="material-symbols-outlined text-[12px]">close</span>
+                                                <span className="material-symbols-outlined text-[12px] lg:text-[18px]">close</span>
                                             </button>
                                         </div>
                                     )}
@@ -2863,6 +3325,27 @@ const OrderForm = () => {
                                         placeholder="Nhập số dương hoặc âm"
                                     />
                                 </Field>
+                                <div className="rounded-sm border border-amber-200/80 bg-white/80 px-3 py-2">
+                                    <div className="text-[11px] font-black uppercase tracking-[0.12em] text-amber-900/55">
+                                        Mã sản phẩm đổi trả
+                                    </div>
+                                    {supplementDeclarationSkus.length > 0 ? (
+                                        <div className="mt-2 flex flex-wrap gap-2">
+                                            {supplementDeclarationSkus.map((sku) => (
+                                                <span
+                                                    key={sku}
+                                                    className="inline-flex items-center rounded-sm border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-900"
+                                                >
+                                                    {sku}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="mt-2 text-[12px] font-semibold text-amber-900/45">
+                                            Chưa khai báo sản phẩm đổi trả.
+                                        </div>
+                                    )}
+                                </div>
                                 <div className="rounded-sm border border-amber-200/80 bg-white/70 px-3 py-2">
                                     <div className="flex items-center justify-between gap-3 text-[12px] font-bold">
                                         <span className="text-amber-900/60">Doanh thu báo cáo</span>
@@ -3168,7 +3651,7 @@ const OrderForm = () => {
                                             >
                                                 <div className="aspect-[4/3] bg-stone-50 border-b border-primary/10 overflow-hidden">
                                                     {template.image_url ? (
-                                                        <img src={template.image_url} alt={template.name} className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform" />
+                                                        <img src={getQuoteTemplateImageUrl(template)} alt={template.name} className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform" />
                                                     ) : (
                                                         <div className="w-full h-full flex items-center justify-center text-primary/25 uppercase tracking-[0.16em] text-[12px] font-black">
                                                             Chưa có ảnh

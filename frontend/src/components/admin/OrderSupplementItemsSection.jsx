@@ -190,7 +190,7 @@ const OrderSupplementItemsSection = ({
                                             <span className="material-symbols-outlined text-[18px]">inventory_2</span>
                                         </span>
                                         <h3 className="text-[15px] font-black uppercase tracking-[0.12em] text-primary">
-                                            {orderTypeMeta.sectionTitle}
+                                            Khai báo sp đổi trả
                                         </h3>
                                         <span className="inline-flex items-center rounded-sm border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-amber-700">
                                             {orderTypeMeta.shortLabel}

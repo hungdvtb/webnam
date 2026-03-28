@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Category;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\DB;
 
 class CategoryController extends Controller
 {
@@ -14,7 +15,10 @@ class CategoryController extends Controller
      */
     public function index()
     {
-        $categories = Category::withCount('products')->orderBy('order')->get();
+        $categories = Category::withCount('products')
+            ->orderBy('order')
+            ->orderBy('id')
+            ->get();
         return response()->json($categories);
     }
 
@@ -165,5 +169,108 @@ class CategoryController extends Controller
         ]);
 
         return response()->json(['message' => 'Bulk update successful']);
+    }
+
+    public function products($id)
+    {
+        $category = Category::findOrFail($id);
+        Category::ensureProductAssignments((int) $category->id);
+
+        return response()->json($this->buildCategoryProductPayload($category));
+    }
+
+    public function reorderProducts(Request $request, $id)
+    {
+        $request->validate([
+            'product_ids' => 'required|array',
+            'product_ids.*' => 'integer|distinct',
+        ]);
+
+        $category = Category::findOrFail($id);
+        Category::ensureProductAssignments((int) $category->id);
+
+        $productIds = collect($request->input('product_ids', []))
+            ->map(fn ($productId) => is_numeric($productId) ? (int) $productId : null)
+            ->filter()
+            ->values();
+
+        $existingProductIds = $category->products()
+            ->pluck('products.id')
+            ->map(fn ($productId) => (int) $productId)
+            ->values();
+
+        if ($productIds->count() !== $existingProductIds->count() || $productIds->diff($existingProductIds)->isNotEmpty() || $existingProductIds->diff($productIds)->isNotEmpty()) {
+            return response()->json([
+                'message' => 'Danh sách sản phẩm không hợp lệ cho danh mục này.',
+            ], 422);
+        }
+
+        DB::transaction(function () use ($category, $productIds) {
+            $timestamp = now();
+
+            foreach ($productIds as $index => $productId) {
+                DB::table('category_product')
+                    ->where('category_id', $category->id)
+                    ->where('product_id', $productId)
+                    ->update([
+                        'sort_order' => $index,
+                        'updated_at' => $timestamp,
+                    ]);
+            }
+        });
+
+        Category::ensureProductAssignments((int) $category->id);
+
+        return response()->json([
+            'message' => 'Đã cập nhật thứ tự sản phẩm trong danh mục.',
+            ...$this->buildCategoryProductPayload($category->fresh()),
+        ]);
+    }
+
+    protected function buildCategoryProductPayload(Category $category): array
+    {
+        $category->loadCount('products');
+
+        $products = $category->products()
+            ->with([
+                'images:id,product_id,image_url,is_primary,sort_order',
+                'category:id,name',
+            ])
+            ->get([
+                'products.id',
+                'products.name',
+                'products.slug',
+                'products.sku',
+                'products.status',
+                'products.category_id',
+            ])
+            ->map(function ($product) use ($category) {
+                return [
+                    'id' => (int) $product->id,
+                    'name' => $product->name,
+                    'slug' => $product->slug,
+                    'sku' => $product->sku,
+                    'status' => (bool) $product->status,
+                    'category_id' => $product->category_id ? (int) $product->category_id : null,
+                    'category_name' => $product->category?->name,
+                    'main_image' => $product->main_image,
+                    'sort_order' => (int) ($product->pivot->sort_order ?? 0),
+                    'is_primary_category' => (int) $product->category_id === (int) $category->id,
+                ];
+            })
+            ->values();
+
+        return [
+            'category' => [
+                'id' => (int) $category->id,
+                'name' => $category->name,
+                'slug' => $category->slug,
+                'parent_id' => $category->parent_id ? (int) $category->parent_id : null,
+                'display_layout' => $category->display_layout,
+                'status' => (int) $category->status,
+                'products_count' => (int) ($category->products_count ?? $products->count()),
+            ],
+            'products' => $products,
+        ];
     }
 }

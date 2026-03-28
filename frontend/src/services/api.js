@@ -129,10 +129,12 @@ export const productImageApi = {
 export const categoryApi = {
     getAll: () => api.get('/categories'),
     getOne: (id) => api.get(`/categories/${id}`),
+    getProducts: (id) => api.get(`/categories/${id}/products`),
     store: (data) => api.post('/categories', data),
     update: (id, data) => api.post(`/categories/${id}`, data),
     destroy: (id) => api.delete(`/categories/${id}`),
     reorder: (items) => api.post('/categories/reorder', { items }),
+    reorderProducts: (id, productIds) => api.post(`/categories/${id}/products/reorder`, { product_ids: productIds }),
     bulkUpdateLayout: (data) => api.post('/categories/bulk-layout', data),
 };
 
@@ -178,6 +180,14 @@ export const orderApi = {
         () => api.get('/orders/bootstrap', { params }),
         ORDER_BOOTSTRAP_CACHE_TTL_MS
     ).catch(() => null),
+    invalidateBootstrap: (params) => {
+        if (!params) {
+            requestCache.orderBootstrap.clear();
+            return;
+        }
+
+        invalidateCachedResponse(requestCache.orderBootstrap, orderBootstrapCacheKey(params));
+    },
     getAll: (params, signal) => api.get('/orders', { params, signal }),
     getOne: (id) => api.get(`/orders/${id}`),
     getOneCached: (id) => primeCachedRequest(
@@ -203,6 +213,7 @@ export const orderApi = {
     getInventorySlips: (id) => api.get(`/orders/${id}/inventory-slips`),
     createInventorySlip: (id, data) => api.post(`/orders/${id}/inventory-slips`, data),
     deleteInventorySlip: (id, documentId) => api.delete(`/orders/${id}/inventory-slips/${documentId}`),
+    quickSelect: (data) => api.post('/orders/quick-select', data),
     previewBatchReturn: (data) => api.post('/orders/inventory-returns/batch-preview', data),
     createBatchReturn: (data) => api.post('/orders/inventory-returns/batch', data),
     getBatchReturn: (documentId) => api.get(`/orders/inventory-returns/${documentId}`),
@@ -545,7 +556,7 @@ export const userApi = {
 };
 
 export const mediaApi = {
-    upload: (formData) => api.post('/media/upload', formData),
+    upload: (formData) => api.post('/media/upload', formData, multipartConfig(formData)),
 };
 
 export const quoteTemplateApi = {

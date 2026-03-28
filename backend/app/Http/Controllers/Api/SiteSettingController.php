@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\SiteSetting;
+use App\Support\OrderBootstrapCache;
 use App\Services\AI\GeminiService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
@@ -17,6 +18,7 @@ class SiteSettingController extends Controller
         'footer_menu_groups',
         'store_locations',
         'inventory_import_print_templates',
+        'order_quick_pick_groups',
     ];
 
     private const BOOLEAN_SETTING_KEYS = [
@@ -99,6 +101,31 @@ class SiteSettingController extends Controller
             )->validate();
         }
 
+        $orderQuickPickGroups = $validated['settings']['order_quick_pick_groups'] ?? null;
+        if ($orderQuickPickGroups !== null) {
+            Validator::make(
+                ['order_quick_pick_groups' => $orderQuickPickGroups],
+                [
+                    'order_quick_pick_groups' => 'array',
+                    'order_quick_pick_groups.*.id' => 'nullable|string|max:100',
+                    'order_quick_pick_groups.*.attribute_id' => 'required|integer|min:1',
+                    'order_quick_pick_groups.*.attribute_value' => 'required|string|max:255',
+                    'order_quick_pick_groups.*.items' => 'array|max:15',
+                    'order_quick_pick_groups.*.items.*.id' => 'nullable|string|max:100',
+                    'order_quick_pick_groups.*.items.*.target_product_id' => 'required|integer|min:1',
+                    'order_quick_pick_groups.*.items.*.parent_product_id' => 'nullable|integer|min:1',
+                    'order_quick_pick_groups.*.items.*.type' => 'nullable|string|in:product,variation',
+                    'order_quick_pick_groups.*.items.*.display_name' => 'nullable|string|max:255',
+                    'order_quick_pick_groups.*.items.*.display_sku' => 'nullable|string|max:100',
+                    'order_quick_pick_groups.*.items.*.option_label' => 'nullable|string|max:255',
+                    'order_quick_pick_groups.*.items.*.main_image' => 'nullable|string|max:1000',
+                    'order_quick_pick_groups.*.items.*.price' => 'nullable|numeric|min:0',
+                    'order_quick_pick_groups.*.items.*.cost_price' => 'nullable|numeric|min:0',
+                    'order_quick_pick_groups.*.items.*.order' => 'nullable|integer|min:1',
+                ]
+            )->validate();
+        }
+
         foreach ($validated['settings'] as $key => $value) {
             if ($key === GeminiService::SETTING_MODEL) {
                 $value = $this->geminiService->normalizeModelName(is_scalar($value) ? (string) $value : null);
@@ -114,6 +141,8 @@ class SiteSettingController extends Controller
                 (int) $validated['account_id']
             );
         }
+
+        OrderBootstrapCache::forget((int) $validated['account_id'], OrderBootstrapCache::MODE_FORM);
 
         return response()->json([
             'message' => 'Settings updated successfully',

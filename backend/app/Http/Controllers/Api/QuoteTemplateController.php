@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\QuoteTemplate;
+use App\Support\OrderBootstrapCache;
 use Illuminate\Http\Request;
 
 class QuoteTemplateController extends Controller
@@ -45,6 +46,8 @@ class QuoteTemplateController extends Controller
             'is_active' => $validated['is_active'] ?? true,
         ]);
 
+        OrderBootstrapCache::forget((int) $accountId, OrderBootstrapCache::MODE_FORM);
+
         return response()->json($template, 201);
     }
 
@@ -67,6 +70,8 @@ class QuoteTemplateController extends Controller
             'is_active' => $validated['is_active'] ?? $template->is_active,
         ]);
 
+        OrderBootstrapCache::forget((int) $accountId, OrderBootstrapCache::MODE_FORM);
+
         return response()->json($template);
     }
 
@@ -75,6 +80,8 @@ class QuoteTemplateController extends Controller
         $accountId = $this->getAccountId($request);
         $template = QuoteTemplate::where('account_id', $accountId)->findOrFail($id);
         $template->delete();
+
+        OrderBootstrapCache::forget((int) $accountId, OrderBootstrapCache::MODE_FORM);
 
         return response()->json(['message' => 'Quote template deleted successfully']);
     }

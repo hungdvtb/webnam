@@ -23,6 +23,9 @@ use App\Services\ProductSkuService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -2001,15 +2004,6 @@ class InventoryController extends Controller
     public function exports(Request $request)
     {
         $query = Order::query()
-            ->where(function ($builder) {
-                $builder
-                    ->where('type', 'inventory_export')
-                    ->orWhere(function ($exportQuery) {
-                        $exportQuery
-                            ->whereNotNull('shipping_tracking_code')
-                            ->where('shipping_tracking_code', '!=', '');
-                    });
-            })
             ->select([
                 'id',
                 'order_number',
@@ -2025,62 +2019,47 @@ class InventoryController extends Controller
                 'shipping_dispatched_at',
                 'created_at',
             ])
-            ->withCount('items')
-            ->withSum('items as total_quantity', 'quantity')
-            ->selectRaw('COALESCE(shipping_dispatched_at, created_at) as exported_at');
+            ->with([
+                'items:id,order_id,product_id,product_name_snapshot,product_sku_snapshot,quantity,price,cost_total,cost_price',
+            ]);
 
-        if ($request->filled('search')) {
-            $search = trim((string) $request->input('search'));
-            $query->where(function ($builder) use ($search) {
-                $this->applyCaseInsensitiveSearch($builder, [
-                    'order_number',
-                    'customer_name',
-                    'customer_phone',
-                    'shipping_tracking_code',
-                    'shipping_address',
-                ], $search);
-
-                $builder->orWhereHas('items', function ($itemQuery) use ($search) {
-                    $this->applyCaseInsensitiveSearch($itemQuery, [
-                        'product_name_snapshot',
-                        'product_sku_snapshot',
-                    ], $search);
-
-                    $itemQuery->orWhereHas('product', function ($productQuery) use ($search) {
-                        $this->applyCaseInsensitiveSearch($productQuery, ['name', 'sku'], $search);
-                    });
-                });
-            });
-        }
+        $this->orderInventorySlipService->applyExportSlipStateFilter($query, 'created');
 
         if ($request->filled('status')) {
             $query->where('status', $request->input('status'));
         }
 
-        if ($request->filled('date_from')) {
-            $query->whereDate(DB::raw('COALESCE(shipping_dispatched_at, created_at)'), '>=', $request->input('date_from'));
-        }
+        $orders = $query->get();
+        $exportOverviewMap = $this->orderInventorySlipService->buildExportOverviewMap($orders);
+        $rows = $orders
+            ->map(function (Order $order) use ($exportOverviewMap) {
+                return $this->transformExportOrderRow(
+                    $order,
+                    $exportOverviewMap[(int) $order->id] ?? []
+                );
+            })
+            ->filter(fn (array $row) => (int) ($row['export_slip_count'] ?? 0) > 0)
+            ->values();
 
-        if ($request->filled('date_to')) {
-            $query->whereDate(DB::raw('COALESCE(shipping_dispatched_at, created_at)'), '<=', $request->input('date_to'));
-        }
+        $rows = $this->filterExportRows($rows, $request);
+        $rows = $this->sortExportRows($rows, $request);
 
         $perPage = min(max((int) $request->input('per_page', 20), 20), 500);
 
-        $this->applyMappedSort($query, $request, [
-            'code' => 'order_number',
-            'source' => 'source',
-            'customer' => 'customer_name',
-            'tracking' => 'shipping_tracking_code',
-            'date' => 'exported_at',
-            'line_count' => 'items_count',
-            'qty' => 'total_quantity',
-            'status' => 'status',
-        ], 'date', ['id' => 'desc']);
+        $page = max((int) $request->input('page', 1), 1);
 
-        $paginated = $query->paginate($perPage);
+        $paginated = new LengthAwarePaginator(
+            $rows->forPage($page, $perPage)->values(),
+            $rows->count(),
+            $perPage,
+            $page,
+            [
+                'path' => $request->url(),
+                'query' => $request->query(),
+            ]
+        );
 
-        $paginated->getCollection()->transform(function (Order $order) {
+        /*
             $isManualExport = $order->type === 'inventory_export';
 
             return [
@@ -2104,30 +2083,185 @@ class InventoryController extends Controller
                 'export_kind_label' => $isManualExport ? 'Phiếu tạo tay' : 'Tự tạo từ vận chuyển',
                 'can_delete' => $isManualExport,
             ];
-        });
+        */
 
         return response()->json($paginated);
     }
 
+    private function transformExportOrderRow(Order $order, array $overview = []): array
+    {
+        $kindMeta = $this->resolveExportKindMeta((string) ($overview['source_kind'] ?? ''), $order);
+        $trackingCode = trim((string) ($overview['tracking_number'] ?? $order->shipping_tracking_code));
+        $carrierName = trim((string) ($overview['carrier_name'] ?? $order->shipping_carrier_name));
+        $exportedAt = $overview['exported_at']
+            ?? optional($order->shipping_dispatched_at ?: $order->created_at)?->toISOString();
+
+        return [
+            'id' => (int) $order->id,
+            'code' => trim((string) ($overview['display_code'] ?? $order->order_number)),
+            'order_number' => $order->order_number,
+            'customer_name' => $order->customer_name,
+            'customer_phone' => $order->customer_phone,
+            'shipping_address' => $order->shipping_address,
+            'status' => $order->status,
+            'source' => $order->source,
+            'type' => $order->type,
+            'notes' => $overview['primary_notes'] ?? $order->notes,
+            'shipping_carrier_name' => $carrierName !== '' ? $carrierName : null,
+            'shipping_tracking_code' => $trackingCode !== '' ? $trackingCode : null,
+            'shipping_dispatched_at' => $exportedAt,
+            'created_at' => optional($order->created_at)?->toISOString(),
+            'exported_at' => $exportedAt,
+            'items_count' => (int) ($overview['line_count'] ?? $order->items->count()),
+            'total_quantity' => (float) ($overview['exported_quantity'] ?? $order->items->sum('quantity')),
+            'export_slip_count' => (int) ($overview['export_slip_count'] ?? 0),
+            'export_kind' => $kindMeta['key'],
+            'export_kind_label' => $kindMeta['label'],
+            'export_kind_description' => $kindMeta['description'],
+            'export_kind_color' => $kindMeta['color'],
+            'status_pill_label' => $kindMeta['status_label'],
+            'tracking_helper' => $kindMeta['tracking_helper'],
+            'can_delete' => $kindMeta['can_delete'],
+            '_search' => implode("\n", array_filter([
+                $overview['display_code'] ?? null,
+                $order->order_number,
+                $order->customer_name,
+                $order->customer_phone,
+                $order->shipping_address,
+                $trackingCode,
+                $carrierName,
+                $order->notes,
+                $overview['primary_notes'] ?? null,
+                ...$order->items->flatMap(fn ($item) => [
+                    $item->product_name_snapshot,
+                    $item->product_sku_snapshot,
+                ])->filter()->values()->all(),
+            ])),
+        ];
+    }
+
+    private function resolveExportKindMeta(string $sourceKind, Order $order): array
+    {
+        return match ($sourceKind) {
+            'legacy_manual_export' => [
+                'key' => 'manual',
+                'label' => 'Phiếu tạo tay',
+                'description' => 'Phiếu xuất nội bộ',
+                'color' => '#7C3AED',
+                'status_label' => 'Phiếu nội bộ',
+                'tracking_helper' => 'Phiếu tạo tay không cần vận đơn',
+                'can_delete' => true,
+            ],
+            'document' => [
+                'key' => 'document',
+                'label' => 'Phiếu theo đơn',
+                'description' => 'Phiếu xuất tạo trong chi tiết đơn',
+                'color' => '#1D4ED8',
+                'status_label' => 'Phiếu theo đơn',
+                'tracking_helper' => 'Phiếu theo đơn không bắt buộc vận đơn',
+                'can_delete' => false,
+            ],
+            default => [
+                'key' => 'dispatch_auto',
+                'label' => 'Tự tạo từ vận chuyển',
+                'description' => 'Từ đơn hàng đã gửi vận chuyển',
+                'color' => '#0F766E',
+                'status_label' => 'Đã gửi vận chuyển',
+                'tracking_helper' => 'Phiếu tự động từ vận chuyển',
+                'can_delete' => (string) $order->type === 'inventory_export',
+            ],
+        };
+    }
+
+    private function filterExportRows(Collection $rows, Request $request): Collection
+    {
+        if ($request->filled('search')) {
+            $needle = Str::lower(trim((string) $request->input('search')));
+
+            $rows = $rows->filter(function (array $row) use ($needle) {
+                return $needle === ''
+                    || Str::contains(Str::lower((string) ($row['_search'] ?? '')), $needle);
+            })->values();
+        }
+
+        if ($request->filled('date_from')) {
+            $from = Carbon::parse((string) $request->input('date_from'))->startOfDay();
+            $rows = $rows->filter(function (array $row) use ($from) {
+                $exportedAt = $this->exportRowDate($row);
+
+                return $exportedAt ? $exportedAt->greaterThanOrEqualTo($from) : false;
+            })->values();
+        }
+
+        if ($request->filled('date_to')) {
+            $to = Carbon::parse((string) $request->input('date_to'))->endOfDay();
+            $rows = $rows->filter(function (array $row) use ($to) {
+                $exportedAt = $this->exportRowDate($row);
+
+                return $exportedAt ? $exportedAt->lessThanOrEqualTo($to) : false;
+            })->values();
+        }
+
+        return $rows->map(function (array $row) {
+            unset($row['_search']);
+
+            return $row;
+        })->values();
+    }
+
+    private function sortExportRows(Collection $rows, Request $request): Collection
+    {
+        $direction = strtolower((string) $request->input('sort_order', 'desc')) === 'asc' ? 'asc' : 'desc';
+        $sortKey = (string) $request->input('sort_by', 'date');
+        $sortMap = [
+            'code' => 'code',
+            'source' => 'export_kind_label',
+            'customer' => 'customer_name',
+            'tracking' => 'shipping_tracking_code',
+            'date' => 'exported_at',
+            'line_count' => 'items_count',
+            'qty' => 'total_quantity',
+            'status' => 'status',
+        ];
+        $field = $sortMap[$sortKey] ?? 'exported_at';
+
+        $sorted = $rows->sortBy(function (array $row) use ($field) {
+            if ($field === 'exported_at') {
+                return $this->exportRowDate($row)?->timestamp ?? 0;
+            }
+
+            $value = $row[$field] ?? null;
+
+            return is_string($value) ? Str::lower($value) : $value;
+        }, SORT_NATURAL, $direction === 'desc')->values();
+
+        return $sorted->values();
+    }
+
+    private function exportRowDate(array $row): ?Carbon
+    {
+        $value = trim((string) ($row['exported_at'] ?? $row['shipping_dispatched_at'] ?? $row['created_at'] ?? ''));
+
+        if ($value === '') {
+            return null;
+        }
+
+        return Carbon::parse($value);
+    }
+
     public function showExport(int $id)
     {
-        $order = Order::query()
-            ->where(function ($builder) {
-                $builder
-                    ->where('type', 'inventory_export')
-                    ->orWhere(function ($exportQuery) {
-                        $exportQuery
-                            ->whereNotNull('shipping_tracking_code')
-                            ->where('shipping_tracking_code', '!=', '');
-                    });
-            })
+        $query = Order::query()
             ->with([
                 'items.product:id,sku,name',
                 'items.batchAllocations.batch',
                 'customer:id,name,phone',
                 'attributeValues.attribute:id,name,code',
-            ])
-            ->findOrFail($id);
+            ]);
+
+        $this->orderInventorySlipService->applyExportSlipStateFilter($query, 'created');
+
+        $order = $query->findOrFail($id);
 
         return response()->json($order);
     }

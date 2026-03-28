@@ -68,6 +68,127 @@ const findCategoryBySlug = (categories = [], slug) => {
     return null;
 };
 
+const collectExpandedCategoryIds = (categories = [], activeSlug) => {
+    if (!activeSlug) {
+        return [];
+    }
+
+    const walk = (items, ancestors = []) => {
+        for (const category of items) {
+            if (category.slug === activeSlug) {
+                return (category.children || []).length > 0
+                    ? [...ancestors, category.id]
+                    : ancestors;
+            }
+
+            const nextAncestors = (category.children || []).length > 0
+                ? [...ancestors, category.id]
+                : ancestors;
+            const childPath = walk(category.children || [], nextAncestors);
+
+            if (childPath) {
+                return childPath;
+            }
+        }
+
+        return null;
+    };
+
+    return walk(categories) || [];
+};
+
+const hasActiveCategoryInBranch = (category, activeSlug) => {
+    if (!activeSlug) {
+        return false;
+    }
+
+    if (category.slug === activeSlug) {
+        return true;
+    }
+
+    return (category.children || []).some((child) => hasActiveCategoryInBranch(child, activeSlug));
+};
+
+const CategoryTreeItem = ({
+    category,
+    activeCategorySlug,
+    expandedCategoryIds,
+    onToggle,
+    onNavigate,
+    depth = 0,
+}) => {
+    const hasChildren = Array.isArray(category.children) && category.children.length > 0;
+    const isExpanded = expandedCategoryIds.has(category.id);
+    const isActive = activeCategorySlug === category.slug;
+    const isInActiveBranch = hasActiveCategoryInBranch(category, activeCategorySlug);
+
+    return (
+        <div className="space-y-1">
+            <div
+                className={`flex items-center gap-1 rounded-xl transition-colors ${
+                    isActive
+                        ? 'bg-primary/6 text-primary'
+                        : isInActiveBranch
+                            ? 'bg-stone-50 text-stone-800'
+                            : 'text-stone-600 hover:bg-stone-50'
+                }`}
+            >
+                <Link
+                    to={`/danh-muc/${category.slug}`}
+                    onClick={onNavigate}
+                    className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-sm font-medium"
+                    style={{ paddingLeft: `${12 + depth * 14}px` }}
+                >
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${isActive ? 'bg-primary' : 'bg-[#c8a56a]'}`} />
+                    <span className={`truncate ${isActive ? 'font-black' : ''}`}>{category.name}</span>
+                    {category.products_count > 0 ? (
+                        <span className="ml-auto shrink-0 text-[10px] text-stone-400">
+                            ({category.products_count})
+                        </span>
+                    ) : null}
+                </Link>
+
+                {hasChildren ? (
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            onToggle(category.id);
+                        }}
+                        className={`mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${
+                            isExpanded
+                                ? 'bg-primary text-white'
+                                : 'text-stone-400 hover:bg-stone-100 hover:text-primary'
+                        }`}
+                        aria-label={isExpanded ? `Thu gon ${category.name}` : `Mo ${category.name}`}
+                    >
+                        <span className={`material-symbols-outlined text-[18px] transition-transform ${isExpanded ? 'rotate-180' : ''}`}>
+                            expand_more
+                        </span>
+                    </button>
+                ) : null}
+            </div>
+
+            {hasChildren && isExpanded ? (
+                <div className="space-y-1 border-l border-stone-100 pl-1">
+                    {category.children.map((child) => (
+                        <CategoryTreeItem
+                            key={child.id}
+                            category={child}
+                            activeCategorySlug={activeCategorySlug}
+                            expandedCategoryIds={expandedCategoryIds}
+                            onToggle={onToggle}
+                            onNavigate={onNavigate}
+                            depth={depth + 1}
+                        />
+                    ))}
+                </div>
+            ) : null}
+        </div>
+    );
+};
+
 const buildPaginationPages = (current, last) => {
     if (!last || last <= 1) {
         return [];
@@ -425,6 +546,7 @@ const StorefrontProducts = () => {
     const [showFilter, setShowFilter] = useState(false);
     const [availableFilters, setAvailableFilters] = useState([]);
     const [categoryDetail, setCategoryDetail] = useState(null);
+    const [expandedCategoryIds, setExpandedCategoryIds] = useState(() => new Set());
 
     const categoryQuerySlug = searchParams.get('category') || '';
     const activeCategorySlug = routeCategorySlug || categoryQuerySlug;
@@ -500,6 +622,24 @@ const StorefrontProducts = () => {
     useEffect(() => {
         setShowFilter(false);
     }, [routeCategorySlug, categoryQuerySlug, searchParamsString]);
+
+    useEffect(() => {
+        setExpandedCategoryIds(new Set(collectExpandedCategoryIds(categories || [], activeCategorySlug)));
+    }, [categories, activeCategorySlug]);
+
+    const toggleCategoryBranch = (categoryId) => {
+        setExpandedCategoryIds((previous) => {
+            const next = new Set(previous);
+
+            if (next.has(categoryId)) {
+                next.delete(categoryId);
+            } else {
+                next.add(categoryId);
+            }
+
+            return next;
+        });
+    };
 
     const updateParam = (key, value) => {
         const params = new URLSearchParams(searchParams);
@@ -664,6 +804,7 @@ const StorefrontProducts = () => {
                                 <div className="space-y-1">
                                     <Link
                                         to="/san-pham"
+                                        onClick={() => setShowFilter(false)}
                                         className={`block rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                                             !activeCategorySlug
                                                 ? 'bg-primary/5 font-bold text-primary'
@@ -673,22 +814,14 @@ const StorefrontProducts = () => {
                                         Tất cả
                                     </Link>
                                     {(categories || []).map((category) => (
-                                        <Link
+                                        <CategoryTreeItem
                                             key={category.id}
-                                            to={`/danh-muc/${category.slug}`}
-                                            className={`block rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                                                activeCategorySlug === category.slug
-                                                    ? 'bg-primary/5 font-bold text-primary'
-                                                    : 'text-stone-600 hover:bg-stone-50'
-                                            }`}
-                                        >
-                                            {category.name}
-                                            {category.products_count > 0 ? (
-                                                <span className="ml-1 text-[10px] text-stone-400">
-                                                    ({category.products_count})
-                                                </span>
-                                            ) : null}
-                                        </Link>
+                                            category={category}
+                                            activeCategorySlug={activeCategorySlug}
+                                            expandedCategoryIds={expandedCategoryIds}
+                                            onToggle={toggleCategoryBranch}
+                                            onNavigate={() => setShowFilter(false)}
+                                        />
                                     ))}
                                 </div>
                             </div>

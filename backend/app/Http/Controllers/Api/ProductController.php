@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Category;
 use App\Models\InventoryUnit;
 use App\Models\Post;
 use App\Models\Product;
@@ -34,6 +35,26 @@ class ProductController extends Controller
         return Rule::exists('suppliers', 'id')->where(function ($query) {
             $query->whereNull('deleted_at');
         });
+    }
+
+    protected function syncProductCategories(Product $product, array $categoryIds, bool $detachMissing = true): void
+    {
+        $syncPayload = Category::buildProductSyncPayload($product, $categoryIds);
+
+        if (empty($syncPayload)) {
+            if ($detachMissing) {
+                $product->categories()->detach();
+            }
+
+            return;
+        }
+
+        if ($detachMissing) {
+            $product->categories()->sync($syncPayload);
+            return;
+        }
+
+        $product->categories()->syncWithoutDetaching($syncPayload);
     }
 
     protected function productResourceRelations(): array
@@ -1471,9 +1492,9 @@ class ProductController extends Controller
                 );
 
                 if ($request->has('category_ids')) {
-                    $product->categories()->sync($request->category_ids);
+                    $this->syncProductCategories($product, (array) $request->category_ids);
                 } elseif ($request->has('category_id') && !empty($request->category_id)) {
-                    $product->categories()->sync([$request->category_id]);
+                    $this->syncProductCategories($product, [(int) $request->category_id]);
                 }
 
                 if ($request->hasFile('main_image')) {
@@ -1928,11 +1949,11 @@ class ProductController extends Controller
         // ────────────────────────────────────────────────────────────────────────
         // Sync categories
         if ($request->has('category_ids')) {
-            $product->categories()->sync($request->category_ids);
+            $this->syncProductCategories($product, (array) $request->category_ids);
         }
         elseif ($request->has('category_id') && !empty($request->category_id)) {
             // If only primary category changed, sync it as well
-            $product->categories()->syncWithoutDetaching([$request->category_id]);
+            $this->syncProductCategories($product, [(int) $request->category_id], false);
         }
         elseif ($request->has('category_id') && empty($request->category_id)) {
             // If primary category was explicitly cleared
@@ -2288,7 +2309,7 @@ class ProductController extends Controller
                     ]);
                 }
 
-                $clone->categories()->sync($original->categories->pluck('id')->toArray());
+                $this->syncProductCategories($clone, $original->categories->pluck('id')->toArray());
 
                 return $this->loadProductResource($clone);
             });
@@ -2353,7 +2374,7 @@ class ProductController extends Controller
                 }
             }
 
-            $clone->categories()->sync($original->categories->pluck('id')->toArray());
+            $this->syncProductCategories($clone, $original->categories->pluck('id')->toArray());
 
             return $this->loadProductResource($clone);
         });
@@ -2415,7 +2436,7 @@ class ProductController extends Controller
             }
 
         // Copy categories
-        $clone->categories()->sync($original->categories->pluck('id')->toArray());
+            $this->syncProductCategories($clone, $original->categories->pluck('id')->toArray());
 
             return $clone;
         });
@@ -2577,7 +2598,7 @@ class ProductController extends Controller
                     $product->update($toUpdate);
                 }
                 if (isset($basicInfo['category_ids']) && is_array($basicInfo['category_ids']) && !empty($basicInfo['category_ids'])) {
-                    $product->categories()->sync($basicInfo['category_ids']);
+                    $this->syncProductCategories($product, $basicInfo['category_ids']);
                 }
 
                 if (array_key_exists('supplier_ids', $basicInfo) && is_array($basicInfo['supplier_ids'])) {
@@ -2654,7 +2675,7 @@ class ProductController extends Controller
 
             // Restore category sync
             if (isset($pData['category_ids'])) {
-                $product->categories()->sync($pData['category_ids']);
+                $this->syncProductCategories($product, (array) $pData['category_ids']);
             }
 
             // Restore EAV attributes

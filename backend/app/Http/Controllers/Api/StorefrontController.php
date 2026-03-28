@@ -9,10 +9,61 @@ use App\Models\Banner;
 use App\Models\Post;
 use App\Models\ProductReview;
 use App\Services\Leads\LeadCaptureService;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class StorefrontController extends Controller
 {
+    protected function getOrderedCategoryIds(Category $category, $accountId = null): array
+    {
+        $ids = [(int) $category->id];
+
+        $children = Category::query()
+            ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+            ->where('parent_id', $category->id)
+            ->orderBy('order')
+            ->orderBy('id')
+            ->get(['id']);
+
+        foreach ($children as $child) {
+            $ids = array_merge($ids, $this->getOrderedCategoryIds($child, $accountId));
+        }
+
+        return $ids;
+    }
+
+    protected function joinCategoryOrdering(Builder $query, array $categoryIds, string $alias = 'category_sorting'): void
+    {
+        $normalizedCategoryIds = collect($categoryIds)
+            ->map(fn ($categoryId) => is_numeric($categoryId) ? (int) $categoryId : null)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($normalizedCategoryIds)) {
+            return;
+        }
+
+        $caseSql = collect($normalizedCategoryIds)
+            ->values()
+            ->map(fn ($categoryId, $index) => "WHEN {$categoryId} THEN {$index}")
+            ->implode(' ');
+
+        $subquery = DB::table('category_product')
+            ->select('product_id')
+            ->selectRaw("MIN((CASE category_id {$caseSql} ELSE 999999 END) * 1000000 + COALESCE(sort_order, 999999)) as category_order_key")
+            ->whereIn('category_id', $normalizedCategoryIds)
+            ->groupBy('product_id');
+
+        $query
+            ->leftJoinSub($subquery, $alias, function ($join) use ($alias) {
+                $join->on("{$alias}.product_id", '=', 'products.id');
+            })
+            ->select('products.*');
+    }
+
     protected function mapStorefrontImages(Product $product): array
     {
         return $product->images->map(fn ($img) => [
@@ -104,8 +155,10 @@ class StorefrontController extends Controller
     public function products(Request $request)
     {
         $accountId = $request->header('X-Account-Id');
+        $selectedCategoryIds = [];
 
         $query = Product::query()
+            ->select('products.*')
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
             ->whereDoesntHave('parentConfigurable')
@@ -115,18 +168,30 @@ class StorefrontController extends Controller
 
         // Filter by category slug
         if ($request->filled('category')) {
-            $cat = Category::where('slug', $request->category)->first();
+            $cat = Category::query()
+                ->when($accountId, fn ($categoryQuery) => $categoryQuery->where('account_id', $accountId))
+                ->where('slug', $request->category)
+                ->first();
             if ($cat) {
-                // Include child categories
-                $catIds = Category::where('parent_id', $cat->id)->pluck('id')->push($cat->id);
-                $query->whereIn('category_id', $catIds);
+                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId);
+                $query->whereHas('categories', function ($categoryQuery) use ($selectedCategoryIds) {
+                    $categoryQuery->whereIn('categories.id', $selectedCategoryIds);
+                });
             }
         }
 
         // Filter by category_id
         if ($request->filled('category_id')) {
-            $catIds = Category::where('parent_id', $request->category_id)->pluck('id')->push((int) $request->category_id);
-            $query->whereIn('category_id', $catIds);
+            $cat = Category::query()
+                ->when($accountId, fn ($categoryQuery) => $categoryQuery->where('account_id', $accountId))
+                ->find($request->category_id);
+
+            if ($cat) {
+                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId);
+                $query->whereHas('categories', function ($categoryQuery) use ($selectedCategoryIds) {
+                    $categoryQuery->whereIn('categories.id', $selectedCategoryIds);
+                });
+            }
         }
 
         // Search
@@ -167,7 +232,25 @@ class StorefrontController extends Controller
             'popular' => ['is_featured', 'desc'],
         ];
         $sort = $sortMap[$request->get('sort', 'newest')] ?? ['created_at', 'desc'];
+
+        if (!empty($selectedCategoryIds)) {
+            $this->joinCategoryOrdering($query, $selectedCategoryIds);
+        }
+
+        $sortKey = $request->get('sort', 'newest');
+        $prioritizeCategoryOrder = !empty($selectedCategoryIds) && in_array($sortKey, ['newest', 'popular'], true);
+
+        if ($prioritizeCategoryOrder) {
+            $query->orderBy('category_sorting.category_order_key');
+        }
+
         $query->orderBy($sort[0], $sort[1]);
+
+        if (!$prioritizeCategoryOrder && !empty($selectedCategoryIds)) {
+            $query->orderBy('category_sorting.category_order_key');
+        }
+
+        $query->orderByDesc('products.id');
 
         $perPage = min((int) $request->get('per_page', 20), 60);
         $products = $query->paginate($perPage);

@@ -82,6 +82,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/categories', [CategoryController::class , 'store']);
     Route::post('/categories/reorder', [CategoryController::class , 'reorder']);
     Route::post('/categories/bulk-layout', [CategoryController::class , 'bulkUpdateLayout']);
+    Route::get('/categories/{id}/products', [CategoryController::class , 'products'])->whereNumber('id');
+    Route::post('/categories/{id}/products/reorder', [CategoryController::class , 'reorderProducts'])->whereNumber('id');
     Route::post('/categories/{id}', [CategoryController::class , 'update']);
     Route::delete('/categories/{id}', [CategoryController::class , 'destroy']);
 
@@ -119,6 +121,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/orders/bootstrap', [\App\Http\Controllers\Api\OrderController::class , 'bootstrap']);
     Route::get('/orders', [\App\Http\Controllers\Api\OrderController::class , 'index']);
     Route::post('/orders', [\App\Http\Controllers\Api\OrderController::class , 'store']);
+    Route::post('/orders/quick-select', [\App\Http\Controllers\Api\OrderController::class , 'quickSelect']);
     Route::get('/orders/connected-carriers', [\App\Http\Controllers\Api\OrderController::class , 'connectedCarriers']);
     Route::get('/orders/shipping-alerts', [\App\Http\Controllers\Api\OrderController::class , 'shippingAlerts']);
     Route::post('/orders/dispatch/preview', [\App\Http\Controllers\Api\OrderController::class , 'dispatchPreview']);

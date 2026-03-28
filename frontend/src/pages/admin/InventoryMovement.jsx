@@ -2533,7 +2533,6 @@ const InventoryMovement = () => {
     const [pasteText, setPasteText] = useState('');
     const [pasteMode, setPasteMode] = useState('sku_price');
     const [showPasteBox, setShowPasteBox] = useState(false);
-    const [createMenuOpen, setCreateMenuOpen] = useState(false);
     const [supplierModal, setSupplierModal] = useState({ open: false, form: createSupplierForm() });
     const [supplierPriceModal, setSupplierPriceModal] = useState({ open: false, form: createSupplierPriceForm() });
     const [importModal, setImportModal] = useState({ open: false, form: createImportForm() });
@@ -5743,7 +5742,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         const isManualExport = row.export_kind === 'manual';
         const sourceLabel = getExportSaleChannelLabel(row.source || (isManualExport ? 'internal' : 'online')) || 'Chưa rõ nguồn';
         const exportKindLabel = row.export_kind_label || (isManualExport ? 'Phiếu tạo tay' : 'Tự tạo từ vận chuyển');
-        const exportKindColor = isManualExport ? '#7C3AED' : '#0F766E';
+        const exportKindColor = row.export_kind_color || (isManualExport ? '#7C3AED' : '#0F766E');
+        const exportKindDescription = row.export_kind_description || (isManualExport ? 'Phiếu xuất nội bộ' : 'Từ đơn hàng đã gửi vận chuyển');
         if (columnId === 'select') {
             return (
                 <div className="flex items-center justify-center">
@@ -5759,8 +5759,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         if (columnId === 'code') {
             return (
                 <CellText
-                    primary={row.order_number}
-                    secondary={isManualExport ? 'Phiếu xuất nội bộ' : 'Từ đơn hàng đã gửi vận chuyển'}
+                    primary={row.code || row.order_number}
+                    secondary={row.code && row.code !== row.order_number ? `Đơn ${row.order_number}` : exportKindDescription}
                     mono
                 />
             );
@@ -5783,7 +5783,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         }
         if (columnId === 'tracking') {
             if (!row.shipping_tracking_code) {
-                return <CellText primary="Chưa có mã vận đơn" secondary={isManualExport ? 'Phiếu tạo tay không cần vận đơn' : 'Sẽ tự lên phiếu khi có mã vận đơn'} />;
+                return <CellText primary="Chưa có mã vận đơn" secondary={row.tracking_helper || (isManualExport ? 'Phiếu tạo tay không cần vận đơn' : 'Sẽ tự lên phiếu khi có mã vận đơn')} />;
             }
             return (
                 <CellText
@@ -5799,7 +5799,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         if (columnId === 'status') {
             return (
                 <div className="space-y-1">
-                    <StatusPill label={isManualExport ? 'Phiếu nội bộ' : 'Đã gửi vận chuyển'} color={isManualExport ? '#6366F1' : '#0F766E'} />
+                    <StatusPill label={row.status_pill_label || (isManualExport ? 'Phiếu nội bộ' : 'Đã gửi vận chuyển')} color={exportKindColor} />
                     <div className="text-[11px] text-primary/55">{row.notes || row.status || '-'}</div>
                 </div>
             );
@@ -6542,44 +6542,13 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         () => getExportInvoiceStatusMeta(exportModal.form.invoice_meta, exportModal.form.customer_name),
         [exportModal.form.customer_name, exportModal.form.invoice_meta]
     );
-    const createSlipActions = [
-        { key: 'imports', label: 'Phiếu nhập', icon: 'inventory_2', onClick: async () => { setCreateMenuOpen(false); await openCreateImport(); } },
-        { key: 'exports', label: 'Phiếu xuất', icon: 'shopping_cart', onClick: async () => { setCreateMenuOpen(false); await openCreateExport(); } },
-        { key: 'returns', label: 'Phiếu hoàn', icon: 'assignment_return', onClick: async () => { setCreateMenuOpen(false); await openCreateDocument('returns'); } },
-        { key: 'damaged', label: 'Phiếu hỏng', icon: 'broken_image', onClick: async () => { setCreateMenuOpen(false); await openCreateDocument('damaged'); } },
-        { key: 'adjustments', label: 'Phiếu điều chỉnh', icon: 'tune', onClick: async () => { setCreateMenuOpen(false); await openCreateDocument('adjustments'); } },
-    ];
     const documentWorkspace = isDocumentTab(activeTab) ? renderSimpleTab(activeTab) : null;
 
     return (
         <div className="space-y-4 px-5 pb-6 pt-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="space-y-1">
-                    <div className="text-[11px] font-black uppercase tracking-[0.18em] text-primary/45">Quản lý kho</div>
-                    <div className="text-[16px] font-black uppercase tracking-[0.18em] text-primary">{currentInventorySection?.label || 'Tổng quan'}</div>
-                </div>
-                <div className="relative flex flex-wrap items-center gap-2">
-                    <button type="button" onClick={() => setCreateMenuOpen((prev) => !prev)} className={primaryButton}>
-                        <span className="material-symbols-outlined text-[18px]">add</span>
-                        Tạo phiếu
-                        <span className="material-symbols-outlined text-[18px]">{createMenuOpen ? 'expand_less' : 'expand_more'}</span>
-                    </button>
-                    {createMenuOpen ? (
-                        <div className="absolute right-0 top-full z-30 mt-2 min-w-[220px] overflow-hidden rounded-sm border border-primary/10 bg-white shadow-xl">
-                            {createSlipActions.map((action) => (
-                                <button
-                                    key={action.key}
-                                    type="button"
-                                    onClick={action.onClick}
-                                    className="flex w-full items-center gap-2 border-b border-primary/10 px-3 py-2.5 text-left text-[13px] font-semibold text-primary transition last:border-b-0 hover:bg-primary/[0.04]"
-                                >
-                                    <span className="material-symbols-outlined text-[18px]">{action.icon}</span>
-                                    {action.label}
-                                </button>
-                            ))}
-                        </div>
-                    ) : null}
-                </div>
+            <div className="space-y-1">
+                <div className="text-[11px] font-black uppercase tracking-[0.18em] text-primary/45">Quản lý kho</div>
+                <div className="text-[16px] font-black uppercase tracking-[0.18em] text-primary">{currentInventorySection?.label || 'Tổng quan'}</div>
             </div>
             {activeTab === 'overview' ? <div className={panelClass}><PanelHeader title="Tổng quan kho" toggles={[{ id: 'overview_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.overview.stats, onClick: () => togglePanel('overview', 'stats') }]} />{openPanels.overview.stats ? <SummaryPanel items={overviewItems} /> : null}</div> : null}
             {activeTab === 'products' ? productsTabContent : null}

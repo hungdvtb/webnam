@@ -109,7 +109,11 @@ class Product extends Model
 
     public function categories()
     {
-        return $this->belongsToMany(Category::class);
+        return $this->belongsToMany(Category::class)
+            ->withPivot('sort_order')
+            ->withTimestamps()
+            ->orderBy('category_product.sort_order')
+            ->orderBy('categories.id');
     }
 
     /**

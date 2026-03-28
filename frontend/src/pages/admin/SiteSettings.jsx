@@ -1,9 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { cmsApi, mediaApi, quoteTemplateApi } from '../../services/api';
+import { cmsApi, mediaApi, orderApi, quoteTemplateApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 import { createDefaultHeaderMenus, normalizeHeaderMenus } from '../../utils/headerSettings';
 import { createDefaultFooterMenuGroups, normalizeFooterMenuGroups } from '../../utils/footerSettings';
 import { useSearchParams } from 'react-router-dom';
+import OrderQuickPickGroupEditor from '../../components/admin/OrderQuickPickGroupEditor';
+import {
+    ORDER_QUICK_PICK_MAX_ITEMS,
+    createOrderQuickPickGroup,
+    normalizeOrderQuickPickGroups,
+} from '../../utils/orderQuickPickGroups';
 
 const defaultSettings = {
     site_name: '',
@@ -50,6 +56,28 @@ const defaultSettings = {
     footer_newsletter_placeholder: '',
     footer_menu_groups: createDefaultFooterMenuGroups(),
     store_locations: [],
+    order_quick_pick_groups: [],
+};
+
+const supportedOrderQuickPickAttributeTypes = new Set(['select', 'multiselect']);
+const normalizeOrderQuickPickOptionValue = (value) => String(value ?? '').trim();
+const buildOrderQuickPickAttributes = (attributes = []) => {
+    const normalizedAttributes = (Array.isArray(attributes) ? attributes : [])
+        .filter((attribute) => supportedOrderQuickPickAttributeTypes.has(attribute?.frontend_type))
+        .map((attribute) => ({
+            ...attribute,
+            options: (attribute.options || [])
+                .map((option) => ({ ...option, value: normalizeOrderQuickPickOptionValue(option?.value) }))
+                .filter((option) => option.value !== ''),
+        }))
+        .filter((attribute) => attribute.options.length > 0);
+
+    const backendPreferredAttributes = normalizedAttributes.filter(
+        (attribute) => attribute.is_filterable_backend || attribute.is_filterable || attribute.is_filterable_frontend
+    );
+
+    return (backendPreferredAttributes.length > 0 ? backendPreferredAttributes : normalizedAttributes)
+        .sort((left, right) => String(left.name || '').localeCompare(String(right.name || ''), 'vi'));
 };
 
 const normalizeIncomingSettings = (incomingSettings = {}) => {
@@ -443,6 +471,7 @@ const SiteSettings = () => {
     const [headerMenus, setHeaderMenus] = useState(createDefaultHeaderMenus());
     const [footerMenuGroups, setFooterMenuGroups] = useState(createDefaultFooterMenuGroups());
     const [storeLocations, setStoreLocations] = useState([]);
+    const [orderQuickPickAttributes, setOrderQuickPickAttributes] = useState([]);
     const [copiedRoute, setCopiedRoute] = useState('');
 
     const activeAccountId = localStorage.getItem('activeAccountId');
@@ -465,6 +494,17 @@ const SiteSettings = () => {
         }
     }, []);
 
+    const fetchOrderQuickPickAttributes = useCallback(async () => {
+        try {
+            const response = await orderApi.getBootstrapCached({ mode: 'form' });
+            const bootstrap = response.data || {};
+            setOrderQuickPickAttributes(buildOrderQuickPickAttributes(bootstrap.product_attributes || []));
+        } catch (error) {
+            console.error('Error fetching order quick pick attributes', error);
+            setOrderQuickPickAttributes([]);
+        }
+    }, []);
+
     const fetchSettings = useCallback(async () => {
         setLoading(true);
         try {
@@ -474,6 +514,7 @@ const SiteSettings = () => {
             const normalizedHeaderMenus = normalizeHeaderMenus(normalizedSettings.header_menu_items);
             const normalizedFooterMenuGroups = normalizeFooterMenuGroups(normalizedSettings.footer_menu_groups);
             const normalizedStoreLocations = normalizeStoreLocations(normalizedSettings.store_locations);
+            const normalizedOrderQuickPickGroups = normalizeOrderQuickPickGroups(normalizedSettings.order_quick_pick_groups);
 
             setHeaderMenus(normalizedHeaderMenus);
             setFooterMenuGroups(normalizedFooterMenuGroups);
@@ -496,6 +537,7 @@ const SiteSettings = () => {
                 footer_email: normalizedSettings.footer_email || normalizedSettings.contact_email || prev.footer_email,
                 footer_menu_groups: normalizedFooterMenuGroups,
                 store_locations: normalizedStoreLocations,
+                order_quick_pick_groups: normalizedOrderQuickPickGroups,
             }));
         } catch {
             console.error('Error fetching settings');
@@ -508,9 +550,16 @@ const SiteSettings = () => {
         fetchSettings();
         fetchDomains();
         fetchQuoteTemplates();
-    }, [fetchSettings, fetchDomains, fetchQuoteTemplates]);
+        fetchOrderQuickPickAttributes();
+    }, [fetchSettings, fetchDomains, fetchQuoteTemplates, fetchOrderQuickPickAttributes]);
 
     useEffect(() => {
+        const currentTab = searchParams.get('tab');
+        const hasLegacyShippingTab = searchParams.has('shippingTab');
+        if (currentTab === activeTab && !hasLegacyShippingTab) {
+            return;
+        }
+
         const next = new URLSearchParams(searchParams);
         next.set('tab', activeTab);
         next.delete('shippingTab');
@@ -681,6 +730,59 @@ const SiteSettings = () => {
         });
     };
 
+    const updateOrderQuickPickGroups = (updater) => {
+        setSettings((prev) => {
+            const previousGroups = normalizeOrderQuickPickGroups(prev.order_quick_pick_groups);
+            const nextGroups = typeof updater === 'function' ? updater(previousGroups) : updater;
+
+            return {
+                ...prev,
+                order_quick_pick_groups: normalizeOrderQuickPickGroups(nextGroups),
+            };
+        });
+    };
+
+    const handleAddOrderQuickPickGroup = () => {
+        if (orderQuickPickAttributes.length === 0) {
+            showModal({
+                title: 'Chưa có thuộc tính',
+                content: 'Hãy tạo thuộc tính lọc sản phẩm trước khi cấu hình SP hay dùng.',
+                type: 'warning',
+            });
+            return;
+        }
+
+        updateOrderQuickPickGroups((prev) => [
+            ...prev,
+            createOrderQuickPickGroup(orderQuickPickAttributes),
+        ]);
+    };
+
+    const handleUpdateOrderQuickPickGroup = (groupId, nextGroup) => {
+        updateOrderQuickPickGroups((prev) => prev.map((group) => (
+            group.id === groupId ? nextGroup : group
+        )));
+    };
+
+    const handleRemoveOrderQuickPickGroup = (groupId) => {
+        updateOrderQuickPickGroups((prev) => prev.filter((group) => group.id !== groupId));
+    };
+
+    const handleMoveOrderQuickPickGroup = (groupId, direction) => {
+        updateOrderQuickPickGroups((prev) => {
+            const currentIndex = prev.findIndex((group) => group.id === groupId);
+            if (currentIndex === -1) return prev;
+
+            const nextIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+            if (nextIndex < 0 || nextIndex >= prev.length) return prev;
+
+            const next = [...prev];
+            const [picked] = next.splice(currentIndex, 1);
+            next.splice(nextIndex, 0, picked);
+            return next;
+        });
+    };
+
     const validateStoreLocations = (stores) => {
         const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -779,6 +881,7 @@ const SiteSettings = () => {
         const normalizedHeaderMenus = normalizeHeaderMenus(headerMenus);
         const normalizedFooterMenuGroups = normalizeFooterMenuGroups(footerMenuGroups);
         const normalizedStoreLocations = normalizeStoreLocations(storeLocations);
+        const normalizedOrderQuickPickGroups = normalizeOrderQuickPickGroups(settings.order_quick_pick_groups);
         const storeValidationError = validateStoreLocations(normalizedStoreLocations);
 
         if (storeValidationError) {
@@ -794,6 +897,7 @@ const SiteSettings = () => {
                 header_menu_items: normalizedHeaderMenus,
                 footer_menu_groups: normalizedFooterMenuGroups,
                 store_locations: normalizedStoreLocations,
+                order_quick_pick_groups: normalizedOrderQuickPickGroups,
             };
 
             const response = await cmsApi.settings.update({
@@ -804,6 +908,7 @@ const SiteSettings = () => {
             const nextHasApiKey = Boolean(
                 aiStatus.configured ?? settings.ai_gemini_has_api_key ?? settings.ai_gemini_api_key
             );
+            orderApi.invalidateBootstrap({ mode: 'form' });
             setHeaderMenus(normalizedHeaderMenus);
             setFooterMenuGroups(normalizedFooterMenuGroups);
             setStoreLocations(normalizedStoreLocations);
@@ -818,6 +923,7 @@ const SiteSettings = () => {
                 header_menu_items: normalizedHeaderMenus,
                 footer_menu_groups: normalizedFooterMenuGroups,
                 store_locations: normalizedStoreLocations,
+                order_quick_pick_groups: normalizedOrderQuickPickGroups,
             }));
             showModal({ title: 'Thành công', content: 'Đã lưu cấu hình.', type: 'success' });
         } catch {
@@ -886,6 +992,7 @@ const SiteSettings = () => {
                 is_active: true,
                 sort_order: quoteTemplates.length,
             });
+            orderApi.invalidateBootstrap({ mode: 'form' });
             setQuoteTemplateDraft({ name: '', image_url: '' });
             fetchQuoteTemplates();
             showModal({ title: 'Thành công', content: 'Đã thêm bộ/mẫu báo giá.', type: 'success' });
@@ -916,6 +1023,7 @@ const SiteSettings = () => {
                 sort_order: Number(template.sort_order) || 0,
                 is_active: Boolean(template.is_active),
             });
+            orderApi.invalidateBootstrap({ mode: 'form' });
             fetchQuoteTemplates();
             showModal({ title: 'Thành công', content: 'Đã lưu bộ/mẫu báo giá.', type: 'success' });
         } catch {
@@ -931,6 +1039,7 @@ const SiteSettings = () => {
         setSavingQuoteTemplateId(templateId);
         try {
             await quoteTemplateApi.destroy(templateId);
+            orderApi.invalidateBootstrap({ mode: 'form' });
             fetchQuoteTemplates();
             showModal({ title: 'Thành công', content: 'Đã xóa bộ/mẫu báo giá.', type: 'success' });
         } catch {
@@ -972,6 +1081,8 @@ const SiteSettings = () => {
         { id: 'bank', title: 'Cài đặt STK', icon: 'account_balance' },
         { id: 'quote', title: 'Báo giá', icon: 'image' },
     ];
+
+    const orderQuickPickGroups = normalizeOrderQuickPickGroups(settings.order_quick_pick_groups);
 
     return (
         <div className="flex flex-col bg-[#fcfcfa] animate-fade-in p-6 w-full h-full overflow-hidden">
@@ -1071,7 +1182,6 @@ const SiteSettings = () => {
                             </SectionCard>
                         </div>
                     )}
-
                     {activeTab === 'header' && (
                         <div className="space-y-6">
                             <SectionCard icon="branding_watermark" title="Nội dung header">

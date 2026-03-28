@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { categoryApi, attributeApi } from '../../services/api';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { Tree } from '@minoru/react-dnd-treeview';
+import { useUI } from '../../context/UIContext';
 
 const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelected, onSelect, isCheckable, isChecked, onCheck, isDropTarget, allAttributes }) => {
     const layoutLabel = node.data?.display_layout === 'layout_2' ? 'Giao diện 2' : 'Giao diện 1';
@@ -156,7 +158,128 @@ const Placeholder = (props) => {
     );
 };
 
+const INITIAL_FORM_DATA = {
+    id: null,
+    name: '',
+    description: '',
+    parent_id: '',
+    status: 1,
+    banner: null,
+    banner_url: null,
+    display_layout: 'layout_1',
+    filterable_attribute_ids: [],
+};
+
+const CategoryProductRow = ({
+    product,
+    index,
+    isFirst,
+    isLast,
+    isDragging,
+    isDropTarget,
+    onDragStart,
+    onDragEnter,
+    onDrop,
+    onDragEnd,
+    onMoveUp,
+    onMoveDown,
+}) => (
+    <div
+        draggable
+        onDragStart={() => onDragStart(product.id)}
+        onDragEnter={(event) => {
+            event.preventDefault();
+            onDragEnter(product.id);
+        }}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+            event.preventDefault();
+            onDrop(product.id);
+        }}
+        onDragEnd={onDragEnd}
+        className={`rounded-sm border transition-all ${
+            isDropTarget
+                ? 'border-primary bg-primary/5 shadow-md'
+                : 'border-gold/10 bg-white hover:border-gold/30'
+        } ${isDragging ? 'opacity-40' : 'opacity-100'}`}
+    >
+        <div className="flex items-center gap-3 p-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-sm bg-gold/10 text-primary">
+                {product.main_image ? (
+                    <img
+                        src={product.main_image}
+                        alt={product.name}
+                        className="h-full w-full rounded-sm object-cover"
+                    />
+                ) : (
+                    <span className="material-symbols-outlined text-[18px]">inventory_2</span>
+                )}
+            </div>
+
+            <div className="flex min-w-0 flex-1 items-start gap-3">
+                <div className="flex shrink-0 items-center gap-1.5 rounded-full bg-stone/5 px-2 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-stone/60">
+                    <span className="material-symbols-outlined text-[14px]">drag_indicator</span>
+                    #{index + 1}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Link
+                            to={`/admin/products/edit/${product.id}`}
+                            className="truncate text-[13px] font-bold text-primary transition-colors hover:text-umber"
+                        >
+                            {product.name}
+                        </Link>
+                        {product.is_primary_category ? (
+                            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-primary">
+                                Danh mục chính
+                            </span>
+                        ) : (
+                            <span className="rounded-full bg-gold/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-amber-700">
+                                Gắn thêm
+                            </span>
+                        )}
+                        {!product.status ? (
+                            <span className="rounded-full bg-brick/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-brick">
+                                Đang ẩn
+                            </span>
+                        ) : null}
+                    </div>
+
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-medium text-stone/55">
+                        <span>SKU: {product.sku || '--'}</span>
+                        <span>ID: {product.id}</span>
+                        {product.category_name ? <span>Chính: {product.category_name}</span> : null}
+                    </div>
+                </div>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-1">
+                <button
+                    type="button"
+                    onClick={onMoveUp}
+                    disabled={isFirst}
+                    className="flex h-8 w-8 items-center justify-center rounded-sm border border-gold/15 text-stone/60 transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-30"
+                    title="Đưa lên"
+                >
+                    <span className="material-symbols-outlined text-[16px]">arrow_upward</span>
+                </button>
+                <button
+                    type="button"
+                    onClick={onMoveDown}
+                    disabled={isLast}
+                    className="flex h-8 w-8 items-center justify-center rounded-sm border border-gold/15 text-stone/60 transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-30"
+                    title="Đưa xuống"
+                >
+                    <span className="material-symbols-outlined text-[16px]">arrow_downward</span>
+                </button>
+            </div>
+        </div>
+    </div>
+);
+
 const CategoryList = () => {
+    const { showModal, showToast } = useUI();
     const [treeData, setTreeData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isFormOpen, setIsFormOpen] = useState(false);
@@ -172,14 +295,17 @@ const CategoryList = () => {
     const [isExpandingAll, setIsExpandingAll] = useState(false);
     const [isAllOpen, setIsAllOpen] = useState(false);
     const [openNodes, setOpenNodes] = useState(new Set());
-    const [formData, setFormData] = useState({ 
-        id: null, name: '', description: '', parent_id: '', status: 1, 
-        banner: null, banner_url: null, display_layout: 'layout_1',
-        filterable_attribute_ids: []
-    });
+    const [formData, setFormData] = useState(INITIAL_FORM_DATA);
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [isBulkUpdating, setIsBulkUpdating] = useState(false);
     const [allAttributes, setAllAttributes] = useState([]);
+    const [selectedCategoryMeta, setSelectedCategoryMeta] = useState(null);
+    const [categoryProducts, setCategoryProducts] = useState([]);
+    const [categoryProductsLoading, setCategoryProductsLoading] = useState(false);
+    const [categoryProductsSaving, setCategoryProductsSaving] = useState(false);
+    const [categoryProductsDirty, setCategoryProductsDirty] = useState(false);
+    const [draggingProductId, setDraggingProductId] = useState(null);
+    const [dragOverProductId, setDragOverProductId] = useState(null);
 
     // Close dropdowns on outside click
     useEffect(() => {
@@ -249,6 +375,110 @@ const CategoryList = () => {
         return treeData.filter(node => includeIds.has(node.id));
     }, [treeData, searchQuery, filterLevel, filterStatus, filterLayout]);
 
+    const selectedCategoryNode = React.useMemo(
+        () => treeData.find((node) => node.id === selectedId) || null,
+        [treeData, selectedId],
+    );
+
+    const loadCategoryProducts = async (categoryId = selectedId) => {
+        if (!categoryId) {
+            setSelectedCategoryMeta(null);
+            setCategoryProducts([]);
+            setCategoryProductsDirty(false);
+            return;
+        }
+
+        setCategoryProductsLoading(true);
+        try {
+            const response = await categoryApi.getProducts(categoryId);
+            setSelectedCategoryMeta(response.data?.category || null);
+            setCategoryProducts(Array.isArray(response.data?.products) ? response.data.products : []);
+            setCategoryProductsDirty(false);
+        } catch (error) {
+            console.error('Error loading category products:', error);
+            setSelectedCategoryMeta(null);
+            setCategoryProducts([]);
+            showModal({
+                title: 'Lỗi',
+                content: 'Không thể tải danh sách sản phẩm trong danh mục này.',
+                type: 'error',
+            });
+        } finally {
+            setCategoryProductsLoading(false);
+        }
+    };
+
+    const moveCategoryProduct = (fromIndex, toIndex) => {
+        if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= categoryProducts.length || toIndex >= categoryProducts.length) {
+            return;
+        }
+
+        setCategoryProducts((previous) => {
+            const next = [...previous];
+            const [movedItem] = next.splice(fromIndex, 1);
+            next.splice(toIndex, 0, movedItem);
+            return next;
+        });
+        setCategoryProductsDirty(true);
+    };
+
+    const saveCategoryProductOrder = async () => {
+        if (!selectedId || categoryProductsSaving || !categoryProductsDirty) {
+            return;
+        }
+
+        setCategoryProductsSaving(true);
+        try {
+            const response = await categoryApi.reorderProducts(
+                selectedId,
+                categoryProducts.map((product) => product.id),
+            );
+
+            setSelectedCategoryMeta(response.data?.category || null);
+            setCategoryProducts(Array.isArray(response.data?.products) ? response.data.products : []);
+            setCategoryProductsDirty(false);
+            showToast({ message: 'Đã lưu thứ tự sản phẩm trong danh mục.', type: 'success' });
+        } catch (error) {
+            console.error('Error saving category product order:', error);
+            showModal({
+                title: 'Lỗi',
+                content: error?.response?.data?.message || 'Không thể lưu thứ tự sản phẩm trong danh mục.',
+                type: 'error',
+            });
+        } finally {
+            setCategoryProductsSaving(false);
+        }
+    };
+
+    const moveCategoryProductByOffset = (productId, offset) => {
+        const currentIndex = categoryProducts.findIndex((product) => product.id === productId);
+        if (currentIndex < 0) {
+            return;
+        }
+
+        moveCategoryProduct(currentIndex, currentIndex + offset);
+    };
+
+    const handleCategoryProductDragStart = (productId) => {
+        setDraggingProductId(productId);
+        setDragOverProductId(productId);
+    };
+
+    const handleCategoryProductDrop = (targetProductId) => {
+        if (!draggingProductId || draggingProductId === targetProductId) {
+            setDraggingProductId(null);
+            setDragOverProductId(null);
+            return;
+        }
+
+        const fromIndex = categoryProducts.findIndex((product) => product.id === draggingProductId);
+        const toIndex = categoryProducts.findIndex((product) => product.id === targetProductId);
+
+        moveCategoryProduct(fromIndex, toIndex);
+        setDraggingProductId(null);
+        setDragOverProductId(null);
+    };
+
     const fetchInitialData = async () => {
         setLoading(true);
         try {
@@ -287,8 +517,16 @@ const CategoryList = () => {
                 data: cat
             }));
             setTreeData(formattedData);
+            if (selectedId) {
+                loadCategoryProducts(selectedId);
+            }
         } catch (error) {
             console.error('Error fetching categories:', error);
+            showModal({
+                title: 'Lỗi',
+                content: 'Không thể tải lại danh sách danh mục.',
+                type: 'error',
+            });
         }
     };
 
@@ -305,6 +543,31 @@ const CategoryList = () => {
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isFormOpen]);
+
+    useEffect(() => {
+        if (!selectedId) {
+            setSelectedCategoryMeta(null);
+            setCategoryProducts([]);
+            setCategoryProductsDirty(false);
+            return;
+        }
+
+        loadCategoryProducts(selectedId);
+    }, [selectedId]);
+
+    useEffect(() => {
+        if (!selectedId) {
+            return;
+        }
+
+        const selectedStillExists = treeData.some((node) => node.id === selectedId);
+        if (!selectedStillExists) {
+            setSelectedId(null);
+            setSelectedCategoryMeta(null);
+            setCategoryProducts([]);
+            setCategoryProductsDirty(false);
+        }
+    }, [treeData, selectedId]);
 
     const handleDrop = async (newTree, options) => {
         if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all' || filterLayout !== 'all') return; // Disable reorder when filtered
@@ -363,11 +626,7 @@ const CategoryList = () => {
                 await categoryApi.store(data);
             }
             setIsFormOpen(false);
-            setFormData({ 
-                id: null, name: '', description: '', parent_id: '', status: 1, 
-                banner: null, banner_url: null, display_layout: 'layout_1',
-                filterable_attribute_ids: []
-            });
+            setFormData(INITIAL_FORM_DATA);
             fetchCategories();
         } catch (error) {
             console.error("Lỗi khi lưu danh mục:", error);
@@ -500,7 +759,7 @@ const CategoryList = () => {
                     <div className="bg-white border border-gold/10 p-2 shadow-sm rounded-sm flex items-center justify-between">
                         <div className="flex gap-1.5 items-center w-full max-w-3xl">
                             <button
-                                onClick={() => { setFormData({ id: null, name: '', description: '', parent_id: '', status: 1 }); setIsFormOpen(true); }}
+                                onClick={() => { setFormData(INITIAL_FORM_DATA); setIsFormOpen(true); }}
                                 className="bg-brick text-white p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 shadow-sm shrink-0"
                                 title="Thêm danh mục mới"
                             >
@@ -1025,6 +1284,150 @@ const CategoryList = () => {
                                 </div>
                             </div>
                         )}
+
+                        <div className="bg-white border border-gold/10 shadow-sm rounded-sm flex flex-col overflow-hidden min-h-[320px]">
+                            <div className="flex items-start justify-between gap-3 border-b border-gold/10 bg-gold/5 px-4 py-4">
+                                <div>
+                                    <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-primary flex items-center gap-2">
+                                        <span className="material-symbols-outlined text-[16px]">inventory_2</span>
+                                        Sản phẩm trong danh mục
+                                    </h3>
+                                    <p className="mt-1 text-[11px] leading-relaxed text-stone/60">
+                                        {selectedCategoryNode
+                                            ? `Đang quản lí thứ tự hiển thị của "${selectedCategoryNode.text}".`
+                                            : 'Chọn một danh mục ở cây bên trái để xem và sắp xếp sản phẩm.'}
+                                    </p>
+                                </div>
+
+                                {selectedCategoryNode ? (
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => handleEdit(selectedCategoryNode)}
+                                            className="flex h-9 w-9 items-center justify-center rounded-sm border border-gold/15 text-stone/60 transition-colors hover:border-primary hover:text-primary"
+                                            title="Sửa danh mục đang chọn"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">edit</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => loadCategoryProducts(selectedId)}
+                                            disabled={categoryProductsLoading || categoryProductsSaving}
+                                            className="flex h-9 w-9 items-center justify-center rounded-sm border border-gold/15 text-stone/60 transition-colors hover:border-primary hover:text-primary disabled:opacity-40"
+                                            title="Tải lại danh sách sản phẩm"
+                                        >
+                                            <span className={`material-symbols-outlined text-[16px] ${(categoryProductsLoading || categoryProductsSaving) ? 'animate-spin' : ''}`}>refresh</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => loadCategoryProducts(selectedId)}
+                                            disabled={!categoryProductsDirty || categoryProductsLoading || categoryProductsSaving}
+                                            className="rounded-sm border border-gold/15 px-3 py-2 text-[10px] font-black uppercase tracking-[0.14em] text-stone/60 transition-colors hover:border-primary hover:text-primary disabled:opacity-40"
+                                        >
+                                            Hoàn tác
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={saveCategoryProductOrder}
+                                            disabled={!categoryProductsDirty || categoryProductsLoading || categoryProductsSaving}
+                                            className="rounded-sm bg-brick px-3 py-2 text-[10px] font-black uppercase tracking-[0.14em] text-white transition-colors hover:bg-umber disabled:opacity-40"
+                                        >
+                                            {categoryProductsSaving ? 'Đang lưu' : 'Lưu thứ tự'}
+                                        </button>
+                                    </div>
+                                ) : null}
+                            </div>
+
+                            {selectedCategoryNode ? (
+                                <div className="flex flex-wrap items-center gap-2 border-b border-gold/10 px-4 py-3">
+                                    <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-primary">
+                                        {selectedCategoryMeta?.products_count ?? categoryProducts.length} sản phẩm
+                                    </span>
+                                    <span className="rounded-full bg-gold/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-amber-700">
+                                        {selectedCategoryMeta?.display_layout === 'layout_2' ? 'Layout 2' : 'Layout 1'}
+                                    </span>
+                                    <span className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${
+                                        Number(selectedCategoryMeta?.status ?? selectedCategoryNode.data?.status ?? 0) === 1
+                                            ? 'bg-emerald-100 text-emerald-700'
+                                            : 'bg-stone-100 text-stone-500'
+                                    }`}>
+                                        {Number(selectedCategoryMeta?.status ?? selectedCategoryNode.data?.status ?? 0) === 1 ? 'Đang hiển thị' : 'Đang ẩn'}
+                                    </span>
+                                    {categoryProductsDirty ? (
+                                        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-amber-700">
+                                            Chưa lưu thay đổi
+                                        </span>
+                                    ) : (
+                                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-emerald-700">
+                                            Đồng bộ frontend
+                                        </span>
+                                    )}
+                                </div>
+                            ) : null}
+
+                            <div className="flex-1 overflow-auto custom-scrollbar p-4">
+                                {!selectedCategoryNode ? (
+                                    <div className="flex h-full min-h-[220px] flex-col items-center justify-center gap-3 text-center opacity-50">
+                                        <span className="material-symbols-outlined text-[48px] text-stone/40">touch_app</span>
+                                        <p className="text-[12px] font-bold uppercase tracking-[0.18em] text-stone/50">
+                                            Chọn một danh mục để bắt đầu
+                                        </p>
+                                        <p className="max-w-[280px] text-[12px] leading-relaxed text-stone/55">
+                                            Sau khi chọn, bạn sẽ thấy ngay danh sách sản phẩm đang nằm trong danh mục đó và có thể kéo thả để đổi thứ tự.
+                                        </p>
+                                    </div>
+                                ) : categoryProductsLoading ? (
+                                    <div className="flex h-full min-h-[220px] flex-col items-center justify-center gap-3 opacity-40">
+                                        <div className="h-9 w-9 animate-spin rounded-full border-b-2 border-primary"></div>
+                                        <p className="text-[11px] font-black uppercase tracking-[0.18em] text-stone/50">
+                                            Đang tải sản phẩm
+                                        </p>
+                                    </div>
+                                ) : categoryProducts.length === 0 ? (
+                                    <div className="flex h-full min-h-[220px] flex-col items-center justify-center gap-3 text-center opacity-50">
+                                        <span className="material-symbols-outlined text-[44px] text-stone/40">inventory</span>
+                                        <p className="text-[12px] font-bold uppercase tracking-[0.18em] text-stone/50">
+                                            Danh mục này chưa có sản phẩm
+                                        </p>
+                                        <p className="max-w-[280px] text-[12px] leading-relaxed text-stone/55">
+                                            Khi sản phẩm đã được gắn vào danh mục, danh sách sẽ xuất hiện tại đây để bạn sắp xếp thứ tự hiển thị ngoài frontend.
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {categoryProducts.map((product, index) => (
+                                            <CategoryProductRow
+                                                key={product.id}
+                                                product={product}
+                                                index={index}
+                                                isFirst={index === 0}
+                                                isLast={index === categoryProducts.length - 1}
+                                                isDragging={draggingProductId === product.id}
+                                                isDropTarget={dragOverProductId === product.id && draggingProductId !== product.id}
+                                                onDragStart={handleCategoryProductDragStart}
+                                                onDragEnter={setDragOverProductId}
+                                                onDrop={handleCategoryProductDrop}
+                                                onDragEnd={() => {
+                                                    setDraggingProductId(null);
+                                                    setDragOverProductId(null);
+                                                }}
+                                                onMoveUp={() => moveCategoryProductByOffset(product.id, -1)}
+                                                onMoveDown={() => moveCategoryProductByOffset(product.id, 1)}
+                                            />
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            {selectedCategoryNode ? (
+                                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-gold/10 px-4 py-3 text-[10px] text-stone/50">
+                                    <span>Kéo thả hoặc dùng nút lên/xuống, sau đó bấm "Lưu thứ tự".</span>
+                                    <span className="font-bold uppercase tracking-[0.14em]">
+                                        Frontend dùng đúng thứ tự này
+                                    </span>
+                                </div>
+                            ) : null}
+                        </div>
                     </div>
                 </div>
             </div>

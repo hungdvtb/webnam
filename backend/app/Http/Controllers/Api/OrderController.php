@@ -1079,6 +1079,140 @@ class OrderController extends Controller
         return $this->scopedOrderQuery($request, $withTrashed)->findOrFail($id);
     }
 
+    private function applyOrderListFilters($query, Request $request): void
+    {
+        if ($request->input('trashed') == '1') {
+            $query->onlyTrashed();
+        }
+
+        $requestedKind = $this->normalizeOrderKind($request->input('order_kind'));
+        if ($request->input('trashed') != '1') {
+            $query->where(function ($kindQuery) use ($requestedKind) {
+                $kindQuery
+                    ->where('order_kind', $requestedKind)
+                    ->orWhere(function ($fallbackQuery) use ($requestedKind) {
+                        if ($requestedKind !== self::ORDER_KIND_OFFICIAL) {
+                            $fallbackQuery->whereRaw('1 = 0');
+                            return;
+                        }
+
+                        $fallbackQuery
+                            ->whereNull('order_kind')
+                            ->orWhere('order_kind', '');
+                    });
+            });
+        }
+
+        if ($request->filled('order_type')) {
+            $query->where('order_type', $this->normalizeOrderType((string) $request->input('order_type')));
+        }
+
+        if ($request->filled('order_ids')) {
+            $orderIds = collect(
+                is_array($request->input('order_ids'))
+                    ? $request->input('order_ids')
+                    : explode(',', (string) $request->input('order_ids'))
+            )
+                ->map(fn ($value) => (int) $value)
+                ->filter(fn (int $id) => $id > 0)
+                ->unique()
+                ->values();
+
+            if ($orderIds->isEmpty()) {
+                $query->whereRaw('1 = 0');
+            } else {
+                $query->whereIn('orders.id', $orderIds->all());
+            }
+        }
+
+        $query
+            ->when($request->filled('search'), function ($q) use ($request) {
+                $searchContainsLike = $this->containsLike((string) $request->input('search'));
+                $searchPrefixLike = $this->prefixLike((string) $request->input('search'));
+
+                $q->where(function ($sub) use ($searchContainsLike, $searchPrefixLike) {
+                    $this->applyInsensitiveLike($sub, 'order_number', $searchContainsLike);
+                    $this->applyInsensitiveLike($sub, 'customer_name', $searchContainsLike, true);
+                    $this->applyInsensitiveLike($sub, 'customer_phone', $searchPrefixLike, true);
+                    $this->applyInsensitiveLike($sub, 'shipping_address', $searchContainsLike, true);
+                    $this->applyInsensitiveLike($sub, 'notes', $searchContainsLike, true);
+                    $this->applyInsensitiveLike($sub, 'shipping_tracking_code', $searchContainsLike, true);
+
+                    $sub->orWhereHas('items', function ($itemQuery) use ($searchContainsLike) {
+                        $this->applyInsensitiveLike($itemQuery, 'product_sku_snapshot', $searchContainsLike);
+                        $this->applyInsensitiveLike($itemQuery, 'product_name_snapshot', $searchContainsLike, true);
+                    })
+                        ->orWhereHas('items.product', function ($productQuery) use ($searchContainsLike) {
+                            $this->applyInsensitiveLike($productQuery, 'sku', $searchContainsLike);
+                            $this->applyInsensitiveLike($productQuery, 'name', $searchContainsLike, true);
+                        });
+                });
+            })
+            ->when($request->filled('customer_name'), function ($q) use ($request) {
+                $this->applyInsensitiveLike($q, 'customer_name', $this->containsLike((string) $request->input('customer_name')));
+            })
+            ->when($request->filled('order_number'), function ($q) use ($request) {
+                $this->applyInsensitiveLike($q, 'order_number', $this->containsLike((string) $request->input('order_number')));
+            })
+            ->when($request->filled('customer_phone'), function ($q) use ($request) {
+                $this->applyInsensitiveLike($q, 'customer_phone', $this->prefixLike((string) $request->input('customer_phone')));
+            })
+            ->when($request->filled('shipping_address'), function ($q) use ($request) {
+                $this->applyInsensitiveLike($q, 'shipping_address', $this->containsLike((string) $request->input('shipping_address')));
+            })
+            ->when($request->filled('status'), function ($q) use ($request) {
+                $statuses = is_array($request->input('status'))
+                    ? $request->input('status')
+                    : explode(',', (string) $request->input('status'));
+
+                $q->whereIn('status', $statuses);
+            })
+            ->when($request->filled('created_at_from'), function ($q) use ($request) {
+                $q->whereDate('created_at', '>=', $request->input('created_at_from'));
+            })
+            ->when($request->filled('created_at_to'), function ($q) use ($request) {
+                $q->whereDate('created_at', '<=', $request->input('created_at_to'));
+            })
+            ->when($request->filled('shipping_carrier_code'), function ($q) use ($request) {
+                $q->where('shipping_carrier_code', $request->input('shipping_carrier_code'));
+            })
+            ->when($request->filled('shipping_dispatched_from'), function ($q) use ($request) {
+                $q->whereDate('shipping_dispatched_at', '>=', $request->input('shipping_dispatched_from'));
+            })
+            ->when($request->filled('shipping_dispatched_to'), function ($q) use ($request) {
+                $q->whereDate('shipping_dispatched_at', '<=', $request->input('shipping_dispatched_to'));
+            })
+            ->when($request->filled('export_slip_state'), function ($q) use ($request) {
+                $state = trim((string) $request->input('export_slip_state'));
+                $this->orderInventorySlipService->applyExportSlipStateFilter($q, $state);
+            })
+            ->when($request->filled('return_slip_state'), function ($q) use ($request) {
+                $state = trim((string) $request->input('return_slip_state'));
+                $this->orderInventorySlipService->applyReturnSlipStateFilter($q, $state);
+            })
+            ->when($request->filled('damaged_slip_state'), function ($q) use ($request) {
+                $state = trim((string) $request->input('damaged_slip_state'));
+                $this->orderInventorySlipService->applyDamagedSlipStateFilter($q, $state);
+            });
+
+        foreach ($request->all() as $key => $value) {
+            if (strpos($key, 'attr_order_') !== 0 || empty($value)) {
+                continue;
+            }
+
+            $attrId = str_replace('attr_order_', '', $key);
+            $query->whereExists(function ($attributeQuery) use ($attrId, $value) {
+                $attributeQuery->select(DB::raw(1))
+                    ->from('order_attribute_values')
+                    ->whereRaw('order_attribute_values.order_id = orders.id')
+                    ->where('attribute_id', $attrId)
+                    ->whereRaw($this->loweredSearchExpression('value') . " LIKE ? ESCAPE '\\'", [
+                        $this->containsLike((string) $value),
+                    ]);
+            });
+        }
+    }
+
     private function repeatPhoneMetaForOrder(array $repeatMetaMap, int $orderId): array
     {
         return $repeatMetaMap["order:{$orderId}"] ?? [
@@ -1503,133 +1637,7 @@ class OrderController extends Controller
             'activeShipment:id,order_id,shipment_number,carrier_name,carrier_tracking_code,shipment_status,problem_code,problem_message,problem_detected_at'
         ]);
 
-        if ($request->input('trashed') == '1') {
-            $query->onlyTrashed();
-        }
-
-        $requestedKind = $this->normalizeOrderKind($request->input('order_kind'));
-        if ($request->input('trashed') != '1') {
-            $query->where(function ($kindQuery) use ($requestedKind) {
-                $kindQuery
-                    ->where('order_kind', $requestedKind)
-                    ->orWhere(function ($fallbackQuery) use ($requestedKind) {
-                        if ($requestedKind !== self::ORDER_KIND_OFFICIAL) {
-                            $fallbackQuery->whereRaw('1 = 0');
-                            return;
-                        }
-
-                        $fallbackQuery
-                            ->whereNull('order_kind')
-                            ->orWhere('order_kind', '');
-                    });
-            });
-        }
-
-        if ($request->filled('order_type')) {
-            $query->where('order_type', $this->normalizeOrderType((string) $request->input('order_type')));
-        }
-
-        if ($request->filled('order_ids')) {
-            $orderIds = collect(
-                is_array($request->input('order_ids'))
-                    ? $request->input('order_ids')
-                    : explode(',', (string) $request->input('order_ids'))
-            )
-                ->map(fn ($value) => (int) $value)
-                ->filter(fn (int $id) => $id > 0)
-                ->unique()
-                ->values();
-
-            if ($orderIds->isEmpty()) {
-                $query->whereRaw('1 = 0');
-            } else {
-                $query->whereIn('orders.id', $orderIds->all());
-            }
-        }
-
-        $query->when($request->filled('search'), function($q) use ($request) {
-            $searchContainsLike = $this->containsLike((string) $request->input('search'));
-            $searchPrefixLike = $this->prefixLike((string) $request->input('search'));
-
-            $q->where(function($sub) use ($searchContainsLike, $searchPrefixLike) {
-                // Order-level fields
-                $this->applyInsensitiveLike($sub, 'order_number', $searchPrefixLike);
-                $this->applyInsensitiveLike($sub, 'customer_name', $searchContainsLike, true);
-                $this->applyInsensitiveLike($sub, 'customer_phone', $searchPrefixLike, true);
-                $this->applyInsensitiveLike($sub, 'shipping_address', $searchContainsLike, true);
-                $this->applyInsensitiveLike($sub, 'notes', $searchContainsLike, true);
-                $this->applyInsensitiveLike($sub, 'shipping_tracking_code', $searchContainsLike, true);
-                    // Product-level: search by snapshot SKU/name stored in order_items
-                $sub->orWhereHas('items', function($iq) use ($searchContainsLike) {
-                        $this->applyInsensitiveLike($iq, 'product_sku_snapshot', $searchContainsLike);
-                        $this->applyInsensitiveLike($iq, 'product_name_snapshot', $searchContainsLike, true);
-                    })
-                    // Also search live product data via JOIN (catches new/updated products)
-                    ->orWhereHas('items.product', function($pq) use ($searchContainsLike) {
-                        $this->applyInsensitiveLike($pq, 'sku', $searchContainsLike);
-                        $this->applyInsensitiveLike($pq, 'name', $searchContainsLike, true);
-                    });
-            });
-        })
-        ->when($request->filled('customer_name'), function($q) use ($request) {
-            $this->applyInsensitiveLike($q, 'customer_name', $this->containsLike((string) $request->customer_name));
-        })
-        ->when($request->filled('order_number'), function($q) use ($request) {
-            $this->applyInsensitiveLike($q, 'order_number', $this->prefixLike((string) $request->order_number));
-        })
-        ->when($request->filled('customer_phone'), function($q) use ($request) {
-            $this->applyInsensitiveLike($q, 'customer_phone', $this->prefixLike((string) $request->customer_phone));
-        })
-        ->when($request->filled('shipping_address'), function($q) use ($request) {
-            $this->applyInsensitiveLike($q, 'shipping_address', $this->containsLike((string) $request->shipping_address));
-        })
-        ->when($request->filled('status'), function($q) use ($request) {
-            $statuses = is_array($request->status) ? $request->status : explode(',', $request->status);
-            $q->whereIn('status', $statuses);
-        })
-        ->when($request->filled('created_at_from'), function($q) use ($request) {
-            $q->whereDate('created_at', '>=', $request->created_at_from);
-        })
-        ->when($request->filled('created_at_to'), function($q) use ($request) {
-            $q->whereDate('created_at', '<=', $request->created_at_to);
-        })
-        ->when($request->filled('shipping_carrier_code'), function($q) use ($request) {
-            $q->where('shipping_carrier_code', $request->shipping_carrier_code);
-        })
-        ->when($request->filled('shipping_dispatched_from'), function($q) use ($request) {
-            $q->whereDate('shipping_dispatched_at', '>=', $request->shipping_dispatched_from);
-        })
-        ->when($request->filled('shipping_dispatched_to'), function($q) use ($request) {
-            $q->whereDate('shipping_dispatched_at', '<=', $request->shipping_dispatched_to);
-        })
-        ->when($request->filled('export_slip_state'), function ($q) use ($request) {
-            $state = trim((string) $request->input('export_slip_state'));
-            $this->orderInventorySlipService->applyExportSlipStateFilter($q, $state);
-        })
-        ->when($request->filled('return_slip_state'), function ($q) use ($request) {
-            $state = trim((string) $request->input('return_slip_state'));
-            $this->orderInventorySlipService->applyReturnSlipStateFilter($q, $state);
-        })
-        ->when($request->filled('damaged_slip_state'), function ($q) use ($request) {
-            $state = trim((string) $request->input('damaged_slip_state'));
-            $this->orderInventorySlipService->applyDamagedSlipStateFilter($q, $state);
-        });
-
-        // Optimize Dynamic Attribute Filters (EAV) using JOIN for large data
-        foreach ($request->all() as $key => $value) {
-            if (strpos($key, 'attr_order_') === 0 && !empty($value)) {
-                $attrId = str_replace('attr_order_', '', $key);
-                $query->whereExists(function ($q) use ($attrId, $value) {
-                    $q->select(DB::raw(1))
-                        ->from('order_attribute_values')
-                        ->whereRaw('order_attribute_values.order_id = orders.id')
-                        ->where('attribute_id', $attrId)
-                        ->whereRaw($this->loweredSearchExpression('value') . " LIKE ? ESCAPE '\\'", [
-                            $this->containsLike((string) $value),
-                        ]);
-                });
-            }
-        }
+        $this->applyOrderListFilters($query, $request);
 
         $sortBy = $request->input('sort_by', 'created_at');
         $sortOrder = $request->input('sort_order', 'desc');
@@ -1659,6 +1667,130 @@ class OrderController extends Controller
         $response['order_kind_counts'] = $this->loadOrderKindCounts($accountId);
 
         return response()->json($response);
+    }
+
+    public function quickSelect(Request $request)
+    {
+        $validated = $request->validate([
+            'codes' => 'required|array|min:1|max:100',
+            'codes.*' => 'required|string|max:255',
+        ]);
+
+        $preparedCodes = collect($validated['codes'])
+            ->map(function ($code) {
+                $rawCode = trim((string) $code);
+
+                return [
+                    'code' => $rawCode,
+                    'normalized' => $this->normalizeSearchText($rawCode),
+                ];
+            })
+            ->filter(fn (array $item) => $item['normalized'] !== '')
+            ->values();
+
+        if ($preparedCodes->isEmpty()) {
+            return response()->json([
+                'message' => 'Cần nhập ít nhất một mã để chọn nhanh.',
+                'resolved_order_ids' => [],
+                'resolved_orders' => [],
+                'missing_codes' => [],
+                'duplicate_codes' => [],
+                'summary' => [
+                    'submitted_count' => 0,
+                    'matched_count' => 0,
+                    'missing_count' => 0,
+                    'duplicate_count' => 0,
+                ],
+            ]);
+        }
+
+        $query = $this->scopedOrderQuery($request)
+            ->select([
+                'id',
+                'order_number',
+                'customer_name',
+                'status',
+                'order_kind',
+                'created_at',
+            ]);
+
+        $this->applyOrderListFilters($query, $request);
+
+        $query->where(function ($codeQuery) use ($preparedCodes) {
+            foreach ($preparedCodes as $index => $item) {
+                $like = '%' . $this->escapeLike($item['normalized']) . '%';
+                $this->applyInsensitiveLike($codeQuery, 'order_number', $like, $index > 0);
+            }
+        });
+
+        $candidates = $query
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->get()
+            ->map(function (Order $order) {
+                return [
+                    'id' => (int) $order->id,
+                    'order_number' => (string) $order->order_number,
+                    'customer_name' => (string) ($order->customer_name ?? ''),
+                    'status' => (string) ($order->status ?? ''),
+                    'order_kind' => $this->normalizeOrderKind((string) $order->order_kind),
+                    'created_at' => $order->created_at?->toISOString(),
+                    'normalized_order_number' => $this->normalizeSearchText((string) $order->order_number),
+                ];
+            })
+            ->values();
+
+        $resolvedOrdersById = [];
+        $missingCodes = [];
+        $duplicateCodes = [];
+
+        $transformCandidate = static fn (array $candidate) => [
+            'id' => $candidate['id'],
+            'order_number' => $candidate['order_number'],
+            'customer_name' => $candidate['customer_name'],
+            'status' => $candidate['status'],
+            'order_kind' => $candidate['order_kind'],
+            'created_at' => $candidate['created_at'],
+        ];
+
+        foreach ($preparedCodes as $preparedCode) {
+            $matches = $candidates
+                ->filter(fn (array $candidate) => str_contains($candidate['normalized_order_number'], $preparedCode['normalized']))
+                ->values();
+
+            if ($matches->count() === 0) {
+                $missingCodes[] = $preparedCode['code'];
+                continue;
+            }
+
+            if ($matches->count() > 1) {
+                $duplicateCodes[] = [
+                    'code' => $preparedCode['code'],
+                    'message' => 'Mã này đang trùng, cần nhập thêm ký tự để xác định chính xác.',
+                    'match_count' => $matches->count(),
+                    'matches' => $matches->map($transformCandidate)->all(),
+                ];
+                continue;
+            }
+
+            $matchedOrder = $transformCandidate($matches->first());
+            $resolvedOrdersById[$matchedOrder['id']] = $matchedOrder;
+        }
+
+        $resolvedOrders = array_values($resolvedOrdersById);
+
+        return response()->json([
+            'resolved_order_ids' => array_map(fn (array $order) => (int) $order['id'], $resolvedOrders),
+            'resolved_orders' => $resolvedOrders,
+            'missing_codes' => $missingCodes,
+            'duplicate_codes' => $duplicateCodes,
+            'summary' => [
+                'submitted_count' => $preparedCodes->count(),
+                'matched_count' => count($resolvedOrders),
+                'missing_count' => count($missingCodes),
+                'duplicate_count' => count($duplicateCodes),
+            ],
+        ]);
     }
 
     public function inventorySlips(Request $request, int $id)

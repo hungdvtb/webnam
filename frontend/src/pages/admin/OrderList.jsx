@@ -18,6 +18,13 @@ import { SHIPPING_SOUND_STORAGE_KEY, defaultSoundSettings, beep } from '../../co
 import OrderInventorySlipDrawer from '../../components/admin/OrderInventorySlipDrawer';
 import BatchReturnSlipModal from '../../components/admin/BatchReturnSlipModal';
 import { printOrders } from '../../utils/orderPrint';
+import {
+    addOrderIdsToReturnWorkbench,
+    clearOrderReturnWorkbench,
+    loadOrderReturnWorkbenchOrderIds,
+    parseQuickSelectCodes,
+    removeOrderIdsFromReturnWorkbench,
+} from '../../utils/orderReturnWorkbench';
 
 const DEFAULT_COLUMNS = [
     { id: 'order_number', label: 'Mã Đơn', minWidth: '140px', fixed: true },
@@ -313,6 +320,9 @@ const getCompactColumnLabelLines = (columnId, label) => {
 
 const MAIN_ORDER_KIND = 'official';
 const DRAFT_ORDER_KIND = 'draft';
+const RETURN_WORKBENCH_VIEW = 'return-staging';
+const QUICK_SELECT_DUPLICATE_MESSAGE = 'Mã này đang trùng, cần nhập thêm ký tự để xác định chính xác.';
+const SHIPPING_ALERTS_ENABLED = false;
 const CANCEL_DISPATCH_ALLOWED_SHIPMENT_STATUSES = new Set([
     'created',
     'waiting_pickup',
@@ -346,6 +356,7 @@ const getTargetListView = (orderKind) => (isDraftOrder(orderKind) ? 'draft' : 'm
 const buildOrderListUrl = (view = 'main') => {
     if (view === 'draft') return '/admin/orders?view=draft';
     if (view === 'trash') return '/admin/orders?view=trash';
+    if (view === RETURN_WORKBENCH_VIEW) return `/admin/orders?view=${RETURN_WORKBENCH_VIEW}`;
     return '/admin/orders';
 };
 const parseOrderIdList = (value) => {
@@ -396,6 +407,61 @@ const createDefaultOrderFilters = (search = '', orderIds = []) => ({
     attributes: {},
     order_ids: parseOrderIdList(orderIds),
 });
+
+const buildOrderListRequestParams = ({
+    filters,
+    sortConfig,
+    page = 1,
+    perPage = 20,
+    isDraftView = false,
+    isTrashView = false,
+    scopedOrderIds = null,
+}) => {
+    const effectiveScopedIds = Array.isArray(scopedOrderIds)
+        ? parseOrderIdList(scopedOrderIds)
+        : parseOrderIdList(filters?.order_ids);
+
+    const params = {
+        page,
+        per_page: effectiveScopedIds.length
+            ? Math.max(perPage, Math.min(effectiveScopedIds.length, 100))
+            : perPage,
+        trashed: isTrashView ? 1 : 0,
+        sort_by: sortConfig.direction === 'none' ? 'created_at' : sortConfig.key,
+        sort_order: sortConfig.direction === 'none' ? 'desc' : sortConfig.direction,
+    };
+
+    if (isDraftView) {
+        params.order_kind = DRAFT_ORDER_KIND;
+    }
+
+    if (filters.search?.trim()) params.search = filters.search.trim();
+    if (effectiveScopedIds.length) params.order_ids = effectiveScopedIds.join(',');
+    if (filters.status?.length) params.status = filters.status.join(',');
+    if (filters.customer_name?.trim()) params.customer_name = filters.customer_name.trim();
+    if (filters.order_number?.trim()) params.order_number = filters.order_number.trim();
+    if (filters.customer_phone?.trim()) params.customer_phone = filters.customer_phone.trim();
+    if (filters.order_type) params.order_type = filters.order_type;
+    if (filters.shipping_address?.trim()) params.shipping_address = filters.shipping_address.trim();
+    if (filters.created_at_from) params.created_at_from = filters.created_at_from;
+    if (filters.created_at_to) params.created_at_to = filters.created_at_to;
+    if (filters.shipping_carrier_code) params.shipping_carrier_code = filters.shipping_carrier_code;
+    if (filters.export_slip_state) params.export_slip_state = filters.export_slip_state;
+    if (filters.return_slip_state) params.return_slip_state = filters.return_slip_state;
+    if (filters.damaged_slip_state) params.damaged_slip_state = filters.damaged_slip_state;
+    if (filters.shipping_dispatched_from) params.shipping_dispatched_from = filters.shipping_dispatched_from;
+    if (filters.shipping_dispatched_to) params.shipping_dispatched_to = filters.shipping_dispatched_to;
+
+    if (filters.attributes) {
+        Object.entries(filters.attributes).forEach(([id, value]) => {
+            if (value && (Array.isArray(value) ? value.length > 0 : value !== '')) {
+                params[`attr_order_${id}`] = Array.isArray(value) ? value.join(',') : value;
+            }
+        });
+    }
+
+    return params;
+};
 
 const getCancelDispatchEligibility = (order) => {
     if (!order) {
@@ -477,6 +543,13 @@ const LIST_VIEW_META = {
         emptyTitle: 'Thùng rác đang trống',
         emptyDescription: 'Các đơn đã chuyển vào thùng rác sẽ hiển thị tại đây',
         selectedLabel: 'đơn trong thùng rác',
+        createTitle: 'Tạo đơn hàng mới',
+    },
+    [RETURN_WORKBENCH_VIEW]: {
+        listTitle: 'Mục tạm hoàn',
+        emptyTitle: 'Mục tạm hoàn đang trống',
+        emptyDescription: 'Các đơn bạn gom để xử lý hoàn nhanh sẽ nằm tại đây. Tạo phiếu hoàn xong hệ thống sẽ tự dọn khỏi mục tạm.',
+        selectedLabel: 'đơn trong mục tạm',
         createTitle: 'Tạo đơn hàng mới',
     },
 };
@@ -919,6 +992,13 @@ const OrderList = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
+    const activeAccountStorageKey = typeof window === 'undefined'
+        ? 'default'
+        : (window.localStorage.getItem('activeAccountId') || 'default');
+    const activeSiteStorageKey = typeof window === 'undefined'
+        ? 'default'
+        : (window.localStorage.getItem('activeSiteCode') || 'default');
+    const returnWorkbenchStorageScopeKey = `${activeAccountStorageKey}::${activeSiteStorageKey}`;
     const filterRef = useRef(null);
     const columnSettingsRef = useRef(null);
     const [orderStatuses, setOrderStatuses] = useState([]);
@@ -926,6 +1006,11 @@ const OrderList = () => {
     const [allAttributes, setAllAttributes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedIds, setSelectedIds] = useState([]);
+    const [returnWorkbenchIds, setReturnWorkbenchIds] = useState(() => loadOrderReturnWorkbenchOrderIds());
+    const [quickSelectPanelOpen, setQuickSelectPanelOpen] = useState(false);
+    const [quickSelectInput, setQuickSelectInput] = useState('');
+    const [quickSelectLoading, setQuickSelectLoading] = useState(false);
+    const [quickSelectResult, setQuickSelectResult] = useState(null);
     const [showFilters, setShowFilters] = useState(false);
     const [showColumnSettings, setShowColumnSettings] = useState(false);
     const initialListParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
@@ -933,7 +1018,7 @@ const OrderList = () => {
     const routeOrderIdsKey = routeOrderScope.orderIds.join(',');
     const [currentView, setCurrentView] = useState(() => {
         const view = initialListParams.get('view');
-        return ['draft', 'trash'].includes(view) ? view : 'main';
+        return ['draft', 'trash', RETURN_WORKBENCH_VIEW].includes(view) ? view : 'main';
     });
     const [copiedText, setCopiedText] = useState(null);
     const [statusMenuOrderId, setStatusMenuOrderId] = useState(null);
@@ -1016,7 +1101,11 @@ const OrderList = () => {
     const isTrashView = currentView === 'trash';
     const isDraftView = currentView === 'draft';
     const isMainView = currentView === 'main';
+    const isReturnWorkbenchView = currentView === RETURN_WORKBENCH_VIEW;
+    const canQuickSelect = (isMainView || isReturnWorkbenchView) && !routeOrderIdsKey;
+    const canCreateBatchReturn = isMainView || isReturnWorkbenchView;
     const currentViewMeta = LIST_VIEW_META[currentView] || LIST_VIEW_META.main;
+    const workbenchOrderCount = returnWorkbenchIds.length;
     const statusMap = useMemo(
         () => new Map(orderStatuses.map((status) => [String(status.code), status])),
         [orderStatuses]
@@ -1041,6 +1130,11 @@ const OrderList = () => {
         () => new Map(orders.map((order) => [String(order.id), order])),
         [orders]
     );
+
+    useEffect(() => {
+        setReturnWorkbenchIds(loadOrderReturnWorkbenchOrderIds());
+        setSelectedIds([]);
+    }, [returnWorkbenchStorageScopeKey]);
 
     const buildQuickDispatchRows = useCallback((ids, existingRows = {}) => (
         ids.reduce((accumulator, id) => {
@@ -1239,41 +1333,32 @@ const OrderList = () => {
         orderRequestAbortRef.current = controller;
         setLoading(true);
         try {
-            const scopedOrderIds = parseOrderIdList(currentFilters.order_ids);
-            const effectivePerPage = scopedOrderIds.length
-                ? Math.max(perPage, Math.min(scopedOrderIds.length, 100))
-                : perPage;
-            const params = {
-                page, per_page: effectivePerPage, trashed: isTrashView ? 1 : 0,
-                sort_by: currentSort.direction === 'none' ? 'created_at' : currentSort.key,
-                sort_order: currentSort.direction === 'none' ? 'desc' : currentSort.direction
-            };
-            if (isDraftView) params.order_kind = DRAFT_ORDER_KIND;
+            const explicitScopedIds = parseOrderIdList(currentFilters.order_ids);
+            const scopedOrderIds = isReturnWorkbenchView
+                ? (explicitScopedIds.length ? explicitScopedIds : returnWorkbenchIds)
+                : explicitScopedIds;
 
-            if (currentFilters.search?.trim()) params.search = currentFilters.search.trim();
-            if (scopedOrderIds.length) params.order_ids = scopedOrderIds.join(',');
-            if (currentFilters.status?.length) params.status = currentFilters.status.join(',');
-            if (currentFilters.customer_name?.trim()) params.customer_name = currentFilters.customer_name.trim();
-            if (currentFilters.order_number) params.order_number = currentFilters.order_number;
-            if (currentFilters.customer_phone) params.customer_phone = currentFilters.customer_phone;
-            if (currentFilters.order_type) params.order_type = currentFilters.order_type;
-            if (currentFilters.shipping_address) params.shipping_address = currentFilters.shipping_address;
-            if (currentFilters.created_at_from) params.created_at_from = currentFilters.created_at_from;
-            if (currentFilters.created_at_to) params.created_at_to = currentFilters.created_at_to;
-            if (currentFilters.shipping_carrier_code) params.shipping_carrier_code = currentFilters.shipping_carrier_code;
-            if (currentFilters.export_slip_state) params.export_slip_state = currentFilters.export_slip_state;
-            if (currentFilters.return_slip_state) params.return_slip_state = currentFilters.return_slip_state;
-            if (currentFilters.damaged_slip_state) params.damaged_slip_state = currentFilters.damaged_slip_state;
-            if (currentFilters.shipping_dispatched_from) params.shipping_dispatched_from = currentFilters.shipping_dispatched_from;
-            if (currentFilters.shipping_dispatched_to) params.shipping_dispatched_to = currentFilters.shipping_dispatched_to;
-
-            if (currentFilters.attributes) {
-                Object.entries(currentFilters.attributes).forEach(([id, val]) => {
-                    if (val && (Array.isArray(val) ? val.length > 0 : val !== '')) {
-                        params[`attr_order_${id}`] = Array.isArray(val) ? val.join(',') : val;
-                    }
-                });
+            if (isReturnWorkbenchView && scopedOrderIds.length === 0) {
+                setOrders([]);
+                setPagination((current) => ({
+                    ...current,
+                    current_page: 1,
+                    last_page: 1,
+                    total: 0,
+                }));
+                setHasLoadedOrdersOnce(true);
+                return;
             }
+
+            const params = buildOrderListRequestParams({
+                filters: currentFilters,
+                sortConfig: currentSort,
+                page,
+                perPage,
+                isDraftView,
+                isTrashView,
+                scopedOrderIds,
+            });
 
             const response = await orderApi.getAll(params, controller.signal);
             if (controller.signal.aborted) return;
@@ -1290,21 +1375,236 @@ const OrderList = () => {
                 setLoading(false);
             }
         }
-    }, [filters, isDraftView, isTrashView, pagination.per_page, sortConfig]);
+    }, [filters, isDraftView, isReturnWorkbenchView, isTrashView, pagination.per_page, returnWorkbenchIds, sortConfig]);
 
-    const handleBatchReturnSaved = useCallback(async () => {
+    const handleBatchReturnSaved = useCallback(async (payload) => {
         closeBatchReturnModal();
         setInventorySlipRefreshKey((current) => current + 1);
-        await fetchOrders(pagination.current_page || 1);
-    }, [closeBatchReturnModal, fetchOrders, pagination.current_page]);
+        let nextFetchFilters = filters;
+
+        if (batchReturnModal.mode === 'create') {
+            const sourceOrderIds = parseOrderIdList(
+                Array.isArray(payload?.source_orders)
+                    ? payload.source_orders.map((order) => order?.id)
+                    : (Array.isArray(payload?.orders)
+                        ? payload.orders.map((order) => order?.id)
+                        : batchReturnModal.orderIds)
+            );
+
+            if (sourceOrderIds.length) {
+                const nextWorkbenchIds = removeOrderIdsFromReturnWorkbench(sourceOrderIds);
+                setReturnWorkbenchIds(nextWorkbenchIds);
+                setSelectedIds((current) => current.filter((id) => !sourceOrderIds.includes(Number(id))));
+                if (filters.order_ids?.length) {
+                    const nextScopedIds = filters.order_ids.filter((id) => !sourceOrderIds.includes(Number(id)));
+                    nextFetchFilters = { ...filters, order_ids: nextScopedIds };
+                    setFilters(nextFetchFilters);
+                    setTempFilters((current) => (current ? { ...current, order_ids: nextScopedIds } : current));
+                }
+            }
+        }
+
+        await fetchOrders(pagination.current_page || 1, nextFetchFilters);
+    }, [batchReturnModal.mode, batchReturnModal.orderIds, closeBatchReturnModal, fetchOrders, filters, pagination.current_page]);
+
+    const handleQuickSelect = useCallback(async () => {
+        const codes = parseQuickSelectCodes(quickSelectInput);
+        if (!codes.length) {
+            setNotification({ type: 'error', message: 'Nhập ít nhất một mã để chọn nhanh.' });
+            return;
+        }
+
+        setQuickSelectLoading(true);
+
+        try {
+            const explicitScopedIds = parseOrderIdList(filters.order_ids);
+            const payload = buildOrderListRequestParams({
+                filters,
+                sortConfig,
+                page: 1,
+                perPage: pagination.per_page,
+                isDraftView,
+                isTrashView,
+                scopedOrderIds: isReturnWorkbenchView
+                    ? (explicitScopedIds.length ? explicitScopedIds : returnWorkbenchIds)
+                    : explicitScopedIds,
+            });
+
+            delete payload.page;
+            delete payload.per_page;
+            delete payload.sort_by;
+            delete payload.sort_order;
+
+            const response = await orderApi.quickSelect({
+                ...payload,
+                codes,
+            });
+
+            const result = {
+                ...response.data,
+                resolved_order_ids: parseOrderIdList(response.data?.resolved_order_ids),
+                resolved_orders: Array.isArray(response.data?.resolved_orders) ? response.data.resolved_orders : [],
+                missing_codes: Array.isArray(response.data?.missing_codes) ? response.data.missing_codes : [],
+                duplicate_codes: Array.isArray(response.data?.duplicate_codes) ? response.data.duplicate_codes : [],
+                summary: {
+                    submitted_count: Number(response.data?.summary?.submitted_count || codes.length),
+                    matched_count: Number(response.data?.summary?.matched_count || 0),
+                    missing_count: Number(response.data?.summary?.missing_count || 0),
+                    duplicate_count: Number(response.data?.summary?.duplicate_count || 0),
+                },
+            };
+
+            setQuickSelectResult(result);
+
+            if (result.resolved_order_ids.length > 0) {
+                const nextFilters = {
+                    ...filters,
+                    order_ids: result.resolved_order_ids,
+                };
+
+                setFilters(nextFilters);
+                setTempFilters((prev) => (prev ? { ...prev, order_ids: result.resolved_order_ids } : prev));
+                setSelectedIds(result.resolved_order_ids);
+                await fetchOrders(1, nextFilters);
+            } else {
+                setSelectedIds([]);
+
+                if (filters.order_ids?.length && !routeOrderIdsKey) {
+                    const nextFilters = {
+                        ...filters,
+                        order_ids: [],
+                    };
+
+                    setFilters(nextFilters);
+                    setTempFilters((prev) => (prev ? { ...prev, order_ids: [] } : prev));
+                    await fetchOrders(1, nextFilters);
+                }
+            }
+
+            const messageParts = [];
+            if (result.summary.matched_count > 0) {
+                messageParts.push(`đã chọn ${result.summary.matched_count} đơn`);
+            }
+            if (result.summary.missing_count > 0) {
+                messageParts.push(`${result.summary.missing_count} mã không thấy`);
+            }
+            if (result.summary.duplicate_count > 0) {
+                messageParts.push(`${result.summary.duplicate_count} mã bị trùng`);
+            }
+
+            setNotification({
+                type: result.summary.matched_count > 0 ? 'success' : 'error',
+                message: messageParts.length
+                    ? `Chọn nhanh: ${messageParts.join(' • ')}.`
+                    : 'Chưa có kết quả chọn nhanh.',
+            });
+        } catch (error) {
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể dò danh sách chọn nhanh.',
+            });
+        } finally {
+            setQuickSelectLoading(false);
+        }
+    }, [
+        fetchOrders,
+        filters,
+        isDraftView,
+        isReturnWorkbenchView,
+        isTrashView,
+        pagination.per_page,
+        quickSelectInput,
+        returnWorkbenchIds,
+        routeOrderIdsKey,
+        sortConfig,
+    ]);
+
+    const handleMoveSelectedToReturnWorkbench = useCallback(async () => {
+        if (!selectedIds.length) return;
+
+        const eligibleIds = selectedBatchReturnState.validOrders.map((item) => item.id);
+        if (!eligibleIds.length) {
+            setNotification({
+                type: 'error',
+                message: selectedBatchReturnState.firstInvalidReason || 'Không có đơn hợp lệ để đưa vào mục tạm.',
+            });
+            return;
+        }
+
+        const beforeCount = returnWorkbenchIds.length;
+        const nextWorkbenchIds = addOrderIdsToReturnWorkbench(eligibleIds);
+        const addedCount = Math.max(0, nextWorkbenchIds.length - beforeCount);
+        const skippedCount = selectedIds.length - eligibleIds.length;
+
+        setReturnWorkbenchIds(nextWorkbenchIds);
+        setSelectedIds([]);
+        setNotification({
+            type: 'success',
+            message: addedCount > 0
+                ? `Đã đưa ${addedCount} đơn vào mục tạm${skippedCount > 0 ? `, bỏ qua ${skippedCount} đơn không hợp lệ` : ''}.`
+                : 'Các đơn hợp lệ đã có sẵn trong mục tạm.',
+        });
+
+        if (isReturnWorkbenchView) {
+            await fetchOrders(1, { ...filters, order_ids: [] });
+        }
+    }, [
+        fetchOrders,
+        filters,
+        isReturnWorkbenchView,
+        returnWorkbenchIds.length,
+        selectedBatchReturnState.firstInvalidReason,
+        selectedBatchReturnState.validOrders,
+        selectedIds.length,
+    ]);
+
+    const handleRemoveSelectedFromReturnWorkbench = useCallback(async () => {
+        if (!selectedIds.length) return;
+
+        const nextWorkbenchIds = removeOrderIdsFromReturnWorkbench(selectedIds);
+        setReturnWorkbenchIds(nextWorkbenchIds);
+        setSelectedIds([]);
+        setNotification({
+            type: 'success',
+            message: `Đã gỡ ${selectedIds.length} đơn khỏi mục tạm.`,
+        });
+
+        if (isReturnWorkbenchView) {
+            await fetchOrders(1, { ...filters, order_ids: [] });
+        }
+    }, [fetchOrders, filters, isReturnWorkbenchView, selectedIds]);
+
+    const handleClearReturnWorkbench = useCallback(async () => {
+        if (!returnWorkbenchIds.length) return;
+        if (!window.confirm('Xóa toàn bộ đơn khỏi mục tạm hoàn?')) return;
+
+        const nextWorkbenchIds = clearOrderReturnWorkbench();
+        setReturnWorkbenchIds(nextWorkbenchIds);
+        setSelectedIds([]);
+        setNotification({
+            type: 'success',
+            message: 'Đã làm trống mục tạm hoàn.',
+        });
+
+        if (isReturnWorkbenchView) {
+            await fetchOrders(1, { ...filters, order_ids: [] });
+        }
+    }, [fetchOrders, filters, isReturnWorkbenchView, returnWorkbenchIds.length]);
 
     useEffect(() => { fetchInitialData(); }, []);
 
     useEffect(() => {
         const params = new URLSearchParams(location.search);
         const nextView = params.get('view');
-        setCurrentView(['draft', 'trash'].includes(nextView) ? nextView : 'main');
+        setCurrentView(['draft', 'trash', RETURN_WORKBENCH_VIEW].includes(nextView) ? nextView : 'main');
     }, [location.search]);
+
+    useEffect(() => {
+        setSelectedIds([]);
+        setStatusMenuOrderId(null);
+        setProductPopupOrderId(null);
+        setInventorySlipOrderId(null);
+    }, [currentView]);
 
     useEffect(() => {
         if (!routeOrderIdsKey) {
@@ -1362,7 +1662,14 @@ const OrderList = () => {
 
     useEffect(() => {
         if (!routeOrderIdsKey) {
-            fetchOrders(1, { ...filters, order_ids: [] });
+            const nextFilters = { ...filters, order_ids: [] };
+
+            if (filters.order_ids?.length) {
+                setFilters(nextFilters);
+                setTempFilters((prev) => (prev ? { ...prev, order_ids: [] } : prev));
+            }
+
+            fetchOrders(1, nextFilters);
         }
     }, [currentView]);
 
@@ -1391,7 +1698,7 @@ const OrderList = () => {
             if (statusMenuRef.current && !statusMenuRef.current.contains(e.target) && !e.target.closest('[data-status-edit-btn]')) setStatusMenuOrderId(null);
             if (searchContainerRef.current && !searchContainerRef.current.contains(e.target)) setShowSearchHistory(false);
             if (!e.target.closest('[data-attr-dropdown]')) setOpenAttrId(null);
-            if (shippingAlertRef.current && !shippingAlertRef.current.contains(e.target) && !e.target.closest('[data-shipping-alert-btn]')) setShowShippingAlerts(false);
+            if (SHIPPING_ALERTS_ENABLED && shippingAlertRef.current && !shippingAlertRef.current.contains(e.target) && !e.target.closest('[data-shipping-alert-btn]')) setShowShippingAlerts(false);
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -1411,6 +1718,7 @@ const OrderList = () => {
     }, [shippingAlerts]);
 
     const fetchShippingAlerts = useCallback(async () => {
+        if (!SHIPPING_ALERTS_ENABLED) return;
         try {
             const response = await orderApi.getShippingAlerts({ per_page: 20 });
             const incomingAlerts = response.data?.data || [];
@@ -1436,7 +1744,7 @@ const OrderList = () => {
     }, [shippingSoundSettings]);
 
     useEffect(() => {
-        if (!hasLoadedOrdersOnce) return;
+        if (!SHIPPING_ALERTS_ENABLED || !hasLoadedOrdersOnce) return;
         fetchShippingAlerts();
         const intervalId = window.setInterval(fetchShippingAlerts, 15000);
         return () => window.clearInterval(intervalId);
@@ -1524,6 +1832,7 @@ const OrderList = () => {
         setFilters(rf);
         setTempFilters((prev) => (prev ? rf : prev));
         setSortConfig({ key: 'created_at', direction: 'desc', phase: 1 });
+        setQuickSelectResult(null);
         localStorage.removeItem('order_list_search_current');
         fetchOrders(1, rf);
         if (routeOrderIdsKey) {
@@ -2089,6 +2398,14 @@ const OrderList = () => {
                             <button type="button" onClick={() => navigateToListView('draft')} title="Đơn nháp" className={`h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isDraftView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
                                 <span className="material-symbols-outlined text-[18px]">draft_orders</span>
                             </button>
+                            <button type="button" onClick={() => navigateToListView(RETURN_WORKBENCH_VIEW)} title="Mục tạm hoàn" className={`relative h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isReturnWorkbenchView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
+                                <span className="material-symbols-outlined text-[18px]">inbox</span>
+                                {workbenchOrderCount > 0 && (
+                                    <span className={`absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${isReturnWorkbenchView ? 'bg-white text-primary' : 'bg-primary text-white'}`}>
+                                        {workbenchOrderCount > 99 ? '99+' : workbenchOrderCount}
+                                    </span>
+                                )}
+                            </button>
                             <button type="button" onClick={() => navigateToListView('trash')} title="Thùng rác" className={`h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isTrashView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
                                 <span className="material-symbols-outlined text-[18px]">delete</span>
                             </button>
@@ -2096,7 +2413,37 @@ const OrderList = () => {
 
                         <div className="w-[1px] h-6 bg-primary/20 mx-1"></div>
 
+                        <button data-column-settings-btn onClick={() => setShowColumnSettings(!showColumnSettings)} className={`p-1.5 border rounded-sm w-9 h-9 flex items-center justify-center transition-all ${showColumnSettings ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/30 hover:bg-primary/5'}`} title="Cấu hình hiển thị cột"><span className="material-symbols-outlined text-[18px]">settings_suggest</span></button>
                         <button data-filter-btn onClick={() => { if (!showFilters) setTempFilters({ ...filters }); setShowFilters(!showFilters); }} className={`p-1.5 border transition-all rounded-sm w-9 h-9 flex items-center justify-center ${showFilters || activeCount() > 0 ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`} title="Bộ lọc nâng cao"><span className="material-symbols-outlined text-[18px]">filter_alt</span></button>
+                        {canQuickSelect && (
+                            <button
+                                type="button"
+                                onClick={() => setQuickSelectPanelOpen((current) => !current)}
+                                className={`p-1.5 border transition-all rounded-sm w-9 h-9 flex items-center justify-center ${quickSelectPanelOpen || quickSelectResult ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`}
+                                title="Chọn nhanh nhiều đơn"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">playlist_add_check</span>
+                            </button>
+                        )}
+                        {isMainView && (
+                            <button
+                                type="button"
+                                onClick={handleMoveSelectedToReturnWorkbench}
+                                disabled={selectedBatchReturnState.validOrders.length === 0}
+                                title={
+                                    selectedBatchReturnState.validOrders.length > 0
+                                        ? 'Đưa các đơn đã chọn vào mục tạm hoàn'
+                                        : (selectedBatchReturnState.firstInvalidReason || 'Chọn đơn để đưa vào mục tạm hoàn')
+                                }
+                                className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${
+                                    selectedBatchReturnState.validOrders.length > 0
+                                        ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-600 hover:text-white shadow-sm'
+                                        : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'
+                                }`}
+                            >
+                                <span className="material-symbols-outlined text-[18px]">move_to_inbox</span>
+                            </button>
+                        )}
 
                         {isTrashView ? (
                             <>
@@ -2107,15 +2454,58 @@ const OrderList = () => {
                         ) : (
                             <>
                                 <button onClick={handleBulkDuplicate} disabled={selectedIds.length === 0} title="Sao chép đơn hàng" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
-                                {isDraftView
-                                    ? <button onClick={() => handleBulkConvert(MAIN_ORDER_KIND)} disabled={selectedIds.length === 0} title="Chốt thành đơn chính" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary border-primary/20 hover:bg-primary hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>
-                                    : <button onClick={() => handleBulkConvert(DRAFT_ORDER_KIND)} disabled={selectedIds.length === 0} title="Chuyển sang đơn nháp" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-700 hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">drive_file_move</span></button>}
                                 <button onClick={handleBulkPrint} disabled={selectedIds.length === 0 || printingOrders} title="In đơn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !printingOrders ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${printingOrders ? 'animate-refresh-spin' : ''}`}>{printingOrders ? 'progress_activity' : 'local_printshop'}</span></button>
                                 <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Chuyển vào thùng rác" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_sweep</span></button>
+                                {canCreateBatchReturn && (
+                                    <button
+                                        type="button"
+                                        onClick={openBatchReturnCreateModal}
+                                        disabled={!selectedBatchReturnState.canSubmit}
+                                        title={
+                                            selectedIds.length === 0
+                                                ? 'Chọn đơn để tạo phiếu hoàn theo lô'
+                                                : selectedBatchReturnState.canSubmit
+                                                    ? 'Tạo phiếu hoàn theo lô'
+                                                    : (selectedBatchReturnState.firstInvalidReason || 'Danh sách đơn đã chọn không hợp lệ để lập phiếu hoàn theo lô')
+                                        }
+                                        className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${
+                                            selectedBatchReturnState.canSubmit
+                                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-600 hover:text-white'
+                                                : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'
+                                        }`}
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">assignment_return</span>
+                                    </button>
+                                )}
+                                {isDraftView && (
+                                    <button onClick={() => handleBulkConvert(MAIN_ORDER_KIND)} disabled={selectedIds.length === 0} title="Chốt thành đơn chính" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary border-primary/20 hover:bg-primary hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">published_with_changes</span></button>
+                                )}
+                                {isReturnWorkbenchView && (
+                                    <button
+                                        type="button"
+                                        onClick={handleRemoveSelectedFromReturnWorkbench}
+                                        disabled={selectedIds.length === 0}
+                                        title="Gỡ khỏi mục tạm"
+                                        className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-600 hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">remove_from_queue</span>
+                                    </button>
+                                )}
+                                {isReturnWorkbenchView && (
+                                    <button
+                                        type="button"
+                                        onClick={handleClearReturnWorkbench}
+                                        disabled={workbenchOrderCount === 0}
+                                        title="Làm trống mục tạm"
+                                        className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${workbenchOrderCount > 0 ? 'bg-white text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">inbox_customize</span>
+                                    </button>
+                                )}
                             </>
                         )}
 
-                        {isMainView && (
+                        {SHIPPING_ALERTS_ENABLED && isMainView && (
                             <div className="relative" ref={shippingAlertRef}>
                                 <button type="button" data-shipping-alert-btn onClick={() => setShowShippingAlerts((current) => !current)} className={`p-1.5 border rounded-sm w-9 h-9 flex items-center justify-center transition-all ${showShippingAlerts || shippingAlertUnread.length > 0 ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`} title="Cảnh báo vận chuyển">
                                     <span className="material-symbols-outlined text-[18px]">notifications_active</span>
@@ -2125,28 +2515,9 @@ const OrderList = () => {
                             </div>
                         )}
                         <button onClick={handleRefresh} disabled={loading} title="Làm mới" className="bg-white text-primary border border-primary/20 p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center hover:bg-primary/5"><span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span></button>
-                        <button data-column-settings-btn onClick={() => setShowColumnSettings(!showColumnSettings)} className={`p-1.5 border rounded-sm w-9 h-9 flex items-center justify-center transition-all ${showColumnSettings ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/30 hover:bg-primary/5'}`} title="Cấu hình hiển thị cột"><span className="material-symbols-outlined text-[18px]">settings_suggest</span></button>
 
-                        {isMainView && <>
-                            <button
-                                type="button"
-                                onClick={openBatchReturnCreateModal}
-                                disabled={!selectedBatchReturnState.canSubmit}
-                                title={
-                                    selectedIds.length === 0
-                                        ? 'Chọn đơn để tạo phiếu hoàn theo lô'
-                                        : selectedBatchReturnState.canSubmit
-                                            ? 'Tạo phiếu hoàn theo lô'
-                                            : (selectedBatchReturnState.firstInvalidReason || 'Danh sách đơn đã chọn không hợp lệ để lập phiếu hoàn theo lô')
-                                }
-                                className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${
-                                    selectedBatchReturnState.canSubmit
-                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-600 hover:text-white'
-                                        : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'
-                                }`}
-                            >
-                                <span className="material-symbols-outlined text-[18px]">assignment_return</span>
-                            </button>
+                        {isMainView && (
+                            <>
                             <button type="button" onClick={openDispatchModal} disabled={selectedIds.length === 0} title="Gửi đơn vị vận chuyển" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-primary text-white border-primary hover:bg-primary/90' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">local_shipping</span></button>
                             <button
                                 type="button"
@@ -2170,7 +2541,8 @@ const OrderList = () => {
                                 </span>
                             </button>
                             <button type="button" onClick={openQuickDispatchModal} disabled={selectedIds.length === 0} title="Gửi vận chuyển nhanh" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">flash_on</span></button>
-                        </>}
+                            </>
+                        )}
 
                         {selectedIds.length > 0 && (
                             <div className="flex items-center gap-1 ml-1 pl-2 border-l border-primary/10">
@@ -2182,7 +2554,7 @@ const OrderList = () => {
 
                     <div className="flex-1 relative" ref={searchContainerRef}>
                         <span className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-primary/40 text-[16px] pointer-events-none z-10">search</span>
-                        <input type="text" autoComplete="off" placeholder="Tìm tên, mã, SĐT khách..." className="w-full bg-primary/5 border border-primary/10 px-8 py-1.5 rounded-sm text-[14px] focus:outline-none focus:border-primary/30 transition-all relative z-0" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} onFocus={() => setShowSearchHistory(true)} onKeyDown={(e) => { if (e.key === 'Enter') { setShowSearchHistory(false); addToSearchHistory(filters.search); } }} />
+                        <input type="text" autoComplete="off" placeholder="Tìm chứa trong mã đơn, tên, SĐT, mã vận đơn..." className="w-full bg-primary/5 border border-primary/10 px-8 py-1.5 rounded-sm text-[14px] focus:outline-none focus:border-primary/30 transition-all relative z-0" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} onFocus={() => setShowSearchHistory(true)} onKeyDown={(e) => { if (e.key === 'Enter') { setShowSearchHistory(false); addToSearchHistory(filters.search); } }} />
                         {filters.search && <button onClick={() => { setFilters(prev => ({ ...prev, search: '' })); setShowSearchHistory(false); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors"><span className="material-symbols-outlined text-[16px]">cancel</span></button>}
                         {showSearchHistory && searchHistory.length > 0 && (
                             <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[60] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
@@ -2200,6 +2572,142 @@ const OrderList = () => {
                     </div>
                 </div>
             </div>
+
+            {canQuickSelect && quickSelectPanelOpen && (
+                <div className="mb-4 overflow-hidden rounded-sm border border-primary/15 bg-white shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-primary/10 bg-primary/[0.03] px-4 py-3">
+                        <div>
+                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Chọn nhanh đơn hoàn</div>
+                            <div className="mt-1 text-[15px] font-black text-primary">Nhập mỗi dòng 1 mã, chỉ cần 5 ký tự hoặc số cuối của mã đơn</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setQuickSelectPanelOpen(false)}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-sm border border-primary/15 bg-white text-primary transition hover:bg-primary/5"
+                                title="Ẩn bảng chọn nhanh"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">close</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setQuickSelectInput('');
+                                    setQuickSelectResult(null);
+                                }}
+                                className="h-9 rounded-sm border border-primary/15 bg-white px-3 text-[12px] font-black text-primary transition hover:bg-primary/5"
+                            >
+                                Xóa nội dung
+                            </button>
+                            {canQuickSelect && (
+                                <button
+                                    type="button"
+                                    onClick={handleQuickSelect}
+                                    disabled={quickSelectLoading}
+                                    className="inline-flex h-9 items-center gap-2 rounded-sm bg-primary px-4 text-[12px] font-black text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    <span className={`material-symbols-outlined text-[18px] ${quickSelectLoading ? 'animate-refresh-spin' : ''}`}>{quickSelectLoading ? 'progress_activity' : 'playlist_add_check'}</span>
+                                    {quickSelectLoading ? 'Đang dò...' : 'Dò và tick'}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="grid gap-5 p-4 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
+                        <div className="space-y-3">
+                            <textarea
+                                value={quickSelectInput}
+                                onChange={(event) => setQuickSelectInput(event.target.value)}
+                                placeholder={`12345\n67890\nA9B21`}
+                                className="min-h-[220px] w-full rounded-sm border border-primary/15 bg-[#fbfcfe] p-3 text-[13px] font-semibold text-primary outline-none focus:border-primary"
+                            />
+                            <div className="flex flex-wrap items-center gap-3 text-[12px] text-primary/55">
+                                <span>Tự dò trong đúng phạm vi bảng hiện tại, gồm cả các filter đang bật.</span>
+                                <span className="rounded-full border border-primary/10 bg-primary/[0.04] px-2 py-1 text-[11px] font-black text-primary/70">
+                                    {parseQuickSelectCodes(quickSelectInput).length} mã hợp lệ
+                                </span>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4">
+                            {quickSelectResult ? (
+                                <>
+                                    <div className="grid gap-3 sm:grid-cols-4">
+                                        <div className="rounded-sm border border-primary/15 bg-primary/[0.04] px-4 py-3">
+                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">Đã dò</div>
+                                            <div className="mt-1 text-[24px] font-black text-primary">{formatNumber(quickSelectResult.summary?.submitted_count || 0)}</div>
+                                        </div>
+                                        <div className="rounded-sm border border-emerald-200 bg-emerald-50 px-4 py-3">
+                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700/70">Tìm thấy</div>
+                                            <div className="mt-1 text-[24px] font-black text-emerald-700">{formatNumber(quickSelectResult.summary?.matched_count || 0)}</div>
+                                        </div>
+                                        <div className="rounded-sm border border-amber-200 bg-amber-50 px-4 py-3">
+                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-700/70">Không thấy</div>
+                                            <div className="mt-1 text-[24px] font-black text-amber-700">{formatNumber(quickSelectResult.summary?.missing_count || 0)}</div>
+                                        </div>
+                                        <div className="rounded-sm border border-rose-200 bg-rose-50 px-4 py-3">
+                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-rose-700/70">Bị trùng</div>
+                                            <div className="mt-1 text-[24px] font-black text-rose-700">{formatNumber(quickSelectResult.summary?.duplicate_count || 0)}</div>
+                                        </div>
+                                    </div>
+
+                                    {quickSelectResult.missing_codes?.length > 0 && (
+                                        <div className="rounded-sm border border-amber-200 bg-amber-50 px-4 py-4">
+                                            <div className="text-[11px] font-black uppercase tracking-[0.14em] text-amber-700/80">Mã không tìm thấy</div>
+                                            <div className="mt-3 flex flex-wrap gap-2">
+                                                {quickSelectResult.missing_codes.map((code) => (
+                                                    <span key={`missing-${code}`} className="rounded-sm border border-amber-200 bg-white px-2.5 py-1 text-[12px] font-black text-amber-700">
+                                                        {code}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {quickSelectResult.duplicate_codes?.length > 0 ? (
+                                        <div className="rounded-sm border border-rose-200 bg-rose-50 px-4 py-4">
+                                            <div className="text-[11px] font-black uppercase tracking-[0.14em] text-rose-700/80">Mã đang trùng</div>
+                                            <div className="mt-3 space-y-3">
+                                                {quickSelectResult.duplicate_codes.map((duplicate) => (
+                                                    <div key={`duplicate-${duplicate.code}`} className="rounded-sm border border-rose-200 bg-white p-3">
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <span className="rounded-sm bg-rose-50 px-2 py-1 text-[12px] font-black text-rose-700">{duplicate.code}</span>
+                                                            <span className="text-[12px] font-semibold text-rose-700">
+                                                                {duplicate.message || QUICK_SELECT_DUPLICATE_MESSAGE}
+                                                            </span>
+                                                        </div>
+                                                        <div className="mt-3 space-y-2">
+                                                            {(duplicate.matches || []).map((match) => (
+                                                                <div key={`${duplicate.code}-${match.id}`} className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-primary/10 bg-[#fbfcfe] px-3 py-2">
+                                                                    <div className="min-w-0">
+                                                                        <div className="text-[13px] font-black text-primary">{match.order_number}</div>
+                                                                        <div className="mt-1 text-[12px] text-primary/55">{match.customer_name || 'Chưa có tên khách'}</div>
+                                                                    </div>
+                                                                    <span className="rounded-full border border-primary/10 bg-white px-2.5 py-1 text-[11px] font-black text-primary/70">
+                                                                        {statusMap.get(String(match.status))?.name || match.status || '---'}
+                                                                    </span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="rounded-sm border border-emerald-200 bg-emerald-50 px-4 py-4 text-[13px] font-semibold text-emerald-700">
+                                            Không có mã bị trùng trong phạm vi đang lọc.
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                <div className="flex h-full min-h-[220px] items-center justify-center rounded-sm border border-dashed border-primary/15 bg-[#fbfcfe] px-6 text-center text-[13px] text-primary/45">
+                                    Dán danh sách mã đơn vào khung bên trái rồi bấm <span className="mx-1 font-black text-primary">Dò và tick</span>. Hệ thống sẽ tự chọn các đơn khớp duy nhất và báo rõ mã nào bị trùng hoặc không tìm thấy.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {showFilters && tempFilters && (
                 <div ref={filterRef} className="bg-white border border-primary/20 p-5 shadow-2xl mb-4 rounded-sm animate-in slide-in-from-top-4 duration-300 relative z-50 text-[#0F172A]">
@@ -2390,14 +2898,37 @@ const OrderList = () => {
                 </div>
             )}
 
+            {isReturnWorkbenchView && (
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-amber-200 bg-amber-50 px-4 py-3">
+                    <div>
+                        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-700/75">Mục tạm hoàn</div>
+                        <div className="mt-1 text-[14px] font-black text-amber-900">
+                            {workbenchOrderCount > 0
+                                ? `Đang giữ ${formatNumber(workbenchOrderCount)} đơn để xử lý hoàn nhanh.`
+                                : 'Mục tạm đang trống. Chọn đơn ở bảng chính rồi bấm “Đưa vào mục tạm”.'}
+                        </div>
+                    </div>
+                    {workbenchOrderCount > 0 && (
+                        <button
+                            type="button"
+                            onClick={handleClearReturnWorkbench}
+                            className="inline-flex h-9 items-center gap-2 rounded-sm border border-amber-300 bg-white px-3 text-[12px] font-black text-amber-800 transition hover:bg-amber-600 hover:text-white"
+                        >
+                            <span className="material-symbols-outlined text-[18px]">inbox_customize</span>
+                            Làm trống mục tạm
+                        </button>
+                    )}
+                </div>
+            )}
+
             {activeCount() > 0 && (
                 <div className="flex flex-wrap items-center gap-2 mb-4 bg-primary/5 p-2 border border-primary/10 rounded-sm animate-in fade-in duration-300">
                     <span className="text-[13px] font-bold text-primary px-1 mr-1 border-r border-primary/20 flex items-center gap-1.5"><span className="material-symbols-outlined text-[16px]">filter_list</span>Đang lọc:</span>
                     {filters.order_ids?.length > 0 && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
-                            <span className="text-[11px] text-primary/40">Đơn nguồn:</span>
+                            <span className="text-[11px] text-primary/40">{routeOrderScope.batchReturnDocumentNumber ? 'Đơn nguồn:' : 'Chọn nhanh:'}</span>
                             <span className="text-[13px] font-bold text-[#0F172A]">
-                                {routeOrderScope.batchReturnDocumentNumber || `${formatNumber(filters.order_ids.length)} đơn liên quan`}
+                                {routeOrderScope.batchReturnDocumentNumber || `${formatNumber(filters.order_ids.length)} đơn đã khoanh`}
                             </span>
                             <span className="text-[11px] font-bold text-primary/45">{formatNumber(filters.order_ids.length)} đơn</span>
                             <button onClick={() => removeFilter('order_ids')} className="text-primary/40 hover:text-brick">

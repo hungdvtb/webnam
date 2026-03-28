@@ -183,7 +183,7 @@ class InventoryPricingConsistencyTest extends TestCase
         ]);
 
         $this->withHeaders($this->headers($account))
-            ->putJson("/api/products/{$product->id}", [
+            ->postJson("/api/products/{$product->id}", [
                 'expected_cost' => 99000,
                 'supplier_ids' => [$primarySupplier->id, $secondarySupplier->id],
             ])
@@ -197,6 +197,47 @@ class InventoryPricingConsistencyTest extends TestCase
         $this->assertSame(99000.0, (float) $product->expected_cost);
         $this->assertSame(180000.0, (float) $primaryPrice->unit_cost);
         $this->assertSame(99000.0, (float) $secondaryPrice->unit_cost);
+    }
+
+    public function test_product_post_update_persists_expected_cost_and_returns_latest_value(): void
+    {
+        [$account] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham post update gia du kien',
+            'sku' => 'POST-EXP-001',
+            'expected_cost' => 120000,
+            'cost_price' => 120000,
+        ]);
+
+        $response = $this->withHeaders($this->headers($account))
+            ->postJson("/api/products/{$product->id}", [
+                'expected_cost' => 150000,
+            ]);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('expected_cost', 150000.0)
+            ->assertJsonPath('cost_price', 120000.0);
+
+        $product->refresh();
+
+        $this->assertSame(150000.0, (float) $product->expected_cost);
+        $this->assertSame(120000.0, (float) $product->cost_price);
+
+        $supplierPrice = SupplierProductPrice::query()
+            ->where('supplier_id', $supplier->id)
+            ->where('product_id', $product->id)
+            ->first();
+
+        $this->assertNotNull($supplierPrice);
+        $this->assertSame(150000.0, (float) $supplierPrice->unit_cost);
+
+        $this->withHeaders($this->headers($account))
+            ->getJson("/api/products/{$product->id}")
+            ->assertOk()
+            ->assertJsonPath('expected_cost', 150000.0)
+            ->assertJsonPath('cost_price', 120000.0);
     }
 
     public function test_delete_and_restore_import_recomputes_only_affected_product_aggregate(): void

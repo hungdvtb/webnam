@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { orderApi, productApi } from '../../services/api';
 
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0));
 const todayValue = () => new Date().toISOString().slice(0, 10);
 const sanitizeWholeNumber = (value) => String(value ?? '').replace(/[^0-9]/g, '');
+const EMPTY_ORDER_IDS = [];
+const MAX_HEADER_ORDER_CHIPS = 4;
 
 const normalizeRow = (item, index = 0) => ({
     key: item?.item_id ? `item-${item.item_id}` : `row-${item?.product_id || 'new'}-${index}`,
@@ -29,7 +32,9 @@ const normalizePayload = (payload) => ({
         adjustment_document_id: payload?.document?.adjustment_document_id || null,
         adjustment_document_number: payload?.document?.adjustment_document_number || null,
     },
-    orders: Array.isArray(payload?.orders) ? payload.orders : [],
+    orders: Array.isArray(payload?.source_orders)
+        ? payload.source_orders
+        : (Array.isArray(payload?.orders) ? payload.orders : []),
     rows: Array.isArray(payload?.products) ? payload.products.map((item, index) => normalizeRow(item, index)) : [],
 });
 
@@ -65,15 +70,17 @@ const EmptyState = ({ title, description }) => (
 const BatchReturnSlipModal = ({
     open,
     mode = 'create',
-    orderIds = [],
+    orderIds = EMPTY_ORDER_IDS,
     documentId = null,
     onClose,
     onSaved,
     onNotify,
 }) => {
+    const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [formState, setFormState] = useState(() => normalizePayload(null));
+    const [showSourceOrders, setShowSourceOrders] = useState(false);
     const [pickerQuery, setPickerQuery] = useState('');
     const [pickerLoading, setPickerLoading] = useState(false);
     const [pickerResults, setPickerResults] = useState([]);
@@ -82,9 +89,17 @@ const BatchReturnSlipModal = ({
     const rows = formState.rows || [];
     const orders = formState.orders || [];
     const documentState = formState.document || {};
+    const normalizedOrderIds = Array.isArray(orderIds) ? orderIds : EMPTY_ORDER_IDS;
+    const orderIdsKey = normalizedOrderIds.join(',');
+    const notifyRef = useRef(onNotify);
+
+    useEffect(() => {
+        notifyRef.current = onNotify;
+    }, [onNotify]);
 
     useEffect(() => {
         if (!open) {
+            setShowSourceOrders(false);
             setPickerQuery('');
             setPickerResults([]);
             return;
@@ -97,17 +112,17 @@ const BatchReturnSlipModal = ({
             try {
                 const response = mode === 'edit' && documentId
                     ? await orderApi.getBatchReturn(documentId)
-                    : await orderApi.previewBatchReturn({ order_ids: orderIds });
+                    : await orderApi.previewBatchReturn({ order_ids: normalizedOrderIds });
 
                 if (cancelled) return;
                 setFormState(normalizePayload(response.data));
             } catch (error) {
                 if (cancelled) return;
-                onNotify?.({
+                notifyRef.current?.({
                     type: 'error',
                     message: error.response?.data?.message
                         || Object.values(error.response?.data?.errors || {}).flat()[0]
-                        || 'Khong the tai phieu hoan theo lo.',
+                        || 'Không thể tải phiếu hoàn theo lô.',
                 });
             } finally {
                 if (!cancelled) {
@@ -121,7 +136,7 @@ const BatchReturnSlipModal = ({
         return () => {
             cancelled = true;
         };
-    }, [documentId, mode, onNotify, open, orderIds]);
+    }, [documentId, mode, open, orderIdsKey]);
 
     useEffect(() => {
         if (!open) return undefined;
@@ -211,6 +226,15 @@ const BatchReturnSlipModal = ({
         };
     }, [computedRows]);
 
+    const sourceOrderIds = useMemo(
+        () => orders
+            .map((order) => Number(order?.id || 0))
+            .filter((id) => Number.isInteger(id) && id > 0),
+        [orders]
+    );
+    const previewOrders = useMemo(() => orders.slice(0, MAX_HEADER_ORDER_CHIPS), [orders]);
+    const remainingPreviewOrders = Math.max(0, orders.length - previewOrders.length);
+
     const updateDocumentField = (field, value) => {
         setFormState((current) => ({
             ...current,
@@ -246,7 +270,7 @@ const BatchReturnSlipModal = ({
         if (rows.some((row) => Number(row.product_id || 0) === productId)) {
             onNotify?.({
                 type: 'error',
-                message: 'San pham nay da co trong bang doi chieu.',
+                message: 'Sản phẩm này đã có trong bảng đối chiếu.',
             });
             return;
         }
@@ -273,6 +297,25 @@ const BatchReturnSlipModal = ({
         setPickerResults([]);
     };
 
+    const handleViewSourceOrdersInOrderList = (focusOrderId = null) => {
+        if (!sourceOrderIds.length) return;
+
+        const params = new URLSearchParams();
+        params.set('order_ids', sourceOrderIds.join(','));
+
+        if (focusOrderId) {
+            params.set('focus_order_id', String(focusOrderId));
+        }
+
+        const documentNumber = String(documentState.document_number || '').trim();
+        if (documentNumber) {
+            params.set('batch_return_document_number', documentNumber);
+        }
+
+        onClose?.();
+        navigate(`/admin/orders?${params.toString()}`);
+    };
+
     const handleSubmit = async () => {
         const payload = {
             document_date: documentState.document_date || todayValue(),
@@ -291,13 +334,13 @@ const BatchReturnSlipModal = ({
         if (!payload.items.length) {
             onNotify?.({
                 type: 'error',
-                message: 'Can it nhat mot dong san pham de lap phieu hoan theo lo.',
+                message: 'Cần ít nhất một dòng sản phẩm để lập phiếu hoàn theo lô.',
             });
             return;
         }
 
         if (mode === 'create') {
-            payload.order_ids = orderIds;
+            payload.order_ids = normalizedOrderIds;
         }
 
         setSaving(true);
@@ -309,8 +352,8 @@ const BatchReturnSlipModal = ({
             onNotify?.({
                 type: 'success',
                 message: mode === 'edit'
-                    ? 'Da cap nhat phieu hoan theo lo.'
-                    : 'Da tao phieu hoan theo lo.',
+                    ? 'Đã cập nhật phiếu hoàn theo lô.'
+                    : 'Đã tạo phiếu hoàn theo lô.',
             });
 
             await onSaved?.(response.data);
@@ -319,7 +362,7 @@ const BatchReturnSlipModal = ({
                 type: 'error',
                 message: error.response?.data?.message
                     || Object.values(error.response?.data?.errors || {}).flat()[0]
-                    || 'Khong the luu phieu hoan theo lo.',
+                    || 'Không thể lưu phiếu hoàn theo lô.',
             });
         } finally {
             setSaving(false);
@@ -342,36 +385,57 @@ const BatchReturnSlipModal = ({
                                             <span className="material-symbols-outlined text-[24px]">assignment_return</span>
                                         </div>
                                         <div>
-                                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Phieu hoan theo lo</div>
+                                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Phiếu hoàn theo lô</div>
                                             <div className="mt-1 flex flex-wrap items-center gap-2">
                                                 <div className="text-[22px] font-black text-primary">
                                                     {mode === 'edit'
-                                                        ? (documentState.document_number || `Phieu #${documentId}`)
-                                                        : 'Tao phieu hoan tong hop'}
+                                                        ? (documentState.document_number || `Phiếu #${documentId}`)
+                                                        : 'Tạo phiếu hoàn tổng hợp'}
                                                 </div>
                                                 <span className="inline-flex items-center gap-1 rounded-sm border border-primary/15 bg-primary/[0.04] px-2.5 py-1 text-[11px] font-black text-primary/70">
                                                     <span className="material-symbols-outlined text-[14px]">inventory</span>
-                                                    {formatNumber(orders.length)} don
+                                                    {formatNumber(orders.length)} đơn
                                                 </span>
                                                 {documentState.adjustment_document_number ? (
                                                     <span className="inline-flex items-center gap-1 rounded-sm border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-black text-amber-700">
                                                         <span className="material-symbols-outlined text-[14px]">tune</span>
-                                                        Phieu dieu chinh {documentState.adjustment_document_number}
+                                                        Phiếu điều chỉnh {documentState.adjustment_document_number}
                                                     </span>
                                                 ) : null}
                                             </div>
                                         </div>
                                     </div>
                                     <div className="mt-3 flex flex-wrap gap-2">
-                                        {orders.map((order) => (
+                                        {previewOrders.map((order) => (
                                             <span
                                                 key={order.id}
                                                 className="inline-flex items-center gap-1 rounded-sm border border-primary/10 bg-[#fbfcfe] px-2.5 py-1 text-[11px] font-black text-primary/70"
                                             >
-                                                <span>{order.order_number || `Don #${order.id}`}</span>
+                                                <span>{order.order_number || `Đơn #${order.id}`}</span>
                                                 {order.customer_name ? <span className="text-primary/45">| {order.customer_name}</span> : null}
                                             </span>
                                         ))}
+                                        {remainingPreviewOrders > 0 ? (
+                                            <span className="inline-flex items-center rounded-sm border border-dashed border-primary/20 bg-white px-2.5 py-1 text-[11px] font-black text-primary/55">
+                                                +{formatNumber(remainingPreviewOrders)} đơn khác
+                                            </span>
+                                        ) : null}
+                                    </div>
+                                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowSourceOrders((current) => !current)}
+                                            disabled={!orders.length}
+                                            className="inline-flex h-9 items-center gap-2 rounded-sm border border-primary/15 bg-white px-3 text-[12px] font-black text-primary transition hover:border-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px]">list_alt</span>
+                                            {showSourceOrders ? 'Ẩn danh sách mã đơn nguồn' : 'Xem danh sách mã đơn nguồn'}
+                                        </button>
+                                        {orders.length ? (
+                                            <div className="text-[12px] text-primary/55">
+                                                Xem lại toàn bộ đơn nguồn đã dùng để tạo phiếu hoàn này.
+                                            </div>
+                                        ) : null}
                                     </div>
                                 </div>
                                 <button
@@ -384,11 +448,50 @@ const BatchReturnSlipModal = ({
                             </div>
                         </div>
 
+                        {!loading && showSourceOrders ? (
+                            <div className="border-b border-primary/10 bg-[#fdfefe] px-6 py-4">
+                                <div className="overflow-hidden rounded-sm border border-primary/10 bg-white">
+                                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-primary/10 bg-[#fbfcfe] px-4 py-3">
+                                        <div>
+                                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Đơn nguồn tạo phiếu</div>
+                                            <div className="mt-1 text-[12px] text-primary/60">
+                                                Bấm <span className="font-black text-primary">Xem đơn</span> để sang Quản lý đơn hàng, hệ thống sẽ lọc đúng toàn bộ đơn của phiếu hoàn và tô nổi dòng bạn chọn.
+                                            </div>
+                                        </div>
+                                        <div className="inline-flex items-center gap-1 rounded-sm border border-primary/15 bg-white px-2.5 py-1 text-[11px] font-black text-primary/70">
+                                            <span className="material-symbols-outlined text-[14px]">receipt_long</span>
+                                            {formatNumber(orders.length)} đơn nguồn
+                                        </div>
+                                    </div>
+                                    <div className="max-h-[280px] overflow-auto">
+                                        {orders.map((order) => (
+                                            <div key={order.id || order.order_number} className="flex flex-wrap items-center justify-between gap-3 border-b border-primary/10 px-4 py-3 last:border-b-0">
+                                                <div className="min-w-0">
+                                                    <div className="text-[13px] font-black text-primary">{order.order_number || `Đơn #${order.id}`}</div>
+                                                    <div className="mt-1 text-[12px] text-primary/60">
+                                                        {[order.customer_name, order.customer_phone].filter(Boolean).join(' · ') || 'Không có thông tin khách hàng'}
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleViewSourceOrdersInOrderList(order.id)}
+                                                    className="inline-flex h-9 items-center gap-1.5 rounded-sm border border-primary/15 bg-white px-3 text-[12px] font-black text-primary transition hover:border-primary hover:bg-primary/5"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+                                                    Xem đơn
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        ) : null}
+
                         {loading ? (
                             <div className="px-6 py-12">
                                 <EmptyState
-                                    title="Dang tai du lieu doi chieu"
-                                    description="He thong dang tong hop san pham da xuat tu cac don duoc chon."
+                                    title="Đang tải dữ liệu đối chiếu"
+                                    description="Hệ thống đang tổng hợp sản phẩm đã xuất từ các đơn được chọn."
                                 />
                             </div>
                         ) : (
@@ -396,12 +499,12 @@ const BatchReturnSlipModal = ({
                                 <div className="grid gap-4 border-b border-primary/10 bg-[#f8fafc] px-6 py-5 lg:grid-cols-[minmax(0,1fr)_320px]">
                                     <div className="space-y-4">
                                         <div className="grid gap-3 md:grid-cols-3">
-                                            <MetricCard label="Da Xuat" value={formatNumber(summary.exportedQuantity)} hint="Tong so luong nguon" tone="matched" />
-                                            <MetricCard label="Hoan Thuc Te" value={formatNumber(summary.actualQuantity)} hint="So luong se ghi vao phieu hoan" tone="matched" />
+                                            <MetricCard label="Đã xuất" value={formatNumber(summary.exportedQuantity)} hint="Tổng số lượng nguồn" tone="matched" />
+                                            <MetricCard label="Hoàn thực tế" value={formatNumber(summary.actualQuantity)} hint="Số lượng sẽ ghi vào phiếu hoàn" tone="matched" />
                                             <MetricCard
-                                                label="Chenh Lech"
+                                                label="Chênh lệch"
                                                 value={`${summary.discrepancyQuantity > 0 ? '+' : ''}${formatNumber(summary.discrepancyQuantity)}`}
-                                                hint={`Tong lech tuyet doi ${formatNumber(summary.discrepancyAbsQuantity)}`}
+                                                hint={`Tổng lệch tuyệt đối ${formatNumber(summary.discrepancyAbsQuantity)}`}
                                                 tone={discrepancyTone(summary.discrepancyQuantity)}
                                             />
                                         </div>
@@ -416,28 +519,28 @@ const BatchReturnSlipModal = ({
                                             <textarea
                                                 value={documentState.notes || ''}
                                                 onChange={(event) => updateDocumentField('notes', event.target.value)}
-                                                placeholder="Ghi chu chung cho phieu hoan"
+                                                placeholder="Ghi chú chung cho phiếu hoàn"
                                                 className="min-h-[44px] rounded-sm border border-primary/15 bg-white p-3 text-[13px] text-primary outline-none focus:border-primary"
                                             />
                                         </div>
                                     </div>
 
                                     <div className="rounded-sm border border-primary/10 bg-white p-4">
-                                        <div className="text-[11px] font-black uppercase tracking-[0.14em] text-primary/40">Them san pham ngoai danh sach xuat</div>
+                                        <div className="text-[11px] font-black uppercase tracking-[0.14em] text-primary/40">Thêm sản phẩm ngoài danh sách xuất</div>
                                         <div className="mt-3 relative">
                                             <input
                                                 type="text"
                                                 value={pickerQuery}
                                                 onChange={(event) => setPickerQuery(event.target.value)}
-                                                placeholder="Nhap ten hoac SKU de tim san pham"
+                                                placeholder="Nhập tên hoặc SKU để tìm sản phẩm"
                                                 className="h-11 w-full rounded-sm border border-primary/15 bg-[#fbfcfe] px-3 text-[13px] font-semibold text-primary outline-none focus:border-primary"
                                             />
                                             {(pickerLoading || pickerResults.length > 0 || pickerQuery.trim().length >= 2) ? (
                                                 <div className="absolute left-0 right-0 top-full z-20 mt-2 max-h-[280px] overflow-auto rounded-sm border border-primary/10 bg-white shadow-xl">
                                                     {pickerLoading ? (
-                                                        <div className="px-3 py-4 text-[12px] font-semibold text-primary/55">Dang tim san pham...</div>
+                                                        <div className="px-3 py-4 text-[12px] font-semibold text-primary/55">Đang tìm sản phẩm...</div>
                                                     ) : pickerResults.length === 0 ? (
-                                                        <div className="px-3 py-4 text-[12px] font-semibold text-primary/55">Khong co san pham phu hop.</div>
+                                                        <div className="px-3 py-4 text-[12px] font-semibold text-primary/55">Không có sản phẩm phù hợp.</div>
                                                     ) : (
                                                         pickerResults.map((product) => (
                                                             <button
@@ -448,7 +551,7 @@ const BatchReturnSlipModal = ({
                                                             >
                                                                 <div className="min-w-0">
                                                                     <div className="truncate text-[13px] font-black text-primary">{product.name}</div>
-                                                                    <div className="mt-1 truncate text-[11px] font-bold text-orange-600/70">{product.sku || 'Khong co SKU'}</div>
+                                                                    <div className="mt-1 truncate text-[11px] font-bold text-orange-600/70">{product.sku || 'Không có SKU'}</div>
                                                                 </div>
                                                                 <div className="text-[11px] font-black text-primary/45">{formatNumber(product.stock_quantity || 0)}</div>
                                                             </button>
@@ -457,15 +560,15 @@ const BatchReturnSlipModal = ({
                                                 </div>
                                             ) : null}
                                         </div>
-                                        <div className="mt-3 text-[12px] text-primary/55">Dung khi kho hoan ve san pham chua tung xuat trong cac don da chon.</div>
+                                        <div className="mt-3 text-[12px] text-primary/55">Dùng khi kho hoàn về sản phẩm chưa từng xuất trong các đơn đã chọn.</div>
                                     </div>
                                 </div>
 
                                 <div className="px-6 py-5">
                                     {computedRows.length === 0 ? (
                                         <EmptyState
-                                            title="Chua co dong san pham"
-                                            description="Hay them san pham hoan thuc te hoac chon lai danh sach don nguon."
+                                            title="Chưa có dòng sản phẩm"
+                                            description="Hãy thêm sản phẩm hoàn thực tế hoặc chọn lại danh sách đơn nguồn."
                                         />
                                     ) : (
                                         <div className="overflow-hidden rounded-sm border border-primary/10 bg-white">
@@ -473,25 +576,25 @@ const BatchReturnSlipModal = ({
                                                 <table className="w-full min-w-[980px] border-collapse">
                                                     <thead className="bg-[#fbfcfe]">
                                                         <tr>
-                                                            <th className="border-b border-r border-primary/10 px-4 py-3 text-left text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">San pham</th>
-                                                            <th className="border-b border-r border-primary/10 px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">Da xuat</th>
-                                                            <th className="border-b border-r border-primary/10 px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">Hoan thuc te</th>
-                                                            <th className="border-b border-r border-primary/10 px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">Chenh lech</th>
-                                                            <th className="border-b border-r border-primary/10 px-4 py-3 text-left text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">Nguon xuat</th>
-                                                            <th className="border-b border-r border-primary/10 px-4 py-3 text-left text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">Ghi chu</th>
-                                                            <th className="border-b border-primary/10 px-3 py-3 text-center text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">Xoa</th>
+                                                            <th className="border-b border-r border-primary/10 px-4 py-3 text-left text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">Sản phẩm</th>
+                                                            <th className="border-b border-r border-primary/10 px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">Đã xuất</th>
+                                                            <th className="border-b border-r border-primary/10 px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">Hoàn thực tế</th>
+                                                            <th className="border-b border-r border-primary/10 px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">Chênh lệch</th>
+                                                            <th className="border-b border-r border-primary/10 px-4 py-3 text-left text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">Nguồn xuất</th>
+                                                            <th className="border-b border-r border-primary/10 px-4 py-3 text-left text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">Ghi chú</th>
+                                                            <th className="border-b border-primary/10 px-3 py-3 text-center text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">Xóa</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody>
                                                         {computedRows.map((row) => (
                                                             <tr key={row.key} className="hover:bg-primary/[0.02]">
                                                                 <td className="border-b border-r border-primary/10 px-4 py-3 align-top">
-                                                                    <div className="text-[13px] font-black text-primary">{row.product_name || `San pham #${row.product_id}`}</div>
-                                                                    <div className="mt-1 text-[11px] font-bold text-orange-600/70">{row.product_sku || 'Khong co SKU'}</div>
+                                                                    <div className="text-[13px] font-black text-primary">{row.product_name || `Sản phẩm #${row.product_id}`}</div>
+                                                                    <div className="mt-1 text-[11px] font-bold text-orange-600/70">{row.product_sku || 'Không có SKU'}</div>
                                                                     {row.is_extra_product ? (
                                                                         <div className="mt-2 inline-flex items-center gap-1 rounded-sm border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-black text-sky-700">
                                                                             <span className="material-symbols-outlined text-[13px]">add_box</span>
-                                                                            San pham them moi
+                                                                            Sản phẩm thêm mới
                                                                         </div>
                                                                     ) : null}
                                                                 </td>
@@ -519,13 +622,13 @@ const BatchReturnSlipModal = ({
                                                                         <div className="space-y-1">
                                                                             {row.order_breakdown.map((entry, index) => (
                                                                                 <div key={`${row.key}-src-${index}`} className="text-[12px] text-primary/70">
-                                                                                    <span className="font-black text-primary">{entry.order_number || `Don #${entry.order_id}`}</span>
-                                                                                    <span>{` | Xuat ${formatNumber(entry.exported_quantity || 0)}`}</span>
+                                                                                    <span className="font-black text-primary">{entry.order_number || `Đơn #${entry.order_id}`}</span>
+                                                                                    <span>{` | Xuất ${formatNumber(entry.exported_quantity || 0)}`}</span>
                                                                                 </div>
                                                                             ))}
                                                                         </div>
                                                                     ) : (
-                                                                        <div className="text-[12px] font-semibold text-primary/50">San pham them ngoai danh sach xuat</div>
+                                                                        <div className="text-[12px] font-semibold text-primary/50">Sản phẩm thêm ngoài danh sách xuất</div>
                                                                     )}
                                                                 </td>
                                                                 <td className="border-b border-r border-primary/10 px-4 py-3 align-top">
@@ -533,7 +636,7 @@ const BatchReturnSlipModal = ({
                                                                         type="text"
                                                                         value={row.notes}
                                                                         onChange={(event) => updateRow(row.key, 'notes', event.target.value)}
-                                                                        placeholder="Ghi chu dong san pham"
+                                                                        placeholder="Ghi chú dòng sản phẩm"
                                                                         className="h-10 w-full rounded-sm border border-primary/15 bg-white px-3 text-[13px] text-primary outline-none focus:border-primary"
                                                                     />
                                                                 </td>
@@ -560,14 +663,14 @@ const BatchReturnSlipModal = ({
                                 </div>
 
                                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-primary/10 bg-white px-6 py-4">
-                                    <div className="text-[12px] text-primary/55">Phieu hoan luu dung so luong thuc te ban nhap. Moi phan lech se tu chuyen sang phieu dieu chinh ton kho rieng.</div>
+                                    <div className="text-[12px] text-primary/55">Phiếu hoàn lưu đúng số lượng thực tế bạn nhập. Mọi phần lệch sẽ tự chuyển sang phiếu điều chỉnh tồn kho riêng.</div>
                                     <div className="flex items-center gap-3">
                                         <button
                                             type="button"
                                             onClick={onClose}
                                             className="h-10 rounded-sm border border-primary/20 bg-white px-4 text-[12px] font-black uppercase tracking-wide text-primary transition hover:bg-primary/5"
                                         >
-                                            Huy
+                                            Hủy
                                         </button>
                                         <button
                                             type="button"
@@ -576,7 +679,7 @@ const BatchReturnSlipModal = ({
                                             className="inline-flex h-10 items-center gap-2 rounded-sm bg-primary px-5 text-[12px] font-black uppercase tracking-wide text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                             <span className="material-symbols-outlined text-[18px]">{saving ? 'progress_activity' : 'save'}</span>
-                                            {saving ? 'Dang luu...' : (mode === 'edit' ? 'Cap nhat phieu' : 'Tao phieu hoan')}
+                                            {saving ? 'Đang lưu...' : (mode === 'edit' ? 'Cập nhật phiếu' : 'Tạo phiếu hoàn')}
                                         </button>
                                     </div>
                                 </div>

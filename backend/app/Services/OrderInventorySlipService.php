@@ -52,7 +52,7 @@ class OrderInventorySlipService
         }
 
         throw ValidationException::withMessages([
-            'inventory' => ['Tinh nang phieu hoan theo lo yeu cau chay day du migration kho moi nhat.'],
+            'inventory' => ['Tính năng phiếu hoàn theo lô yêu cầu chạy đầy đủ migration kho mới nhất.'],
         ]);
     }
 
@@ -90,6 +90,51 @@ class OrderInventorySlipService
                 );
 
                 return [(int) $order->id => $detail['summary']];
+            })
+            ->all();
+    }
+
+    public function buildExportOverviewMap(Collection $orders): array
+    {
+        if ($orders->isEmpty()) {
+            return [];
+        }
+
+        $documentsByOrderId = $this->loadDocumentsForOrders($orders);
+        $automaticExportsByOrderId = $this->loadAutomaticExportsForOrders($orders);
+
+        return $orders
+            ->mapWithKeys(function (Order $order) use ($documentsByOrderId, $automaticExportsByOrderId) {
+                $detail = $this->buildDetailPayload(
+                    $order,
+                    $documentsByOrderId->get((int) $order->id, collect()),
+                    $automaticExportsByOrderId->get((int) $order->id, collect()),
+                    true
+                );
+
+                $exports = collect(data_get($detail, 'documents.export', []))->values();
+                $primaryExport = $exports->first();
+
+                return [
+                    (int) $order->id => [
+                        'display_code' => trim((string) ($primaryExport['document_number'] ?? $order->order_number)),
+                        'exported_at' => $this->normalizeExportOverviewTimestamp($primaryExport, $order),
+                        'tracking_number' => trim((string) ($primaryExport['tracking_number'] ?? $order->shipping_tracking_code)) ?: null,
+                        'carrier_name' => trim((string) ($primaryExport['carrier_name'] ?? $order->shipping_carrier_name)) ?: null,
+                        'exported_quantity' => (int) data_get($detail, 'summary.exported_quantity', 0),
+                        'export_slip_count' => (int) data_get($detail, 'summary.export_slip_count', 0),
+                        'line_count' => max(
+                            count((array) ($primaryExport['items'] ?? [])),
+                            (int) $order->items->count()
+                        ),
+                        'primary_notes' => $primaryExport['notes'] ?? $order->notes,
+                        'source_kind' => (string) ($primaryExport['source_kind'] ?? (
+                            (string) $order->type === 'inventory_export'
+                                ? 'legacy_manual_export'
+                                : 'shipment_auto'
+                        )),
+                    ],
+                ];
             })
             ->all();
     }
@@ -242,7 +287,7 @@ class OrderInventorySlipService
 
         if (!$this->isManagedReturnDocument($managedDocument)) {
             throw ValidationException::withMessages([
-                'document' => ['Phieu hoan nay khong thuoc luong doi chieu theo lo.'],
+                'document' => ['Phiếu hoàn này không thuộc luồng đối chiếu theo lô.'],
             ]);
         }
 
@@ -298,7 +343,7 @@ class OrderInventorySlipService
 
         if (!$this->isManagedReturnDocument($managedDocument)) {
             throw ValidationException::withMessages([
-                'document' => ['Phieu hoan nay khong thuoc luong doi chieu theo lo.'],
+                'document' => ['Phiếu hoàn này không thuộc luồng đối chiếu theo lô.'],
             ]);
         }
 
@@ -309,7 +354,7 @@ class OrderInventorySlipService
 
         if ($orders->isEmpty()) {
             throw ValidationException::withMessages([
-                'document' => ['Phieu hoan nay khong con lien ket don hang de cap nhat.'],
+                'document' => ['Phiếu hoàn này không còn liên kết đơn hàng để cập nhật.'],
             ]);
         }
 
@@ -334,7 +379,7 @@ class OrderInventorySlipService
 
         if (!$this->isManagedReturnDocument($managedDocument)) {
             throw ValidationException::withMessages([
-                'document' => ['Phieu hoan nay khong thuoc luong doi chieu theo lo.'],
+                'document' => ['Phiếu hoàn này không thuộc luồng đối chiếu theo lô.'],
             ]);
         }
 
@@ -358,7 +403,7 @@ class OrderInventorySlipService
 
         if (!$this->isManagedReturnDocument($managedDocument)) {
             throw ValidationException::withMessages([
-                'document' => ['Phieu hoan nay khong thuoc luong doi chieu theo lo.'],
+                'document' => ['Phiếu hoàn này không thuộc luồng đối chiếu theo lô.'],
             ]);
         }
 
@@ -394,7 +439,7 @@ class OrderInventorySlipService
 
         if (!$this->isManagedReturnDocument($managedDocument)) {
             throw ValidationException::withMessages([
-                'document' => ['Phieu hoan nay khong thuoc luong doi chieu theo lo.'],
+                'document' => ['Phiếu hoàn này không thuộc luồng đối chiếu theo lô.'],
             ]);
         }
 
@@ -1138,6 +1183,8 @@ class OrderInventorySlipService
             'notes' => $this->buildAutomaticExportNotes('Tu tao tu van chuyen', $trackingNumber, $carrierName),
             'created_by_name' => null,
             'total_quantity' => (int) $items->sum('quantity'),
+            'tracking_number' => $trackingNumber !== '' ? $trackingNumber : null,
+            'carrier_name' => $carrierName !== '' ? $carrierName : null,
             'items' => $items->all(),
             'can_delete' => false,
             'can_edit' => false,
@@ -1181,12 +1228,35 @@ class OrderInventorySlipService
             'notes' => $this->buildAutomaticExportNotes($sourceLabel, $trackingNumber, $carrierName),
             'created_by_name' => null,
             'total_quantity' => (int) $items->sum('quantity'),
+            'tracking_number' => $trackingNumber !== '' ? $trackingNumber : null,
+            'carrier_name' => $carrierName !== '' ? $carrierName : null,
             'items' => $items->all(),
             'can_delete' => false,
             'can_edit' => false,
             'source_label' => $sourceLabel,
             'source_kind' => $isManualExportOrder ? 'legacy_manual_export' : 'legacy_tracking_export',
         ];
+    }
+
+    private function normalizeExportOverviewTimestamp(?array $primaryExport, Order $order): ?string
+    {
+        $candidates = [
+            $primaryExport['document_date'] ?? null,
+            $primaryExport['created_at'] ?? null,
+            optional($order->shipping_dispatched_at)?->toISOString(),
+            optional($order->created_at)?->toISOString(),
+        ];
+
+        foreach ($candidates as $candidate) {
+            $value = trim((string) $candidate);
+            if ($value === '') {
+                continue;
+            }
+
+            return Carbon::parse($value)->toISOString();
+        }
+
+        return null;
     }
 
     private function buildAutomaticExportItemsFromShipment(Order $order, Shipment $shipment): Collection
@@ -1481,6 +1551,8 @@ class OrderInventorySlipService
             'notes' => $document->notes,
             'created_by_name' => $document->creator?->name,
             'total_quantity' => (int) $items->sum('quantity'),
+            'tracking_number' => trim((string) ($document->meta['tracking_number'] ?? '')) ?: null,
+            'carrier_name' => trim((string) ($document->meta['carrier_name'] ?? '')) ?: null,
             'can_delete' => !$isManagedReturn,
             'can_edit' => $isManagedReturn,
             'is_batch_return' => $isManagedReturn,
@@ -1490,8 +1562,9 @@ class OrderInventorySlipService
                 : 0,
             'adjustment_document_id' => $adjustmentDocument?->id,
             'adjustment_document_number' => $adjustmentDocument?->document_number,
+            'source_kind' => $document->type === 'export' ? 'document' : null,
             'source_label' => $isManagedReturn && $this->managedReturnOrderLinksCount($document) > 1
-                ? 'Phieu hoan theo lo'
+                ? 'Phiếu hoàn theo lô'
                 : null,
             'items' => $items->all(),
         ];
@@ -1596,7 +1669,7 @@ class OrderInventorySlipService
         foreach ($batches as $batch) {
             if ((int) $batch->remaining_quantity !== (int) $batch->quantity || (int) $batch->allocations_count > 0 || (int) $batch->document_allocations_count > 0) {
                 throw ValidationException::withMessages([
-                    'document' => ['Phieu hoan nay da phat sinh luong kho tiep theo nen khong the xoa hoac sua.'],
+                    'document' => ['Phiếu hoàn này đã phát sinh luồng kho tiếp theo nên không thể xóa hoặc sửa.'],
                 ]);
             }
         }
@@ -1672,10 +1745,10 @@ class OrderInventorySlipService
     private function typeLabel(string $type): string
     {
         return match ($type) {
-            'export' => 'phieu xuat',
-            'return' => 'phieu hoan',
-            'damaged' => 'phieu hong',
-            default => 'phieu kho',
+            'export' => 'phiếu xuất',
+            'return' => 'phiếu hoàn',
+            'damaged' => 'phiếu hỏng',
+            default => 'phiếu kho',
         };
     }
 
@@ -1712,7 +1785,7 @@ class OrderInventorySlipService
     {
         if (empty($orderIds)) {
             throw ValidationException::withMessages([
-                'order_ids' => ['Can chon it nhat mot don hang de tao phieu hoan theo lo.'],
+                'order_ids' => ['Cần chọn ít nhất một đơn hàng để tạo phiếu hoàn theo lô.'],
             ]);
         }
 
@@ -1728,7 +1801,7 @@ class OrderInventorySlipService
 
         if ($orders->count() !== count(array_unique($orderIds))) {
             throw ValidationException::withMessages([
-                'order_ids' => ['Co don hang khong ton tai hoac khong thuoc tai khoan hien tai.'],
+                'order_ids' => ['Có đơn hàng không tồn tại hoặc không thuộc tài khoản hiện tại.'],
             ]);
         }
 
@@ -1743,7 +1816,7 @@ class OrderInventorySlipService
 
         if ($invalidOrder) {
             throw ValidationException::withMessages([
-                'order_ids' => ["Don {$invalidOrder->order_number} khong thuoc nhom don chinh de lap phieu hoan theo lo."],
+                'order_ids' => ["Đơn {$invalidOrder->order_number} không thuộc nhóm đơn chính để lập phiếu hoàn theo lô."],
             ]);
         }
     }
@@ -1777,7 +1850,7 @@ class OrderInventorySlipService
 
         if ($conflict) {
             throw ValidationException::withMessages([
-                'order_ids' => ["Da ton tai phieu hoan doi chieu {$conflict->document_number} cho mot trong cac don da chon. Hay sua phieu nay thay vi tao moi."],
+                'order_ids' => ["Đã tồn tại phiếu hoàn đối chiếu {$conflict->document_number} cho một trong các đơn đã chọn. Hãy sửa phiếu này thay vì tạo mới."],
             ]);
         }
     }
@@ -1814,6 +1887,7 @@ class OrderInventorySlipService
                 'adjustment_document_number' => null,
             ],
             'orders' => $sourceContext['orders'],
+            'source_orders' => $sourceContext['orders'],
             'summary' => [
                 'order_count' => $orders->count(),
                 'exported_quantity' => (int) $products->sum('exported_quantity'),
@@ -1914,7 +1988,7 @@ class OrderInventorySlipService
 
         if ($normalizedItems->isEmpty()) {
             throw ValidationException::withMessages([
-                'items' => ['Can nhap it nhat mot san pham hoan co so luong lon hon 0.'],
+                'items' => ['Cần nhập ít nhất một sản phẩm hoàn có số lượng lớn hơn 0.'],
             ]);
         }
 
@@ -2063,7 +2137,7 @@ class OrderInventorySlipService
                     'unit_cost' => $unitCost,
                     'status' => 'open',
                     'meta' => [
-                        'source_name' => 'Phieu hoan theo lo',
+                        'source_name' => 'Phiếu hoàn theo lô',
                         'source_label' => $document->document_number,
                         'document_type' => 'return',
                         'document_item_id' => (int) $documentItem->id,
@@ -2275,8 +2349,8 @@ class OrderInventorySlipService
                         ? round((float) $item['unit_cost'], 2)
                         : null,
                     'notes' => $discrepancyQuantity > 0
-                        ? 'Phan lech duong tu phieu hoan doi chieu'
-                        : 'Phan lech am tu phieu hoan doi chieu',
+                        ? 'Phần lệch dương từ phiếu hoàn đối chiếu'
+                        : 'Phần lệch âm từ phiếu hoàn đối chiếu',
                     'allow_oversold' => $discrepancyQuantity < 0,
                 ];
             })
@@ -2294,7 +2368,7 @@ class OrderInventorySlipService
 
         $payload = [
             'document_date' => optional($document->document_date)->toDateString() ?: now()->toDateString(),
-            'notes' => 'Tu dong cap nhat tu phieu hoan doi chieu ' . $document->document_number,
+            'notes' => 'Tự động cập nhật từ phiếu hoàn đối chiếu ' . $document->document_number,
             'reference_type' => 'inventory_document',
             'reference_id' => (int) $document->id,
             'parent_document_id' => (int) $document->id,
@@ -2421,6 +2495,7 @@ class OrderInventorySlipService
                 'adjustment_document_number' => $adjustmentDocument?->document_number,
             ],
             'orders' => $orders->all(),
+            'source_orders' => $orders->all(),
             'summary' => [
                 'order_count' => $orders->count(),
                 'exported_quantity' => (int) $products->sum('exported_quantity'),

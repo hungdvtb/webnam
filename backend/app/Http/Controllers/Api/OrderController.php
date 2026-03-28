@@ -19,6 +19,7 @@ use App\Models\ShipmentItem;
 use App\Models\ShipmentStatusLog;
 use App\Models\ShippingIntegration;
 use App\Models\SiteSetting;
+use App\Support\OrderBootstrapCache;
 use App\Support\OrderStatusCatalog;
 use App\Services\Inventory\InventoryService;
 use App\Services\OrderInventorySlipService;
@@ -65,6 +66,7 @@ class OrderController extends Controller
         'quote_store_address',
         'quote_store_phone',
     ];
+    private const ORDER_QUICK_PICK_SETTING_KEY = 'order_quick_pick_groups';
 
     public function __construct(
         protected RepeatCustomerPhoneService $repeatCustomerPhoneService,
@@ -1112,7 +1114,7 @@ class OrderController extends Controller
 
     private function bootstrapCacheKey(int $accountId, string $mode): string
     {
-        return "orders:bootstrap:{$accountId}:{$mode}";
+        return OrderBootstrapCache::key($accountId, $mode);
     }
 
     private function loadOrderKindCounts(int $accountId): array
@@ -1280,6 +1282,159 @@ class OrderController extends Controller
         );
     }
 
+    private function loadOrderQuickPickGroups(int $accountId): array
+    {
+        $rawValue = SiteSetting::getValue(self::ORDER_QUICK_PICK_SETTING_KEY, $accountId, '[]');
+        $decodedGroups = is_array($rawValue)
+            ? $rawValue
+            : json_decode((string) $rawValue, true);
+
+        if (!is_array($decodedGroups)) {
+            return [];
+        }
+
+        $normalizedGroups = collect($decodedGroups)
+            ->map(function ($group, $groupIndex) {
+                if (!is_array($group)) {
+                    return null;
+                }
+
+                $attributeId = (int) ($group['attribute_id'] ?? 0);
+                $attributeValue = trim((string) ($group['attribute_value'] ?? ''));
+
+                if ($attributeId <= 0 || $attributeValue === '') {
+                    return null;
+                }
+
+                $items = collect(is_array($group['items'] ?? null) ? $group['items'] : [])
+                    ->map(function ($item, $itemIndex) {
+                        if (!is_array($item)) {
+                            return null;
+                        }
+
+                        $targetProductId = (int) ($item['target_product_id'] ?? $item['product_id'] ?? 0);
+                        if ($targetProductId <= 0) {
+                            return null;
+                        }
+
+                        $parentProductId = (int) ($item['parent_product_id'] ?? 0);
+                        $type = strtolower(trim((string) ($item['type'] ?? '')));
+
+                        return [
+                            'id' => trim((string) ($item['id'] ?? '')) ?: "order-quick-pick-item-{$targetProductId}-" . ($itemIndex + 1),
+                            'target_product_id' => $targetProductId,
+                            'parent_product_id' => $parentProductId > 0 ? $parentProductId : null,
+                            'type' => $type === 'variation' ? 'variation' : 'product',
+                            'display_name' => trim((string) ($item['display_name'] ?? $item['name'] ?? '')),
+                            'display_sku' => trim((string) ($item['display_sku'] ?? $item['sku'] ?? '')),
+                            'option_label' => trim((string) ($item['option_label'] ?? '')),
+                            'main_image' => trim((string) ($item['main_image'] ?? '')),
+                            'price' => round((float) ($item['price'] ?? 0), 2),
+                            'cost_price' => round((float) ($item['cost_price'] ?? 0), 2),
+                            'order' => max(1, (int) ($item['order'] ?? ($itemIndex + 1))),
+                        ];
+                    })
+                    ->filter()
+                    ->sortBy('order')
+                    ->take(15)
+                    ->values()
+                    ->all();
+
+                return [
+                    'id' => trim((string) ($group['id'] ?? '')) ?: "order-quick-pick-group-{$attributeId}-" . ($groupIndex + 1),
+                    'attribute_id' => $attributeId,
+                    'attribute_value' => $attributeValue,
+                    'items' => $items,
+                ];
+            })
+            ->filter()
+            ->values();
+
+        if ($normalizedGroups->isEmpty()) {
+            return [];
+        }
+
+        $productIds = $normalizedGroups
+            ->flatMap(function (array $group) {
+                return collect($group['items'])->flatMap(fn (array $item) => array_filter([
+                    (int) ($item['target_product_id'] ?? 0),
+                    (int) ($item['parent_product_id'] ?? 0),
+                ]));
+            })
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($productIds->isEmpty()) {
+            return $normalizedGroups->all();
+        }
+
+        $products = Product::query()
+            ->where('account_id', $accountId)
+            ->whereIn('id', $productIds)
+            ->with([
+                'images:id,product_id,image_url,is_primary,sort_order',
+                'attributeValues:id,product_id,attribute_id,value',
+            ])
+            ->get()
+            ->keyBy(fn (Product $product) => (int) $product->id);
+
+        return $normalizedGroups
+            ->map(function (array $group) use ($products) {
+                $resolvedItems = collect($group['items'])
+                    ->map(function (array $item) use ($products) {
+                        /** @var Product|null $product */
+                        $product = $products->get((int) ($item['target_product_id'] ?? 0));
+                        if (!$product) {
+                            return null;
+                        }
+
+                        /** @var Product|null $parentProduct */
+                        $parentProduct = !empty($item['parent_product_id'])
+                            ? $products->get((int) $item['parent_product_id'])
+                            : null;
+
+                        $primaryImage = $product->images->firstWhere('is_primary', true)
+                            ?: $product->images->sortBy('sort_order')->first();
+                        $parentPrimaryImage = $parentProduct
+                            ? ($parentProduct->images->firstWhere('is_primary', true) ?: $parentProduct->images->sortBy('sort_order')->first())
+                            : null;
+
+                        return [
+                            'id' => $item['id'],
+                            'target_product_id' => (int) $product->id,
+                            'parent_product_id' => $item['parent_product_id'],
+                            'type' => $item['type'],
+                            'display_name' => $item['display_name'] !== '' ? $item['display_name'] : trim((string) $product->name),
+                            'display_sku' => $item['display_sku'] !== '' ? $item['display_sku'] : trim((string) $product->sku),
+                            'option_label' => $item['option_label'],
+                            'name' => trim((string) $product->name),
+                            'sku' => trim((string) $product->sku),
+                            'price' => round((float) ($product->price ?? 0), 2),
+                            'cost_price' => round((float) ($product->cost_price ?? $product->expected_cost ?? 0), 2),
+                            'main_image' => $primaryImage?->image_url ?: $item['main_image'] ?: $parentPrimaryImage?->image_url,
+                            'attribute_values' => $product->attributeValues
+                                ->map(fn ($attributeValue) => [
+                                    'attribute_id' => (int) $attributeValue->attribute_id,
+                                    'value' => $attributeValue->value,
+                                ])
+                                ->values()
+                                ->all(),
+                        ];
+                    })
+                    ->filter()
+                    ->values()
+                    ->all();
+
+                return [
+                    ...$group,
+                    'items' => $resolvedItems,
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
     public function bootstrap(Request $request)
     {
         $accountId = $this->resolveAccountId($request);
@@ -1301,6 +1456,7 @@ class OrderController extends Controller
                         'order_statuses' => $this->loadOrderStatuses($accountId),
                         'order_attributes' => $this->loadOrderAttributes('order'),
                         'product_attributes' => $this->loadOrderAttributes('product'),
+                        'product_quick_pick_groups' => $this->loadOrderQuickPickGroups($accountId),
                         'quote_settings' => $this->loadQuoteSettings($accountId),
                         'quote_templates' => QuoteTemplate::query()
                             ->where('account_id', $accountId)
@@ -1371,6 +1527,24 @@ class OrderController extends Controller
 
         if ($request->filled('order_type')) {
             $query->where('order_type', $this->normalizeOrderType((string) $request->input('order_type')));
+        }
+
+        if ($request->filled('order_ids')) {
+            $orderIds = collect(
+                is_array($request->input('order_ids'))
+                    ? $request->input('order_ids')
+                    : explode(',', (string) $request->input('order_ids'))
+            )
+                ->map(fn ($value) => (int) $value)
+                ->filter(fn (int $id) => $id > 0)
+                ->unique()
+                ->values();
+
+            if ($orderIds->isEmpty()) {
+                $query->whereRaw('1 = 0');
+            } else {
+                $query->whereIn('orders.id', $orderIds->all());
+            }
         }
 
         $query->when($request->filled('search'), function($q) use ($request) {

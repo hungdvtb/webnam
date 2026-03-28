@@ -348,6 +348,54 @@ const buildOrderListUrl = (view = 'main') => {
     if (view === 'trash') return '/admin/orders?view=trash';
     return '/admin/orders';
 };
+const parseOrderIdList = (value) => {
+    const rawItems = Array.isArray(value) ? value : String(value || '').split(',');
+    const seen = new Set();
+
+    return rawItems.reduce((result, item) => {
+        const normalized = Number.parseInt(String(item || '').trim(), 10);
+        if (!Number.isInteger(normalized) || normalized <= 0 || seen.has(normalized)) {
+            return result;
+        }
+
+        seen.add(normalized);
+        result.push(normalized);
+        return result;
+    }, []);
+};
+const areOrderIdListsEqual = (left = [], right = []) => (
+    left.length === right.length && left.every((value, index) => Number(value) === Number(right[index]))
+);
+const parseOrderListRouteScope = (search = '') => {
+    const params = new URLSearchParams(search);
+    const orderIds = parseOrderIdList(params.get('order_ids'));
+    const focusOrderId = parseOrderIdList(params.get('focus_order_id'))[0] || null;
+
+    return {
+        orderIds,
+        focusOrderId,
+        batchReturnDocumentNumber: String(params.get('batch_return_document_number') || '').trim(),
+    };
+};
+const createDefaultOrderFilters = (search = '', orderIds = []) => ({
+    search,
+    status: [],
+    customer_name: '',
+    order_number: '',
+    created_at_from: '',
+    created_at_to: '',
+    customer_phone: '',
+    order_type: '',
+    shipping_address: '',
+    shipping_carrier_code: '',
+    export_slip_state: '',
+    return_slip_state: '',
+    damaged_slip_state: '',
+    shipping_dispatched_from: '',
+    shipping_dispatched_to: '',
+    attributes: {},
+    order_ids: parseOrderIdList(orderIds),
+});
 
 const getCancelDispatchEligibility = (order) => {
     if (!order) {
@@ -881,6 +929,8 @@ const OrderList = () => {
     const [showFilters, setShowFilters] = useState(false);
     const [showColumnSettings, setShowColumnSettings] = useState(false);
     const initialListParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+    const routeOrderScope = useMemo(() => parseOrderListRouteScope(location.search), [location.search]);
+    const routeOrderIdsKey = routeOrderScope.orderIds.join(',');
     const [currentView, setCurrentView] = useState(() => {
         const view = initialListParams.get('view');
         return ['draft', 'trash'].includes(view) ? view : 'main';
@@ -933,26 +983,13 @@ const OrderList = () => {
     const shippingAlertRef = useRef(null);
     const previousUnreadRef = useRef([]);
     const orderRequestAbortRef = useRef(null);
+    const suppressSearchSyncRef = useRef(false);
 
     const [pagination, setPagination] = useState({ current_page: 1, last_page: 1, total: 0, per_page: 20 });
-    const [filters, setFilters] = useState({
-        search: localStorage.getItem('order_list_search_current') || '',
-        status: [],
-        customer_name: '',
-        order_number: '',
-        created_at_from: '',
-        created_at_to: '',
-        customer_phone: '',
-        order_type: '',
-        shipping_address: '',
-        shipping_carrier_code: '',
-        export_slip_state: '',
-        return_slip_state: '',
-        damaged_slip_state: '',
-        shipping_dispatched_from: '',
-        shipping_dispatched_to: '',
-        attributes: {}
-    });
+    const [filters, setFilters] = useState(() => createDefaultOrderFilters(
+        routeOrderScope.orderIds.length ? '' : (localStorage.getItem('order_list_search_current') || ''),
+        routeOrderScope.orderIds
+    ));
 
     const [sortConfig, setSortConfig] = useState(() => {
         const saved = localStorage.getItem('order_list_sort');
@@ -1202,14 +1239,19 @@ const OrderList = () => {
         orderRequestAbortRef.current = controller;
         setLoading(true);
         try {
+            const scopedOrderIds = parseOrderIdList(currentFilters.order_ids);
+            const effectivePerPage = scopedOrderIds.length
+                ? Math.max(perPage, Math.min(scopedOrderIds.length, 100))
+                : perPage;
             const params = {
-                page, per_page: perPage, trashed: isTrashView ? 1 : 0,
+                page, per_page: effectivePerPage, trashed: isTrashView ? 1 : 0,
                 sort_by: currentSort.direction === 'none' ? 'created_at' : currentSort.key,
                 sort_order: currentSort.direction === 'none' ? 'desc' : currentSort.direction
             };
             if (isDraftView) params.order_kind = DRAFT_ORDER_KIND;
 
             if (currentFilters.search?.trim()) params.search = currentFilters.search.trim();
+            if (scopedOrderIds.length) params.order_ids = scopedOrderIds.join(',');
             if (currentFilters.status?.length) params.status = currentFilters.status.join(',');
             if (currentFilters.customer_name?.trim()) params.customer_name = currentFilters.customer_name.trim();
             if (currentFilters.order_number) params.order_number = currentFilters.order_number;
@@ -1265,6 +1307,44 @@ const OrderList = () => {
     }, [location.search]);
 
     useEffect(() => {
+        if (!routeOrderIdsKey) {
+            if (filters.order_ids?.length) {
+                const nextFilters = { ...filters, order_ids: [] };
+                setFilters(nextFilters);
+                setTempFilters((prev) => (prev ? { ...prev, order_ids: [] } : prev));
+                fetchOrders(1, nextFilters);
+            }
+            return;
+        }
+
+        localStorage.removeItem('order_list_search_current');
+        suppressSearchSyncRef.current = true;
+
+        const nextFilters = createDefaultOrderFilters('', routeOrderScope.orderIds);
+        setFilters((prev) => (
+            areOrderIdListsEqual(prev.order_ids, nextFilters.order_ids) && !prev.search && !prev.status?.length
+                && !prev.customer_name && !prev.order_number && !prev.created_at_from && !prev.created_at_to
+                && !prev.customer_phone && !prev.order_type && !prev.shipping_address
+                && !prev.shipping_carrier_code && !prev.export_slip_state && !prev.return_slip_state
+                && !prev.damaged_slip_state && !prev.shipping_dispatched_from && !prev.shipping_dispatched_to
+                && Object.keys(prev.attributes || {}).length === 0
+                ? prev
+                : nextFilters
+        ));
+        setTempFilters((prev) => (prev ? nextFilters : prev));
+        setSelectedIds([]);
+        setStatusMenuOrderId(null);
+        setProductPopupOrderId(null);
+        setInventorySlipOrderId(null);
+        fetchOrders(1, nextFilters);
+    }, [routeOrderIdsKey]);
+
+    useEffect(() => {
+        if (suppressSearchSyncRef.current) {
+            suppressSearchSyncRef.current = false;
+            return undefined;
+        }
+
         const timer = setTimeout(() => {
             if (filters.search !== localStorage.getItem('order_list_search_current')) {
                 if (filters.search) {
@@ -1280,13 +1360,29 @@ const OrderList = () => {
         return () => clearTimeout(timer);
     }, [filters.search]);
 
-    useEffect(() => { fetchOrders(1); }, [currentView]);
+    useEffect(() => {
+        if (!routeOrderIdsKey) {
+            fetchOrders(1, { ...filters, order_ids: [] });
+        }
+    }, [currentView]);
 
     useEffect(() => {
         return () => {
             orderRequestAbortRef.current?.abort();
         };
     }, []);
+
+    useEffect(() => {
+        if (!routeOrderScope.focusOrderId) return undefined;
+        if (!orders.some((order) => Number(order.id) === Number(routeOrderScope.focusOrderId))) return undefined;
+
+        const timeoutId = window.setTimeout(() => {
+            const targetRow = window.document.querySelector(`[data-order-row-id="${routeOrderScope.focusOrderId}"]`);
+            targetRow?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 120);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [orders, routeOrderScope.focusOrderId]);
 
     useEffect(() => {
         const handleClickOutside = (e) => {
@@ -1402,6 +1498,15 @@ const OrderList = () => {
     };
 
     const removeFilter = (key, value = null) => {
+        if (key === 'order_ids') {
+            const nextFilters = { ...filters, order_ids: [] };
+            setFilters(nextFilters);
+            setTempFilters((prev) => (prev ? { ...prev, order_ids: [] } : prev));
+            fetchOrders(1, nextFilters);
+            clearRouteOrderScopeFromUrl();
+            return;
+        }
+
         setFilters(prev => {
             let nf = { ...prev };
             if (key === 'attributes') { nf.attributes = { ...prev.attributes }; delete nf.attributes[value.attrId]; }
@@ -1415,27 +1520,15 @@ const OrderList = () => {
     };
 
     const handleReset = () => {
-        const rf = {
-            search: '',
-            status: [],
-            customer_name: '',
-            order_number: '',
-            created_at_from: '',
-            created_at_to: '',
-            customer_phone: '',
-            order_type: '',
-            shipping_address: '',
-            shipping_carrier_code: '',
-            export_slip_state: '',
-            return_slip_state: '',
-            damaged_slip_state: '',
-            shipping_dispatched_from: '',
-            shipping_dispatched_to: '',
-            attributes: {},
-        };
+        const rf = createDefaultOrderFilters();
         setFilters(rf);
+        setTempFilters((prev) => (prev ? rf : prev));
         setSortConfig({ key: 'created_at', direction: 'desc', phase: 1 });
+        localStorage.removeItem('order_list_search_current');
         fetchOrders(1, rf);
+        if (routeOrderIdsKey) {
+            clearRouteOrderScopeFromUrl();
+        }
     };
 
     const handleRefresh = () => fetchOrders(1);
@@ -1759,11 +1852,20 @@ const OrderList = () => {
         }
     };
 
-    const currentListUrl = useMemo(() => buildOrderListUrl(currentView), [currentView]);
+    const currentListUrl = useMemo(() => `${location.pathname}${location.search}`, [location.pathname, location.search]);
 
     const navigateToListView = useCallback((nextView = 'main') => {
         navigate(buildOrderListUrl(nextView));
     }, [navigate]);
+
+    const clearRouteOrderScopeFromUrl = useCallback(() => {
+        const params = new URLSearchParams(location.search);
+        params.delete('order_ids');
+        params.delete('focus_order_id');
+        params.delete('batch_return_document_number');
+        const nextSearch = params.toString();
+        navigate(`${location.pathname}${nextSearch ? `?${nextSearch}` : ''}`, { replace: true });
+    }, [location.pathname, location.search, navigate]);
 
     const exitSpecialListView = useCallback(() => {
         setCurrentView('main');
@@ -1913,6 +2015,7 @@ const OrderList = () => {
 
     const activeCount = () => {
         let c = 0;
+        if (filters.order_ids?.length) c++;
         if (filters.status?.length) c++;
         if (filters.customer_name) c++;
         if (filters.order_number) c++;
@@ -2290,6 +2393,18 @@ const OrderList = () => {
             {activeCount() > 0 && (
                 <div className="flex flex-wrap items-center gap-2 mb-4 bg-primary/5 p-2 border border-primary/10 rounded-sm animate-in fade-in duration-300">
                     <span className="text-[13px] font-bold text-primary px-1 mr-1 border-r border-primary/20 flex items-center gap-1.5"><span className="material-symbols-outlined text-[16px]">filter_list</span>Đang lọc:</span>
+                    {filters.order_ids?.length > 0 && (
+                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                            <span className="text-[11px] text-primary/40">Đơn nguồn:</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">
+                                {routeOrderScope.batchReturnDocumentNumber || `${formatNumber(filters.order_ids.length)} đơn liên quan`}
+                            </span>
+                            <span className="text-[11px] font-bold text-primary/45">{formatNumber(filters.order_ids.length)} đơn</span>
+                            <button onClick={() => removeFilter('order_ids')} className="text-primary/40 hover:text-brick">
+                                <span className="material-symbols-outlined text-[14px]">close</span>
+                            </button>
+                        </div>
+                    )}
                     {filters.status?.length > 0 && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">Trạng thái:</span>
@@ -2387,8 +2502,21 @@ const OrderList = () => {
                                 </td>
                             </tr>
                         ) : (
-                            orders.map(o => (
-                                <tr key={o.id} onDoubleClick={() => { if (!isTrashView) openOrderEditor(o.id); }} onClick={() => toggleSelectOrder(o.id)} className={`transition-all group cursor-pointer ${selectedIds.includes(o.id) ? 'bg-primary/10' : 'hover:bg-primary/5'}`}>
+                            orders.map(o => {
+                                const isFocusedRouteRow = Number(o.id) === Number(routeOrderScope.focusOrderId);
+
+                                return (
+                                <tr
+                                    key={o.id}
+                                    data-order-row-id={o.id}
+                                    onDoubleClick={() => { if (!isTrashView) openOrderEditor(o.id); }}
+                                    onClick={() => toggleSelectOrder(o.id)}
+                                    className={`transition-all group cursor-pointer ${
+                                        isFocusedRouteRow
+                                            ? 'bg-amber-50 hover:bg-amber-100'
+                                            : (selectedIds.includes(o.id) ? 'bg-primary/10' : 'hover:bg-primary/5')
+                                    }`}
+                                >
                                     <td className="p-3 w-12 border border-primary/20 sticky-col-0 group-hover:bg-primary/5 transition-colors">
                                         <div className="flex items-center">
                                             <input
@@ -2411,6 +2539,11 @@ const OrderList = () => {
                                                         <span className={`mt-1 inline-flex w-fit items-center rounded-sm border px-1.5 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] ${ORDER_TYPE_BADGE_CLASSNAMES[normalizeOrderType(o.order_type)] || ORDER_TYPE_BADGE_CLASSNAMES[ORDER_TYPE_STANDARD]}`}>
                                                             {getOrderTypeMeta(o.order_type).shortLabel}
                                                         </span>
+                                                        {isFocusedRouteRow && (
+                                                            <span className="mt-1 inline-flex w-fit items-center rounded-sm border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] text-amber-800">
+                                                                Đang xem
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     <button onClick={(e) => handleCopy(o.order_number, e)} className={`opacity-0 group-hover:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === o.order_number ? 'text-green-500 opacity-100' : 'text-primary/20'}`}><span className="material-symbols-outlined text-[14px]">{copiedText === o.order_number ? 'check' : 'content_copy'}</span></button>
                                                 </div>
@@ -2724,7 +2857,8 @@ const OrderList = () => {
                                         );
                                     })}
                                 </tr>
-                            ))
+                            );
+                            })
                         )}
                     </tbody>
                 </table>

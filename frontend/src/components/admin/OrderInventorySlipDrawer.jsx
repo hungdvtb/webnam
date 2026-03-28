@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { orderApi } from '../../services/api';
 
@@ -73,14 +73,24 @@ const emptyDetail = {
     },
 };
 
+const getAvailableQuantityForType = (product, type) => {
+    if (!product) return 0;
+
+    return type === 'export'
+        ? Number(product.exportable_quantity || 0)
+        : Number(product.reversible_quantity || 0);
+};
+
 const buildDraftForm = (detail, type) => ({
     document_date: todayValue(),
     notes: '',
-    items: (detail?.products || []).map((product) => ({
-        product_id: product.product_id,
-        quantity: '',
-        notes: '',
-    })),
+    items: (detail?.products || [])
+        .filter((product) => getAvailableQuantityForType(product, type) > 0)
+        .map((product) => ({
+            product_id: product.product_id,
+            quantity: '',
+            notes: '',
+        })),
     type,
 });
 
@@ -126,6 +136,7 @@ const OrderInventorySlipDrawer = ({ open, orderId, refreshKey = 0, onClose, onUp
     const [deletingId, setDeletingId] = useState(null);
     const [composerType, setComposerType] = useState(null);
     const [form, setForm] = useState(buildDraftForm(emptyDetail, 'export'));
+    const composerPanelRef = useRef(null);
 
     const loadDetail = useCallback(async () => {
         if (!orderId) return;
@@ -173,6 +184,15 @@ const OrderInventorySlipDrawer = ({ open, orderId, refreshKey = 0, onClose, onUp
         };
     }, [open, composerType, onClose]);
 
+    useEffect(() => {
+        if (!composerType || !composerPanelRef.current) return;
+
+        composerPanelRef.current.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start',
+        });
+    }, [composerType]);
+
     const summary = detail?.summary || emptyDetail.summary;
     const products = useMemo(() => detail?.products || [], [detail]);
     const documents = useMemo(() => detail?.documents || emptyDetail.documents, [detail]);
@@ -192,9 +212,7 @@ const OrderInventorySlipDrawer = ({ open, orderId, refreshKey = 0, onClose, onUp
     const draftRows = useMemo(
         () => (form.items || []).map((item) => {
             const product = products.find((entry) => String(entry.product_id) === String(item.product_id));
-            const maxQuantity = composerType === 'export'
-                ? Number(product?.exportable_quantity || 0)
-                : Number(product?.reversible_quantity || 0);
+            const maxQuantity = getAvailableQuantityForType(product, composerType);
 
             return {
                 ...item,
@@ -212,8 +230,19 @@ const OrderInventorySlipDrawer = ({ open, orderId, refreshKey = 0, onClose, onUp
     );
 
     const openComposer = (type) => {
+        const nextForm = buildDraftForm(detail, type);
+        const typeLabel = slipTypeMeta[type]?.label?.toLowerCase() || 'phiếu kho';
+
+        if (nextForm.items.length === 0) {
+            onNotify?.({
+                type: 'error',
+                message: `Đơn hiện không còn số lượng khả dụng để tạo ${typeLabel}.`,
+            });
+            return;
+        }
+
         setComposerType(type);
-        setForm(buildDraftForm(detail, type));
+        setForm(nextForm);
     };
 
     const closeComposer = () => {
@@ -426,7 +455,7 @@ const OrderInventorySlipDrawer = ({ open, orderId, refreshKey = 0, onClose, onUp
                                 </div>
 
                                 {composerType ? (
-                                    <div className="overflow-hidden rounded-sm border border-primary/10 bg-white shadow-sm">
+                                    <div ref={composerPanelRef} className="overflow-hidden rounded-sm border border-primary/10 bg-white shadow-sm">
                                         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-primary/10 bg-[#fbfcfe] px-4 py-3">
                                             <div>
                                                 <div className="flex items-center gap-2 text-[14px] font-black text-primary">

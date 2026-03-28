@@ -11,9 +11,12 @@ import {
     ORDER_TYPE_EXCHANGE_RETURN,
     ORDER_TYPE_PARTIAL_DELIVERY,
     ORDER_TYPE_STANDARD,
+    getSupplementReturnStatusLabel,
     getOrderTypeMeta,
     isSpecialOrderType,
+    normalizeSupplementReturnStatus,
     normalizeOrderType,
+    SUPPLEMENT_RETURN_STATUS_NOT_RETURNED,
 } from '../../config/orderTypes';
 import { writeLeadListReturnHint } from '../../utils/leadListViewState';
 import { VN_REGIONS } from '../../data/regions';
@@ -375,6 +378,22 @@ const calculateSupplementItemsCostTotal = (items = []) => items.reduce(
     (sum, item) => sum + ((parseMoneyNumber(item?.cost_price, 0) || 0) * (parseMoneyNumber(item?.quantity, 0) || 0)),
     0
 );
+const collectSupplementDeclarationCodes = (items = []) => Array.from(new Set(
+    (Array.isArray(items) ? items : [])
+        .map((item) => String(item?.sku || '').trim() || (item?.product_id ? `SP#${item.product_id}` : ''))
+        .filter(Boolean)
+));
+const buildCompactSupplementCodeSummary = (codes = []) => {
+    if (!Array.isArray(codes) || codes.length === 0) {
+        return 'Chưa khai báo';
+    }
+
+    if (codes.length <= 2) {
+        return codes.join(', ');
+    }
+
+    return `${codes.slice(0, 2).join(', ')} +${codes.length - 2}`;
+};
 const resolveOrderItemCostPrice = (item, useCurrentProductCost = false) => {
     const preferredValues = useCurrentProductCost
         ? [
@@ -818,6 +837,8 @@ const OrderForm = () => {
         source: 'Website',
         order_type: ORDER_TYPE_STANDARD,
         settlement_delta: 0,
+        return_tracking_code: '',
+        return_status: SUPPLEMENT_RETURN_STATUS_NOT_RETURNED,
         type: 'Lẻ',
         shipment_status: 'Chưa giao',
         notes: '',
@@ -1535,7 +1556,7 @@ const OrderForm = () => {
             const shouldUseCurrentProductCost = (isDuplicating ? MAIN_ORDER_KIND : nextOrderKind) === MAIN_ORDER_KIND;
             const mappedItems = order.items?.map(item => ({
                 product_id: item.product_id,
-                name: item.product?.name || item.product_name_snapshot || `Sáº£n pháº©m #${item.product_id}`,
+                name: item.product?.name || item.product_name_snapshot || `Sản phẩm #${item.product_id}`,
                 sku: item.product?.sku || item.product_sku_snapshot || `N/A`,
                 quantity: parseMoneyNumber(item.quantity, 0) || 0,
                 price: parseMoneyNumber(item.price, 0) || 0,
@@ -1568,6 +1589,10 @@ const OrderForm = () => {
                 notes: order.notes || '',
                 order_type: nextOrderType,
                 settlement_delta: isDuplicating ? 0 : (parseMoneyNumber(order.settlement_delta, 0) || 0),
+                return_tracking_code: isDuplicating ? '' : (order.return_tracking_code || order.returnTrackingCode || ''),
+                return_status: isDuplicating
+                    ? SUPPLEMENT_RETURN_STATUS_NOT_RETURNED
+                    : normalizeSupplementReturnStatus(order.return_status || order.returnStatus),
                 items: order.items?.map(item => ({
                     product_id: item.product_id,
                     name: item.product?.name || item.product_name_snapshot || `Sản phẩm #${item.product_id}`,
@@ -1657,6 +1682,8 @@ const OrderForm = () => {
                 source: draft.source || 'Website',
                 order_type: ORDER_TYPE_STANDARD,
                 settlement_delta: 0,
+                return_tracking_code: '',
+                return_status: SUPPLEMENT_RETURN_STATUS_NOT_RETURNED,
                 type: draft.type || 'Lẻ',
                 shipment_status: draft.shipment_status || 'Chưa giao',
                 notes: draft.notes || '',
@@ -1863,11 +1890,13 @@ const OrderForm = () => {
     const supplementDeclarationCount = Array.isArray(formData.supplement_items)
         ? formData.supplement_items.length
         : 0;
-    const supplementDeclarationSkus = Array.from(new Set(
-        (Array.isArray(formData.supplement_items) ? formData.supplement_items : [])
-            .map((item) => String(item?.sku || '').trim() || (item?.product_id ? `SP#${item.product_id}` : ''))
-            .filter(Boolean)
-    ));
+    const supplementDeclarationSkus = collectSupplementDeclarationCodes(formData.supplement_items);
+    const supplementDeclarationSkuSummary = buildCompactSupplementCodeSummary(supplementDeclarationSkus);
+    const supplementDeclarationSkuTitle = supplementDeclarationSkus.join(', ');
+    const normalizedSupplementReturnStatus = normalizeSupplementReturnStatus(formData.return_status);
+    const supplementReturnStatusLabel = getSupplementReturnStatusLabel(normalizedSupplementReturnStatus);
+    const supplementReturnTrackingCode = String(formData.return_tracking_code || '').trim();
+    const supplementReturnTrackingSummary = supplementReturnTrackingCode || 'Chưa có';
 
     useEffect(() => {
         if (!specialOrderType) {
@@ -2378,6 +2407,10 @@ const OrderForm = () => {
                 order_kind: isEdit ? normalizedOrderKind : MAIN_ORDER_KIND,
                 order_type: normalizedOrderType,
                 settlement_delta: specialOrderType ? (parseMoneyNumber(formData.settlement_delta, 0) || 0) : 0,
+                return_tracking_code: specialOrderType ? String(formData.return_tracking_code || '').trim() : '',
+                return_status: specialOrderType
+                    ? normalizeSupplementReturnStatus(formData.return_status)
+                    : SUPPLEMENT_RETURN_STATUS_NOT_RETURNED,
                 supplement_items: normalizedSupplementItems,
                 region_type: regionType,
                 lead_id: leadId ? Number(leadId) : undefined,
@@ -3326,6 +3359,43 @@ const OrderForm = () => {
                                     />
                                 </Field>
                                 <div className="rounded-sm border border-amber-200/80 bg-white/80 px-3 py-2">
+                                    <div className="grid grid-cols-1 gap-2 text-[12px] font-semibold lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_auto] lg:items-center lg:gap-3">
+                                        <div
+                                            className="min-w-0"
+                                            title={supplementDeclarationSkuTitle || 'Chưa khai báo sản phẩm đổi trả.'}
+                                        >
+                                            <div className="text-[11px] font-black uppercase tracking-[0.12em] text-amber-900/55">
+                                                Mã SP đổi trả
+                                            </div>
+                                            <div className="mt-1 truncate text-amber-900">
+                                                {supplementDeclarationSkuSummary}
+                                            </div>
+                                        </div>
+
+                                        <div
+                                            className="min-w-0"
+                                            title={supplementReturnTrackingCode || 'Chưa có mã vận đơn trả về.'}
+                                        >
+                                            <div className="text-[11px] font-black uppercase tracking-[0.12em] text-amber-900/55">
+                                                Mã VĐ trả về
+                                            </div>
+                                            <div className="mt-1 truncate text-amber-900">
+                                                {supplementReturnTrackingSummary}
+                                            </div>
+                                        </div>
+
+                                        <div className="min-w-0 lg:text-right">
+                                            <div className="text-[11px] font-black uppercase tracking-[0.12em] text-amber-900/55">
+                                                Trạng thái
+                                            </div>
+                                            <div className="mt-1">
+                                                <span className={`inline-flex items-center rounded-sm border px-2.5 py-1 text-[11px] font-black ${normalizedSupplementReturnStatus === SUPPLEMENT_RETURN_STATUS_NOT_RETURNED ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+                                                    {supplementReturnStatusLabel}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="hidden">
                                     <div className="text-[11px] font-black uppercase tracking-[0.12em] text-amber-900/55">
                                         Mã sản phẩm đổi trả
                                     </div>
@@ -3345,6 +3415,7 @@ const OrderForm = () => {
                                             Chưa khai báo sản phẩm đổi trả.
                                         </div>
                                     )}
+                                    </div>
                                 </div>
                                 <div className="rounded-sm border border-amber-200/80 bg-white/70 px-3 py-2">
                                     <div className="flex items-center justify-between gap-3 text-[12px] font-bold">
@@ -3562,9 +3633,19 @@ const OrderForm = () => {
                 open={showSupplementItemsModal}
                 orderType={normalizedOrderType}
                 items={formData.supplement_items}
+                returnTrackingCode={formData.return_tracking_code}
+                returnStatus={formData.return_status}
                 onChange={(supplementItems) => setFormData((prev) => ({
                     ...prev,
                     supplement_items: supplementItems,
+                }))}
+                onReturnTrackingCodeChange={(returnTrackingCode) => setFormData((prev) => ({
+                    ...prev,
+                    return_tracking_code: returnTrackingCode,
+                }))}
+                onReturnStatusChange={(returnStatus) => setFormData((prev) => ({
+                    ...prev,
+                    return_status: returnStatus,
                 }))}
                 onClose={() => setShowSupplementItemsModal(false)}
             />

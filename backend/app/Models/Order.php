@@ -32,7 +32,7 @@ class Order extends Model
         'user_id', 'lead_id', 'order_number', 'order_kind', 'order_type', 'converted_from_order_id', 'converted_from_kind', 'total_price', 'status',
         'customer_name', 'customer_email', 'customer_phone', 
         'shipping_address', 'province', 'district', 'ward', 'notes', 'account_id',
-        'source', 'type', 'shipment_status', 'shipping_fee', 'discount', 'settlement_delta', 'cost_total', 'profit_total',
+        'source', 'type', 'shipment_status', 'shipping_fee', 'discount', 'settlement_delta', 'return_tracking_code', 'return_status', 'cost_total', 'profit_total',
         'supplement_items_total_price', 'supplement_items_cost_total', 'report_revenue_total', 'report_cost_total',
         'report_profit_total', 'customer_id',
         'shipping_status', 'shipping_synced_at', 'shipping_status_source',

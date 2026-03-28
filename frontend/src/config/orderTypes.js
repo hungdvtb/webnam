@@ -1,6 +1,13 @@
 export const ORDER_TYPE_STANDARD = 'standard';
 export const ORDER_TYPE_EXCHANGE_RETURN = 'exchange_return';
 export const ORDER_TYPE_PARTIAL_DELIVERY = 'partial_delivery';
+export const SUPPLEMENT_RETURN_STATUS_NOT_RETURNED = 'not_returned';
+export const SUPPLEMENT_RETURN_STATUS_RETURNED = 'returned';
+
+export const SUPPLEMENT_RETURN_STATUS_OPTIONS = [
+    { value: SUPPLEMENT_RETURN_STATUS_NOT_RETURNED, label: 'Chưa trả' },
+    { value: SUPPLEMENT_RETURN_STATUS_RETURNED, label: 'Đã trả về' },
+];
 
 export const ORDER_TYPE_OPTIONS = [
     { value: ORDER_TYPE_STANDARD, label: 'Đơn thường' },
@@ -42,3 +49,14 @@ export const normalizeOrderType = (value) => (
 export const isSpecialOrderType = (value) => normalizeOrderType(value) !== ORDER_TYPE_STANDARD;
 
 export const getOrderTypeMeta = (value) => ORDER_TYPE_META[normalizeOrderType(value)] || ORDER_TYPE_META[ORDER_TYPE_STANDARD];
+
+export const normalizeSupplementReturnStatus = (value) => (
+    SUPPLEMENT_RETURN_STATUS_OPTIONS.some((option) => option.value === String(value || '').trim())
+        ? String(value || '').trim()
+        : SUPPLEMENT_RETURN_STATUS_NOT_RETURNED
+);
+
+export const getSupplementReturnStatusLabel = (value) => (
+    SUPPLEMENT_RETURN_STATUS_OPTIONS.find((option) => option.value === normalizeSupplementReturnStatus(value))?.label
+    || SUPPLEMENT_RETURN_STATUS_OPTIONS[0].label
+);

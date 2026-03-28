@@ -50,6 +50,12 @@ class OrderController extends Controller
     private const ORDER_TYPE_STANDARD = Order::TYPE_STANDARD;
     private const ORDER_TYPE_EXCHANGE_RETURN = Order::TYPE_EXCHANGE_RETURN;
     private const ORDER_TYPE_PARTIAL_DELIVERY = Order::TYPE_PARTIAL_DELIVERY;
+    private const RETURN_STATUS_NOT_RETURNED = 'not_returned';
+    private const RETURN_STATUS_RETURNED = 'returned';
+    private const RETURN_STATUSES = [
+        self::RETURN_STATUS_NOT_RETURNED,
+        self::RETURN_STATUS_RETURNED,
+    ];
     private const ORDER_KIND_LABELS = [
         self::ORDER_KIND_OFFICIAL => 'Đơn hàng chính',
         self::ORDER_KIND_TEMPLATE => 'Đơn hàng mẫu',
@@ -268,6 +274,8 @@ class OrderController extends Controller
             'customer_phone' => $order->customer_phone,
             'total_price' => (float) $order->total_price,
             'settlement_delta' => (float) ($order->settlement_delta ?? 0),
+            'return_tracking_code' => $order->return_tracking_code,
+            'return_status' => $this->normalizeReturnStatus($order->return_status),
             'supplement_items_total_price' => (float) ($order->supplement_items_total_price ?? 0),
             'supplement_items_cost_total' => (float) ($order->supplement_items_cost_total ?? 0),
             'report_revenue_total' => (float) ($order->report_revenue_total ?? 0),
@@ -296,6 +304,44 @@ class OrderController extends Controller
         return in_array($normalized, Order::TYPES, true)
             ? $normalized
             : self::ORDER_TYPE_STANDARD;
+    }
+
+    private function normalizeReturnTrackingCode(mixed $trackingCode): ?string
+    {
+        $normalized = trim((string) $trackingCode);
+
+        return $normalized !== ''
+            ? $normalized
+            : null;
+    }
+
+    private function normalizeReturnStatus(?string $returnStatus): string
+    {
+        $normalized = Str::lower(trim((string) $returnStatus));
+
+        return in_array($normalized, self::RETURN_STATUSES, true)
+            ? $normalized
+            : self::RETURN_STATUS_NOT_RETURNED;
+    }
+
+    private function supplementReturnTrackingPayload(
+        ?string $orderType,
+        mixed $returnTrackingCode = null,
+        ?string $returnStatus = null
+    ): array {
+        $normalizedOrderType = $this->normalizeOrderType($orderType);
+
+        if ($normalizedOrderType === self::ORDER_TYPE_STANDARD) {
+            return [
+                'return_tracking_code' => null,
+                'return_status' => self::RETURN_STATUS_NOT_RETURNED,
+            ];
+        }
+
+        return [
+            'return_tracking_code' => $this->normalizeReturnTrackingCode($returnTrackingCode),
+            'return_status' => $this->normalizeReturnStatus($returnStatus),
+        ];
     }
 
     private function shouldManageInventory(string $orderKind): bool
@@ -835,7 +881,10 @@ class OrderController extends Controller
                 $newOrder->customer_id = null;
                 $newOrder->status = $this->defaultStatusForKind($original->account_id, $targetKind, 'new');
                 $newOrder->shipment_status = 'Chưa giao';
-                $newOrder->forceFill($this->freshShippingState());
+                $newOrder->forceFill(array_merge(
+                    $this->freshShippingState(),
+                    $this->supplementReturnTrackingPayload((string) $newOrder->order_type)
+                ));
                 $newOrder->save();
 
                 $rawItems = $original->items->map(function (OrderItem $item) {
@@ -1915,6 +1964,8 @@ class OrderController extends Controller
             'order_type' => 'nullable|string|in:standard,exchange_return,partial_delivery',
             'region_type' => 'nullable|string|in:new,old',
             'settlement_delta' => 'nullable|numeric',
+            'return_tracking_code' => 'nullable|string|max:120',
+            'return_status' => 'nullable|string|in:not_returned,returned',
             'supplement_items' => 'nullable|array',
             'supplement_items.*.product_id' => 'nullable|integer',
             'supplement_items.*.quantity' => 'nullable|integer|min:0',
@@ -1942,6 +1993,12 @@ class OrderController extends Controller
                     ->with('statusConfig')
                     ->findOrFail((int) $request->lead_id);
             }
+
+            $returnTrackingData = $this->supplementReturnTrackingPayload(
+                $orderType,
+                $request->input('return_tracking_code'),
+                $request->input('return_status')
+            );
 
             $order = Order::create(array_merge([
                 'user_id' => Auth::id(),
@@ -1973,7 +2030,7 @@ class OrderController extends Controller
                 'report_revenue_total' => 0,
                 'report_cost_total' => 0,
                 'report_profit_total' => 0,
-            ], $this->freshShippingState()));
+            ], $this->freshShippingState(), $returnTrackingData));
 
             $summary = $this->syncOrderItems($order, $rawItems, $orderKind);
             $supplementSummary = $orderType === self::ORDER_TYPE_STANDARD
@@ -2060,6 +2117,8 @@ class OrderController extends Controller
                 'shipping_fee',
                 'discount',
                 'settlement_delta',
+                'return_tracking_code',
+                'return_status',
                 'cost_total',
                 'profit_total',
                 'supplement_items_total_price',
@@ -2143,6 +2202,8 @@ class OrderController extends Controller
             'order_type' => 'nullable|string|in:standard,exchange_return,partial_delivery',
             'region_type' => 'nullable|string|in:new,old',
             'settlement_delta' => 'nullable|numeric',
+            'return_tracking_code' => 'nullable|string|max:120',
+            'return_status' => 'nullable|string|in:not_returned,returned',
             'supplement_items' => 'nullable|array',
             'supplement_items.*.product_id' => 'nullable|integer',
             'supplement_items.*.quantity' => 'nullable|integer|min:0',
@@ -2196,6 +2257,14 @@ class OrderController extends Controller
             $data['settlement_delta'] = $requestedOrderType === self::ORDER_TYPE_STANDARD
                 ? 0
                 : (float) $request->input('settlement_delta', $order->settlement_delta ?? 0);
+            $data = array_merge(
+                $data,
+                $this->supplementReturnTrackingPayload(
+                    $requestedOrderType,
+                    $request->input('return_tracking_code', $order->return_tracking_code),
+                    $request->input('return_status', $order->return_status)
+                )
+            );
 
             if (!$this->shouldManageInventory($requestedKind)) {
                 $data = array_merge($data, $this->freshShippingState());

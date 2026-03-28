@@ -1,7 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { productApi } from '../../services/api';
-import { getOrderTypeMeta, isSpecialOrderType } from '../../config/orderTypes';
+import {
+    getOrderTypeMeta,
+    isSpecialOrderType,
+    normalizeSupplementReturnStatus,
+    SUPPLEMENT_RETURN_STATUS_OPTIONS,
+} from '../../config/orderTypes';
 
 const moneyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
 
@@ -22,16 +27,22 @@ const buildItemFromProduct = (product) => ({
 
 const searchInputClassName = 'w-full h-11 rounded-sm border border-primary/10 bg-white pl-10 pr-10 text-[13px] text-[#0F172A] focus:outline-none focus:border-primary/30 transition-all';
 const tableInputClassName = 'w-full h-9 rounded-sm border border-primary/10 bg-white px-2 text-[13px] text-[#0F172A] focus:outline-none focus:border-primary transition-all';
+const popupMetaInputClassName = 'w-full h-10 rounded-sm border border-primary/10 bg-white px-3 text-[13px] text-[#0F172A] focus:outline-none focus:border-primary/30 transition-all';
 
 const OrderSupplementItemsSection = ({
     open = false,
     orderType,
     items = [],
+    returnTrackingCode = '',
+    returnStatus,
     onChange,
+    onReturnTrackingCodeChange,
+    onReturnStatusChange,
     onClose,
 }) => {
     const normalizedItems = Array.isArray(items) ? items : [];
     const orderTypeMeta = getOrderTypeMeta(orderType);
+    const normalizedReturnStatus = normalizeSupplementReturnStatus(returnStatus);
     const [searchTerm, setSearchTerm] = useState('');
     const [searchResults, setSearchResults] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -212,8 +223,9 @@ const OrderSupplementItemsSection = ({
                             </div>
 
                             <div className="border-b border-primary/10 bg-primary/[0.02] px-5 py-4 sm:px-6">
-                                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                                    <div className="relative w-full xl:max-w-[440px]">
+                                <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(420px,0.95fr)] xl:items-start">
+                                    <div className="flex min-w-0 flex-col gap-3">
+                                        <div className="relative w-full">
                                         <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">
                                             search
                                         </span>
@@ -276,6 +288,37 @@ const OrderSupplementItemsSection = ({
                                                 )}
                                             </div>
                                         )}
+                                        </div>
+
+                                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                            <label className="block rounded-sm border border-primary/10 bg-white px-3 py-3 shadow-sm">
+                                                <span className="block text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                                    Mã vận đơn trả về
+                                                </span>
+                                                <input
+                                                    type="text"
+                                                    value={returnTrackingCode}
+                                                    onChange={(event) => onReturnTrackingCodeChange?.(event.target.value)}
+                                                    placeholder="Nhập mã vận đơn theo dõi"
+                                                    className={`${popupMetaInputClassName} mt-2`}
+                                                />
+                                            </label>
+
+                                            <label className="block rounded-sm border border-primary/10 bg-white px-3 py-3 shadow-sm">
+                                                <span className="block text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                                    Trạng thái trả về
+                                                </span>
+                                                <select
+                                                    value={normalizedReturnStatus}
+                                                    onChange={(event) => onReturnStatusChange?.(event.target.value)}
+                                                    className={`${popupMetaInputClassName} mt-2`}
+                                                >
+                                                    {SUPPLEMENT_RETURN_STATUS_OPTIONS.map((option) => (
+                                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                                    ))}
+                                                </select>
+                                            </label>
+                                        </div>
                                     </div>
 
                                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 xl:min-w-[450px]">

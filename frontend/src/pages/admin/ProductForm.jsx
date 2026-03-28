@@ -8,7 +8,7 @@ import ReactQuill from 'react-quill-new';
 import mammoth from 'mammoth';
 import 'react-quill-new/dist/quill.snow.css';
 
-import QuillResizeImage from 'quill-resize-module';
+import QuillResizeImage from 'quill-image-resize-module-react';
 window.Quill = ReactQuill.Quill;
 ReactQuill.Quill.register('modules/resize', QuillResizeImage);
 

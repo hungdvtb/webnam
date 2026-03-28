@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import { Link, useNavigate } from 'react-router-dom';
-import { productApi, categoryApi, attributeApi, inventoryApi } from '../../services/api';
+import { productApi, categoryApi, attributeApi, inventoryApi, STORAGE_BASE_URL } from '../../services/api';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
 import Pagination from '../../components/Pagination';
@@ -36,8 +36,7 @@ function getPrimaryImage(product) {
     let url = primary?.image_url || product.images[0]?.image_url;
     
     if (url && !url.startsWith('http') && !url.startsWith('data:')) {
-        const baseUrl = 'http://localhost:8003';
-        url = `${baseUrl}/storage/${url.replace(/^\/storage\//, '').replace(/^\//, '')}`;
+        url = `${STORAGE_BASE_URL}/storage/${url.replace(/^\/storage\//, '').replace(/^\//, '')}`;
     }
     return url || null;
 }

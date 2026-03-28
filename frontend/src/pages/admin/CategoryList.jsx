@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { categoryApi, attributeApi } from '../../services/api';
+import { categoryApi, attributeApi, STORAGE_BASE_URL } from '../../services/api';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { Tree } from '@minoru/react-dnd-treeview';
@@ -653,7 +653,7 @@ const CategoryList = () => {
             } else {
                 // Remove 'storage/' if it's already at the beginning to avoid duplication
                 const finalPath = cleanPath.startsWith('storage/') ? cleanPath.substring(8) : cleanPath;
-                bannerUrl = `http://localhost:8003/storage/${finalPath}`;
+                bannerUrl = `${STORAGE_BASE_URL}/storage/${finalPath}`;
             }
         }
 

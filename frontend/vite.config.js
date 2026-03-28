@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   optimizeDeps: {
-    include: ['quill-resize-module', 'react-quill-new'],
+    include: ['quill-image-resize-module-react', 'react-quill-new'],
   },
   server: {
     // Listen on all interfaces so Vite can serve both localhost and LAN access.

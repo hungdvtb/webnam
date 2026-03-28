@@ -27,9 +27,11 @@ services:
       DB_PASSWORD: Hungdv@121
       APP_ENV: production
       APP_DEBUG: "false"
-      APP_URL: https://api.gomdaithanh.com
-      FRONTEND_URL: https://admin.gomdaithanh.com
-      FRONTEND_WEBSITE_URL: https://gomdaithanh.com
+      APP_URL: ${APP_URL:-https://api.gomdaithanh.com}
+      FRONTEND_URL: ${FRONTEND_URL:-https://admin.gomdaithanh.com}
+      FRONTEND_WEBSITE_URL: ${FRONTEND_WEBSITE_URL:-https://gomdaithanh.com}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://gomdaithanh.com,https://admin.gomdaithanh.com,https://www.gomdaithanh.com,http://localhost:3000,http://localhost:3003,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:3003,http://127.0.0.1:5173}
+      SANCTUM_STATEFUL_DOMAINS: ${SANCTUM_STATEFUL_DOMAINS:-localhost,localhost:3000,localhost:3003,127.0.0.1,127.0.0.1:3000,127.0.0.1:3003,127.0.0.1:8000,::1}
     depends_on:
       - db
 
@@ -38,7 +40,8 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_BASE_URL: https://api.gomdaithanh.com/api
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-https://api.gomdaithanh.com/api}
+        VITE_STORAGE_BASE_URL: ${VITE_STORAGE_BASE_URL:-https://api.gomdaithanh.com/storage}
     container_name: webnam-admin
     restart: always
     depends_on:
@@ -49,13 +52,15 @@ services:
       context: ./webgom
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: https://api.gomdaithanh.com/api
-        NEXT_PUBLIC_SITE_CODE: GSDT
-        NEXT_PUBLIC_STORAGE_URL: https://api.gomdaithanh.com/storage
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://api.gomdaithanh.com/api}
+        NEXT_PUBLIC_SITE_CODE: ${NEXT_PUBLIC_SITE_CODE:-GSDT}
+        NEXT_PUBLIC_STORAGE_URL: ${NEXT_PUBLIC_STORAGE_URL:-https://api.gomdaithanh.com/storage}
     container_name: webnam-website
     restart: always
     environment:
-      NEXT_PUBLIC_API_URL: https://api.gomdaithanh.com/api
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://api.gomdaithanh.com/api}
+      NEXT_PUBLIC_SITE_CODE: ${NEXT_PUBLIC_SITE_CODE:-GSDT}
+      NEXT_PUBLIC_STORAGE_URL: ${NEXT_PUBLIC_STORAGE_URL:-https://api.gomdaithanh.com/storage}
     depends_on:
       - backend
 

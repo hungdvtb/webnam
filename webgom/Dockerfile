@@ -4,9 +4,9 @@ COPY package*.json ./
 RUN npm install
 COPY . .
 # Next.js build args for process.env.NEXT_PUBLIC_*
-ARG NEXT_PUBLIC_API_URL=https://api.gomdaithanh.com/api
+ARG NEXT_PUBLIC_API_URL=http://localhost:8003/api
 ARG NEXT_PUBLIC_SITE_CODE=GSDT
-ARG NEXT_PUBLIC_STORAGE_URL=https://api.gomdaithanh.com/storage
+ARG NEXT_PUBLIC_STORAGE_URL=http://localhost:8003/storage
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_SITE_CODE=$NEXT_PUBLIC_SITE_CODE
 ENV NEXT_PUBLIC_STORAGE_URL=$NEXT_PUBLIC_STORAGE_URL

@@ -5,8 +5,10 @@ COPY package*.json ./
 RUN npm install
 COPY . .
 # We need environment variables at build time for Vite
-ARG VITE_API_BASE_URL=https://api.gomdaithanh.com/api
+ARG VITE_API_BASE_URL=http://localhost:8003/api
+ARG VITE_STORAGE_BASE_URL=http://localhost:8003/storage
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+ENV VITE_STORAGE_BASE_URL=$VITE_STORAGE_BASE_URL
 RUN npm run build
 
 # Production stage

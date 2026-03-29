@@ -8,9 +8,11 @@ use App\Models\InventoryDocumentItem;
 use App\Models\InventoryDocumentItemOrderLink;
 use App\Models\InventoryDocumentOrderLink;
 use App\Models\Order;
+use App\Models\OrderStatusLog;
 use App\Models\Product;
 use App\Models\Shipment;
 use App\Services\Inventory\InventoryService;
+use App\Support\OrderStatusCatalog;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -2168,11 +2170,71 @@ class OrderInventorySlipService
             ]),
         ])->save();
 
+        $this->syncManagedReturnOrdersToReturned($orders, (string) $document->document_number, $userId);
+
         if (!empty($touchedProductIds)) {
             $this->inventoryService->refreshProducts($touchedProductIds);
         }
 
         return $this->loadManagedReturnDocument($document);
+    }
+
+    private function syncManagedReturnOrdersToReturned(
+        Collection $orders,
+        string $documentNumber,
+        ?int $userId
+    ): void {
+        $orderIds = $orders
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($orderIds)) {
+            return;
+        }
+
+        $lockedOrders = Order::query()
+            ->whereIn('id', $orderIds)
+            ->lockForUpdate()
+            ->get()
+            ->keyBy(fn (Order $order) => (int) $order->id);
+
+        $ensuredAccounts = [];
+
+        foreach ($orderIds as $orderId) {
+            $order = $lockedOrders->get((int) $orderId);
+
+            if (!$order) {
+                continue;
+            }
+
+            $accountId = (int) ($order->account_id ?? 0);
+            if ($accountId > 0 && !isset($ensuredAccounts[$accountId])) {
+                OrderStatusCatalog::ensureReturnedStatus($accountId);
+                $ensuredAccounts[$accountId] = true;
+            }
+
+            $oldStatus = trim((string) $order->status);
+            if ($oldStatus === OrderStatusCatalog::RETURNED_CODE) {
+                continue;
+            }
+
+            OrderStatusLog::create([
+                'order_id' => (int) $order->id,
+                'from_status' => $oldStatus !== '' ? $oldStatus : null,
+                'to_status' => OrderStatusCatalog::RETURNED_CODE,
+                'source' => 'system',
+                'changed_by' => $userId,
+                'reason' => "Tu dong cap nhat tu phieu hoan {$documentNumber}",
+            ]);
+
+            $order->forceFill([
+                'status' => OrderStatusCatalog::RETURNED_CODE,
+            ])->save();
+        }
     }
 
     private function normalizeManagedReturnItems(array $payload, array $sourceProducts, array $sourceOrders): Collection

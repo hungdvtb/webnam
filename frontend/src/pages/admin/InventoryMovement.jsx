@@ -267,7 +267,7 @@ const isSlipTab = (tabKey) => isDocumentTab(tabKey) || tabKey === 'trash';
 const documentTypeMap = { returns: 'return', damaged: 'damaged', adjustments: 'adjustment' };
 const documentTitleMap = { returns: 'Phiếu hàng hoàn', damaged: 'Phiếu hàng hỏng', adjustments: 'Phiếu điều chỉnh' };
 const pageSizeOptions = [20, 50, 100, 500];
-const inventoryTableStorageVersion = 'v8';
+const inventoryTableStorageVersion = 'v9';
 const emptySortConfig = { key: null, direction: 'none' };
 const getStoredPageSize = (key) => {
     if (typeof window === 'undefined') return 20;
@@ -342,7 +342,7 @@ const getActualStockCellMeta = (row) => {
     };
 };
 const renderTwoLineHeader = (topLine, bottomLine) => (
-    <span className="inline-flex flex-col items-center whitespace-normal text-center text-[11px] font-bold leading-[1.15]">
+    <span className="inline-flex flex-col items-center whitespace-normal text-center text-[14px] font-bold leading-[1.1]">
         <span>{topLine}</span>
         <span>{bottomLine}</span>
     </span>
@@ -1672,7 +1672,8 @@ const productColumns = [
     { id: 'total_adjusted', label: 'Tổng điều chỉnh', minWidth: 82, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'điều chỉnh') },
     { id: 'computed_stock', label: 'Tồn kho', minWidth: 76, align: 'right', headerRender: () => renderTwoLineHeader('Tồn', 'kho') },
     { id: 'pending_export_quantity', label: 'SL chờ xuất', minWidth: 82, align: 'right', headerTooltip: 'Đã bán nhưng chưa xuất kho', headerRender: () => renderTwoLineHeader('SL chờ', 'xuất') },
-    { id: 'actual_stock', label: 'Tồn thực tế', minWidth: 84, align: 'right', headerTooltip: 'Tồn sau khi trừ đơn chưa xuất', headerRender: () => renderTwoLineHeader('Tồn', 'thực tế') },
+    { id: 'pending_return_quantity', label: 'SL hoàn chờ về', minWidth: 90, align: 'right', headerTooltip: 'Đơn hoàn chưa tạo phiếu hoàn nhập lại kho', headerRender: () => renderTwoLineHeader('SL hoàn', 'chờ về') },
+    { id: 'actual_stock', label: 'Tồn thực tế', minWidth: 84, align: 'right', headerTooltip: 'Tồn kho - đơn chờ xuất + đơn hoàn chờ về', headerRender: () => renderTwoLineHeader('Tồn', 'thực tế') },
     { id: 'expected_cost', label: 'Giá nhập dự kiến', minWidth: 108, align: 'right', headerRender: () => renderTwoLineHeader('Giá nhập', 'dự kiến') },
     { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 108, align: 'right', headerRender: () => renderTwoLineHeader('Giá nhập', 'thực tế') },
     { id: 'inventory_value', label: 'Thành tiền', minWidth: 104, align: 'right', headerRender: () => renderTwoLineHeader('Thành', 'tiền') },
@@ -1789,6 +1790,7 @@ const inventorySortColumnMaps = {
         total_adjusted: 'total_adjusted',
         computed_stock: 'computed_stock',
         pending_export_quantity: 'pending_export_quantity',
+        pending_return_quantity: 'pending_return_quantity',
         actual_stock: 'actual_stock',
         expected_cost: 'expected_cost',
         current_cost: 'cost_price',
@@ -3110,6 +3112,7 @@ const InventoryTable = ({
     onRowDoubleClick,
     wrapperClassName = '',
     viewportClassName = tableViewportClass,
+    headerTextClassName = 'text-[12px]',
 }) => {
     const tableColumns = useMemo(() => {
         const baseColumns = columns.filter((column) => column.id !== 'stt');
@@ -3172,7 +3175,7 @@ const InventoryTable = ({
                                         column.headerTooltip || '',
                                         canSortColumn(column) ? 'Double click để sắp xếp' : '',
                                     ].filter(Boolean).join(' • ') || undefined}
-                                    className={`relative border-b border-r border-primary/10 px-3 py-3 text-center text-[12px] font-bold text-primary ${canSortColumn(column) ? 'cursor-pointer select-none' : ''}`}
+                                    className={`relative border-b border-r border-primary/10 px-3 py-3 text-center font-bold text-primary ${headerTextClassName} ${canSortColumn(column) ? 'cursor-pointer select-none' : ''}`}
                                     style={{ width: columnWidths[column.id] || column.minWidth }}
                                 >
                                     <div className={`flex items-center gap-1 ${column.align === 'right' ? 'justify-end' : 'justify-center'}`}>
@@ -6390,6 +6393,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     const productSummaryItems = useMemo(() => !productSummary ? [] : [
         { label: 'Tổng số lượng tồn kho', value: formatNumber(productSummary.total_stock ?? productSummary.total_sellable_stock) },
         { label: 'SL chờ xuất', value: formatNumber(productSummary.total_pending_export || 0) },
+        { label: 'SL hoàn chờ về', value: formatNumber(productSummary.total_pending_return || 0) },
         { label: 'Tồn thực tế', value: formatNumber(productSummary.total_actual_stock ?? productSummary.total_sellable_stock ?? 0) },
         { label: 'Tổng giá trị tồn kho', value: formatCurrency(productSummary.total_inventory_value || 0) },
         { label: 'Tổng mã', value: formatNumber(productSummary.total_products) },
@@ -6549,6 +6553,14 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             return (
                 <span className={`text-[14px] font-black ${waitingQuantity > 0 ? 'text-amber-600' : 'text-primary/45'}`}>
                     {formatNumber(waitingQuantity)}
+                </span>
+            );
+        }
+        if (columnId === 'pending_return_quantity') {
+            const pendingReturnQuantity = Number(row.pending_return_quantity || 0);
+            return (
+                <span className={`text-[14px] font-black ${pendingReturnQuantity > 0 ? 'text-sky-600' : 'text-primary/45'}`}>
+                    {formatNumber(pendingReturnQuantity)}
                 </span>
             );
         }
@@ -7282,6 +7294,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 sortColumnMap={inventorySortColumnMaps.products}
                 wrapperClassName="flex min-h-0 flex-1 flex-col"
                 viewportClassName={stretchedTableViewportClass}
+                headerTextClassName="text-[14px]"
             />
         </div>
     );

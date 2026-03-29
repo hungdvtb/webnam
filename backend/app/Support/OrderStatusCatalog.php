@@ -9,6 +9,9 @@ class OrderStatusCatalog
     public const PRINTED_CODE = 'printed';
     public const PRINTED_NAME = 'Đã in';
     public const PRINTED_COLOR = '#0f766e';
+    public const RETURNED_CODE = 'returned';
+    public const RETURNED_NAME = 'Đã hoàn';
+    public const RETURNED_COLOR = '#b91c1c';
 
     public const PRINT_STATUS_LOCK_CODES = [
         'shipping',
@@ -20,9 +23,38 @@ class OrderStatusCatalog
 
     public static function ensurePrintedStatus(int $accountId): OrderStatus
     {
+        return self::ensureSystemStatus(
+            $accountId,
+            self::PRINTED_CODE,
+            self::PRINTED_NAME,
+            self::PRINTED_COLOR
+        );
+    }
+
+    public static function ensureReturnedStatus(int $accountId): OrderStatus
+    {
+        return self::ensureSystemStatus(
+            $accountId,
+            self::RETURNED_CODE,
+            self::RETURNED_NAME,
+            self::RETURNED_COLOR
+        );
+    }
+
+    public static function shouldKeepStatusWhenPrinting(?string $status): bool
+    {
+        return in_array((string) $status, self::PRINT_STATUS_LOCK_CODES, true);
+    }
+
+    private static function ensureSystemStatus(
+        int $accountId,
+        string $code,
+        string $name,
+        string $color
+    ): OrderStatus {
         $status = OrderStatus::query()
             ->where('account_id', $accountId)
-            ->where('code', self::PRINTED_CODE)
+            ->where('code', $code)
             ->first();
 
         if ($status) {
@@ -51,18 +83,13 @@ class OrderStatusCatalog
 
         return OrderStatus::create([
             'account_id' => $accountId,
-            'code' => self::PRINTED_CODE,
-            'name' => self::PRINTED_NAME,
-            'color' => self::PRINTED_COLOR,
+            'code' => $code,
+            'name' => $name,
+            'color' => $color,
             'sort_order' => $maxSortOrder + 1,
             'is_default' => false,
             'is_system' => true,
             'is_active' => true,
         ]);
-    }
-
-    public static function shouldKeepStatusWhenPrinting(?string $status): bool
-    {
-        return in_array((string) $status, self::PRINT_STATUS_LOCK_CODES, true);
     }
 }

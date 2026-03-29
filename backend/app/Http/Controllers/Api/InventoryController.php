@@ -222,6 +222,7 @@ class InventoryController extends Controller
             'display_cost',
             'computed_stock',
             'pending_export_quantity',
+            'pending_return_quantity',
             'actual_stock',
             'inventory_value',
             'total_imported',
@@ -2815,15 +2816,7 @@ class InventoryController extends Controller
         });
         $this->applyDateRange($importQtySub, 'imports.import_date', $request);
 
-        $exportQtySub = \App\Models\InventoryDocumentItem::query()
-            ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
-            ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0)')
-            ->whereColumn('inventory_document_items.product_id', 'products.id')
-            ->where('inventory_documents.type', 'export');
-        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
-            $exportQtySub->whereNull('inventory_documents.deleted_at');
-        }
-        $this->applyDateRange($exportQtySub, 'inventory_documents.document_date', $request);
+        $exportQtySub = $this->buildExportQuantitySubquery($request);
 
         $returnQtySub = \App\Models\InventoryDocumentItem::query()
             ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
@@ -2897,11 +2890,16 @@ class InventoryController extends Controller
         );
         $pendingOutboundQtySub = $this->buildPendingOutboundQuantitySubquery($request);
         $pendingExportQtySql = 'COALESCE(pending_outbound.pending_export_quantity, 0)';
-        $actualStockSql = '(' . $computedStockSql . ' - ' . $pendingExportQtySql . ')';
+        $pendingReturnQtySub = $this->buildPendingReturnQuantitySubquery($request);
+        $pendingReturnQtySql = 'COALESCE(pending_returns.pending_return_quantity, 0)';
+        $actualStockSql = '(' . $computedStockSql . ' - ' . $pendingExportQtySql . ' + ' . $pendingReturnQtySql . ')';
         $inventoryValueSql = '(' . $actualStockSql . ' * COALESCE(products.cost_price, products.expected_cost, 0))';
 
         $query->leftJoinSub($pendingOutboundQtySub, 'pending_outbound', function ($join) {
             $join->on('pending_outbound.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($pendingReturnQtySub, 'pending_returns', function ($join) {
+            $join->on('pending_returns.product_id', '=', 'products.id');
         });
 
         if ($compact) {
@@ -2911,6 +2909,7 @@ class InventoryController extends Controller
                 ->selectRaw('COALESCE(products.cost_price, products.expected_cost, 0) as display_cost')
                 ->selectRaw($computedStockSql . ' as computed_stock', $computedStockBindings)
                 ->selectRaw($pendingExportQtySql . ' as pending_export_quantity')
+                ->selectRaw($pendingReturnQtySql . ' as pending_return_quantity')
                 ->selectRaw($actualStockSql . ' as actual_stock', $computedStockBindings)
                 ->selectRaw($inventoryValueSql . ' as inventory_value', $computedStockBindings);
 
@@ -2930,6 +2929,7 @@ class InventoryController extends Controller
             ->selectRaw('COALESCE(products.cost_price, products.expected_cost, 0) as display_cost')
             ->selectRaw($computedStockSql . ' as computed_stock', $computedStockBindings)
             ->selectRaw($pendingExportQtySql . ' as pending_export_quantity')
+            ->selectRaw($pendingReturnQtySql . ' as pending_return_quantity')
             ->selectRaw($actualStockSql . ' as actual_stock', $computedStockBindings)
             ->selectRaw($inventoryValueSql . ' as inventory_value', $computedStockBindings);
 
@@ -2949,6 +2949,137 @@ class InventoryController extends Controller
         }
 
         return $query;
+    }
+
+    private function buildExportQuantitySubquery(Request $request)
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+
+        $manualExportQtySub = \App\Models\InventoryDocumentItem::query()
+            ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
+            ->selectRaw('inventory_documents.reference_id as order_id')
+            ->selectRaw('inventory_document_items.product_id')
+            ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0) as manual_export_quantity')
+            ->where('inventory_documents.type', 'export')
+            ->where('inventory_documents.reference_type', 'order')
+            ->whereNotNull('inventory_documents.reference_id')
+            ->where('inventory_documents.status', 'completed')
+            ->groupBy('inventory_documents.reference_id', 'inventory_document_items.product_id');
+
+        if ($accountId > 0) {
+            $manualExportQtySub->where('inventory_documents.account_id', $accountId);
+        }
+
+        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+            $manualExportQtySub->whereNull('inventory_documents.deleted_at');
+        }
+
+        $this->applyDateRange($manualExportQtySub, 'inventory_documents.document_date', $request);
+
+        $shipmentExportQtySub = DB::table('shipment_items')
+            ->join('shipments', 'shipments.id', '=', 'shipment_items.shipment_id')
+            ->join('order_items', 'order_items.id', '=', 'shipment_items.order_item_id')
+            ->join('orders', 'orders.id', '=', 'shipments.order_id')
+            ->selectRaw('shipments.order_id')
+            ->selectRaw('order_items.product_id')
+            ->selectRaw('COALESCE(SUM(shipment_items.qty), 0) as automatic_export_quantity')
+            ->groupBy('shipments.order_id', 'order_items.product_id');
+
+        $this->applyExportEligibleOrderScope(
+            $shipmentExportQtySub,
+            $request,
+            'COALESCE(shipments.shipped_at, shipments.out_for_delivery_at, shipments.created_at, orders.shipping_dispatched_at, orders.created_at)'
+        );
+        $this->applyActiveShipmentFilters($shipmentExportQtySub, 'shipments');
+
+        $legacyAutomaticExportQtySub = OrderItem::query()
+            ->join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->selectRaw('orders.id as order_id')
+            ->selectRaw('order_items.product_id')
+            ->selectRaw('COALESCE(SUM(order_items.quantity), 0) as automatic_export_quantity')
+            ->whereNotNull('order_items.product_id')
+            ->groupBy('orders.id', 'order_items.product_id');
+
+        $this->applyExportEligibleOrderScope(
+            $legacyAutomaticExportQtySub,
+            $request,
+            'COALESCE(orders.shipping_dispatched_at, orders.created_at)'
+        );
+
+        $legacyAutomaticExportQtySub
+            ->where(function ($builder) {
+                $builder
+                    ->where('orders.type', 'inventory_export')
+                    ->orWhere(function ($trackingQuery) {
+                        $trackingQuery
+                            ->whereNotNull('orders.shipping_tracking_code')
+                            ->where('orders.shipping_tracking_code', '!=', '');
+                    })
+                    ->orWhereExists(function ($shipmentQuery) {
+                        $shipmentQuery
+                            ->select(DB::raw(1))
+                            ->from('shipments')
+                            ->whereColumn('shipments.order_id', 'orders.id');
+
+                        $this->applyActiveShipmentFilters($shipmentQuery, 'shipments');
+                    });
+            })
+            ->whereNotExists(function ($shipmentItemQuery) {
+                $shipmentItemQuery
+                    ->select(DB::raw(1))
+                    ->from('shipment_items')
+                    ->join('shipments', 'shipments.id', '=', 'shipment_items.shipment_id')
+                    ->whereColumn('shipments.order_id', 'orders.id');
+
+                $this->applyActiveShipmentFilters($shipmentItemQuery, 'shipments');
+            });
+
+        $automaticExportQtySub = DB::query()
+            ->fromSub(
+                DB::query()
+                    ->fromSub($shipmentExportQtySub, 'shipment_exports')
+                    ->selectRaw('order_id, product_id, automatic_export_quantity')
+                    ->unionAll(
+                        DB::query()
+                            ->fromSub($legacyAutomaticExportQtySub, 'legacy_automatic_exports')
+                            ->selectRaw('order_id, product_id, automatic_export_quantity')
+                    ),
+                'automatic_export_sources'
+            )
+            ->selectRaw('order_id')
+            ->selectRaw('product_id')
+            ->selectRaw('COALESCE(SUM(automatic_export_quantity), 0) as automatic_export_quantity')
+            ->groupBy('order_id', 'product_id');
+
+        $exportKeysSub = DB::query()
+            ->fromSub(
+                DB::query()
+                    ->fromSub($manualExportQtySub, 'manual_export_keys')
+                    ->selectRaw('order_id, product_id')
+                    ->union(
+                        DB::query()
+                            ->fromSub($automaticExportQtySub, 'automatic_export_keys')
+                            ->selectRaw('order_id, product_id')
+                    ),
+                'export_keys'
+            )
+            ->selectRaw('order_id')
+            ->selectRaw('product_id');
+
+        return DB::query()
+            ->fromSub($exportKeysSub, 'export_keys')
+            ->leftJoinSub($manualExportQtySub, 'manual_exports', function ($join) {
+                $join
+                    ->on('manual_exports.order_id', '=', 'export_keys.order_id')
+                    ->on('manual_exports.product_id', '=', 'export_keys.product_id');
+            })
+            ->leftJoinSub($automaticExportQtySub, 'automatic_exports', function ($join) {
+                $join
+                    ->on('automatic_exports.order_id', '=', 'export_keys.order_id')
+                    ->on('automatic_exports.product_id', '=', 'export_keys.product_id');
+            })
+            ->selectRaw('COALESCE(SUM(GREATEST(COALESCE(manual_exports.manual_export_quantity, 0), COALESCE(automatic_exports.automatic_export_quantity, 0))), 0)')
+            ->whereColumn('export_keys.product_id', 'products.id');
     }
 
     private function buildPendingOutboundQuantitySubquery(Request $request)
@@ -2996,6 +3127,48 @@ class InventoryController extends Controller
             ->groupBy('pending_order_items.product_id');
     }
 
+    private function buildPendingReturnQuantitySubquery(Request $request)
+    {
+        $pendingReturnItemsSub = OrderItem::query()
+            ->join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->selectRaw('order_items.order_id')
+            ->selectRaw('order_items.product_id')
+            ->selectRaw('COALESCE(SUM(order_items.quantity), 0) as pending_return_quantity')
+            ->whereNotNull('order_items.product_id')
+            ->groupBy('order_items.order_id', 'order_items.product_id');
+
+        $this->applyPendingReturnEligibleOrderScope($pendingReturnItemsSub, $request);
+
+        return DB::query()
+            ->fromSub($pendingReturnItemsSub, 'pending_return_items')
+            ->selectRaw('pending_return_items.product_id')
+            ->selectRaw('COALESCE(SUM(pending_return_items.pending_return_quantity), 0) as pending_return_quantity')
+            ->groupBy('pending_return_items.product_id');
+    }
+
+    private function applyExportEligibleOrderScope($query, Request $request, $dateColumn): void
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+
+        if ($accountId > 0) {
+            $query->where('orders.account_id', $accountId);
+        }
+
+        if (Schema::hasColumn('orders', 'deleted_at')) {
+            $query->whereNull('orders.deleted_at');
+        }
+
+        $query->where(function ($builder) {
+            $builder
+                ->where('orders.order_kind', Order::KIND_OFFICIAL)
+                ->orWhereNull('orders.order_kind')
+                ->orWhere('orders.order_kind', '');
+        });
+
+        $this->applyPendingOutboundInvalidStatusFilter($query, 'orders.status');
+        $this->applyDateRangeExpression($query, $dateColumn, $request);
+    }
+
     private function applyPendingOutboundEligibleOrderScope($query, Request $request): void
     {
         $accountId = (int) $request->header('X-Account-Id');
@@ -3035,12 +3208,48 @@ class InventoryController extends Controller
                     ->from('shipments')
                     ->whereColumn('shipments.order_id', 'orders.id');
 
-                if (Schema::hasColumn('shipments', 'deleted_at')) {
-                    $shipmentQuery->whereNull('shipments.deleted_at');
-                }
-
-                $shipmentQuery->whereNotIn('shipments.shipment_status', ['canceled']);
+                $this->applyActiveShipmentFilters($shipmentQuery, 'shipments');
             });
+    }
+
+    private function applyPendingReturnEligibleOrderScope($query, Request $request): void
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+
+        if ($accountId > 0) {
+            $query->where('orders.account_id', $accountId);
+        }
+
+        if (Schema::hasColumn('orders', 'deleted_at')) {
+            $query->whereNull('orders.deleted_at');
+        }
+
+        $query->where(function ($builder) {
+            $builder
+                ->where('orders.order_kind', Order::KIND_OFFICIAL)
+                ->orWhereNull('orders.order_kind')
+                ->orWhere('orders.order_kind', '');
+        });
+
+        $query
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('orders.type')
+                    ->orWhere('orders.type', '!=', 'inventory_export');
+            })
+            ->whereIn('orders.status', ['pending_return', 'returned']);
+
+        $this->orderInventorySlipService->applyReturnSlipStateFilter($query, 'missing');
+        $this->applyDateRange($query, 'orders.created_at', $request);
+    }
+
+    private function applyActiveShipmentFilters($query, string $shipmentTable = 'shipments'): void
+    {
+        if (Schema::hasColumn('shipments', 'deleted_at')) {
+            $query->whereNull("{$shipmentTable}.deleted_at");
+        }
+
+        $query->whereNotIn("{$shipmentTable}.shipment_status", ['canceled']);
     }
 
     private function applyPendingOutboundInvalidStatusFilter($query, string $column): void
@@ -3247,6 +3456,7 @@ class InventoryController extends Controller
             ->selectRaw('COALESCE(SUM(total_adjusted), 0) as total_adjusted')
             ->selectRaw('COALESCE(SUM(computed_stock), 0) as total_stock')
             ->selectRaw('COALESCE(SUM(pending_export_quantity), 0) as total_pending_export')
+            ->selectRaw('COALESCE(SUM(pending_return_quantity), 0) as total_pending_return')
             ->selectRaw('COALESCE(SUM(actual_stock), 0) as total_actual_stock')
             ->selectRaw('COALESCE(SUM(damaged_quantity), 0) as total_damaged_stock')
             ->selectRaw('COALESCE(SUM(inventory_value), 0) as total_inventory_value')
@@ -3261,6 +3471,7 @@ class InventoryController extends Controller
             'total_adjusted' => (int) round((float) ($summary->total_adjusted ?? 0)),
             'total_stock' => (int) round((float) ($summary->total_stock ?? 0)),
             'total_pending_export' => (int) round((float) ($summary->total_pending_export ?? 0)),
+            'total_pending_return' => (int) round((float) ($summary->total_pending_return ?? 0)),
             'total_actual_stock' => (int) round((float) ($summary->total_actual_stock ?? 0)),
             'total_sellable_stock' => (int) round((float) ($summary->total_actual_stock ?? 0)),
             'total_damaged_stock' => (int) round((float) ($summary->total_damaged_stock ?? 0)),
@@ -3284,12 +3495,17 @@ class InventoryController extends Controller
 
     private function applyDateRange($query, string $column, Request $request): void
     {
+        $this->applyDateRangeExpression($query, $column, $request);
+    }
+
+    private function applyDateRangeExpression($query, string $expression, Request $request): void
+    {
         if ($request->filled('date_from')) {
-            $query->whereDate($column, '>=', $request->input('date_from'));
+            $query->whereRaw("DATE({$expression}) >= ?", [$request->input('date_from')]);
         }
 
         if ($request->filled('date_to')) {
-            $query->whereDate($column, '<=', $request->input('date_to'));
+            $query->whereRaw("DATE({$expression}) <= ?", [$request->input('date_to')]);
         }
     }
 
@@ -3551,9 +3767,10 @@ class InventoryController extends Controller
             ? (int) round((float) $product->computed_stock)
             : ($totalImported - $totalExported + $totalReturned - $totalDamaged + $totalAdjusted);
         $pendingExportQuantity = (int) round((float) ($product->pending_export_quantity ?? 0));
+        $pendingReturnQuantity = (int) round((float) ($product->pending_return_quantity ?? 0));
         $actualStock = $product->actual_stock !== null
             ? (int) round((float) $product->actual_stock)
-            : ($computedStock - $pendingExportQuantity);
+            : ($computedStock - $pendingExportQuantity + $pendingReturnQuantity);
         $displayCost = round((float) ($product->display_cost ?? ($currentCost ?? $expectedCost ?? 0)), 2);
         $inventoryValue = $product->inventory_value !== null
             ? round((float) $product->inventory_value, 2)
@@ -3601,6 +3818,7 @@ class InventoryController extends Controller
             'total_adjusted' => $totalAdjusted,
             'computed_stock' => $computedStock,
             'pending_export_quantity' => $pendingExportQuantity,
+            'pending_return_quantity' => $pendingReturnQuantity,
             'actual_stock' => $actualStock,
             'inventory_value' => $inventoryValue,
             'stock_alert' => $stockAlert,

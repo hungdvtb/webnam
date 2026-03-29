@@ -114,6 +114,24 @@ class OrderBatchReturnSlipTest extends TestCase
             'direction' => 'in',
         ]);
 
+        $firstOrder->refresh();
+        $secondOrder->refresh();
+
+        $this->assertSame('returned', (string) $firstOrder->status);
+        $this->assertSame('returned', (string) $secondOrder->status);
+        $this->assertDatabaseHas('order_status_logs', [
+            'order_id' => $firstOrder->id,
+            'from_status' => 'new',
+            'to_status' => 'returned',
+            'source' => 'system',
+        ]);
+        $this->assertDatabaseHas('order_status_logs', [
+            'order_id' => $secondOrder->id,
+            'from_status' => 'new',
+            'to_status' => 'returned',
+            'source' => 'system',
+        ]);
+
         $updateResponse = $this
             ->withHeaders($this->headers($account))
             ->putJson("/api/orders/inventory-returns/{$returnDocumentId}", [

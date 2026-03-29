@@ -386,16 +386,18 @@ class OrderInventorySlipService
         }
 
         DB::transaction(function () use ($managedDocument) {
-            $this->ensureReturnSlipCanBeDeleted($managedDocument);
-
             $adjustmentDocument = $this->findLinkedAdjustmentDocument($managedDocument, true);
             if ($adjustmentDocument && !$adjustmentDocument->trashed()) {
                 $this->inventoryService->deleteDocument($adjustmentDocument);
             }
 
+            $this->ensureReturnSlipCanBeDeleted($managedDocument);
+
             if (!$managedDocument->trashed()) {
                 $this->inventoryService->deleteDocument($managedDocument);
             }
+
+            $this->restoreManagedReturnOrdersToPreviousStatus($managedDocument);
         });
     }
 
@@ -420,14 +422,20 @@ class OrderInventorySlipService
         }
 
         DB::transaction(function () use ($managedDocument) {
+            if ($managedDocument->trashed()) {
+                $this->inventoryService->restoreDocument($managedDocument);
+            }
+
             $adjustmentDocument = $this->findLinkedAdjustmentDocument($managedDocument, true);
             if ($adjustmentDocument && $adjustmentDocument->trashed()) {
                 $this->inventoryService->restoreDocument($adjustmentDocument);
             }
 
-            if ($managedDocument->trashed()) {
-                $this->inventoryService->restoreDocument($managedDocument);
-            }
+            $this->syncManagedReturnOrdersToReturned(
+                collect($this->extractManagedReturnOrderIds($managedDocument))->map(fn ($id) => ['id' => $id]),
+                (string) $managedDocument->document_number,
+                null
+            );
         });
 
         return $this->buildManagedReturnDocumentPayload(
@@ -451,7 +459,12 @@ class OrderInventorySlipService
                 $this->inventoryService->forceDeleteDocument($adjustmentDocument);
             }
 
+            if (!$managedDocument->trashed()) {
+                $this->ensureReturnSlipCanBeDeleted($managedDocument);
+            }
+
             $this->inventoryService->forceDeleteDocument($managedDocument);
+            $this->restoreManagedReturnOrdersToPreviousStatus($managedDocument);
         });
     }
 
@@ -719,6 +732,13 @@ class OrderInventorySlipService
             }
 
             if ($document->type === 'return') {
+                $managedRoot = $this->resolveManagedReturnRootDocument($document);
+                if ($managedRoot) {
+                    $this->deleteManagedReturnDocument($managedRoot);
+
+                    return;
+                }
+
                 $this->ensureReturnSlipCanBeDeleted($document);
             }
 
@@ -2160,6 +2180,13 @@ class OrderInventorySlipService
             $userId
         );
 
+        $existingStatusSnapshots = $this->storedManagedReturnOrderStatusSnapshots($document);
+        $updatedStatusSnapshots = $this->syncManagedReturnOrdersToReturned(
+            $orders,
+            (string) $document->document_number,
+            $userId
+        );
+
         $document->forceFill([
             'meta' => array_merge((array) ($document->meta ?? []), [
                 'managed_by' => self::MANAGED_RETURN_SOURCE,
@@ -2167,10 +2194,13 @@ class OrderInventorySlipService
                 'order_ids' => $selectedOrders->pluck('id')->map(fn ($id) => (int) $id)->values()->all(),
                 'adjustment_document_id' => $adjustmentDocument?->id,
                 'adjustment_document_number' => $adjustmentDocument?->document_number,
+                'order_status_snapshots' => $this->mergeManagedReturnOrderStatusSnapshots(
+                    $selectedOrders,
+                    $existingStatusSnapshots,
+                    $updatedStatusSnapshots
+                ),
             ]),
         ])->save();
-
-        $this->syncManagedReturnOrdersToReturned($orders, (string) $document->document_number, $userId);
 
         if (!empty($touchedProductIds)) {
             $this->inventoryService->refreshProducts($touchedProductIds);
@@ -2183,7 +2213,7 @@ class OrderInventorySlipService
         Collection $orders,
         string $documentNumber,
         ?int $userId
-    ): void {
+    ): array {
         $orderIds = $orders
             ->pluck('id')
             ->map(fn ($id) => (int) $id)
@@ -2193,7 +2223,7 @@ class OrderInventorySlipService
             ->all();
 
         if (empty($orderIds)) {
-            return;
+            return [];
         }
 
         $lockedOrders = Order::query()
@@ -2203,6 +2233,7 @@ class OrderInventorySlipService
             ->keyBy(fn (Order $order) => (int) $order->id);
 
         $ensuredAccounts = [];
+        $snapshots = [];
 
         foreach ($orderIds as $orderId) {
             $order = $lockedOrders->get((int) $orderId);
@@ -2222,6 +2253,8 @@ class OrderInventorySlipService
                 continue;
             }
 
+            $snapshots[(string) $order->id] = $oldStatus !== '' ? $oldStatus : null;
+
             OrderStatusLog::create([
                 'order_id' => (int) $order->id,
                 'from_status' => $oldStatus !== '' ? $oldStatus : null,
@@ -2235,6 +2268,197 @@ class OrderInventorySlipService
                 'status' => OrderStatusCatalog::RETURNED_CODE,
             ])->save();
         }
+
+        return $snapshots;
+    }
+
+    private function restoreManagedReturnOrdersToPreviousStatus(InventoryDocument $document, ?int $userId = null): void
+    {
+        $orderIds = $this->extractManagedReturnOrderIds($document);
+        if (empty($orderIds)) {
+            return;
+        }
+
+        $snapshots = $this->resolveManagedReturnOrderStatusSnapshots($document, $orderIds);
+        if (empty($snapshots)) {
+            return;
+        }
+
+        $lockedOrders = Order::query()
+            ->whereIn('id', $orderIds)
+            ->lockForUpdate()
+            ->get()
+            ->keyBy(fn (Order $order) => (int) $order->id);
+
+        foreach ($orderIds as $orderId) {
+            $order = $lockedOrders->get((int) $orderId);
+            if (!$order) {
+                continue;
+            }
+
+            $currentStatus = trim((string) $order->status);
+            if ($currentStatus !== OrderStatusCatalog::RETURNED_CODE) {
+                continue;
+            }
+
+            $snapshotKey = (string) $orderId;
+            if (!array_key_exists($snapshotKey, $snapshots)) {
+                continue;
+            }
+
+            $targetStatus = $snapshots[$snapshotKey];
+            if ($targetStatus === OrderStatusCatalog::RETURNED_CODE) {
+                continue;
+            }
+
+            OrderStatusLog::create([
+                'order_id' => (int) $order->id,
+                'from_status' => $currentStatus !== '' ? $currentStatus : null,
+                'to_status' => $targetStatus ?? '',
+                'source' => 'system',
+                'changed_by' => $userId,
+                'reason' => "Khoi phuc trang thai truoc khi lap phieu hoan {$document->document_number}",
+            ]);
+
+            $order->forceFill([
+                'status' => $targetStatus ?? '',
+            ])->save();
+        }
+    }
+
+    private function extractManagedReturnOrderIds(InventoryDocument $document): array
+    {
+        $orderIds = collect();
+
+        if ($document->relationLoaded('orderLinks')) {
+            $orderIds = $orderIds->merge($document->orderLinks->pluck('order_id'));
+        } elseif ($this->hasInventoryDocumentOrderLinksTable()) {
+            $orderIds = $orderIds->merge(
+                InventoryDocumentOrderLink::query()
+                    ->where('inventory_document_id', (int) $document->id)
+                    ->pluck('order_id')
+            );
+        }
+
+        if (
+            in_array((string) $document->reference_type, ['order', 'order_batch'], true)
+            && (int) ($document->reference_id ?? 0) > 0
+        ) {
+            $orderIds->push((int) $document->reference_id);
+        }
+
+        return $orderIds
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function storedManagedReturnOrderStatusSnapshots(InventoryDocument $document): array
+    {
+        $rawSnapshots = data_get((array) ($document->meta ?? []), 'order_status_snapshots', []);
+        if (!is_array($rawSnapshots)) {
+            return [];
+        }
+
+        $snapshots = [];
+        foreach ($rawSnapshots as $orderId => $status) {
+            $normalizedOrderId = (int) $orderId;
+            if ($normalizedOrderId <= 0) {
+                continue;
+            }
+
+            $snapshots[(string) $normalizedOrderId] = $this->normalizeManagedReturnOrderStatusValue($status);
+        }
+
+        return $snapshots;
+    }
+
+    private function mergeManagedReturnOrderStatusSnapshots(
+        Collection $orders,
+        array $existingSnapshots,
+        array $updatedSnapshots
+    ): array {
+        $merged = [];
+        $orderIds = $orders
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        foreach ($orderIds as $orderId) {
+            $snapshotKey = (string) $orderId;
+
+            if (array_key_exists($snapshotKey, $updatedSnapshots)) {
+                $merged[$snapshotKey] = $updatedSnapshots[$snapshotKey];
+                continue;
+            }
+
+            if (array_key_exists($snapshotKey, $existingSnapshots)) {
+                $merged[$snapshotKey] = $existingSnapshots[$snapshotKey];
+            }
+        }
+
+        return $merged;
+    }
+
+    private function resolveManagedReturnOrderStatusSnapshots(InventoryDocument $document, array $orderIds): array
+    {
+        $snapshots = array_filter(
+            $this->storedManagedReturnOrderStatusSnapshots($document),
+            fn ($orderId) => in_array((int) $orderId, $orderIds, true),
+            ARRAY_FILTER_USE_KEY
+        );
+
+        $missingOrderIds = array_values(array_filter(
+            $orderIds,
+            fn ($orderId) => !array_key_exists((string) $orderId, $snapshots)
+        ));
+
+        if (empty($missingOrderIds)) {
+            return $snapshots;
+        }
+
+        $logsByOrderId = OrderStatusLog::query()
+            ->whereIn('order_id', $missingOrderIds)
+            ->where('source', 'system')
+            ->where('to_status', OrderStatusCatalog::RETURNED_CODE)
+            ->orderByDesc('id')
+            ->get()
+            ->groupBy(fn (OrderStatusLog $log) => (int) $log->order_id);
+
+        $documentNumber = trim((string) $document->document_number);
+
+        foreach ($missingOrderIds as $orderId) {
+            $logs = $logsByOrderId->get((int) $orderId, collect());
+            if ($logs->isEmpty()) {
+                continue;
+            }
+
+            $matchedLog = $logs->first(function (OrderStatusLog $log) use ($documentNumber) {
+                $reason = (string) ($log->reason ?? '');
+
+                return $documentNumber !== '' && str_contains($reason, $documentNumber);
+            }) ?? $logs->first();
+
+            if (!$matchedLog) {
+                continue;
+            }
+
+            $snapshots[(string) $orderId] = $this->normalizeManagedReturnOrderStatusValue($matchedLog->from_status);
+        }
+
+        return $snapshots;
+    }
+
+    private function normalizeManagedReturnOrderStatusValue(mixed $value): ?string
+    {
+        $normalized = trim((string) ($value ?? ''));
+
+        return $normalized !== '' ? $normalized : null;
     }
 
     private function normalizeManagedReturnItems(array $payload, array $sourceProducts, array $sourceOrders): Collection

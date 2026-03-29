@@ -3165,7 +3165,7 @@ class InventoryController extends Controller
                 ->orWhere('orders.order_kind', '');
         });
 
-        $this->applyPendingOutboundInvalidStatusFilter($query, 'orders.status');
+        $this->applyExportInvalidStatusFilter($query, 'orders.status');
         $this->applyDateRangeExpression($query, $dateColumn, $request);
     }
 
@@ -3269,6 +3269,23 @@ class InventoryController extends Controller
             'nhap',
             'huy',
             'hoan',
+            'void',
+        ] as $keyword) {
+            $query->whereRaw($statusExpression . ' NOT LIKE ?', ['%' . $keyword . '%']);
+        }
+    }
+
+    private function applyExportInvalidStatusFilter($query, string $column): void
+    {
+        $statusExpression = "LOWER(COALESCE({$column}, ''))";
+
+        foreach ([
+            'cancel',
+            'canceled',
+            'cancelled',
+            'draft',
+            'nhap',
+            'huy',
             'void',
         ] as $keyword) {
             $query->whereRaw($statusExpression . ' NOT LIKE ?', ['%' . $keyword . '%']);

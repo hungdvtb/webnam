@@ -246,6 +246,8 @@ class OrderBatchReturnSlipTest extends TestCase
             ->first();
 
         $this->assertNotNull($adjustmentDocument);
+        $this->assertSame('returned', (string) $firstOrder->fresh()->status);
+        $this->assertSame('returned', (string) $secondOrder->fresh()->status);
 
         $this->withHeaders($this->headers($account))
             ->deleteJson("/api/inventory/documents/adjustment/{$adjustmentDocument->id}")
@@ -253,6 +255,20 @@ class OrderBatchReturnSlipTest extends TestCase
 
         $this->assertSoftDeleted('inventory_documents', ['id' => $returnDocumentId]);
         $this->assertSoftDeleted('inventory_documents', ['id' => $adjustmentDocument->id]);
+        $this->assertSame('new', (string) $firstOrder->fresh()->status);
+        $this->assertSame('new', (string) $secondOrder->fresh()->status);
+        $this->assertDatabaseHas('order_status_logs', [
+            'order_id' => $firstOrder->id,
+            'from_status' => 'returned',
+            'to_status' => 'new',
+            'source' => 'system',
+        ]);
+        $this->assertDatabaseHas('order_status_logs', [
+            'order_id' => $secondOrder->id,
+            'from_status' => 'returned',
+            'to_status' => 'new',
+            'source' => 'system',
+        ]);
 
         $trashRows = collect(
             $this->withHeaders($this->headers($account))
@@ -271,10 +287,15 @@ class OrderBatchReturnSlipTest extends TestCase
 
         $this->assertFalse(InventoryDocument::withTrashed()->findOrFail($returnDocumentId)->trashed());
         $this->assertFalse(InventoryDocument::withTrashed()->findOrFail($adjustmentDocument->id)->trashed());
+        $this->assertSame('returned', (string) $firstOrder->fresh()->status);
+        $this->assertSame('returned', (string) $secondOrder->fresh()->status);
 
         $this->withHeaders($this->headers($account))
             ->deleteJson("/api/inventory/documents/return/{$returnDocumentId}")
             ->assertOk();
+        $this->assertSame('new', (string) $firstOrder->fresh()->status);
+        $this->assertSame('new', (string) $secondOrder->fresh()->status);
+
         $this->withHeaders($this->headers($account))
             ->deleteJson("/api/inventory/documents/return/{$returnDocumentId}/force")
             ->assertOk();

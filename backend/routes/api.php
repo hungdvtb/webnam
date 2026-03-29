@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\FinanceController;
+use App\Http\Controllers\Api\FinanceReceiptController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ProductController;
@@ -271,6 +272,17 @@ Route::middleware('auth:sanctum')->group(function () {
     // Finance
     Route::get('/finance/dashboard', [FinanceController::class, 'dashboard']);
     Route::get('/finance/options', [FinanceController::class, 'options']);
+    Route::get('/finance/receipts/bootstrap', [FinanceReceiptController::class, 'bootstrap']);
+    Route::get('/finance/receipts', [FinanceReceiptController::class, 'index']);
+    Route::post('/finance/receipts', [FinanceReceiptController::class, 'store']);
+    Route::post('/finance/receipts/bulk-delete', [FinanceReceiptController::class, 'bulkDelete']);
+    Route::post('/finance/receipts/bulk-restore', [FinanceReceiptController::class, 'bulkRestore']);
+    Route::post('/finance/receipts/bulk-force-delete', [FinanceReceiptController::class, 'bulkForceDelete']);
+    Route::get('/finance/receipts/{id}', [FinanceReceiptController::class, 'show'])->whereNumber('id');
+    Route::put('/finance/receipts/{id}', [FinanceReceiptController::class, 'update'])->whereNumber('id');
+    Route::delete('/finance/receipts/{id}', [FinanceReceiptController::class, 'destroy'])->whereNumber('id');
+    Route::post('/finance/receipts/{id}/restore', [FinanceReceiptController::class, 'restore'])->whereNumber('id');
+    Route::delete('/finance/receipts/{id}/force', [FinanceReceiptController::class, 'forceDelete'])->whereNumber('id');
     Route::get('/finance/transactions', [FinanceController::class, 'transactions']);
     Route::post('/finance/transactions', [FinanceController::class, 'storeTransaction']);
     Route::post('/finance/transactions/{id}/restore', [FinanceController::class, 'restoreTransaction'])->whereNumber('id');

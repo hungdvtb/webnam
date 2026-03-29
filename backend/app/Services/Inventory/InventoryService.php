@@ -16,6 +16,7 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Models\Supplier;
 use App\Models\SupplierProductPrice;
+use App\Support\ImportCostRounding;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
@@ -409,9 +410,12 @@ class InventoryService
             $quantity = (int) $item['quantity'];
             $sellingPrice = round((float) ($item['price'] ?? $product->price ?? 0), 2);
             $allocation = $this->allocateOrderSellableBatches($order->account_id, $product, $quantity);
-            $avgUnitCost = $quantity > 0 ? round($allocation['total_cost'] / $quantity, 2) : 0;
+            $avgUnitCost = $quantity > 0
+                ? ImportCostRounding::roundUnitCost($allocation['total_cost'] / $quantity)
+                : 0;
+            $roundedCostTotal = ImportCostRounding::lineTotal($avgUnitCost, $quantity);
             $revenue = round($sellingPrice * $quantity, 2);
-            $profit = round($revenue - $allocation['total_cost'], 2);
+            $profit = round($revenue - $roundedCostTotal, 2);
 
             $orderItem = $order->items()->create([
                 'account_id' => $order->account_id,
@@ -421,7 +425,7 @@ class InventoryService
                 'quantity' => $quantity,
                 'price' => $sellingPrice,
                 'cost_price' => $avgUnitCost,
-                'cost_total' => $allocation['total_cost'],
+                'cost_total' => $roundedCostTotal,
                 'profit_total' => $profit,
                 'options' => $item['options'] ?? null,
             ]);
@@ -499,13 +503,16 @@ class InventoryService
             $quantity = (int) $item->quantity;
             $sellingPrice = round((float) ($item->price ?? 0), 2);
             $allocation = $this->allocateOrderSellableBatches($order->account_id, $product, $quantity);
-            $avgUnitCost = $quantity > 0 ? round($allocation['total_cost'] / $quantity, 2) : 0;
+            $avgUnitCost = $quantity > 0
+                ? ImportCostRounding::roundUnitCost($allocation['total_cost'] / $quantity)
+                : 0;
+            $roundedCostTotal = ImportCostRounding::lineTotal($avgUnitCost, $quantity);
             $lineTotalPrice = round($sellingPrice * $quantity, 2);
-            $lineProfit = round($lineTotalPrice - $allocation['total_cost'], 2);
+            $lineProfit = round($lineTotalPrice - $roundedCostTotal, 2);
 
             $item->forceFill([
                 'cost_price' => $avgUnitCost,
-                'cost_total' => $allocation['total_cost'],
+                'cost_total' => $roundedCostTotal,
                 'profit_total' => $lineProfit,
             ])->save();
 
@@ -525,7 +532,7 @@ class InventoryService
 
             $touchedProductIds[] = $product->id;
             $totalPrice += $lineTotalPrice;
-            $costTotal += (float) $allocation['total_cost'];
+            $costTotal += $roundedCostTotal;
             $profitTotal += $lineProfit;
         }
 
@@ -1724,9 +1731,7 @@ class InventoryService
     private function createAdjustmentDocument(array $payload, int $accountId, ?int $userId): InventoryDocument
     {
         return DB::transaction(function () use ($payload, $accountId, $userId) {
-            $items = collect($payload['items'] ?? [])
-                ->filter(fn ($item) => (int) ($item['quantity'] ?? 0) > 0)
-                ->values();
+            $items = $this->normalizeAdjustmentItems($payload);
 
             if ($items->isEmpty()) {
                 throw ValidationException::withMessages([
@@ -1749,6 +1754,7 @@ class InventoryService
 
             $documentDate = Carbon::parse($payload['document_date'] ?? now());
             $document = $this->createDocumentHead('adjustment', $payload, $accountId, $userId, $documentDate);
+            $supplierId = isset($payload['supplier_id']) ? (int) $payload['supplier_id'] : null;
             $touchedProductIds = [];
 
             foreach ($items as $index => $item) {
@@ -1757,7 +1763,7 @@ class InventoryService
                 $stockBucket = $item['stock_bucket'] ?? 'sellable';
                 $direction = $item['direction'] ?? 'in';
                 $allowOversold = (bool) ($item['allow_oversold'] ?? $payload['allow_oversold'] ?? false);
-                $unitCost = round((float) ($item['unit_cost'] ?? $product->cost_price ?? $product->expected_cost ?? 0), 2);
+                $unitCost = $this->resolveAdjustmentUnitCost($product, $item, $supplierId);
                 $totalCost = round($quantity * $unitCost, 2);
 
                 $documentItem = InventoryDocumentItem::create([
@@ -1838,6 +1844,71 @@ class InventoryService
         });
     }
 
+    private function normalizeAdjustmentItems(array $payload): \Illuminate\Support\Collection
+    {
+        return collect($payload['items'] ?? [])
+            ->map(fn ($item) => is_array($item) ? $item : [])
+            ->map(function (array $item) {
+                $signedQuantity = $this->resolveSignedAdjustmentQuantity($item);
+
+                if ($signedQuantity === 0 || empty($item['product_id'])) {
+                    return null;
+                }
+
+                return [
+                    ...$item,
+                    'quantity' => abs($signedQuantity),
+                    'direction' => $signedQuantity > 0 ? 'in' : 'out',
+                    'stock_bucket' => $item['stock_bucket'] ?? 'sellable',
+                ];
+            })
+            ->filter()
+            ->values();
+    }
+
+    private function resolveSignedAdjustmentQuantity(array $item): int
+    {
+        $quantity = (int) ($item['quantity'] ?? 0);
+        if ($quantity < 0) {
+            return $quantity;
+        }
+
+        return strtolower((string) ($item['direction'] ?? '')) === 'out'
+            ? -abs($quantity)
+            : abs($quantity);
+    }
+
+    private function resolveAdjustmentUnitCost(Product $product, array $item, ?int $supplierId = null): float
+    {
+        if (array_key_exists('unit_cost', $item) && $item['unit_cost'] !== null && $item['unit_cost'] !== '') {
+            return round((float) $item['unit_cost'], 2);
+        }
+
+        if ($product->cost_price !== null) {
+            return round((float) $product->cost_price, 2);
+        }
+
+        $supplierPriceQuery = SupplierProductPrice::query()
+            ->where('product_id', $product->id)
+            ->whereNotNull('unit_cost')
+            ->where('unit_cost', '>', 0);
+
+        if ($supplierId) {
+            $supplierPriceQuery->where('supplier_id', $supplierId);
+        }
+
+        $supplierPrice = $supplierPriceQuery
+            ->orderByDesc('updated_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if ($supplierPrice && $supplierPrice->unit_cost !== null) {
+            return round((float) $supplierPrice->unit_cost, 2);
+        }
+
+        return round((float) ($product->expected_cost ?? 0), 2);
+    }
+
     private function createDocumentHead(string $type, array $payload, int $accountId, ?int $userId, Carbon $documentDate): InventoryDocument
     {
         return InventoryDocument::create([
@@ -1859,14 +1930,40 @@ class InventoryService
 
     private function finalizeDocumentTotals(InventoryDocument $document): void
     {
-        $totalAmount = (string) $document->type === 'export'
-            ? round((float) $document->items()->selectRaw('COALESCE(SUM(COALESCE(total_price, total_cost)), 0) as aggregate')->value('aggregate'), 2)
-            : round((float) $document->items()->sum('total_cost'), 2);
+        $document->loadMissing('items');
+
+        if ((string) $document->type === 'adjustment') {
+            $totalQuantity = (int) $document->items->sum(fn (InventoryDocumentItem $item) => $this->signedAdjustmentDocumentQuantity($item));
+            $totalAmount = round((float) $document->items->sum(fn (InventoryDocumentItem $item) => $this->signedAdjustmentDocumentAmount($item)), 2);
+        } else {
+            $totalQuantity = (int) $document->items()->sum('quantity');
+            $totalAmount = (string) $document->type === 'export'
+                ? round((float) $document->items()->selectRaw('COALESCE(SUM(COALESCE(total_price, total_cost)), 0) as aggregate')->value('aggregate'), 2)
+                : round((float) $document->items()->sum('total_cost'), 2);
+        }
 
         $document->forceFill([
-            'total_quantity' => (int) $document->items()->sum('quantity'),
+            'total_quantity' => $totalQuantity,
             'total_amount' => $totalAmount,
         ])->save();
+    }
+
+    private function signedAdjustmentDocumentQuantity(InventoryDocumentItem $item): int
+    {
+        $quantity = abs((int) ($item->quantity ?? 0));
+
+        return (string) ($item->direction ?? 'in') === 'out'
+            ? -$quantity
+            : $quantity;
+    }
+
+    private function signedAdjustmentDocumentAmount(InventoryDocumentItem $item): float
+    {
+        $amount = round((float) ($item->total_cost ?? 0), 2);
+
+        return (string) ($item->direction ?? 'in') === 'out'
+            ? -$amount
+            : $amount;
     }
 
     private function createSellableBatch(

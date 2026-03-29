@@ -12,7 +12,9 @@ use App\Models\FinanceLoanPayment;
 use App\Models\FinanceTransaction;
 use App\Models\FinanceTransfer;
 use App\Models\FinanceWallet;
+use App\Models\InventoryDocument;
 use App\Models\Order;
+use App\Models\Shipment;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -244,10 +246,16 @@ class FinanceService
                 'account_id' => $accountId,
                 'wallet_id' => $data['wallet_id'] ?? null,
                 'category_id' => $data['category_id'] ?? null,
+                'source_name' => $data['source_name'] ?? null,
                 'related_transaction_id' => $data['related_transaction_id'] ?? null,
                 'created_by' => $transaction->created_by ?: ($data['user_id'] ?? auth()->id()),
                 'updated_by' => $data['user_id'] ?? auth()->id(),
-                'code' => $transaction->code ?: $this->nextCode(FinanceTransaction::class, 'FT', $accountId),
+                'code' => $transaction->code
+                    ?: ($data['code'] ?? $this->nextCode(
+                        FinanceTransaction::class,
+                        strtoupper((string) ($data['code_prefix'] ?? 'FT')),
+                        $accountId
+                    )),
                 'status' => $data['status'] ?? ($transaction->status ?: 'confirmed'),
                 'direction' => $data['direction'],
                 'transaction_type' => $data['transaction_type'] ?? 'manual',
@@ -256,8 +264,11 @@ class FinanceService
                 'amount' => round((float) ($data['amount'] ?? 0), 2),
                 'counterparty_type' => $data['counterparty_type'] ?? null,
                 'counterparty_name' => $data['counterparty_name'] ?? null,
+                'counterparty_phone' => $data['counterparty_phone'] ?? null,
                 'reference_type' => $data['reference_type'] ?? null,
                 'reference_id' => $data['reference_id'] ?? null,
+                'reference_code' => $data['reference_code'] ?? null,
+                'reference_label' => $data['reference_label'] ?? null,
                 'content' => $data['content'] ?? null,
                 'note' => $data['note'] ?? null,
                 'affects_profit_loss' => array_key_exists('affects_profit_loss', $data)
@@ -1297,6 +1308,117 @@ class FinanceService
         ];
     }
 
+    public function receiptVoucherStatusOptions(): array
+    {
+        return [
+            ['value' => 'draft', 'label' => 'Nháp', 'color' => '#2563eb'],
+            ['value' => 'confirmed', 'label' => 'Đã xác nhận', 'color' => '#16a34a'],
+            ['value' => 'cancelled', 'label' => 'Đã hủy', 'color' => '#6b7280'],
+        ];
+    }
+
+    public function receiptVoucherPaymentMethodOptions(): array
+    {
+        return [
+            ['value' => 'cash', 'label' => 'Tiền mặt'],
+            ['value' => 'bank_transfer', 'label' => 'Chuyển khoản'],
+            ['value' => 'cod', 'label' => 'COD'],
+            ['value' => 'card', 'label' => 'Thẻ'],
+            ['value' => 'ewallet', 'label' => 'Ví điện tử'],
+            ['value' => 'other', 'label' => 'Khác'],
+        ];
+    }
+
+    public function receiptVoucherReferenceTypeOptions(): array
+    {
+        return [
+            ['value' => 'order', 'label' => 'Đơn hàng'],
+            ['value' => 'shipment', 'label' => 'Vận đơn'],
+            ['value' => 'debt', 'label' => 'Công nợ'],
+            ['value' => 'return_slip', 'label' => 'Phiếu hoàn'],
+            ['value' => 'other', 'label' => 'Liên kết khác'],
+        ];
+    }
+
+    public function receiptVoucherStatusLabel(?string $value): string
+    {
+        return collect($this->receiptVoucherStatusOptions())
+            ->firstWhere('value', (string) $value)['label'] ?? 'Nháp';
+    }
+
+    public function receiptVoucherPaymentMethodLabel(?string $value): string
+    {
+        return collect($this->receiptVoucherPaymentMethodOptions())
+            ->firstWhere('value', (string) $value)['label'] ?? 'Khác';
+    }
+
+    public function receiptVoucherReferenceTypeLabel(?string $value): string
+    {
+        return collect($this->receiptVoucherReferenceTypeOptions())
+            ->firstWhere('value', (string) $value)['label'] ?? 'Không liên kết';
+    }
+
+    public function storeReceiptVoucher(int $accountId, array $data, ?FinanceTransaction $transaction = null): FinanceTransaction
+    {
+        $categoryId = $this->resolveReceiptVoucherCategoryId($accountId, $data['category_id'] ?? null);
+        $reference = $this->resolveReceiptVoucherReference($accountId, $data);
+        $walletId = !empty($data['wallet_id'])
+            ? (int) $data['wallet_id']
+            : $this->resolveReceiptVoucherWalletId($accountId, $data['payment_method'] ?? null);
+        $status = in_array(($data['status'] ?? null), ['draft', 'confirmed', 'cancelled'], true)
+            ? $data['status']
+            : 'draft';
+        $content = trim((string) ($data['content'] ?? ''));
+        $existingMetadata = is_array($transaction?->metadata) ? $transaction->metadata : [];
+        $metadata = array_merge($existingMetadata, [
+            'receipt_reference_type' => $reference['reference_type'],
+            'receipt_reference_code' => $reference['reference_code'],
+            'receipt_reference_label' => $reference['reference_label'],
+            'receipt_reference_summary' => $reference['summary'],
+        ]);
+
+        if ($content === '') {
+            $content = trim((string) (
+                $data['source_name']
+                ?? $reference['reference_label']
+                ?? $data['counterparty_name']
+                ?? 'Phiếu thu'
+            ));
+        }
+
+        return $this->storeTransaction(
+            $accountId,
+            [
+                'wallet_id' => $walletId,
+                'category_id' => $categoryId,
+                'source_name' => trim((string) ($data['source_name'] ?? '')) ?: null,
+                'direction' => 'in',
+                'transaction_type' => FinanceTransaction::TYPE_RECEIPT_VOUCHER,
+                'payment_method' => trim((string) ($data['payment_method'] ?? '')) ?: 'other',
+                'transaction_date' => $data['transaction_date'] ?? now(),
+                'amount' => $data['amount'] ?? 0,
+                'counterparty_type' => trim((string) ($data['counterparty_type'] ?? 'customer')) ?: 'customer',
+                'counterparty_name' => trim((string) ($data['counterparty_name'] ?? '')) ?: null,
+                'counterparty_phone' => trim((string) ($data['counterparty_phone'] ?? '')) ?: null,
+                'reference_type' => $reference['reference_type'],
+                'reference_id' => $reference['reference_id'],
+                'reference_code' => $reference['reference_code'],
+                'reference_label' => $reference['reference_label'],
+                'content' => Str::limit($content, 255, ''),
+                'note' => trim((string) ($data['note'] ?? '')) ?: null,
+                'status' => $status,
+                'affects_profit_loss' => array_key_exists('affects_profit_loss', $data)
+                    ? (bool) $data['affects_profit_loss']
+                    : true,
+                'metadata' => $metadata,
+                'user_id' => $data['user_id'] ?? auth()->id(),
+                'code_prefix' => 'PT',
+            ],
+            $data['attachment'] ?? null,
+            $transaction
+        );
+    }
+
     public function transactionPayload(FinanceTransaction $transaction): array
     {
         return [
@@ -1315,18 +1437,42 @@ class FinanceService
             'category_id' => $transaction->category_id,
             'category_name' => $transaction->category?->name,
             'category_color' => $transaction->category?->color,
+            'source_name' => $transaction->source_name,
             'counterparty_type' => $transaction->counterparty_type,
             'counterparty_name' => $transaction->counterparty_name,
+            'counterparty_phone' => $transaction->counterparty_phone,
             'reference_type' => $transaction->reference_type,
             'reference_id' => $transaction->reference_id,
+            'reference_code' => $transaction->reference_code,
+            'reference_label' => $transaction->reference_label,
             'content' => $transaction->content,
             'note' => $transaction->note,
             'attachment_path' => $transaction->attachment_path,
             'attachment_url' => $transaction->attachment_url,
             'affects_profit_loss' => (bool) $transaction->affects_profit_loss,
             'metadata' => $transaction->metadata,
+            'created_by' => $transaction->created_by,
             'created_by_name' => $transaction->creator?->name,
+            'updated_by' => $transaction->updated_by,
             'deleted_at' => optional($transaction->deleted_at)->toIso8601String(),
+        ];
+    }
+
+    public function receiptVoucherPayload(FinanceTransaction $transaction): array
+    {
+        $base = $this->transactionPayload($transaction);
+        $reference = $this->resolveReceiptVoucherReferenceForTransaction($transaction);
+
+        return [
+            ...$base,
+            'receipt_date' => $base['transaction_date'],
+            'receipt_type_id' => $transaction->category_id,
+            'receipt_type_name' => $transaction->category?->name,
+            'payer_name' => $transaction->counterparty_name,
+            'payer_phone' => $transaction->counterparty_phone,
+            'payment_method_label' => $this->receiptVoucherPaymentMethodLabel($transaction->payment_method),
+            'status_label' => $this->receiptVoucherStatusLabel($transaction->status),
+            'reference' => $reference,
         ];
     }
 
@@ -1565,6 +1711,218 @@ class FinanceService
         $sanitized = Str::upper(Str::slug($value, '_'));
 
         return $sanitized !== '' ? $sanitized : Str::upper(Str::random(6));
+    }
+
+    private function resolveReceiptVoucherCategoryId(int $accountId, $categoryId): ?int
+    {
+        if (!$categoryId) {
+            return null;
+        }
+
+        $category = FinanceCatalog::query()
+            ->where('account_id', $accountId)
+            ->where('group_key', 'income_type')
+            ->find((int) $categoryId);
+
+        if (!$category) {
+            throw new InvalidArgumentException('Loại thu không hợp lệ.');
+        }
+
+        return (int) $category->id;
+    }
+
+    private function resolveReceiptVoucherWalletId(int $accountId, ?string $paymentMethod): ?int
+    {
+        $resolvedMethod = trim((string) $paymentMethod);
+
+        if ($resolvedMethod === 'cash') {
+            return FinanceWallet::query()
+                ->where('account_id', $accountId)
+                ->where('type', 'cash')
+                ->where('is_active', true)
+                ->orderByDesc('is_default')
+                ->orderBy('sort_order')
+                ->value('id');
+        }
+
+        if (in_array($resolvedMethod, ['bank_transfer', 'cod', 'card', 'ewallet'], true)) {
+            return FinanceWallet::query()
+                ->where('account_id', $accountId)
+                ->where('type', 'bank')
+                ->where('is_active', true)
+                ->orderByDesc('is_default')
+                ->orderBy('sort_order')
+                ->value('id');
+        }
+
+        return null;
+    }
+
+    private function resolveReceiptVoucherReference(int $accountId, array $data): array
+    {
+        $referenceType = trim((string) ($data['reference_type'] ?? ''));
+        $referenceId = !empty($data['reference_id']) ? (int) $data['reference_id'] : null;
+        $referenceCode = trim((string) ($data['reference_code'] ?? '')) ?: null;
+        $referenceLabel = trim((string) ($data['reference_label'] ?? '')) ?: null;
+
+        if ($referenceType === '') {
+            return [
+                'reference_type' => null,
+                'reference_id' => null,
+                'reference_code' => null,
+                'reference_label' => null,
+                'summary' => null,
+            ];
+        }
+
+        if ($referenceType === 'order') {
+            if (!$referenceId) {
+                throw new InvalidArgumentException('Phiếu thu liên kết đơn hàng cần chọn đơn hàng.');
+            }
+
+            $order = Order::query()
+                ->withTrashed()
+                ->where('account_id', $accountId)
+                ->find($referenceId);
+
+            if (!$order) {
+                throw new InvalidArgumentException('Không tìm thấy đơn hàng liên kết.');
+            }
+
+            return [
+                'reference_type' => 'order',
+                'reference_id' => (int) $order->id,
+                'reference_code' => $order->order_number ?: $referenceCode,
+                'reference_label' => $order->customer_name ?: $referenceLabel ?: 'Đơn hàng',
+                'summary' => sprintf('Đơn %s', $order->order_number ?: ('#' . $order->id)),
+            ];
+        }
+
+        if ($referenceType === 'shipment') {
+            if (!$referenceId) {
+                throw new InvalidArgumentException('Phiếu thu liên kết vận đơn cần chọn vận đơn.');
+            }
+
+            $shipment = Shipment::query()
+                ->withTrashed()
+                ->where('account_id', $accountId)
+                ->find($referenceId);
+
+            if (!$shipment) {
+                throw new InvalidArgumentException('Không tìm thấy vận đơn liên kết.');
+            }
+
+            $shipmentCode = $shipment->carrier_tracking_code ?: $shipment->tracking_number ?: $shipment->shipment_number;
+
+            return [
+                'reference_type' => 'shipment',
+                'reference_id' => (int) $shipment->id,
+                'reference_code' => $shipmentCode ?: $referenceCode,
+                'reference_label' => $shipment->customer_name ?: $referenceLabel ?: 'Vận đơn',
+                'summary' => sprintf('Vận đơn %s', $shipmentCode ?: ('#' . $shipment->id)),
+            ];
+        }
+
+        if ($referenceType === 'return_slip') {
+            if (!$referenceId) {
+                throw new InvalidArgumentException('Phiếu thu liên kết phiếu hoàn cần chọn phiếu hoàn.');
+            }
+
+            $document = InventoryDocument::query()
+                ->withTrashed()
+                ->where('account_id', $accountId)
+                ->where('type', 'return')
+                ->find($referenceId);
+
+            if (!$document) {
+                throw new InvalidArgumentException('Không tìm thấy phiếu hoàn liên kết.');
+            }
+
+            return [
+                'reference_type' => 'return_slip',
+                'reference_id' => (int) $document->id,
+                'reference_code' => $document->document_number ?: $referenceCode,
+                'reference_label' => $referenceLabel ?: 'Phiếu hoàn',
+                'summary' => sprintf('Phiếu hoàn %s', $document->document_number ?: ('#' . $document->id)),
+            ];
+        }
+
+        if (in_array($referenceType, ['debt', 'other'], true)) {
+            if (!$referenceCode && !$referenceLabel) {
+                throw new InvalidArgumentException('Liên kết công nợ hoặc liên kết khác cần có mã hoặc nhãn tham chiếu.');
+            }
+
+            return [
+                'reference_type' => $referenceType,
+                'reference_id' => null,
+                'reference_code' => $referenceCode,
+                'reference_label' => $referenceLabel,
+                'summary' => trim(implode(' - ', array_filter([$referenceCode, $referenceLabel]))),
+            ];
+        }
+
+        throw new InvalidArgumentException('Loại liên kết phiếu thu không hợp lệ.');
+    }
+
+    private function resolveReceiptVoucherReferenceForTransaction(FinanceTransaction $transaction): array
+    {
+        $type = $transaction->reference_type;
+        $id = $transaction->reference_id ? (int) $transaction->reference_id : null;
+        $code = $transaction->reference_code;
+        $label = $transaction->reference_label;
+        $route = null;
+        $status = null;
+
+        if ($type === 'order' && $id) {
+            $order = Order::query()
+                ->withTrashed()
+                ->where('account_id', $transaction->account_id)
+                ->find($id);
+
+            if ($order) {
+                $code = $order->order_number ?: $code;
+                $label = $order->customer_name ?: $label;
+                $route = '/admin/orders/' . $order->id;
+                $status = $order->status;
+            }
+        } elseif ($type === 'shipment' && $id) {
+            $shipment = Shipment::query()
+                ->withTrashed()
+                ->where('account_id', $transaction->account_id)
+                ->find($id);
+
+            if ($shipment) {
+                $code = $shipment->carrier_tracking_code ?: $shipment->tracking_number ?: $shipment->shipment_number ?: $code;
+                $label = $shipment->customer_name ?: $label;
+                $route = '/admin/shipments';
+                $status = $shipment->shipment_status ?: $shipment->status;
+            }
+        } elseif ($type === 'return_slip' && $id) {
+            $document = InventoryDocument::query()
+                ->withTrashed()
+                ->where('account_id', $transaction->account_id)
+                ->find($id);
+
+            if ($document) {
+                $code = $document->document_number ?: $code;
+                $label = $label ?: 'Phiếu hoàn';
+                $route = '/admin/inventory';
+                $status = $document->status;
+            }
+        }
+
+        $summary = trim(implode(' - ', array_filter([$code, $label])));
+
+        return [
+            'type' => $type,
+            'type_label' => $this->receiptVoucherReferenceTypeLabel($type),
+            'id' => $id,
+            'code' => $code,
+            'label' => $label,
+            'summary' => $summary !== '' ? $summary : null,
+            'route' => $route,
+            'status' => $status,
+        ];
     }
 
     private function defaultCatalogs(): array

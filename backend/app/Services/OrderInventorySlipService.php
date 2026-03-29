@@ -2342,9 +2342,7 @@ class OrderInventorySlipService
 
                 return [
                     'product_id' => (int) $item['product_id'],
-                    'quantity' => abs($discrepancyQuantity),
-                    'stock_bucket' => 'sellable',
-                    'direction' => $discrepancyQuantity > 0 ? 'in' : 'out',
+                    'quantity' => $discrepancyQuantity,
                     'unit_cost' => ((float) ($item['unit_cost'] ?? 0)) > 0
                         ? round((float) $item['unit_cost'], 2)
                         : null,

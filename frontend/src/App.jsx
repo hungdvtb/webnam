@@ -38,6 +38,7 @@ import OrderForm from './pages/admin/OrderForm';
 import InventoryMovement from './pages/admin/InventoryMovement';
 import CustomerManagement from './pages/admin/CustomerManagement';
 import FinanceTracking from './pages/admin/FinanceTracking';
+import ReceiptVoucherList from './pages/admin/ReceiptVoucherList';
 import DailyProfitTracking from './pages/admin/DailyProfitTracking';
 import SalesReportPage from './pages/admin/SalesReportPage';
 import BlogList from './pages/admin/BlogList';
@@ -162,6 +163,7 @@ function App() {
                 <Route path="users" element={<UserList />} />
                 <Route path="reports" element={<SalesReportPage />} />
                 <Route path="finance" element={<FinanceTracking />} />
+                <Route path="finance/receipts" element={<ReceiptVoucherList />} />
                 <Route path="finance/daily-profit" element={<DailyProfitTracking />} />
                 <Route path="order-status-settings" element={<OrderStatusSettings />} />
                 <Route path="carrier-mappings" element={<Navigate to="/admin/shipping-settings?tab=mapping" replace />} />

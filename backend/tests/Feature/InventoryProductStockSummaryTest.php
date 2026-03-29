@@ -71,27 +71,11 @@ class InventoryProductStockSummaryTest extends TestCase
                 [
                     'product_id' => $product->id,
                     'quantity' => 3,
-                    'stock_bucket' => 'sellable',
-                    'direction' => 'in',
                     'unit_cost' => 100000,
                 ],
                 [
                     'product_id' => $product->id,
-                    'quantity' => 1,
-                    'stock_bucket' => 'sellable',
-                    'direction' => 'out',
-                ],
-                [
-                    'product_id' => $product->id,
-                    'quantity' => 4,
-                    'stock_bucket' => 'damaged',
-                    'direction' => 'in',
-                ],
-                [
-                    'product_id' => $product->id,
-                    'quantity' => 1,
-                    'stock_bucket' => 'damaged',
-                    'direction' => 'out',
+                    'quantity' => -1,
                 ],
             ],
         ], $account->id, $user->id);

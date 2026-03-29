@@ -11,6 +11,42 @@
         {
             "indexname": "products_slug_unique",
             "indexdef": "CREATE UNIQUE INDEX products_slug_unique ON public.products USING btree (slug)"
+        },
+        {
+            "indexname": "idx_prod_category_id",
+            "indexdef": "CREATE INDEX idx_prod_category_id ON public.products USING btree (category_id)"
+        },
+        {
+            "indexname": "idx_prod_account_id",
+            "indexdef": "CREATE INDEX idx_prod_account_id ON public.products USING btree (account_id)"
+        },
+        {
+            "indexname": "idx_prod_created_at",
+            "indexdef": "CREATE INDEX idx_prod_created_at ON public.products USING btree (created_at)"
+        },
+        {
+            "indexname": "idx_prod_price",
+            "indexdef": "CREATE INDEX idx_prod_price ON public.products USING btree (price)"
+        },
+        {
+            "indexname": "idx_prod_flags",
+            "indexdef": "CREATE INDEX idx_prod_flags ON public.products USING btree (account_id, is_featured, is_new)"
+        },
+        {
+            "indexname": "idx_prod_acc_date",
+            "indexdef": "CREATE INDEX idx_prod_acc_date ON public.products USING btree (account_id, created_at, id)"
+        },
+        {
+            "indexname": "idx_products_name_trgm",
+            "indexdef": "CREATE INDEX idx_products_name_trgm ON public.products USING gin (immutable_unaccent((name)::text) gin_trgm_ops)"
+        },
+        {
+            "indexname": "idx_products_sku_trgm",
+            "indexdef": "CREATE INDEX idx_products_sku_trgm ON public.products USING gin (immutable_unaccent((sku)::text) gin_trgm_ops)"
+        },
+        {
+            "indexname": "products_inventory_import_starred_idx",
+            "indexdef": "CREATE INDEX products_inventory_import_starred_idx ON public.products USING btree (inventory_import_starred)"
         }
     ],
     "product_attribute_values": [
@@ -27,6 +63,10 @@
         {
             "indexname": "product_images_pkey",
             "indexdef": "CREATE UNIQUE INDEX product_images_pkey ON public.product_images USING btree (id)"
+        },
+        {
+            "indexname": "idx_prod_img_product_id",
+            "indexdef": "CREATE INDEX idx_prod_img_product_id ON public.product_images USING btree (product_id)"
         }
     ]
 }

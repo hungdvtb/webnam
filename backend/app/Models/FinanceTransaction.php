@@ -12,10 +12,13 @@ class FinanceTransaction extends Model
     use BelongsToAccount;
     use SoftDeletes;
 
+    public const TYPE_RECEIPT_VOUCHER = 'receipt_voucher';
+
     protected $fillable = [
         'account_id',
         'wallet_id',
         'category_id',
+        'source_name',
         'related_transaction_id',
         'created_by',
         'updated_by',
@@ -28,8 +31,11 @@ class FinanceTransaction extends Model
         'amount',
         'counterparty_type',
         'counterparty_name',
+        'counterparty_phone',
         'reference_type',
         'reference_id',
+        'reference_code',
+        'reference_label',
         'content',
         'note',
         'attachment_path',
@@ -88,5 +94,12 @@ class FinanceTransaction extends Model
         }
 
         return Storage::disk('public')->url($this->attachment_path);
+    }
+
+    public function scopeReceiptVouchers($query)
+    {
+        return $query
+            ->where('direction', 'in')
+            ->where('transaction_type', self::TYPE_RECEIPT_VOUCHER);
     }
 }

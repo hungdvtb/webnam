@@ -11,13 +11,13 @@ import TrustBadges from './common/TrustBadges';
 
 import Breadcrumb from './common/Breadcrumb';
 
-function VariantActionPopover({ variantLabel, onAddToCart, onBuyNow }) {
+function VariantActionPopover({ variantLabel, onAddToCart, onBuyNow, className = '' }) {
   if (!variantLabel) {
     return null;
   }
 
   return (
-    <div className={`${styles.bundleActionPopover} ${styles.variantActionPopover}`}>
+    <div className={`${styles.bundleActionPopover} ${styles.variantActionPopover} ${className}`.trim()}>
       <div className={styles.bundleActionContent}>
         <p className={styles.bundleActionEyebrow}>Chọn phân loại</p>
         <h3 className={styles.bundleActionTitle}>{variantLabel}</h3>
@@ -57,6 +57,7 @@ export default function ConfigurableProductView({
   additionalInfo
 }) {
   const [variantActionId, setVariantActionId] = useState(null);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
   const pendingStructuredOpenRef = useRef(false);
   const isConcreteVariant = currentProduct?.id && currentProduct.id !== product?.id;
 
@@ -73,6 +74,54 @@ export default function ConfigurableProductView({
 
     return variant?.sku || `Biến thể #${variant?.id || ''}`.trim();
   };
+
+  const getVariantDisplayName = (variant) => {
+    const variantName = String(
+      variant?.name
+      ?? variant?.display_name
+      ?? variant?.full_name
+      ?? variant?.variant_name
+      ?? ''
+    ).trim();
+
+    if (variantName) {
+      return variantName;
+    }
+
+    const parentName = String(product?.name || '').trim();
+    if (parentName) {
+      return parentName;
+    }
+
+    return getFallbackVariantLabel(variant);
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia('(max-width: 640px)');
+    const syncViewport = () => {
+      setIsMobileViewport(mediaQuery.matches);
+    };
+
+    syncViewport();
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', syncViewport);
+
+      return () => {
+        mediaQuery.removeEventListener('change', syncViewport);
+      };
+    }
+
+    mediaQuery.addListener(syncViewport);
+
+    return () => {
+      mediaQuery.removeListener(syncViewport);
+    };
+  }, []);
 
   useEffect(() => {
     if (!variantActionId) {
@@ -267,18 +316,33 @@ export default function ConfigurableProductView({
                     data-variant-action-wrapper="true"
                     data-variant-id={currentProduct.id}
                   >
-                    <button
-                      type="button"
-                      onClick={toggleStructuredVariantActions}
-                      className={`${styles.configOptionBtn} ${variantActionId === currentProduct.id ? styles.configOptionBtnActive : ''}`}
-                      aria-expanded={variantActionId === currentProduct.id}
-                    >
-                      {getFallbackVariantLabel(currentProduct)}
-                      <span className={styles.variantActionMeta}>{currentProduct.sku}</span>
-                    </button>
-                    {variantActionId === currentProduct.id ? (
+                    {!isMobileViewport ? (
+                      <button
+                        type="button"
+                        onClick={toggleStructuredVariantActions}
+                        className={`${styles.configOptionBtn} ${styles.variantActionTrigger} ${variantActionId === currentProduct.id ? styles.configOptionBtnActive : ''}`}
+                        aria-expanded={variantActionId === currentProduct.id}
+                      >
+                        <span className={styles.variantActionCopy}>
+                          <span className={styles.variantActionName}>{getVariantDisplayName(currentProduct)}</span>
+                          {currentProduct.sku ? (
+                            <span className={styles.variantActionMeta}>{currentProduct.sku}</span>
+                          ) : null}
+                        </span>
+                      </button>
+                    ) : null}
+                    {!isMobileViewport && variantActionId === currentProduct.id ? (
                       <VariantActionPopover
-                        variantLabel={getFallbackVariantLabel(currentProduct)}
+                        className={styles.variantActionPopoverDesktop}
+                        variantLabel={getVariantDisplayName(currentProduct)}
+                        onAddToCart={handleVariantPopupAddToCart}
+                        onBuyNow={handleVariantPopupBuyNow}
+                      />
+                    ) : null}
+                    {isMobileViewport && variantActionId === currentProduct.id ? (
+                      <VariantActionPopover
+                        className={styles.variantActionPanelMobile}
+                        variantLabel={getVariantDisplayName(currentProduct)}
                         onAddToCart={handleVariantPopupAddToCart}
                         onBuyNow={handleVariantPopupBuyNow}
                       />
@@ -306,15 +370,17 @@ export default function ConfigurableProductView({
                             className={`${styles.variantCard} ${isActive ? styles.variantCardActive : ''}`}
                             aria-expanded={variantActionId === variant.id}
                           >
-                            <div>
-                              <div className={styles.variantCardName}>{getFallbackVariantLabel(variant)}</div>
-                              <div className={styles.variantCardMeta}>{variant.sku}</div>
+                            <div className={styles.variantCardCopy}>
+                              <div className={styles.variantCardName}>{getVariantDisplayName(variant)}</div>
+                              {variant.sku ? (
+                                <div className={styles.variantCardMeta}>{variant.sku}</div>
+                              ) : null}
                             </div>
                             <div className={styles.variantCardPrice}>{formatPrice(variant.current_price ?? variant.price)}</div>
                           </button>
                           {variantActionId === variant.id ? (
                             <VariantActionPopover
-                              variantLabel={getFallbackVariantLabel(variant)}
+                              variantLabel={getVariantDisplayName(variant)}
                               onAddToCart={handleVariantPopupAddToCart}
                               onBuyNow={handleVariantPopupBuyNow}
                             />

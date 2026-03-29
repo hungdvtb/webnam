@@ -161,7 +161,6 @@ export default async function RootLayout({ children }) {
     hotline: String(settings?.footer_hotline || settings?.contact_phone || "").trim(),
     email: String(settings?.footer_email || settings?.contact_email || "").trim(),
     address: String(settings?.footer_address || "").trim(),
-    newsletterPlaceholder: String(settings?.footer_newsletter_placeholder || "").trim() || "Email của bạn",
     copyrightText:
       String(settings?.footer_copyright_text || "").trim() ||
       `© ${new Date().getFullYear()} ${brandText}. Tất cả quyền được bảo lưu.`,

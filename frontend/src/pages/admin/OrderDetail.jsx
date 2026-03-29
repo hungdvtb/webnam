@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { orderApi, orderStatusApi } from '../../services/api';
 import { getOrderTypeMeta, isSpecialOrderType } from '../../config/orderTypes';
+import { formatRoundedImportCost } from '../../utils/money';
 
 const moneyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
+const formatImportCost = (value) => `${formatRoundedImportCost(value)}đ`;
 const formatMoney = (value) => `${moneyFormatter.format(Number(value || 0))}đ`;
 
 const OrderDetail = () => {
@@ -207,7 +209,7 @@ const OrderDetail = () => {
                                                 </td>
                                                 <td className="p-4 text-center font-bold text-sm">x{item.quantity}</td>
                                                 <td className="p-4 text-right text-sm">{formatMoney(item.price)}</td>
-                                                <td className="p-4 text-right text-sm">{formatMoney(item.cost_price)}</td>
+                                                <td className="p-4 text-right text-sm">{formatImportCost(item.cost_price)}</td>
                                                 <td className="p-4 text-sm text-primary/70">{item.notes || '-'}</td>
                                                 <td className="p-4 text-right font-bold text-brick">{formatMoney(item.total_price ?? (Number(item.price || 0) * Number(item.quantity || 0)))}</td>
                                             </tr>
@@ -321,7 +323,7 @@ const OrderDetail = () => {
                                 </div>
                                 <div className="flex justify-between border-b border-amber-200/70 pb-2">
                                     <span className="text-amber-900/60">Giá vốn báo cáo:</span>
-                                    <span className="font-bold text-amber-900">{formatMoney(order.report_cost_total)}</span>
+                                    <span className="font-bold text-amber-900">{formatImportCost(order.report_cost_total)}</span>
                                 </div>
                                 <div className="flex justify-between border-b border-amber-200/70 pb-2">
                                     <span className="text-amber-900/60">Giá trị hàng khai báo:</span>

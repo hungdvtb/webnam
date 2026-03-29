@@ -7,6 +7,11 @@ import {
     normalizeSupplementReturnStatus,
     SUPPLEMENT_RETURN_STATUS_OPTIONS,
 } from '../../config/orderTypes';
+import {
+    calculateRoundedImportCostLineTotal,
+    formatRoundedImportCost,
+    normalizeRoundedImportCostNumber,
+} from '../../utils/money';
 
 const moneyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
 
@@ -21,7 +26,7 @@ const buildItemFromProduct = (product) => ({
     sku: product?.sku || '',
     quantity: 1,
     price: toNumber(product?.price, 0),
-    cost_price: toNumber(product?.cost_price ?? product?.expected_cost, 0),
+    cost_price: normalizeRoundedImportCostNumber(product?.cost_price ?? product?.expected_cost) ?? 0,
     notes: '',
 });
 
@@ -129,10 +134,10 @@ const OrderSupplementItemsSection = ({
     const totals = useMemo(() => normalizedItems.reduce((summary, item) => {
         const quantity = Math.max(0, toNumber(item?.quantity, 0));
         const price = toNumber(item?.price, 0);
-        const costPrice = toNumber(item?.cost_price, 0);
+        const costPrice = normalizeRoundedImportCostNumber(item?.cost_price) ?? 0;
 
         summary.totalPrice += quantity * price;
-        summary.totalCost += quantity * costPrice;
+        summary.totalCost += calculateRoundedImportCostLineTotal(costPrice, quantity);
 
         return summary;
     }, { totalPrice: 0, totalCost: 0 }), [normalizedItems]);
@@ -161,7 +166,14 @@ const OrderSupplementItemsSection = ({
 
     const handleItemChange = (index, field, value) => {
         updateItems(normalizedItems.map((item, itemIndex) => (
-            itemIndex === index ? { ...item, [field]: value } : item
+            itemIndex === index
+                ? {
+                    ...item,
+                    [field]: field === 'cost_price'
+                        ? (normalizeRoundedImportCostNumber(value) ?? 0)
+                        : value,
+                }
+                : item
         )));
     };
 
@@ -343,7 +355,7 @@ const OrderSupplementItemsSection = ({
                                                 Tổng giá vốn
                                             </div>
                                             <div className="mt-2 text-[22px] font-black text-primary">
-                                                {moneyFormatter.format(totals.totalCost)}đ
+                                                {formatRoundedImportCost(totals.totalCost)}đ
                                             </div>
                                         </div>
                                     </div>
@@ -401,8 +413,8 @@ const OrderSupplementItemsSection = ({
                                                             <input
                                                                 type="number"
                                                                 min="0"
-                                                                value={toNumber(item?.cost_price, 0)}
-                                                                onChange={(event) => handleItemChange(index, 'cost_price', Math.max(0, Number(event.target.value) || 0))}
+                                                                value={normalizeRoundedImportCostNumber(item?.cost_price) ?? 0}
+                                                                onChange={(event) => handleItemChange(index, 'cost_price', event.target.value)}
                                                                 className={`${tableInputClassName} text-right font-bold`}
                                                             />
                                                         </td>
@@ -455,7 +467,7 @@ const OrderSupplementItemsSection = ({
                                 </div>
                                 <div className="flex items-center justify-end gap-3">
                                     <div className="rounded-sm border border-primary/10 bg-primary/[0.02] px-3 py-2 text-[12px] font-bold text-primary/60">
-                                        {moneyFormatter.format(totals.totalPrice)}đ / {moneyFormatter.format(totals.totalCost)}đ
+                                        {moneyFormatter.format(totals.totalPrice)}đ / {formatRoundedImportCost(totals.totalCost)}đ
                                     </div>
                                     <button
                                         type="button"

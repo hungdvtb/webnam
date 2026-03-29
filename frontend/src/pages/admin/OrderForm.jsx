@@ -30,6 +30,11 @@ import {
     sortRegionStrings,
     validateVietnamesePhone
 } from '../../utils/administrativeUnits';
+import {
+    calculateRoundedImportCostLineTotal,
+    formatRoundedImportCost,
+    normalizeRoundedImportCostNumber,
+} from '../../utils/money';
 
 const AdminSection = ({ icon, title, children, className = '', bodyClassName = '' }) => (
     <section className={`bg-white border border-primary/10 shadow-sm rounded-sm overflow-hidden ${className}`}>
@@ -377,14 +382,22 @@ const resolveMoneyValue = (...candidates) => {
 
     return 0;
 };
-const resolveProductCostPrice = (product, fallback = 0) => resolveMoneyValue(
+const resolveRoundedImportCostValue = (value, fallback = 0) => normalizeRoundedImportCostNumber(value) ?? fallback;
+const resolveProductCostPrice = (product, fallback = 0) => resolveRoundedImportCostValue(resolveMoneyValue(
     product?.current_cost_price,
     product?.cost_price,
     product?.expected_cost,
     product?.product?.cost_price,
     product?.product?.expected_cost,
     fallback
-);
+), fallback);
+const hasProductCostSnapshot = (product) => [
+    product?.current_cost_price,
+    product?.cost_price,
+    product?.expected_cost,
+    product?.product?.cost_price,
+    product?.product?.expected_cost,
+].some((value) => parseMoneyNumber(value) !== null);
 const normalizeProductPickerEntry = (product) => {
     if (!product || typeof product !== 'object') return product;
 
@@ -404,7 +417,7 @@ const normalizeProductPickerEntry = (product) => {
     };
 };
 const calculateItemsCostTotal = (items = []) => items.reduce(
-    (sum, item) => sum + ((parseMoneyNumber(item?.cost_price, 0) || 0) * (parseMoneyNumber(item?.quantity, 0) || 0)),
+    (sum, item) => sum + calculateRoundedImportCostLineTotal(item?.cost_price, parseMoneyNumber(item?.quantity, 0) || 0),
     0
 );
 const calculateSupplementItemsTotal = (items = []) => items.reduce(
@@ -412,7 +425,7 @@ const calculateSupplementItemsTotal = (items = []) => items.reduce(
     0
 );
 const calculateSupplementItemsCostTotal = (items = []) => items.reduce(
-    (sum, item) => sum + ((parseMoneyNumber(item?.cost_price, 0) || 0) * (parseMoneyNumber(item?.quantity, 0) || 0)),
+    (sum, item) => sum + calculateRoundedImportCostLineTotal(item?.cost_price, parseMoneyNumber(item?.quantity, 0) || 0),
     0
 );
 const collectSupplementDeclarationCodes = (items = []) => Array.from(new Set(
@@ -432,7 +445,7 @@ const buildCompactSupplementCodeSummary = (codes = []) => {
     return `${codes.slice(0, 2).join(', ')} +${codes.length - 2}`;
 };
 const resolveOrderItemCostPrice = (item, useCurrentProductCost = false) => {
-    return useCurrentProductCost
+    const resolvedValue = useCurrentProductCost
         ? resolveMoneyValue(
             item?.current_cost_price,
             item?.product?.cost_price,
@@ -446,6 +459,8 @@ const resolveOrderItemCostPrice = (item, useCurrentProductCost = false) => {
             item?.product?.expected_cost,
             0
         );
+
+    return resolveRoundedImportCostValue(resolvedValue, 0);
 };
 
 const waitForNodeImages = async (node) => {
@@ -849,6 +864,55 @@ const OrderForm = () => {
             return hasChanged ? nextStore : prev;
         });
     }, []);
+    const applyLatestProductsToOrderState = useCallback((refreshedItems = []) => {
+        const refreshedMap = new Map(
+            (Array.isArray(refreshedItems) ? refreshedItems : []).map((item) => [Number(item.product_id), item])
+        );
+
+        if (refreshedMap.size === 0) {
+            return refreshedMap;
+        }
+
+        setFormData((prev) => {
+            const nextItems = prev.items.map((item) => {
+                const latest = refreshedMap.get(Number(item.product_id));
+                if (!latest) return item;
+
+                return {
+                    ...item,
+                    name: latest.name ?? item.name,
+                    sku: latest.sku ?? item.sku,
+                    price: Number(latest.price ?? 0),
+                    cost_price: resolveProductCostPrice(latest, item.cost_price),
+                };
+            });
+
+            return {
+                ...prev,
+                items: nextItems,
+                cost_total: calculateItemsCostTotal(nextItems),
+            };
+        });
+
+        setProducts((prev) => prev.map((product) => {
+            const latest = refreshedMap.get(Number(product.id));
+            if (!latest) return normalizeProductPickerEntry(product);
+
+            return normalizeProductPickerEntry({
+                ...product,
+                sku: latest.sku ?? product.sku,
+                name: latest.name ?? product.name,
+                price: Number(latest.price ?? product.price ?? 0),
+                expected_cost: parseMoneyNumber(latest.expected_cost, parseMoneyNumber(product.expected_cost)),
+                cost_price: resolveProductCostPrice(latest, product.cost_price),
+                status: latest.status ?? product.status,
+            });
+        }));
+
+        syncLatestProductsIntoLocalSources(refreshedMap);
+
+        return refreshedMap;
+    }, [syncLatestProductsIntoLocalSources]);
 
     const navigateBack = useCallback(() => {
         if (returnTo && returnTo.startsWith('/admin/')) {
@@ -1582,6 +1646,43 @@ const OrderForm = () => {
         setProductQuickSetupProducts([]);
     }, [activeProductQuickSetupKey]);
 
+    useEffect(() => {
+        if (activeProductQuickSetupItems.length === 0) return;
+
+        let isDisposed = false;
+
+        const refreshActiveQuickSetupItems = async () => {
+            try {
+                const response = await productApi.refreshOrderItems({
+                    items: activeProductQuickSetupItems.map((item) => ({
+                        product_id: item.product_id,
+                        sku: item.sku,
+                        name: item.name,
+                    }))
+                });
+
+                if (isDisposed) return;
+
+                const refreshedItems = Array.isArray(response.data?.items) ? response.data.items : [];
+                if (refreshedItems.length === 0) return;
+
+                syncLatestProductsIntoLocalSources(
+                    new Map(refreshedItems.map((item) => [Number(item.product_id), item]))
+                );
+            } catch (error) {
+                if (!isDisposed) {
+                    console.error('Error refreshing quick setup products', error);
+                }
+            }
+        };
+
+        refreshActiveQuickSetupItems();
+
+        return () => {
+            isDisposed = true;
+        };
+    }, [activeProductQuickSetupItems, syncLatestProductsIntoLocalSources]);
+
     useEffect(() => () => {
         productSearchAbortRef.current?.abort();
         productQuickSetupAbortRef.current?.abort();
@@ -1651,12 +1752,10 @@ const OrderForm = () => {
                 sku: item.product?.sku || item.product_sku_snapshot || 'N/A',
                 quantity: parseMoneyNumber(item.quantity, 0) || 0,
                 price: parseMoneyNumber(item.price, 0) || 0,
-                cost_price: parseMoneyNumber(item.cost_price, 0) || 0,
+                cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
                 notes: item.notes || '',
             }));
-            const mappedCostTotal = shouldUseCurrentProductCost
-                ? (parseMoneyNumber(order.current_cost_total, calculateItemsCostTotal(mappedItems)) || 0)
-                : (parseMoneyNumber(order.cost_total, calculateItemsCostTotal(mappedItems)) || 0);
+            const mappedCostTotal = calculateItemsCostTotal(mappedItems);
             setFormData({
                 customer_name: order.customer_name || '',
                 customer_email: order.customer_email || '',
@@ -1682,7 +1781,7 @@ const OrderForm = () => {
                     sku: item.product?.sku || item.product_sku_snapshot || `N/A`,
                     quantity: item.quantity,
                     price: item.price,
-                    cost_price: item.cost_price || item.product?.cost_price || item.product?.expected_cost || 0
+                    cost_price: resolveOrderItemCostPrice(item)
                 })) || [],
                 supplement_items: mappedSupplementItems,
                 custom_attributes: customAttrValues,
@@ -1741,10 +1840,10 @@ const OrderForm = () => {
                 sku: item.sku || item.product_sku || 'N/A',
                 quantity: Number(item.quantity) || 1,
                 price: Number(item.price) || 0,
-                cost_price: Number(item.cost_price) || 0,
+                cost_price: resolveProductCostPrice(item),
                 options: item.options || {}
             }));
-            const draftCostTotal = draftItems.reduce((sum, item) => sum + (Number(item.cost_price || 0) * Number(item.quantity || 0)), 0);
+            const draftCostTotal = calculateItemsCostTotal(draftItems);
 
             setFormData((prev) => syncShippingAddress({
                 ...prev,
@@ -1881,6 +1980,25 @@ const OrderForm = () => {
         detectAdministrativeAddress(e.target.value);
     };
 
+    const hydrateMissingProductCostSnapshot = useCallback(async (product) => {
+        const targetProductId = parseInt(product?.target_product_id ?? product?.product_id ?? product?.id, 10);
+        if (!targetProductId) return;
+
+        try {
+            const response = await productApi.refreshOrderItems({
+                items: [{
+                    product_id: targetProductId,
+                    sku: product?.display_sku || product?.sku || '',
+                    name: product?.display_name || product?.name || '',
+                }]
+            });
+
+            applyLatestProductsToOrderState(response.data?.items);
+        } catch (error) {
+            console.error('Error hydrating product cost snapshot', error);
+        }
+    }, [applyLatestProductsToOrderState]);
+
     const appendProductToOrder = useCallback((product, options = {}) => {
         const targetProductId = parseInt(product?.target_product_id ?? product?.product_id ?? product?.id, 10);
         if (!targetProductId) return;
@@ -1900,9 +2018,9 @@ const OrderForm = () => {
                 sku: product?.display_sku || product?.sku || 'N/A',
                 quantity: 1,
                 price: Number(product?.price ?? 0) || 0,
-                cost_price: Number(product?.cost_price ?? product?.expected_cost ?? 0) || 0,
+                cost_price: resolveProductCostPrice(product),
             }];
-            const costTotal = nextItems.reduce((sum, item) => sum + (item.cost_price * item.quantity), 0);
+            const costTotal = calculateItemsCostTotal(nextItems);
 
             return {
                 ...prev,
@@ -1912,7 +2030,11 @@ const OrderForm = () => {
         });
 
         setShowSearchHistory(false);
-    }, [pushSearchHistory, searchTerm]);
+
+        if (!hasProductCostSnapshot(product)) {
+            hydrateMissingProductCostSnapshot(product);
+        }
+    }, [hydrateMissingProductCostSnapshot, pushSearchHistory, searchTerm]);
 
     const addProductById = useCallback((productId) => {
         if (!productId) return;
@@ -1928,8 +2050,11 @@ const OrderForm = () => {
     const updateItem = React.useCallback((index, field, value) => {
         setFormData(prev => {
             const newItems = [...prev.items];
-            newItems[index] = { ...newItems[index], [field]: value };
-            const costTotal = newItems.reduce((sum, item) => sum + (item.cost_price * item.quantity), 0);
+            const nextValue = field === 'cost_price'
+                ? resolveRoundedImportCostValue(value, 0)
+                : value;
+            newItems[index] = { ...newItems[index], [field]: nextValue };
+            const costTotal = calculateItemsCostTotal(newItems);
             return {
                 ...prev,
                 items: newItems,
@@ -1941,7 +2066,7 @@ const OrderForm = () => {
     const removeItem = React.useCallback((id) => {
         setFormData(prev => {
             const newItems = prev.items.filter(item => item.product_id !== id);
-            const costTotal = newItems.reduce((sum, item) => sum + (item.cost_price * item.quantity), 0);
+            const costTotal = calculateItemsCostTotal(newItems);
             return {
                 ...prev,
                 items: newItems,
@@ -2365,49 +2490,7 @@ const OrderForm = () => {
 
             const refreshedItems = Array.isArray(response.data?.items) ? response.data.items : [];
             const issues = Array.isArray(response.data?.issues) ? response.data.issues : [];
-            const refreshedMap = new Map(
-                refreshedItems.map((item) => [Number(item.product_id), item])
-            );
-
-            setFormData((prev) => {
-                const nextItems = prev.items.map((item) => {
-                    const latest = refreshedMap.get(Number(item.product_id));
-                    if (!latest) return item;
-
-                    return {
-                        ...item,
-                        name: latest.name ?? item.name,
-                        sku: latest.sku ?? item.sku,
-                        price: Number(latest.price ?? 0),
-                        cost_price: Number(latest.cost_price ?? latest.expected_cost ?? 0),
-                    };
-                });
-
-                const costTotal = nextItems.reduce(
-                    (sum, item) => sum + ((Number(item.cost_price) || 0) * (Number(item.quantity) || 0)),
-                    0
-                );
-
-                return {
-                    ...prev,
-                    items: nextItems,
-                    cost_total: costTotal,
-                };
-            });
-
-            setProducts((prev) => prev.map((product) => {
-                const latest = refreshedMap.get(Number(product.id));
-                if (!latest) return product;
-
-                return {
-                    ...product,
-                    sku: latest.sku ?? product.sku,
-                    name: latest.name ?? product.name,
-                    price: Number(latest.price ?? product.price ?? 0),
-                    cost_price: Number(latest.cost_price ?? latest.expected_cost ?? product.cost_price ?? product.expected_cost ?? 0),
-                    status: latest.status ?? product.status,
-                };
-            }));
+            applyLatestProductsToOrderState(refreshedItems);
 
             if (refreshedItems.length > 0) {
                 showTransientNotification(
@@ -2479,7 +2562,7 @@ const OrderForm = () => {
                     product_id: Number(item.product_id) || 0,
                     quantity: Math.max(0, Number(item.quantity) || 0),
                     price: Math.max(0, Number(item.price) || 0),
-                    cost_price: Math.max(0, Number(item.cost_price) || 0),
+                    cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
                     name: item.name || '',
                     sku: item.sku || '',
                     notes: item.notes || '',
@@ -3285,10 +3368,9 @@ const OrderForm = () => {
                                                                     <div className="flex items-center justify-end">
                                                                         <input
                                                                             type="text"
-                                                                            value={new Intl.NumberFormat('vi-VN').format(item.cost_price)}
+                                                                            value={formatRoundedImportCost(item.cost_price)}
                                                                             onChange={(e) => {
-                                                                                const val = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-                                                                                updateItem(index, 'cost_price', parseInt(val) || 0);
+                                                                                updateItem(index, 'cost_price', normalizeRoundedImportCostNumber(e.target.value) ?? 0);
                                                                             }}
                                                                             className="w-full bg-transparent border-none text-right font-sans text-[13px] font-bold text-primary/30 border-b border-primary/5 focus:border-primary/10 transition-all rounded-none px-1"
                                                                         />

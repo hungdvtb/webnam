@@ -11,7 +11,15 @@ import { ACTIVE_PRODUCT_TYPE_OPTIONS } from '../../config/productTypes';
 import { aiApi, categoryApi, cmsApi, inventoryApi, orderApi, productApi } from '../../services/api';
 import BatchReturnSlipModal from '../../components/admin/BatchReturnSlipModal';
 import InventoryProductDailyOutboundDrawer from '../../components/admin/InventoryProductDailyOutboundDrawer';
-import { formatWholeMoneyInput, normalizeWholeMoneyDraft, normalizeWholeMoneyNumber, parseWholeMoneyValue } from '../../utils/money';
+import {
+    formatRoundedImportCost,
+    formatWholeMoneyInput,
+    normalizeRoundedImportCostDraft,
+    normalizeRoundedImportCostNumber,
+    normalizeWholeMoneyDraft,
+    normalizeWholeMoneyNumber,
+    parseWholeMoneyValue,
+} from '../../utils/money';
 
 const emptyPagination = { current_page: 1, last_page: 1, total: 0, per_page: 20 };
 const todayValue = new Date().toISOString().slice(0, 10);
@@ -279,6 +287,7 @@ const nextSortConfig = (current, columnId) => {
 };
 
 const formatCurrency = (value) => `${new Intl.NumberFormat('vi-VN').format(Math.round(Number(value || 0)))}đ`;
+const formatImportCost = (value) => `${formatRoundedImportCost(value)}đ`;
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0));
 const stripNumericValue = (value) => String(value ?? '').replace(/[^0-9]/g, '');
 const getProductStockAlertMeta = (row) => {
@@ -350,13 +359,13 @@ const parseSupplierPasteLine = (line, mode = 'sku_price') => {
     if (mode === 'sku_supplier_code_price') {
         if (parts.length < 3) return null;
         const supplierProductCode = String(parts[1] || '').trim();
-        const unitCost = normalizeWholeMoneyDraft(parts[2]);
+        const unitCost = normalizeRoundedImportCostDraft(parts[2]);
         if (!supplierProductCode || !unitCost) return null;
         return { sku, supplier_product_code: supplierProductCode, unit_cost: unitCost };
     }
 
     if (parts.length < 2) return null;
-    const unitCost = normalizeWholeMoneyDraft(parts[1]);
+    const unitCost = normalizeRoundedImportCostDraft(parts[1]);
     return unitCost ? { sku, unit_cost: unitCost } : null;
 };
 const formatWholeNumberInput = (value) => {
@@ -364,6 +373,44 @@ const formatWholeNumberInput = (value) => {
 };
 const parseWholeNumberInput = (value) => {
     return parseWholeMoneyValue(value);
+};
+const normalizeSignedWholeNumberInput = (value) => {
+    const raw = String(value ?? '').trimStart();
+    const sign = raw.startsWith('-') ? '-' : (raw.startsWith('+') ? '+' : '');
+    const digits = stripNumericValue(raw.replace(/^[+-]\s*/, ''));
+
+    if (!digits) return sign;
+
+    const normalizedDigits = digits.replace(/^0+(?=\d)/, '');
+    return `${sign}${normalizedDigits || '0'}`;
+};
+const parseSignedWholeNumberInput = (value) => {
+    const raw = String(value ?? '').trim();
+    if (!raw || raw === '+' || raw === '-') return null;
+
+    const sign = raw.startsWith('-') ? -1 : 1;
+    const digits = stripNumericValue(raw.replace(/^[+-]\s*/, ''));
+    if (!digits) return null;
+
+    return sign * Number(digits);
+};
+const nudgeSignedWholeNumberInput = (value, delta) => {
+    const currentValue = parseSignedWholeNumberInput(value);
+
+    if (currentValue == null) {
+        return delta > 0 ? '1' : '-1';
+    }
+
+    return String(currentValue + delta);
+};
+const resolveDocumentUnitCostValue = (product) => {
+    const cost = product?.current_cost ?? product?.supplier_unit_cost ?? product?.expected_cost;
+
+    if (cost == null || !Number.isFinite(Number(cost))) {
+        return '';
+    }
+
+    return String(Math.round(Number(cost)));
 };
 const roundCurrencyValue = (value) => Math.round(Number(value || 0) * 100) / 100;
 const formatCompactDecimal = (value) => {
@@ -922,7 +969,7 @@ const createSupplierPriceForm = (price = null) => ({
     product_name: price?.product?.name || '',
     product_sku: price?.product?.sku || '',
     supplier_product_code: price?.supplier_product_code || '',
-    unit_cost: price?.unit_cost != null ? normalizeWholeMoneyDraft(price.unit_cost) : '',
+    unit_cost: price?.unit_cost != null ? normalizeRoundedImportCostDraft(price.unit_cost) : '',
     notes: price?.notes || '',
 });
 
@@ -938,7 +985,7 @@ const mapSupplierCatalogEntry = (item) => ({
     parent_sku: item.parent_sku || null,
     category_name: item.category_name || null,
     price: item.price ?? null,
-    unit_cost: normalizeWholeMoneyNumber(item.supplier_unit_cost),
+    unit_cost: normalizeRoundedImportCostNumber(item.supplier_unit_cost),
     inventory_import_starred: Boolean(item.inventory_import_starred),
     current_cost: item.current_cost ?? item.expected_cost ?? null,
     notes: item.supplier_notes || '',
@@ -1082,7 +1129,15 @@ const createDocumentForm = (tabKey, data = null) => ({
             product_id: item.product_id,
             product_name: item.product?.name || item.product_name_snapshot || '',
             product_sku: item.product?.sku || item.product_sku_snapshot || '',
-            quantity: String(item.quantity || 1),
+            quantity: tabKey === 'adjustments'
+                ? String(
+                    Number(item.quantity || 0) < 0
+                        ? Number(item.quantity || 0)
+                        : ((item.direction || 'in') === 'out'
+                            ? -Math.abs(Number(item.quantity || 0))
+                            : Math.abs(Number(item.quantity || 0)))
+                )
+                : String(item.quantity || 1),
             unit_cost: item.unit_cost != null ? String(Math.round(Number(item.unit_cost || 0))) : '',
             notes: item.notes || '',
             stock_bucket: item.stock_bucket || 'sellable',
@@ -1090,6 +1145,18 @@ const createDocumentForm = (tabKey, data = null) => ({
         }))
         : [createLine()],
 });
+
+const getDocumentLineQuantityValue = (tabKey, item) => {
+    if (tabKey === 'adjustments') {
+        return parseSignedWholeNumberInput(item.quantity) ?? 0;
+    }
+
+    return Number(item.quantity || 0);
+};
+
+const getDocumentLineValue = (tabKey, item) => (
+    getDocumentLineQuantityValue(tabKey, item) * Number(item.unit_cost || 0)
+);
 
 const createExportForm = (data = null) => ({
     id: data?.id || null,
@@ -3988,7 +4055,7 @@ const InventoryMovement = () => {
                     product_sku: product.sku,
                     supplier_product_code: product.supplier_product_code || item.supplier_product_code || '',
                     unit_name: product.unit_name || product.unit?.name || item.unit_name || '',
-                    unit_cost: String(Math.round(Number(product.supplier_unit_cost ?? product.current_cost ?? product.expected_cost ?? 0))),
+                    unit_cost: resolveDocumentUnitCostValue(product),
                     mapping_status: 'matched',
                     mapping_label: item.mapping_status === 'unmatched' ? 'Đã map thủ công' : 'Đã chọn sản phẩm',
                 } : item),
@@ -4850,9 +4917,9 @@ const InventoryMovement = () => {
         }));
     };
 const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {}) => {
-        const nextUnitCost = normalizeWholeMoneyNumber(responseData?.unit_cost ?? responseData?.supplier_unit_cost ?? fallbackValues.unit_cost ?? row.unit_cost) ?? 0;
+        const nextUnitCost = normalizeRoundedImportCostNumber(responseData?.unit_cost ?? responseData?.supplier_unit_cost ?? fallbackValues.unit_cost ?? row.unit_cost) ?? 0;
         const nextUpdatedAt = responseData?.updated_at ?? responseData?.supplier_price_updated_at ?? new Date().toISOString();
-        const nextExpectedCost = normalizeWholeMoneyNumber(responseData?.product?.expected_cost ?? responseData?.expected_cost ?? nextUnitCost);
+        const nextExpectedCost = normalizeRoundedImportCostNumber(responseData?.product?.expected_cost ?? responseData?.expected_cost ?? nextUnitCost);
 
         return {
             supplier_price_id: responseData?.id ?? responseData?.supplier_price_id ?? row.supplier_price_id ?? null,
@@ -4973,7 +5040,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     };
 
     const applyBulkPrice = async () => {
-        const cleaned = normalizeWholeMoneyDraft(bulkPrice);
+        const cleaned = normalizeRoundedImportCostDraft(bulkPrice);
         if (!selectedSupplierId || !selectedIds.length || !cleaned) return showToast({ type: 'warning', message: 'Hãy chọn dòng và nhập giá.' });
         const success = await applyPriceToIds(selectedIds, cleaned);
         if (success) {
@@ -4982,7 +5049,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     };
 
     const applyGroupPrice = async (groupId) => {
-        const cleaned = normalizeWholeMoneyDraft(groupPriceDrafts[groupId] ?? bulkPrice);
+        const cleaned = normalizeRoundedImportCostDraft(groupPriceDrafts[groupId] ?? bulkPrice);
         const ids = getVariantIdsByGroup(groupId);
         if (!ids.length || !cleaned) return showToast({ type: 'warning', message: 'Hãy nhập giá hàng loạt trước.' });
         setExpandedGroups((prev) => ({ ...prev, [groupId]: true }));
@@ -5053,8 +5120,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         const hasUnitCostOverride = Object.prototype.hasOwnProperty.call(overrides, 'unit_cost');
         const hasSupplierCodeOverride = Object.prototype.hasOwnProperty.call(overrides, 'supplier_product_code');
         const rawValue = hasUnitCostOverride ? (overrides.unit_cost ?? '') : (row.unit_cost ?? '');
-        const cleaned = normalizeWholeMoneyDraft(rawValue);
-        const numericValue = parseWholeNumberInput(rawValue) ?? (normalizeWholeMoneyNumber(row.unit_cost) ?? 0);
+        const cleaned = normalizeRoundedImportCostDraft(rawValue);
+        const numericValue = normalizeRoundedImportCostNumber(rawValue) ?? (normalizeRoundedImportCostNumber(row.unit_cost) ?? 0);
         const supplierProductCode = String(hasSupplierCodeOverride ? (overrides.supplier_product_code ?? '') : (row.supplier_product_code ?? '')).trim();
         const currentSupplierCode = String(row.supplier_product_code || '').trim();
         const productId = Number(row.product_id || row.id || 0);
@@ -5084,7 +5151,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             const response = await inventoryApi.createSupplierPrice(selectedSupplierId, payload);
             const responseData = response.data || {};
             const nextCodeDraft = String(responseData.supplier_product_code ?? supplierProductCode).trim();
-            const nextPriceDraft = normalizeWholeMoneyDraft(responseData.unit_cost ?? numericValue);
+            const nextPriceDraft = normalizeRoundedImportCostDraft(responseData.unit_cost ?? numericValue);
             const savedRowUpdates = buildSavedSupplierPriceRowUpdates(row, responseData, {
                 supplier_product_code: nextCodeDraft,
                 unit_cost: nextPriceDraft,
@@ -5110,7 +5177,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
 
     const saveSingleSupplierPrice = async (row, explicitValue = null) => {
         const rawValue = explicitValue ?? priceDrafts[row.id] ?? row.unit_cost ?? '';
-        const cleaned = normalizeWholeMoneyDraft(rawValue);
+        const cleaned = normalizeRoundedImportCostDraft(rawValue);
         if (!selectedSupplierId || row.row_kind === 'group' || cleaned === '') return;
 
         await saveSupplierPriceRow(row, { unit_cost: cleaned });
@@ -5134,7 +5201,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 items: supplierCatalogItemRows.filter((row) => selectedIds.includes(row.id)).map((row) => ({
                     product_id: row.product_id,
                     supplier_product_code: String(codeDrafts[row.id] ?? row.supplier_product_code ?? '').trim() || null,
-                    unit_cost: parseWholeNumberInput(priceDrafts[row.id] ?? row.unit_cost ?? 0) ?? 0,
+                    unit_cost: normalizeRoundedImportCostNumber(priceDrafts[row.id] ?? row.unit_cost ?? 0) ?? 0,
                     notes: bulkNote || null,
                 })),
             });
@@ -5247,7 +5314,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             await inventoryApi.createSupplierPrice(selectedSupplierId, {
                 product_id: Number(form.product_id),
                 supplier_product_code: String(form.supplier_product_code || '').trim() || null,
-                unit_cost: parseWholeNumberInput(form.unit_cost) ?? 0,
+                unit_cost: normalizeRoundedImportCostNumber(form.unit_cost) ?? 0,
                 notes: form.notes || null,
             });
             setSupplierPriceModal({ open: false, form: createSupplierPriceForm() });
@@ -5744,14 +5811,22 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     const saveDocument = async () => {
         const { tabKey, form } = documentModal;
         const type = documentTypeMap[tabKey];
-        const items = form.items.filter((item) => item.product_id).map((item) => ({
-            product_id: Number(item.product_id),
-            quantity: Number(item.quantity || 0),
-            notes: item.notes || null,
-            unit_cost: item.unit_cost !== '' ? Number(item.unit_cost || 0) : null,
-            stock_bucket: item.stock_bucket,
-            direction: item.direction,
-        })).filter((item) => item.product_id && item.quantity > 0);
+        const items = form.items
+            .filter((item) => item.product_id)
+            .map((item) => ({
+                product_id: Number(item.product_id),
+                quantity: tabKey === 'adjustments'
+                    ? parseSignedWholeNumberInput(item.quantity)
+                    : Number(item.quantity || 0),
+                notes: item.notes || null,
+                unit_cost: item.unit_cost !== '' ? Number(item.unit_cost || 0) : null,
+                stock_bucket: item.stock_bucket,
+            }))
+            .filter((item) => (
+                item.product_id
+                && Number.isFinite(item.quantity)
+                && (tabKey === 'adjustments' ? item.quantity !== 0 : item.quantity > 0)
+            ));
         if (!items.length) return showToast({ type: 'warning', message: 'Phiếu kho cần ít nhất một dòng sản phẩm.' });
 
         setFlag('saving', true);
@@ -5764,9 +5839,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     const base = { product_id: item.product_id, quantity: item.quantity, notes: item.notes };
                     if (type === 'return') base.unit_cost = item.unit_cost ?? 0;
                     if (type === 'adjustment') {
-                        base.stock_bucket = item.stock_bucket;
-                        base.direction = item.direction;
                         if (item.unit_cost != null) base.unit_cost = item.unit_cost;
+                        if (item.stock_bucket && item.stock_bucket !== 'sellable') base.stock_bucket = item.stock_bucket;
                     }
                     return base;
                 }),
@@ -6117,8 +6191,9 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 </div>
             );
         }
-        if (columnId === 'expected_cost') return row.expected_cost != null ? formatCurrency(row.expected_cost) : '-';
-        if (columnId === 'current_cost') return row.current_cost != null ? formatCurrency(row.current_cost) : '-';
+        if (columnId === 'supplier_unit_cost') return row.supplier_unit_cost != null ? formatImportCost(row.supplier_unit_cost) : '-';
+        if (columnId === 'expected_cost') return row.expected_cost != null ? formatImportCost(row.expected_cost) : '-';
+        if (columnId === 'current_cost') return row.current_cost != null ? formatImportCost(row.current_cost) : '-';
         if (columnId === 'computed_stock') {
             const stockMeta = getProductStockAlertMeta(row);
             return (
@@ -6168,7 +6243,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                             <div className="text-[11px] text-primary/45">{item.updated_at ? `Cập nhật ${formatDateTime(item.updated_at)}` : 'Chưa có thời gian cập nhật'}</div>
                                         </div>
                                         <div className={`text-[13px] font-black ${item.is_lowest ? 'text-emerald-700' : 'text-primary'}`}>
-                                            {formatCurrency(item.unit_cost)}
+                                            {formatImportCost(item.unit_cost)}
                                         </div>
                                     </div>
                                 ))}
@@ -6234,8 +6309,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 return (
                     <div className="flex items-center gap-2">
                         <input
-                            value={formatWholeNumberInput(groupPriceDrafts[row.id] ?? '')}
-                            onChange={(event) => setGroupPriceDrafts((prev) => ({ ...prev, [row.id]: normalizeWholeMoneyDraft(event.target.value) }))}
+                            value={formatRoundedImportCost(groupPriceDrafts[row.id] ?? '')}
+                            onChange={(event) => setGroupPriceDrafts((prev) => ({ ...prev, [row.id]: normalizeRoundedImportCostDraft(event.target.value) }))}
                             placeholder="Giá nhóm"
                             className="h-8 w-full rounded-sm border border-primary/15 px-2 text-right text-[13px] outline-none focus:border-primary"
                         />
@@ -6245,7 +6320,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             }
             if (columnId === 'current_cost') {
                 const effectiveCurrentCost = row.current_cost ?? row.display_cost ?? row.expected_cost ?? null;
-                return effectiveCurrentCost != null ? formatCurrency(effectiveCurrentCost) : '-';
+                return effectiveCurrentCost != null ? formatImportCost(effectiveCurrentCost) : '-';
             }
             return '-';
         }
@@ -6319,13 +6394,13 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         if (columnId === 'price') return row.price != null ? formatCurrency(row.price) : '-';
         if (columnId === 'current_cost') {
             const effectiveCurrentCost = row.current_cost ?? row.display_cost ?? row.expected_cost ?? null;
-            return effectiveCurrentCost != null ? formatCurrency(effectiveCurrentCost) : '-';
+                return effectiveCurrentCost != null ? formatImportCost(effectiveCurrentCost) : '-';
         }
         if (columnId === 'unit_cost') return (
             <div className="flex items-center gap-2">
                 <input
-                    value={formatWholeNumberInput(priceDrafts[row.id] ?? (row.unit_cost ?? ''))}
-                    onChange={(event) => setPriceDrafts((prev) => ({ ...prev, [row.id]: normalizeWholeMoneyDraft(event.target.value) }))}
+                    value={formatRoundedImportCost(priceDrafts[row.id] ?? (row.unit_cost ?? ''))}
+                    onChange={(event) => setPriceDrafts((prev) => ({ ...prev, [row.id]: normalizeRoundedImportCostDraft(event.target.value) }))}
                     onBlur={() => saveSingleSupplierPrice(row)}
                     onKeyDown={(event) => {
                         if (event.key === 'Enter') {
@@ -6915,7 +6990,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                 className={`w-full pl-9 ${inputClass}`}
                             />
                         </div>
-                        <input value={formatWholeNumberInput(bulkPrice)} onChange={(event) => setBulkPrice(normalizeWholeMoneyDraft(event.target.value))} placeholder="Giá áp chọn" disabled={!selectedSupplierId} className={`w-[125px] ${inputClass}`} />
+<input value={formatRoundedImportCost(bulkPrice)} onChange={(event) => setBulkPrice(normalizeRoundedImportCostDraft(event.target.value))} placeholder="Giá áp chọn" disabled={!selectedSupplierId} className={`w-[125px] ${inputClass}`} />
                         <button type="button" onClick={() => setShowPasteBox((value) => !value)} disabled={!selectedSupplierId} className={ghostButton}>{showPasteBox ? 'Ẩn dán nhanh' : 'Dán nhanh'}</button>
                         <button type="button" onClick={applyBulkPrice} disabled={!selectedSupplierId || !selectedIds.length} className={ghostButton}>Áp giá chọn</button>
                         <button type="button" onClick={refreshSupplierCatalog} disabled={!selectedSupplierId || loading.supplierCatalog} className={ghostButton}><span className={`material-symbols-outlined text-[18px] ${loading.supplierCatalog ? 'animate-spin' : ''}`}>refresh</span>Làm mới</button>
@@ -7234,7 +7309,10 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             allCompleted: relevantItems.length > 0 && incompleteCount === 0,
         };
     }, [importModal.form.items]);
-    const documentLineTotal = useMemo(() => documentModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unit_cost || 0), 0), [documentModal.form.items]);
+    const documentLineTotal = useMemo(
+        () => documentModal.form.items.reduce((sum, item) => sum + getDocumentLineValue(documentModal.tabKey, item), 0),
+        [documentModal.form.items, documentModal.tabKey]
+    );
     const exportLineTotal = useMemo(() => exportModal.form.items.reduce((sum, item) => sum + (Number(item.product_id || 0) > 0 ? Number(item.quantity || 0) * Number(item.unit_cost || 0) : 0), 0), [exportModal.form.items]);
     const exportTotalQuantity = useMemo(() => exportModal.form.items.reduce((sum, item) => sum + (Number(item.product_id || 0) > 0 ? Number(item.quantity || 0) : 0), 0), [exportModal.form.items]);
     const exportInvoiceMeta = exportModal.form.invoice_meta;
@@ -7358,7 +7436,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                             className={`w-full pl-9 ${inputClass}`}
                                         />
                                     </div>
-                                    <input value={formatWholeNumberInput(bulkPrice)} onChange={(event) => setBulkPrice(normalizeWholeMoneyDraft(event.target.value))} placeholder="Giá áp chọn" disabled={!selectedSupplierId} className={`w-[125px] ${inputClass}`} />
+<input value={formatRoundedImportCost(bulkPrice)} onChange={(event) => setBulkPrice(normalizeRoundedImportCostDraft(event.target.value))} placeholder="Giá áp chọn" disabled={!selectedSupplierId} className={`w-[125px] ${inputClass}`} />
                                     <button type="button" onClick={() => setShowPasteBox((value) => !value)} disabled={!selectedSupplierId} className={ghostButton}>{showPasteBox ? 'Ẩn dán nhanh' : 'Dán nhanh'}</button>
                                     <button type="button" onClick={applyBulkPrice} disabled={!selectedSupplierId || !selectedIds.length} className={ghostButton}>Áp giá chọn</button>
                                     {[
@@ -8226,7 +8304,209 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     </div>
                 </div>
             </ModalShell>
-            <ModalShell open={documentModal.open} title={documentModal.form.id ? `Sửa ${documentTitleMap[documentModal.tabKey]}` : `Tạo ${documentTitleMap[documentModal.tabKey]}`} onClose={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} footer={<div className="flex items-center justify-between gap-3"><div className="text-[13px] font-black text-primary">{documentModal.tabKey === 'damaged' ? `Tổng số lượng: ${formatNumber(documentModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}` : `Tổng giá trị tạm tính: ${formatCurrency(documentLineTotal)}`}</div><div className="flex gap-2"><button type="button" onClick={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} className={ghostButton}>Hủy</button><button type="button" onClick={saveDocument} className={primaryButton} disabled={loading.saving}>{loading.saving ? 'Đang lưu' : 'Lưu phiếu'}</button></div></div>}><div className="space-y-4"><div className="grid gap-3 md:grid-cols-3"><input type="date" value={documentModal.form.document_date} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, document_date: event.target.value } }))} className={inputClass} /><select value={documentModal.form.supplier_id} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, supplier_id: event.target.value } }))} className={selectClass}><option value="">Không gắn nhà cung cấp</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select><div className="flex items-center rounded-sm border border-primary/15 px-3 text-[13px] font-semibold text-primary">{documentTitleMap[documentModal.tabKey]}</div></div><ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => { const index = documentModal.form.items.findIndex((item) => !item.product_id); const targetIndex = index >= 0 ? index : documentModal.form.items.length; if (index < 0) addLine(setDocumentModal); attachProductToLine(setDocumentModal, targetIndex, product); }} buttonLabel="Thêm vào phiếu" /><div className="overflow-hidden rounded-sm border border-primary/10"><table className="w-full border-collapse"><thead className="bg-[#f6f9fc]"><tr>{['Sản phẩm', 'Số lượng', documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? 'Giá vốn' : null, documentModal.tabKey === 'adjustments' ? 'Loại tồn' : null, documentModal.tabKey === 'adjustments' ? 'Hướng' : null, 'Ghi chú', 'Xóa'].filter(Boolean).map((label) => <th key={label} className="border-b border-r border-primary/10 px-3 py-2.5 text-center text-[12px] font-bold text-primary">{label}</th>)}</tr></thead><tbody>{documentModal.form.items.map((item, index) => <tr key={item.key}><td className="border-b border-r border-primary/10 px-3 py-2"><div className="space-y-2">{item.product_id ? <CellText primary={item.product_name || '-'} secondary={item.product_sku || '-'} /> : <div className="text-[12px] text-primary/45">Chưa chọn sản phẩm</div>}<ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => attachProductToLine(setDocumentModal, index, product)} placeholder="Đổi sản phẩm" buttonLabel="Chọn" /></div></td><td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.quantity} onChange={(event) => updateLine(setDocumentModal, index, 'quantity', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} /></td>{documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><input value={formatWholeNumberInput(item.unit_cost)} onChange={(event) => updateLine(setDocumentModal, index, 'unit_cost', normalizeWholeMoneyDraft(event.target.value))} className={`w-full text-right ${inputClass}`} /></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.stock_bucket} onChange={(event) => updateLine(setDocumentModal, index, 'stock_bucket', event.target.value)} className={`w-full ${selectClass}`}><option value="sellable">Tồn bán được</option><option value="damaged">Tồn hỏng</option></select></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.direction} onChange={(event) => updateLine(setDocumentModal, index, 'direction', event.target.value)} className={`w-full ${selectClass}`}><option value="in">Cộng</option><option value="out">Trừ</option></select></td> : null}<td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.notes} onChange={(event) => updateLine(setDocumentModal, index, 'notes', event.target.value)} className={`w-full ${inputClass}`} placeholder="Ghi chú" /></td><td className="border-b border-primary/10 px-3 py-2 text-center"><button type="button" onClick={() => removeLine(setDocumentModal, index)} className={dangerButton}>Xóa</button></td></tr>)}</tbody></table></div><div className="flex justify-between gap-2"><button type="button" onClick={() => addLine(setDocumentModal)} className={ghostButton}>Thêm dòng</button><textarea value={documentModal.form.notes} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú phiếu kho" className="min-h-[96px] flex-1 rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary" /></div></div></ModalShell>
+            <ModalShell
+                open={documentModal.open}
+                title={documentModal.form.id ? `Sửa ${documentTitleMap[documentModal.tabKey]}` : `Tạo ${documentTitleMap[documentModal.tabKey]}`}
+                onClose={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })}
+                footer={(
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="text-[13px] font-black text-primary">
+                            {documentModal.tabKey === 'damaged'
+                                ? `Tổng số lượng: ${formatNumber(documentModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}`
+                                : `Tổng giá trị tạm tính: ${formatCurrency(documentLineTotal)}`}
+                        </div>
+                        <div className="flex gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })}
+                                className={ghostButton}
+                            >
+                                Hủy
+                            </button>
+                            <button type="button" onClick={saveDocument} className={primaryButton} disabled={loading.saving}>
+                                {loading.saving ? 'Đang lưu' : 'Lưu phiếu'}
+                            </button>
+                        </div>
+                    </div>
+                )}
+            >
+                <div className="space-y-4">
+                    <div className="grid gap-3 md:grid-cols-3">
+                        <input
+                            type="date"
+                            value={documentModal.form.document_date}
+                            onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, document_date: event.target.value } }))}
+                            className={inputClass}
+                        />
+                        <select
+                            value={documentModal.form.supplier_id}
+                            onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, supplier_id: event.target.value } }))}
+                            className={selectClass}
+                        >
+                            <option value="">Không gắn nhà cung cấp</option>
+                            {suppliers.map((supplier) => (
+                                <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
+                            ))}
+                        </select>
+                        <div className="flex items-center rounded-sm border border-primary/15 px-3 text-[13px] font-semibold text-primary">
+                            {documentTitleMap[documentModal.tabKey]}
+                        </div>
+                    </div>
+
+                    <ProductLookupInput
+                        supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null}
+                        onSelect={(product) => {
+                            const index = documentModal.form.items.findIndex((item) => !item.product_id);
+                            const targetIndex = index >= 0 ? index : documentModal.form.items.length;
+                            if (index < 0) addLine(setDocumentModal);
+                            attachProductToLine(setDocumentModal, targetIndex, product);
+                        }}
+                        buttonLabel="Thêm vào phiếu"
+                    />
+
+                    {documentModal.tabKey === 'adjustments' ? (
+                        <div className="rounded-sm border border-primary/10 bg-[#f8fbff] px-3 py-2 text-[12px] font-medium text-primary/75">
+                            Nhập số dương để tăng tồn thực tế, nhập số âm để giảm tồn thực tế.
+                        </div>
+                    ) : null}
+
+                    <div className="overflow-hidden rounded-sm border border-primary/10">
+                        <table className="w-full border-collapse">
+                            <thead className="bg-[#f6f9fc]">
+                                <tr>
+                                    {[
+                                        'Sản phẩm',
+                                        'Số lượng',
+                                        documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? 'Giá vốn' : null,
+                                        'Ghi chú',
+                                        'Xóa',
+                                    ].filter(Boolean).map((label) => (
+                                        <th key={label} className="border-b border-r border-primary/10 px-3 py-2.5 text-center text-[12px] font-bold text-primary">
+                                            {label}
+                                        </th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {documentModal.form.items.map((item, index) => (
+                                    <tr key={item.key}>
+                                        <td className="border-b border-r border-primary/10 px-3 py-2">
+                                            <div className="space-y-2">
+                                                {item.product_id ? (
+                                                    <CellText primary={item.product_name || '-'} secondary={item.product_sku || '-'} />
+                                                ) : (
+                                                    <div className="text-[12px] text-primary/45">Chưa chọn sản phẩm</div>
+                                                )}
+                                                <ProductLookupInput
+                                                    supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null}
+                                                    onSelect={(product) => attachProductToLine(setDocumentModal, index, product)}
+                                                    placeholder="Đổi sản phẩm"
+                                                    buttonLabel="Chọn"
+                                                />
+                                            </div>
+                                        </td>
+                                        <td className="border-b border-r border-primary/10 px-3 py-2">
+                                            {documentModal.tabKey === 'adjustments' ? (
+                                                <div className="flex h-8 overflow-hidden rounded-sm border border-primary/15 bg-white transition focus-within:border-primary">
+                                                    <input
+                                                        value={item.quantity}
+                                                        onChange={(event) => updateLine(
+                                                            setDocumentModal,
+                                                            index,
+                                                            'quantity',
+                                                            normalizeSignedWholeNumberInput(event.target.value)
+                                                        )}
+                                                        onKeyDown={(event) => {
+                                                            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+
+                                                            event.preventDefault();
+                                                            updateLine(
+                                                                setDocumentModal,
+                                                                index,
+                                                                'quantity',
+                                                                nudgeSignedWholeNumberInput(item.quantity, event.key === 'ArrowUp' ? 1 : -1)
+                                                            );
+                                                        }}
+                                                        className="h-full flex-1 border-0 bg-transparent px-3 text-right text-[13px] text-primary outline-none placeholder:text-primary/35"
+                                                        placeholder="Âm để giảm, dương để tăng"
+                                                    />
+                                                    <div className="flex w-6 flex-col border-l border-primary/10 bg-primary/[0.02]">
+                                                        <button
+                                                            type="button"
+                                                            onMouseDown={(event) => event.preventDefault()}
+                                                            onClick={() => updateLine(setDocumentModal, index, 'quantity', nudgeSignedWholeNumberInput(item.quantity, 1))}
+                                                            className="flex flex-1 items-center justify-center border-b border-primary/10 text-primary/45 transition hover:bg-primary/[0.06] hover:text-primary"
+                                                            aria-label="Tăng số lượng điều chỉnh"
+                                                        >
+                                                            <svg viewBox="0 0 10 10" aria-hidden="true" className="h-2 w-2 fill-current">
+                                                                <path d="M5 2 9 7H1z" />
+                                                            </svg>
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onMouseDown={(event) => event.preventDefault()}
+                                                            onClick={() => updateLine(setDocumentModal, index, 'quantity', nudgeSignedWholeNumberInput(item.quantity, -1))}
+                                                            className="flex flex-1 items-center justify-center text-primary/45 transition hover:bg-primary/[0.06] hover:text-primary"
+                                                            aria-label="Giảm số lượng điều chỉnh"
+                                                        >
+                                                            <svg viewBox="0 0 10 10" aria-hidden="true" className="h-2 w-2 fill-current">
+                                                                <path d="M1 3h8L5 8z" />
+                                                            </svg>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <input
+                                                    value={item.quantity}
+                                                    onChange={(event) => updateLine(
+                                                        setDocumentModal,
+                                                        index,
+                                                        'quantity',
+                                                        event.target.value.replace(/[^0-9]/g, '')
+                                                    )}
+                                                    className={`w-full text-right ${inputClass}`}
+                                                />
+                                            )}
+                                        </td>
+                                        {documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? (
+                                            <td className="border-b border-r border-primary/10 px-3 py-2">
+                                                <input
+                                                    value={formatWholeNumberInput(item.unit_cost)}
+                                                    onChange={(event) => updateLine(setDocumentModal, index, 'unit_cost', normalizeWholeMoneyDraft(event.target.value))}
+                                                    className={`w-full text-right ${inputClass}`}
+                                                />
+                                            </td>
+                                        ) : null}
+                                        <td className="border-b border-r border-primary/10 px-3 py-2">
+                                            <input
+                                                value={item.notes}
+                                                onChange={(event) => updateLine(setDocumentModal, index, 'notes', event.target.value)}
+                                                className={`w-full ${inputClass}`}
+                                                placeholder="Ghi chú"
+                                            />
+                                        </td>
+                                        <td className="border-b border-primary/10 px-3 py-2 text-center">
+                                            <button type="button" onClick={() => removeLine(setDocumentModal, index)} className={dangerButton}>
+                                                Xóa
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div className="flex justify-between gap-2">
+                        <button type="button" onClick={() => addLine(setDocumentModal)} className={ghostButton}>Thêm dòng</button>
+                        <textarea
+                            value={documentModal.form.notes}
+                            onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))}
+                            placeholder="Ghi chú phiếu kho"
+                            className="min-h-[96px] flex-1 rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary"
+                        />
+                    </div>
+                </div>
+            </ModalShell>
             <InventoryProductDailyOutboundDrawer
                 open={dailyOutboundDrawer.open}
                 product={dailyOutboundDrawer.product}

@@ -249,6 +249,12 @@ export default function DailyProfitTracking() {
                         Chi phí cố định
                     </NavLink>
                     <NavLink
+                        to="/admin/finance/receipts"
+                        className={({ isActive }) => `inline-flex h-11 items-center justify-center rounded-sm px-4 text-[13px] font-black transition ${isActive ? 'bg-primary text-white' : 'text-primary hover:bg-primary/5'}`}
+                    >
+                        Phiếu thu
+                    </NavLink>
+                    <NavLink
                         to="/admin/finance/daily-profit"
                         className={({ isActive }) => `inline-flex h-11 items-center justify-center rounded-sm px-4 text-[13px] font-black transition ${isActive ? 'bg-primary text-white' : 'text-primary hover:bg-primary/5'}`}
                     >

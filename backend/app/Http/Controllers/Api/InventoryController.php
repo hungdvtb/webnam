@@ -1543,9 +1543,11 @@ class InventoryController extends Controller
         }
 
         if ($type === 'adjustment') {
-            $rules['items.*.stock_bucket'] = ['required', Rule::in(['sellable', 'damaged'])];
-            $rules['items.*.direction'] = ['required', Rule::in(['in', 'out'])];
+            $rules['items.*.quantity'] = ['required', 'integer', Rule::notIn([0])];
+            $rules['items.*.stock_bucket'] = ['sometimes', Rule::in(['sellable', 'damaged'])];
+            $rules['items.*.direction'] = ['sometimes', Rule::in(['in', 'out'])];
             $rules['items.*.unit_cost'] = 'nullable|numeric|min:0';
+            $rules['items.*.allow_oversold'] = 'nullable|boolean';
         }
 
         $validated = $request->validate($rules);
@@ -1604,9 +1606,11 @@ class InventoryController extends Controller
         }
 
         if ($type === 'adjustment') {
-            $rules['items.*.stock_bucket'] = ['required', Rule::in(['sellable', 'damaged'])];
-            $rules['items.*.direction'] = ['required', Rule::in(['in', 'out'])];
+            $rules['items.*.quantity'] = ['required', 'integer', Rule::notIn([0])];
+            $rules['items.*.stock_bucket'] = ['sometimes', Rule::in(['sellable', 'damaged'])];
+            $rules['items.*.direction'] = ['sometimes', Rule::in(['in', 'out'])];
             $rules['items.*.unit_cost'] = 'nullable|numeric|min:0';
+            $rules['items.*.allow_oversold'] = 'nullable|boolean';
         }
 
         $validated = $request->validate($rules);

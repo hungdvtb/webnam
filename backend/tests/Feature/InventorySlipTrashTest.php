@@ -74,9 +74,7 @@ class InventorySlipTrashTest extends TestCase
             'supplier_id' => null,
             'items' => [[
                 'product_id' => $adjustmentProduct->id,
-                'quantity' => 2,
-                'stock_bucket' => 'sellable',
-                'direction' => 'out',
+                'quantity' => -2,
                 'unit_cost' => 85000,
                 'notes' => 'Xuat dieu chinh',
             ]],
@@ -116,6 +114,8 @@ class InventorySlipTrashTest extends TestCase
         $this->assertSame('import', $importRow['slip_type_key'] ?? null);
         $this->assertSame('adjustment', $adjustmentRow['slip_type_key'] ?? null);
         $this->assertSame('export', $exportRow['slip_type_key'] ?? null);
+        $this->assertSame(-2, (int) ($adjustmentRow['total_quantity'] ?? 0));
+        $this->assertSame(-170000.0, (float) ($adjustmentRow['total_amount'] ?? 0));
         $this->assertSame(4, (int) ($exportRow['total_quantity'] ?? 0));
 
         $this->withHeaders($this->headers($account))

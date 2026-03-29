@@ -430,6 +430,20 @@ export const financeApi = {
     getReports: (params) => api.get('/finance/reports', { params }),
 };
 
+export const receiptVoucherApi = {
+    getBootstrap: () => api.get('/finance/receipts/bootstrap'),
+    getAll: (params) => api.get('/finance/receipts', { params }),
+    getOne: (id) => api.get(`/finance/receipts/${id}`),
+    create: (data) => api.post('/finance/receipts', data),
+    update: (id, data) => api.put(`/finance/receipts/${id}`, data),
+    destroy: (id) => api.delete(`/finance/receipts/${id}`),
+    restore: (id) => api.post(`/finance/receipts/${id}/restore`),
+    forceDelete: (id) => api.delete(`/finance/receipts/${id}/force`),
+    bulkDelete: (ids) => api.post('/finance/receipts/bulk-delete', { ids }),
+    bulkRestore: (ids) => api.post('/finance/receipts/bulk-restore', { ids }),
+    bulkForceDelete: (ids) => api.post('/finance/receipts/bulk-force-delete', { ids }),
+};
+
 export const couponApi = {
     getAll: () => api.get('/coupons'),
     store: (data) => api.post('/coupons', data),

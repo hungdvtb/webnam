@@ -1,6 +1,6 @@
 {
     "orders": {
-        "count": 222,
+        "count": 243,
         "indexes": [
             {
                 "indexname": "orders_pkey",
@@ -29,11 +29,39 @@
             {
                 "indexname": "idx_ord_acc_date",
                 "indexdef": "CREATE INDEX idx_ord_acc_date ON public.orders USING btree (account_id, created_at)"
+            },
+            {
+                "indexname": "orders_lead_id_index",
+                "indexdef": "CREATE INDEX orders_lead_id_index ON public.orders USING btree (lead_id)"
+            },
+            {
+                "indexname": "idx_ord_acc_carrier_shipdate",
+                "indexdef": "CREATE INDEX idx_ord_acc_carrier_shipdate ON public.orders USING btree (account_id, shipping_carrier_code, shipping_dispatched_at)"
+            },
+            {
+                "indexname": "idx_ord_acc_tracking",
+                "indexdef": "CREATE INDEX idx_ord_acc_tracking ON public.orders USING btree (account_id, shipping_tracking_code)"
+            },
+            {
+                "indexname": "idx_orders_converted_from_order_id",
+                "indexdef": "CREATE INDEX idx_orders_converted_from_order_id ON public.orders USING btree (converted_from_order_id)"
+            },
+            {
+                "indexname": "idx_orders_account_kind_deleted_created",
+                "indexdef": "CREATE INDEX idx_orders_account_kind_deleted_created ON public.orders USING btree (account_id, order_kind, deleted_at, created_at)"
+            },
+            {
+                "indexname": "idx_orders_account_return_deleted_created",
+                "indexdef": "CREATE INDEX idx_orders_account_return_deleted_created ON public.orders USING btree (account_id, is_return_order, deleted_at, created_at)"
+            },
+            {
+                "indexname": "idx_orders_account_type_deleted_created",
+                "indexdef": "CREATE INDEX idx_orders_account_type_deleted_created ON public.orders USING btree (account_id, order_type, deleted_at, created_at)"
             }
         ]
     },
     "order_items": {
-        "count": 396,
+        "count": 428,
         "indexes": [
             {
                 "indexname": "order_items_pkey",
@@ -50,7 +78,7 @@
         ]
     },
     "customers": {
-        "count": 101,
+        "count": 103,
         "indexes": [
             {
                 "indexname": "customers_pkey",
@@ -67,7 +95,7 @@
         ]
     },
     "products": {
-        "count": 122,
+        "count": 543,
         "indexes": [
             {
                 "indexname": "products_pkey",
@@ -112,11 +140,15 @@
             {
                 "indexname": "idx_products_sku_trgm",
                 "indexdef": "CREATE INDEX idx_products_sku_trgm ON public.products USING gin (immutable_unaccent((sku)::text) gin_trgm_ops)"
+            },
+            {
+                "indexname": "products_inventory_import_starred_idx",
+                "indexdef": "CREATE INDEX products_inventory_import_starred_idx ON public.products USING btree (inventory_import_starred)"
             }
         ]
     },
     "order_attribute_values": {
-        "count": 433,
+        "count": 468,
         "indexes": [
             {
                 "indexname": "order_attribute_values_pkey",
@@ -125,6 +157,10 @@
             {
                 "indexname": "idx_ord_attr_val_lookup",
                 "indexdef": "CREATE INDEX idx_ord_attr_val_lookup ON public.order_attribute_values USING btree (order_id, attribute_id)"
+            },
+            {
+                "indexname": "idx_ord_attr_attr_order",
+                "indexdef": "CREATE INDEX idx_ord_attr_attr_order ON public.order_attribute_values USING btree (attribute_id, order_id)"
             }
         ]
     }

@@ -72,6 +72,29 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.id', $matching->id);
     }
 
+    public function test_picker_search_uses_expected_cost_when_current_cost_is_missing(): void
+    {
+        $account = $this->authenticate();
+
+        $product = $this->createProduct($account, [
+            'name' => 'San pham picker co gia du kien',
+            'sku' => 'PICKER-EXPECTED-150',
+            'cost_price' => null,
+            'expected_cost' => 150000,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?picker=1&search=PICKER-EXPECTED-150&per_page=20');
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $product->id)
+            ->assertJsonPath('data.0.expected_cost', 150000.0)
+            ->assertJsonPath('data.0.cost_price', 150000.0);
+    }
+
     public function test_name_search_uses_name_matching_instead_of_sku_token_matching(): void
     {
         $account = $this->authenticate();

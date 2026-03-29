@@ -19,6 +19,7 @@ use App\Models\ShipmentItem;
 use App\Models\ShipmentStatusLog;
 use App\Models\ShippingIntegration;
 use App\Models\SiteSetting;
+use App\Support\ImportCostRounding;
 use App\Support\OrderBootstrapCache;
 use App\Support\OrderStatusCatalog;
 use App\Services\Inventory\InventoryService;
@@ -286,7 +287,7 @@ class OrderController extends Controller
 
     private function resolveCurrentProductCost(?Product $product, mixed $fallback = null): float
     {
-        return round((float) ($product?->cost_price ?? $product?->expected_cost ?? $fallback ?? 0), 2);
+        return ImportCostRounding::roundUnitCost($product?->cost_price ?? $product?->expected_cost ?? $fallback ?? 0);
     }
 
     private function appendCurrentCostMetrics(Order $order): Order
@@ -302,7 +303,7 @@ class OrderController extends Controller
             $quantity = (int) ($item->quantity ?? 0);
             $unitPrice = round((float) ($item->price ?? 0), 2);
             $currentCostPrice = $this->resolveCurrentProductCost($item->product, $item->cost_price);
-            $currentCostLineTotal = round($currentCostPrice * $quantity, 2);
+            $currentCostLineTotal = ImportCostRounding::lineTotal($currentCostPrice, $quantity);
 
             $item->setAttribute('current_cost_price', $currentCostPrice);
             $item->setAttribute('current_cost_total', $currentCostLineTotal);
@@ -574,7 +575,7 @@ class OrderController extends Controller
                 'product_id' => $item->product_id,
                 'quantity' => $item->quantity,
                 'price' => $product ? ($product->current_price ?? $item->price) : $item->price,
-                'cost_price' => $product?->cost_price ?? $product?->expected_cost ?? 0,
+                'cost_price' => ImportCostRounding::roundUnitCost($product?->cost_price ?? $product?->expected_cost ?? 0),
                 'options' => $item->options ?? null,
             ];
         })->all();
@@ -617,8 +618,8 @@ class OrderController extends Controller
             $product = $products->get((int) $item['product_id']);
             $quantity = (int) $item['quantity'];
             $price = round((float) ($item['price'] ?? $product->price ?? 0), 2);
-            $costPrice = round((float) ($item['cost_price'] ?? $product->cost_price ?? $product->expected_cost ?? 0), 2);
-            $costTotal = round($costPrice * $quantity, 2);
+            $costPrice = ImportCostRounding::roundUnitCost($item['cost_price'] ?? $product->cost_price ?? $product->expected_cost ?? 0);
+            $costTotal = ImportCostRounding::lineTotal($costPrice, $quantity);
             $profitTotal = round(($price * $quantity) - $costTotal, 2);
 
             $createdItems[] = $order->items()->create([
@@ -754,9 +755,9 @@ class OrderController extends Controller
             $product = $products->get((int) $item['product_id']);
             $quantity = (int) ($item['quantity'] ?? 0);
             $price = round((float) ($item['price'] ?? $product->current_price ?? $product->price ?? 0), 2);
-            $costPrice = round((float) ($item['cost_price'] ?? $product->cost_price ?? $product->expected_cost ?? 0), 2);
+            $costPrice = ImportCostRounding::roundUnitCost($item['cost_price'] ?? $product->cost_price ?? $product->expected_cost ?? 0);
             $totalPrice = round($price * $quantity, 2);
-            $totalCost = round($costPrice * $quantity, 2);
+            $totalCost = ImportCostRounding::lineTotal($costPrice, $quantity);
 
             $createdItems[] = $order->supplementItems()->create([
                 'account_id' => $order->account_id,
@@ -1569,7 +1570,7 @@ class OrderController extends Controller
                             'option_label' => trim((string) ($item['option_label'] ?? '')),
                             'main_image' => trim((string) ($item['main_image'] ?? '')),
                             'price' => round((float) ($item['price'] ?? 0), 2),
-                            'cost_price' => round((float) ($item['cost_price'] ?? 0), 2),
+                            'cost_price' => ImportCostRounding::roundUnitCost($item['cost_price'] ?? 0),
                             'order' => max(1, (int) ($item['order'] ?? ($itemIndex + 1))),
                         ];
                     })
@@ -1650,7 +1651,7 @@ class OrderController extends Controller
                             'name' => trim((string) $product->name),
                             'sku' => trim((string) $product->sku),
                             'price' => round((float) ($product->price ?? 0), 2),
-                            'cost_price' => round((float) ($product->cost_price ?? $product->expected_cost ?? 0), 2),
+                            'cost_price' => ImportCostRounding::roundUnitCost($product->cost_price ?? $product->expected_cost ?? 0),
                             'main_image' => $primaryImage?->image_url ?: $item['main_image'] ?: $parentPrimaryImage?->image_url,
                             'attribute_values' => $product->attributeValues
                                 ->map(fn ($attributeValue) => [

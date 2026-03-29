@@ -12,8 +12,10 @@ use App\Models\FinanceLoanPayment;
 use App\Models\FinanceTransaction;
 use App\Models\FinanceTransfer;
 use App\Models\FinanceWallet;
+use App\Models\InventoryDocument;
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\Shipment;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
@@ -252,6 +254,100 @@ class FinanceReadService
         ];
     }
 
+    public function receiptVoucherBootstrap(int $accountId): array
+    {
+        $this->financeService->ensureDefaults($accountId);
+
+        return [
+            'statuses' => $this->financeService->receiptVoucherStatusOptions(),
+            'payment_methods' => $this->financeService->receiptVoucherPaymentMethodOptions(),
+            'reference_types' => $this->financeService->receiptVoucherReferenceTypeOptions(),
+            'receipt_types' => FinanceCatalog::query()
+                ->where('account_id', $accountId)
+                ->where('group_key', 'income_type')
+                ->where('is_active', true)
+                ->orderBy('sort_order')
+                ->orderBy('name')
+                ->get()
+                ->map(fn (FinanceCatalog $catalog) => $this->financeService->catalogPayload($catalog))
+                ->values(),
+            'wallets' => FinanceWallet::query()
+                ->where('account_id', $accountId)
+                ->where('is_active', true)
+                ->orderByRaw("CASE WHEN type = 'cash' THEN 0 ELSE 1 END")
+                ->orderBy('sort_order')
+                ->orderBy('name')
+                ->get()
+                ->map(fn (FinanceWallet $wallet) => $this->financeService->walletPayload($wallet))
+                ->values(),
+            'recent_orders' => Order::query()
+                ->where('account_id', $accountId)
+                ->whereNull('deleted_at')
+                ->orderByDesc('created_at')
+                ->limit(80)
+                ->get(['id', 'order_number', 'customer_name', 'customer_phone', 'status', 'total_price', 'created_at'])
+                ->map(function (Order $order) {
+                    return [
+                        'id' => (int) $order->id,
+                        'code' => $order->order_number,
+                        'customer_name' => $order->customer_name,
+                        'customer_phone' => $order->customer_phone,
+                        'status' => $order->status,
+                        'amount' => round((float) $order->total_price, 2),
+                        'created_at' => optional($order->created_at)->toIso8601String(),
+                    ];
+                })
+                ->values(),
+            'recent_shipments' => Shipment::query()
+                ->where('account_id', $accountId)
+                ->whereNull('deleted_at')
+                ->orderByDesc('created_at')
+                ->limit(80)
+                ->get([
+                    'id',
+                    'shipment_number',
+                    'tracking_number',
+                    'carrier_tracking_code',
+                    'customer_name',
+                    'customer_phone',
+                    'shipment_status',
+                    'cod_amount',
+                    'created_at',
+                ])
+                ->map(function (Shipment $shipment) {
+                    return [
+                        'id' => (int) $shipment->id,
+                        'code' => $shipment->carrier_tracking_code ?: $shipment->tracking_number ?: $shipment->shipment_number,
+                        'customer_name' => $shipment->customer_name,
+                        'customer_phone' => $shipment->customer_phone,
+                        'status' => $shipment->shipment_status,
+                        'amount' => round((float) $shipment->cod_amount, 2),
+                        'created_at' => optional($shipment->created_at)->toIso8601String(),
+                    ];
+                })
+                ->values(),
+            'recent_return_documents' => InventoryDocument::query()
+                ->where('account_id', $accountId)
+                ->where('type', 'return')
+                ->orderByDesc('document_date')
+                ->orderByDesc('id')
+                ->limit(60)
+                ->get(['id', 'document_number', 'status', 'document_date', 'reference_type', 'reference_id', 'notes'])
+                ->map(function (InventoryDocument $document) {
+                    return [
+                        'id' => (int) $document->id,
+                        'code' => $document->document_number,
+                        'status' => $document->status,
+                        'document_date' => optional($document->document_date)->toDateString(),
+                        'reference_type' => $document->reference_type,
+                        'reference_id' => $document->reference_id,
+                        'notes' => $document->notes,
+                    ];
+                })
+                ->values(),
+        ];
+    }
+
     public function paginatedTransactions(int $accountId, array $filters = []): array
     {
         $this->financeService->ensureDefaults($accountId);
@@ -281,6 +377,75 @@ class FinanceReadService
                     ->where('status', 'confirmed')
                     ->selectRaw("COALESCE(SUM(CASE WHEN direction = 'in' THEN amount ELSE amount * -1 END), 0) AS total")
                     ->value('total'), 2),
+            ],
+        ];
+    }
+
+    public function paginatedReceiptVouchers(int $accountId, array $filters = []): array
+    {
+        $this->financeService->ensureDefaults($accountId);
+
+        $query = FinanceTransaction::query()
+            ->with(['wallet:id,name,type,bank_name', 'category:id,name,color,group_key', 'creator:id,name'])
+            ->where('account_id', $accountId)
+            ->receiptVouchers();
+
+        $this->applyReceiptVoucherFilters($query, $filters);
+
+        $page = $query
+            ->orderByDesc('transaction_date')
+            ->orderByDesc('id')
+            ->paginate($this->financeService->resolvePerPage($filters, 20, 100));
+
+        $summaryQuery = FinanceTransaction::query()
+            ->where('account_id', $accountId)
+            ->receiptVouchers();
+
+        $this->applyReceiptVoucherFilters($summaryQuery, $filters);
+
+        $confirmedSummaryQuery = (clone $summaryQuery)->where('status', 'confirmed');
+        $groupRows = (clone $confirmedSummaryQuery)
+            ->selectRaw('category_id, COUNT(*) AS total_count, COALESCE(SUM(amount), 0) AS total_amount')
+            ->groupBy('category_id')
+            ->get();
+        $groupCategories = FinanceCatalog::query()
+            ->whereIn('id', $groupRows->pluck('category_id')->filter()->values())
+            ->get()
+            ->keyBy('id');
+
+        return [
+            ...$page->toArray(),
+            'data' => collect($page->items())
+                ->map(fn (FinanceTransaction $transaction) => $this->financeService->receiptVoucherPayload($transaction))
+                ->values(),
+            'summary' => [
+                'total_records' => (int) (clone $summaryQuery)->count(),
+                'confirmed_count' => (int) (clone $summaryQuery)->where('status', 'confirmed')->count(),
+                'draft_count' => (int) (clone $summaryQuery)->where('status', 'draft')->count(),
+                'cancelled_count' => (int) (clone $summaryQuery)->where('status', 'cancelled')->count(),
+                'trash_count' => (int) FinanceTransaction::query()
+                    ->where('account_id', $accountId)
+                    ->receiptVouchers()
+                    ->onlyTrashed()
+                    ->count(),
+                'total_amount' => round((float) (clone $confirmedSummaryQuery)->sum('amount'), 2),
+                'cash_amount' => round((float) (clone $confirmedSummaryQuery)->where('payment_method', 'cash')->sum('amount'), 2),
+                'bank_transfer_amount' => round((float) (clone $confirmedSummaryQuery)->where('payment_method', 'bank_transfer')->sum('amount'), 2),
+                'cod_amount' => round((float) (clone $confirmedSummaryQuery)->where('payment_method', 'cod')->sum('amount'), 2),
+                'main_groups' => $groupRows
+                    ->map(function ($row) use ($groupCategories) {
+                        $category = $row->category_id ? $groupCategories->get((int) $row->category_id) : null;
+
+                        return [
+                            'category_id' => $row->category_id ? (int) $row->category_id : null,
+                            'category_name' => $category?->name ?? 'Chua phan loai',
+                            'category_color' => $category?->color,
+                            'total_count' => (int) $row->total_count,
+                            'total_amount' => round((float) $row->total_amount, 2),
+                        ];
+                    })
+                    ->sortByDesc('total_amount')
+                    ->values(),
             ],
         ];
     }
@@ -787,6 +952,61 @@ class FinanceReadService
                 'outstanding_orders' => round((float) $this->financeService->outstandingOrdersQuery($accountId)->get()->sum('outstanding_amount'), 2),
             ],
         ];
+    }
+
+    private function applyReceiptVoucherFilters(Builder $query, array $filters): void
+    {
+        $view = strtolower(trim((string) ($filters['view'] ?? 'active')));
+
+        if ($view === 'trash') {
+            $query->onlyTrashed();
+        } elseif (!empty($filters['include_deleted'])) {
+            $query->withTrashed();
+        }
+
+        if (!empty($filters['search'])) {
+            $search = trim((string) $filters['search']);
+            $query->where(function (Builder $builder) use ($search) {
+                $builder
+                    ->where('code', 'like', '%' . $search . '%')
+                    ->orWhere('counterparty_name', 'like', '%' . $search . '%')
+                    ->orWhere('counterparty_phone', 'like', '%' . $search . '%')
+                    ->orWhere('source_name', 'like', '%' . $search . '%')
+                    ->orWhere('reference_code', 'like', '%' . $search . '%')
+                    ->orWhere('reference_label', 'like', '%' . $search . '%')
+                    ->orWhere('note', 'like', '%' . $search . '%');
+            });
+        }
+
+        if (!empty($filters['counterparty_name'])) {
+            $query->where('counterparty_name', 'like', '%' . trim((string) $filters['counterparty_name']) . '%');
+        }
+
+        if (!empty($filters['counterparty_phone'])) {
+            $query->where('counterparty_phone', 'like', '%' . trim((string) $filters['counterparty_phone']) . '%');
+        }
+
+        if (!empty($filters['source_name'])) {
+            $query->where('source_name', 'like', '%' . trim((string) $filters['source_name']) . '%');
+        }
+
+        foreach (['payment_method', 'status', 'reference_type'] as $field) {
+            if (!empty($filters[$field])) {
+                $query->where($field, $filters[$field]);
+            }
+        }
+
+        if (!empty($filters['category_id'])) {
+            $query->where('category_id', (int) $filters['category_id']);
+        }
+
+        if (!empty($filters['date_from'])) {
+            $query->whereDate('transaction_date', '>=', $filters['date_from']);
+        }
+
+        if (!empty($filters['date_to'])) {
+            $query->whereDate('transaction_date', '<=', $filters['date_to']);
+        }
     }
 
     private function applyTransactionFilters(Builder $query, array $filters, int $accountId): void

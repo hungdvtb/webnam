@@ -617,6 +617,14 @@
   width: auto;
 }
 
+.variantActionPopoverDesktop {
+  display: block;
+}
+
+.variantActionPanelMobile {
+  display: none;
+}
+
 .bundleActionContent {
   position: relative;
   border-radius: 16px;
@@ -791,64 +799,78 @@
     grid-template-columns: 1fr;
   }
 
-  .variantActionPopover {
-    width: fit-content;
-    max-width: min(248px, calc(100vw - 84px));
-    bottom: calc(100% + 8px);
+  .variantActionRow .variantActionTrigger {
+    display: none;
   }
 
-  .variantActionPopover .bundleActionContent {
-    padding: 0.48rem;
-    border-radius: 14px;
+  .variantActionPopoverDesktop {
+    display: none;
+  }
+
+  .variantActionPanelMobile {
+    position: static;
+    width: 100%;
+    max-width: none;
+    display: block;
+    margin-top: 0.65rem;
+    bottom: auto;
+    left: auto;
+    z-index: auto;
+    transform: none;
+    animation: bundleActionModalIn 0.18s ease;
+  }
+
+  .variantActionPanelMobile .bundleActionContent {
+    display: flex;
+    flex-direction: column;
+    padding: 0.96rem 0.92rem 1rem;
+    border-radius: 18px;
     box-shadow: 0 10px 22px rgba(27, 54, 93, 0.12);
   }
 
-  .variantActionPopover .bundleActionContent::after {
-    left: 22px;
-    bottom: -6px;
-    width: 10px;
-    height: 10px;
+  .variantActionPanelMobile .bundleActionContent::after {
+    display: none;
   }
 
-  .variantActionPopover .bundleActionEyebrow {
-    margin-bottom: 0.08rem;
-    font-size: 0.46rem;
+  .variantActionPanelMobile .bundleActionEyebrow {
+    margin: 0 0 0.36rem;
+    font-size: 0.48rem;
     letter-spacing: 0.12em;
   }
 
-  .variantActionPopover .bundleActionTitle {
-    margin-bottom: 0.4rem;
-    font-size: 0.82rem;
-    line-height: 1.1;
+  .variantActionPanelMobile .bundleActionTitle {
+    margin: 0 0 1.24rem;
+    font-size: 0.88rem;
+    line-height: 1.22;
   }
 
-  .variantActionPopover .bundleActionGrid {
+  .variantActionPanelMobile .bundleActionGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.35rem;
-    margin-top: 0.35rem;
+    gap: 0.9rem;
+    margin-top: 0;
   }
 
-  .variantActionPopover .bundleActionPrimary,
-  .variantActionPopover .bundleActionSecondary {
-    min-height: 2.15rem;
-    padding: 0.46rem 0.5rem;
-    border-radius: 10px;
-    gap: 0.26rem;
-    font-size: 0.68rem;
-    line-height: 1.05;
+  .variantActionPanelMobile .bundleActionPrimary,
+  .variantActionPanelMobile .bundleActionSecondary {
+    min-height: 2.7rem;
+    padding: 0.64rem 0.68rem;
+    border-radius: 12px;
+    gap: 0.32rem;
+    font-size: 0.7rem;
+    line-height: 1.08;
     box-shadow: none;
   }
 
-  .variantActionPopover .bundleActionPrimary {
+  .variantActionPanelMobile .bundleActionPrimary {
     box-shadow: 0 6px 12px rgba(27, 54, 93, 0.12);
   }
 
-  .variantActionPopover .bundleActionSecondary {
+  .variantActionPanelMobile .bundleActionSecondary {
     border-width: 1px;
   }
 
-  .variantActionPopover .bundleActionPrimary .material-symbols-outlined,
-  .variantActionPopover .bundleActionSecondary .material-symbols-outlined {
+  .variantActionPanelMobile .bundleActionPrimary .material-symbols-outlined,
+  .variantActionPanelMobile .bundleActionSecondary .material-symbols-outlined {
     font-size: 15px;
   }
 
@@ -1134,10 +1156,19 @@
   box-shadow: 0 12px 22px rgba(197, 160, 101, 0.15);
 }
 
+.variantCardCopy {
+  min-width: 0;
+  flex: 1;
+}
+
 .variantCardName {
   font-size: 0.95rem;
   font-weight: 700;
   color: #1B365D;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .variantCardMeta {
@@ -1162,19 +1193,47 @@
 }
 
 .variantActionRow .configOptionBtn {
+  display: flex;
+  align-items: flex-start;
   width: 100%;
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.875rem 1rem;
   font-size: 0.85rem;
+  text-align: left;
+}
+
+.variantActionCopy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.22rem;
+}
+
+.variantActionName {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  color: inherit;
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .variantActionMeta {
+  display: block;
+  max-width: 100%;
   font-size: 0.72rem;
   font-weight: 700;
+  line-height: 1.3;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   opacity: 0.82;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .optionBtn {

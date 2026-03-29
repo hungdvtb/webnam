@@ -90,6 +90,43 @@ class OrderDraftFlowTest extends TestCase
         $this->assertSame(3, (int) $order->items()->first()->quantity);
     }
 
+    public function test_draft_order_costs_round_up_to_the_nearest_thousand(): void
+    {
+        [$account] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham lam tron len',
+            'sku' => 'ROUND-UP-001',
+            'price' => 890000,
+            'cost_price' => 526951.22,
+            'expected_cost' => 526951.22,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => 'Khach lam tron len',
+                'customer_phone' => '0911111111',
+                'shipping_address' => '123 Nguyen Trai',
+                'items' => [
+                    [
+                        'product_id' => $product->id,
+                        'quantity' => 2,
+                        'price' => 890000,
+                    ],
+                ],
+            ]);
+
+        $response->assertCreated();
+
+        $order = Order::query()->with('items')->findOrFail((int) $response->json('id'));
+        $item = $order->items->first();
+
+        $this->assertSame(527000.0, (float) $item->cost_price);
+        $this->assertSame(1054000.0, (float) $item->cost_total);
+        $this->assertSame(1054000.0, (float) $order->cost_total);
+    }
+
     public function test_store_official_order_allows_negative_inventory_when_stock_is_empty(): void
     {
         [$account] = $this->authenticate();
@@ -155,6 +192,39 @@ class OrderDraftFlowTest extends TestCase
         $this->assertSame(-2, (int) $product->stock_quantity);
         $this->assertSame(3, (int) $order->items->first()->batchAllocations->sum('quantity'));
         $this->assertSame(2, $this->oversoldAllocatedQuantity($order));
+    }
+
+    public function test_official_order_costs_round_down_to_the_nearest_thousand_while_batch_allocations_keep_raw_cost(): void
+    {
+        [$account] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham lam tron xuong',
+            'sku' => 'ROUND-DOWN-001',
+            'price' => 790000,
+            'cost_price' => 526400,
+            'expected_cost' => 526400,
+            'stock_quantity' => 1,
+        ]);
+        $this->createInventoryBatch($account, $product, 1, 526400, 'round-down');
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', $this->officialOrderPayload($product, [
+                'quantity' => 1,
+                'price' => 790000,
+            ]));
+
+        $response->assertCreated();
+
+        $order = $this->loadOrderWithAllocations((int) $response->json('id'));
+        $item = $order->items->first();
+        $allocation = $item->batchAllocations->first();
+
+        $this->assertSame(526000.0, (float) $item->cost_price);
+        $this->assertSame(526000.0, (float) $item->cost_total);
+        $this->assertSame(526400.0, (float) $allocation->total_cost);
+        $this->assertSame(526400.0, (float) $allocation->unit_cost);
+        $this->assertSame(526000.0, (float) $order->cost_total);
     }
 
     public function test_convert_draft_to_official_allows_negative_inventory(): void

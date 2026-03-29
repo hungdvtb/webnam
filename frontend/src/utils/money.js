@@ -1,4 +1,5 @@
 const DECIMAL_MONEY_PATTERN = /^-?\d+[.,]\d{1,2}$/;
+const MONEY_SYMBOL_PATTERN = /[\s\u00a0\u20ab\u0111]/gi;
 
 export const parseWholeMoneyValue = (value) => {
     if (value === null || value === undefined || value === '') {
@@ -57,4 +58,93 @@ export const formatWholeMoneyInput = (value, locale = 'vi-VN') => {
     }
 
     return new Intl.NumberFormat(locale).format(parsed);
+};
+
+export const parseFlexibleMoneyValue = (value) => {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : null;
+    }
+
+    const normalized = String(value)
+        .trim()
+        .replace(MONEY_SYMBOL_PATTERN, '');
+
+    if (!normalized) {
+        return null;
+    }
+
+    const sign = normalized.startsWith('-') ? -1 : 1;
+    const unsigned = normalized.replace(/^[+-]/, '');
+    const lastDot = unsigned.lastIndexOf('.');
+    const lastComma = unsigned.lastIndexOf(',');
+    const lastSeparatorIndex = Math.max(lastDot, lastComma);
+    let decimalSeparator = null;
+
+    if (lastSeparatorIndex >= 0) {
+        const separatorCount = (unsigned.match(/[.,]/g) || []).length;
+        const candidate = unsigned[lastSeparatorIndex];
+        const decimalDigits = unsigned.slice(lastSeparatorIndex + 1);
+
+        if (
+            decimalDigits.length > 0
+            && decimalDigits.length <= 2
+            && (separatorCount > 1 || unsigned.indexOf(candidate) === lastSeparatorIndex)
+        ) {
+            decimalSeparator = candidate;
+        }
+    }
+
+    let numericText = unsigned;
+    if (decimalSeparator) {
+        numericText = decimalSeparator === ','
+            ? numericText.replace(/\./g, '').replace(',', '.')
+            : numericText.replace(/,/g, '');
+    } else {
+        numericText = numericText.replace(/[.,]/g, '');
+    }
+
+    if (!/^\d+(\.\d+)?$/.test(numericText)) {
+        return null;
+    }
+
+    const parsed = Number(numericText);
+    return Number.isFinite(parsed) ? sign * parsed : null;
+};
+
+export const normalizeRoundedImportCostNumber = (value) => {
+    const parsed = parseFlexibleMoneyValue(value);
+    if (parsed === null) {
+        return null;
+    }
+
+    return Math.max(0, Math.round(parsed / 1000) * 1000);
+};
+
+export const normalizeRoundedImportCostDraft = (value) => {
+    const parsed = normalizeRoundedImportCostNumber(value);
+    if (parsed === null) {
+        return '';
+    }
+
+    return String(parsed);
+};
+
+export const formatRoundedImportCost = (value, locale = 'vi-VN') => {
+    const parsed = normalizeRoundedImportCostNumber(value);
+    if (parsed === null) {
+        return '';
+    }
+
+    return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(parsed);
+};
+
+export const calculateRoundedImportCostLineTotal = (unitCost, quantity) => {
+    const normalizedUnitCost = normalizeRoundedImportCostNumber(unitCost) ?? 0;
+    const normalizedQuantity = Number(quantity);
+
+    return normalizedUnitCost * (Number.isFinite(normalizedQuantity) ? normalizedQuantity : 0);
 };

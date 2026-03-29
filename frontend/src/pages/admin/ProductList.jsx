@@ -10,7 +10,14 @@ import { useTableColumns } from '../../hooks/useTableColumns';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
 import SortIndicator from '../../components/SortIndicator';
 import { ACTIVE_PRODUCT_TYPE_KEYS, ACTIVE_PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_META, sanitizeActiveProductTypeValues } from '../../config/productTypes';
-import { formatWholeMoneyInput, normalizeWholeMoneyDraft, normalizeWholeMoneyNumber } from '../../utils/money';
+import {
+    formatRoundedImportCost,
+    formatWholeMoneyInput,
+    normalizeRoundedImportCostDraft,
+    normalizeRoundedImportCostNumber,
+    normalizeWholeMoneyDraft,
+    normalizeWholeMoneyNumber,
+} from '../../utils/money';
 
 const TYPE_LABELS = PRODUCT_TYPE_META;
 
@@ -126,7 +133,7 @@ const ProductList = () => {
         setEditingProductId(p.id);
         setEditForm({
             price: normalizeWholeMoneyDraft(p.price),
-            expected_cost: normalizeWholeMoneyDraft(p.expected_cost ?? p.cost_price)
+            expected_cost: normalizeRoundedImportCostDraft(p.expected_cost ?? p.cost_price)
         });
     };
 
@@ -143,7 +150,7 @@ const ProductList = () => {
         setSavingId(editingProductId);
         try {
             const nextPrice = normalizeWholeMoneyNumber(editForm.price);
-            const nextExpectedCost = normalizeWholeMoneyNumber(editForm.expected_cost);
+            const nextExpectedCost = normalizeRoundedImportCostNumber(editForm.expected_cost);
 
             if (nextPrice === null || nextExpectedCost === null) {
                 setNotification({ type: 'error', message: 'Vui lòng nhập đầy đủ giá bán và giá dự kiến.' });
@@ -768,7 +775,7 @@ const ProductList = () => {
         const typeLabel = TYPE_LABELS[p.type]?.label || p.type;
         const catName = p.category?.name || '-';
         const priceValue = normalizeWholeMoneyNumber(p.price) ?? 0;
-        const expectedCostValue = normalizeWholeMoneyNumber(p.expected_cost ?? p.cost_price) ?? 0;
+        const expectedCostValue = normalizeRoundedImportCostNumber(p.expected_cost ?? p.cost_price) ?? 0;
         const price = `${new Intl.NumberFormat('vi-VN').format(priceValue)}₫`;
         const costPrice = `${new Intl.NumberFormat('vi-VN').format(expectedCostValue)}₫`;
         const stock = p.stock_quantity || 0;
@@ -802,9 +809,9 @@ const ProductList = () => {
         try {
             setLoading(true);
             const payloadField = field === 'cost_price' ? 'expected_cost' : field;
-            const payloadValue = field === 'price' || field === 'cost_price'
+            const payloadValue = field === 'price'
                 ? normalizeWholeMoneyNumber(editValue)
-                : editValue;
+                : (field === 'cost_price' ? normalizeRoundedImportCostNumber(editValue) : editValue);
 
             if ((field === 'price' || field === 'cost_price') && payloadValue === null) {
                 setNotification({ type: 'error', message: 'Giá phải là số hợp lệ.' });
@@ -1579,7 +1586,7 @@ const ProductList = () => {
                                     const pIsChild = isSubRow || p.parent_products?.length > 0;
                                     
                                     // Custom aggregate price display for parent products
-                                    let displayCostPrice = p.expected_cost ?? p.cost_price ?? null;
+                                    let displayCostPrice = normalizeRoundedImportCostNumber(p.expected_cost ?? p.cost_price);
                                     let displayPrice = p.price;
                                     const pVariants = p.variations || [];
                                     
@@ -1588,7 +1595,7 @@ const ProductList = () => {
                                             const components = p.grouped_items || [];
                                             if (components.length > 0) {
                                                 // Calculate sum of cost prices for Grouped Product
-                                                displayCostPrice = components.reduce((sum, item) => sum + (Number(item.expected_cost ?? item.cost_price ?? 0) * (item.pivot?.quantity || 1)), 0);
+                                                displayCostPrice = components.reduce((sum, item) => sum + ((normalizeRoundedImportCostNumber(item.expected_cost ?? item.cost_price) ?? 0) * (item.pivot?.quantity || 1)), 0);
                                                 
                                                 // Calculate sum of selling prices (if price_type is 'sum')
                                                 if (p.price_type === 'sum') {
@@ -1597,7 +1604,7 @@ const ProductList = () => {
                                             }
                                         } else if (pVariants.length > 0) {
                                             // Existing logic for Configurable products
-                                            const vCostPrices = pVariants.map(v => v.expected_cost ?? v.cost_price);
+                                            const vCostPrices = pVariants.map(v => normalizeRoundedImportCostNumber(v.expected_cost ?? v.cost_price));
                                             const firstCost = vCostPrices[0];
                                             const allCostSame = vCostPrices.every(cp => cp !== null && cp !== undefined && Number(cp) === Number(firstCost));
                                             displayCostPrice = allCostSame ? firstCost : null;
@@ -1693,7 +1700,7 @@ const ProductList = () => {
                                                             <div className="flex items-center justify-between">
                                                                 {isEditing ? (
                                                                     <div className="flex flex-col gap-1">
-                                                                        <input type="text" className="w-24 border border-primary/20 rounded px-1.5 py-0.5 text-[11px] font-bold outline-none focus:border-primary" value={formatWholeMoneyInput(editForm.expected_cost)} onChange={(e) => setEditForm(prev => ({...prev, expected_cost: normalizeWholeMoneyDraft(e.target.value)}))} onKeyDown={(e) => e.key === 'Enter' && handleSaveQuickEdit(e)} autoFocus />
+                                                                        <input type="text" className="w-24 border border-primary/20 rounded px-1.5 py-0.5 text-[11px] font-bold outline-none focus:border-primary" value={formatRoundedImportCost(editForm.expected_cost)} onChange={(e) => setEditForm(prev => ({...prev, expected_cost: normalizeRoundedImportCostDraft(e.target.value)}))} onKeyDown={(e) => e.key === 'Enter' && handleSaveQuickEdit(e)} autoFocus />
                                                                         <div className="flex gap-2">
                                                                             <button onClick={handleSaveQuickEdit} className="text-green-600 text-[10px] font-bold uppercase">Lưu</button>
                                                                             <button onClick={handleCancelQuickEdit} className="text-brick text-[10px] font-bold uppercase">Hủy</button>
@@ -2002,8 +2009,8 @@ const ProductList = () => {
                                             type="text"
                                             className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
                                             placeholder="VNĐ"
-                                            value={formatWholeMoneyInput(bulkUpdateData.expected_cost)}
-                                            onChange={e => setBulkUpdateData({...bulkUpdateData, expected_cost: normalizeWholeMoneyDraft(e.target.value)})}
+                                            value={formatRoundedImportCost(bulkUpdateData.expected_cost)}
+                                            onChange={e => setBulkUpdateData({...bulkUpdateData, expected_cost: normalizeRoundedImportCostDraft(e.target.value)})}
                                         />
                                     </div>
                                     <div className="space-y-1">

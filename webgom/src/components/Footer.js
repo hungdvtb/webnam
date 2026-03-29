@@ -5,7 +5,6 @@ import Link from "next/link";
 const DEFAULT_DESCRIPTION =
   "Gìn giữ tinh hoa đất Việt qua từng nét vẽ, mảng men và những tác phẩm gốm sứ thủ công độc bản.";
 const DEFAULT_BRAND_TEXT = "GỐM ĐẠI THÀNH";
-const DEFAULT_NEWSLETTER_PLACEHOLDER = "Email của bạn";
 
 const isExternalUrl = (value = "") => /^https?:\/\//i.test(String(value).trim());
 
@@ -30,8 +29,6 @@ export default function Footer({ config = {} }) {
   const hotline = String(config?.hotline || "").trim();
   const email = String(config?.email || "").trim();
   const address = String(config?.address || "").trim();
-  const newsletterPlaceholder =
-    String(config?.newsletterPlaceholder || "").trim() || DEFAULT_NEWSLETTER_PLACEHOLDER;
   const copyrightText =
     String(config?.copyrightText || "").trim() ||
     `© ${new Date().getFullYear()} ${brandText}. Tất cả quyền được bảo lưu.`;
@@ -85,15 +82,6 @@ export default function Footer({ config = {} }) {
               </ul>
             </div>
           ))}
-
-          <div className="footer-col newsletter-col">
-            <h3>BẢN TIN</h3>
-            <p>Nhận thông tin về các bộ sưu tập mới nhất và ưu đãi đặc quyền.</p>
-            <div className="newsletter-form">
-              <input type="email" placeholder={newsletterPlaceholder} />
-              <button type="button">GỬI</button>
-            </div>
-          </div>
         </div>
 
         <div className="footer-bottom">
@@ -118,7 +106,7 @@ export default function Footer({ config = {} }) {
 
         .footer-grid {
           display: grid;
-          grid-template-columns: 1.5fr repeat(3, 1fr) 1.25fr;
+          grid-template-columns: 1.5fr repeat(3, 1fr);
           gap: 3rem;
           margin-bottom: 3rem;
         }
@@ -127,19 +115,11 @@ export default function Footer({ config = {} }) {
           .footer-grid {
             grid-template-columns: 1.3fr repeat(2, 1fr);
           }
-
-          .newsletter-col {
-            grid-column: span 3;
-          }
         }
 
         @media (max-width: 992px) {
           .footer-grid {
             grid-template-columns: 1fr 1fr;
-          }
-
-          .newsletter-col {
-            grid-column: auto;
           }
         }
 
@@ -203,6 +183,10 @@ export default function Footer({ config = {} }) {
           align-items: flex-start;
         }
 
+        .footer-col {
+          min-width: 0;
+        }
+
         .footer-col h3 {
           font-size: 1rem;
           color: var(--accent);
@@ -231,38 +215,6 @@ export default function Footer({ config = {} }) {
 
         .footer-col ul li :global(a:hover) {
           opacity: 1;
-        }
-
-        .newsletter-col p {
-          font-size: 0.875rem;
-          opacity: 0.8;
-          margin-bottom: 1rem;
-          line-height: 1.7;
-        }
-
-        .newsletter-form {
-          display: flex;
-          gap: 0.5rem;
-        }
-
-        .newsletter-form input {
-          flex: 1;
-          background-color: rgba(255, 255, 255, 0.1);
-          border: 1px solid rgba(255, 255, 255, 0.2);
-          padding: 0.65rem 1rem;
-          border-radius: 8px;
-          color: white;
-          outline: none;
-        }
-
-        .newsletter-form button {
-          background-color: var(--accent);
-          color: white;
-          border: none;
-          padding: 0.65rem 1.25rem;
-          border-radius: 8px;
-          font-weight: bold;
-          cursor: pointer;
         }
 
         .footer-bottom {
@@ -296,13 +248,11 @@ export default function Footer({ config = {} }) {
             margin-bottom: 1.85rem;
           }
 
-          .about-col,
-          .newsletter-col {
+          .about-col {
             grid-column: 1 / -1;
           }
 
           .footer-col {
-            min-width: 0;
             padding: 0;
             border: none;
             border-radius: 0;
@@ -404,40 +354,6 @@ export default function Footer({ config = {} }) {
             line-height: 1.4;
           }
 
-          .newsletter-col p {
-            margin-bottom: 0.9rem;
-            font-size: 0.9rem;
-            line-height: 1.65;
-          }
-
-          .newsletter-form {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            gap: 0.65rem;
-            align-items: stretch;
-          }
-
-          .newsletter-form input {
-            min-width: 0;
-            font-size: 0.9rem;
-            padding: 0.25rem 0;
-            background: transparent;
-            border: none;
-            border-radius: 0;
-            box-shadow: none;
-            outline: none;
-          }
-
-          .newsletter-form button {
-            min-width: 88px;
-            padding: 0.25rem 0;
-            background: transparent;
-            border: none;
-            border-radius: 0;
-            box-shadow: none;
-            outline: none;
-          }
-
           .footer-bottom {
             justify-content: center;
             text-align: center;
@@ -489,14 +405,6 @@ export default function Footer({ config = {} }) {
           .footer-contact-item,
           .footer-address {
             grid-column: auto;
-          }
-
-          .newsletter-form {
-            grid-template-columns: 1fr;
-          }
-
-          .newsletter-form button {
-            width: 100%;
           }
         }
 

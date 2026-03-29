@@ -324,9 +324,13 @@ const AdminLayout = () => {
                         <span className={`material-symbols-outlined w-6 text-center ${location.pathname.startsWith('/admin/reports') ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>table_chart</span>
                         <span className="font-sans text-sm font-medium tracking-wider">Hàng đi hàng ngày</span>
                     </Link>
-                    <Link to="/admin/finance" className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname.startsWith('/admin/finance') ? 'bg-gold/10 text-gold' : 'hover:bg-white/10 text-white'}`}>
-                        <span className={`material-symbols-outlined w-6 text-center ${location.pathname.startsWith('/admin/finance') ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>account_balance_wallet</span>
+                    <Link to="/admin/finance" className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/finance' || location.pathname.startsWith('/admin/finance/daily-profit') ? 'bg-gold/10 text-gold' : 'hover:bg-white/10 text-white'}`}>
+                        <span className={`material-symbols-outlined w-6 text-center ${location.pathname === '/admin/finance' || location.pathname.startsWith('/admin/finance/daily-profit') ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>account_balance_wallet</span>
                         <span className="font-sans text-sm font-medium tracking-wider">Chi phí cố định</span>
+                    </Link>
+                    <Link to="/admin/finance/receipts" className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname.startsWith('/admin/finance/receipts') ? 'bg-gold/10 text-gold' : 'hover:bg-white/10 text-white'}`}>
+                        <span className={`material-symbols-outlined w-6 text-center ${location.pathname.startsWith('/admin/finance/receipts') ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>payments</span>
+                        <span className="font-sans text-sm font-medium tracking-wider">Phiếu thu</span>
                     </Link>
                 </nav>
 

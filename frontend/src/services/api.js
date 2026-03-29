@@ -143,6 +143,9 @@ export const categoryApi = {
     getAll: () => api.get('/categories'),
     getOne: (id) => api.get(`/categories/${id}`),
     getProducts: (id) => api.get(`/categories/${id}/products`),
+    downloadExcel: () => api.get('/categories/export', { responseType: 'blob' }),
+    downloadImportTemplate: () => api.get('/categories/import/template', { responseType: 'blob' }),
+    importExcel: (data) => api.post('/categories/import', data, { headers: { 'Content-Type': 'multipart/form-data' } }),
     store: (data) => api.post('/categories', data),
     update: (id, data) => api.post(`/categories/${id}`, data),
     destroy: (id) => api.delete(`/categories/${id}`),
@@ -400,6 +403,10 @@ export const inventoryApi = {
 export const financeApi = {
     getDashboard: (params) => api.get('/finance/dashboard', { params }),
     getOptions: () => api.get('/finance/options'),
+    getCashbook: (params) => api.get('/finance/cashbook', { params }),
+    createCashbookEntry: (data) => api.post('/finance/cashbook/entries', data),
+    updateCashbookEntry: (kind, id, data) => api.put(`/finance/cashbook/entries/${kind}/${id}`, data),
+    deleteCashbookEntry: (kind, id) => api.delete(`/finance/cashbook/entries/${kind}/${id}`),
     getTransactions: (params) => api.get('/finance/transactions', { params }),
     createTransaction: (data) => api.post('/finance/transactions', data, multipartConfig(data)),
     updateTransaction: (id, data) => api.post(`/finance/transactions/${id}`, data, multipartConfig(data)),
@@ -408,6 +415,7 @@ export const financeApi = {
     getWallets: (params) => api.get('/finance/wallets', { params }),
     createWallet: (data) => api.post('/finance/wallets', data),
     updateWallet: (id, data) => api.put(`/finance/wallets/${id}`, data),
+    deleteWallet: (id) => api.delete(`/finance/wallets/${id}`),
     adjustWallet: (id, data) => api.post(`/finance/wallets/${id}/adjust`, data),
     getWalletLedger: (id, params) => api.get(`/finance/wallets/${id}/ledger`, { params }),
     getTransfers: (params) => api.get('/finance/transfers', { params }),
@@ -500,10 +508,12 @@ export const blogApi = {
     update: (id, data) => api.put(`/blog/${id}`, data),
     destroy: (id) => api.delete(`/blog/${id}`),
     reorder: (ids) => api.post('/blog/reorder', { ids }),
-    importWord: (formData) => api.post('/blog/import-word', formData, {
+    exportBundle: (data = {}) => api.post('/blog/export-bundle', data, {
+        responseType: 'blob',
+    }),
+    importBundle: (formData) => api.post('/blog/import-bundle', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
     }),
-    downloadImportTemplate: () => api.get('/blog/import/template', { responseType: 'blob' }),
 };
 
 export const invoiceApi = {

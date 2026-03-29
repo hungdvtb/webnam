@@ -102,7 +102,7 @@ const trashSlipTypeLabels = {
 
 const defaultProductFilters = { search: '', status: '', cost_source: '', stock_alert: '', type: '', category_id: '', variant_scope: '', date_from: '', date_to: '' };
 const defaultSupplierFilters = { search: '', status: '', month: '', date_from: '', date_to: '' };
-const defaultSupplierCatalogFilters = { sku: '', name: '', category_id: '', type: '', variant_scope: '', missing_supplier_price: '', multiple_suppliers: '' };
+const defaultSupplierCatalogFilters = { sku: '', name: '', category_id: '', type: '', variant_scope: '', missing_supplier_price: '', multiple_suppliers: '', supplier_ids: [] };
 const ALL_SUPPLIER_CATALOG_VALUE = 'all';
 const createDefaultSimpleFilters = () => ({
     imports: { search: '', date_from: '', date_to: '', inventory_import_status_id: '', entry_mode: '', has_invoice: '' },
@@ -115,6 +115,15 @@ const createDefaultSimpleFilters = () => ({
 });
 
 const filterOptionLabel = (options, value) => options.find((option) => String(option.value) === String(value))?.label || String(value || '');
+const normalizeSupplierFilterIds = (value) => {
+    const rawValues = Array.isArray(value)
+        ? value
+        : (typeof value === 'string' ? value.split(',') : []);
+
+    return Array.from(new Set(rawValues
+        .map((item) => Number(item))
+        .filter((item) => Number.isFinite(item) && item > 0)));
+};
 const buildFilterChip = (key, label, value, onRemove) => {
     const normalizedValue = typeof value === 'string' ? value.trim() : value;
     if (normalizedValue == null || normalizedValue === '') return null;
@@ -258,7 +267,7 @@ const isSlipTab = (tabKey) => isDocumentTab(tabKey) || tabKey === 'trash';
 const documentTypeMap = { returns: 'return', damaged: 'damaged', adjustments: 'adjustment' };
 const documentTitleMap = { returns: 'Phiếu hàng hoàn', damaged: 'Phiếu hàng hỏng', adjustments: 'Phiếu điều chỉnh' };
 const pageSizeOptions = [20, 50, 100, 500];
-const inventoryTableStorageVersion = 'v5';
+const inventoryTableStorageVersion = 'v6';
 const emptySortConfig = { key: null, direction: 'none' };
 const getStoredPageSize = (key) => {
     if (typeof window === 'undefined') return 20;
@@ -292,7 +301,7 @@ const formatImportCost = (value) => `${formatRoundedImportCost(value)}đ`;
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0));
 const stripNumericValue = (value) => String(value ?? '').replace(/[^0-9]/g, '');
 const getProductStockAlertMeta = (row) => {
-    const stock = Number(row?.computed_stock ?? 0);
+    const stock = Number(row?.actual_stock ?? row?.computed_stock ?? 0);
     const normalizedAlert = String(row?.stock_alert || '').trim();
 
     if (normalizedAlert === 'out' || stock <= 0) {
@@ -318,6 +327,18 @@ const getProductStockAlertMeta = (row) => {
         label: 'An toàn',
         badgeClass: 'border-emerald-200 bg-emerald-50 text-emerald-700',
         textClass: 'text-emerald-700',
+    };
+};
+const getActualStockCellMeta = (row) => {
+    const baseMeta = getProductStockAlertMeta(row);
+
+    if (baseMeta.key === 'available') {
+        return baseMeta;
+    }
+
+    return {
+        ...baseMeta,
+        textClass: 'text-rose-700',
     };
 };
 const supplierPasteModeConfigs = {
@@ -603,23 +624,36 @@ const sortSupplierComparisons = (items = []) => [...items]
         ...item,
         is_lowest: index === 0,
     }));
-const buildSupplierCatalogDisplayName = (row, selectedSupplierName = '') => {
-    if (String(selectedSupplierName || '').trim()) {
-        return selectedSupplierName;
-    }
-
-    const supplierNames = Array.from(new Set([
-        ...(Array.isArray(row?.suppliers) ? row.suppliers.map((item) => item?.name) : []),
-        ...(Array.isArray(row?.supplier_price_comparisons) ? row.supplier_price_comparisons.map((item) => item?.supplier_name) : []),
+const buildSupplierCatalogDisplayNames = (row, preferredNames = [], preferredSupplierIds = []) => {
+    const normalizedSupplierIds = normalizeSupplierFilterIds(preferredSupplierIds);
+    const canUseFilter = normalizedSupplierIds.length > 0;
+    const includeSupplierId = (supplierId) => !canUseFilter || normalizedSupplierIds.includes(Number(supplierId));
+    const supplierNames = [
+        ...preferredNames,
+        ...(Array.isArray(row?.suppliers)
+            ? row.suppliers.filter((item) => includeSupplierId(item?.id)).map((item) => item?.name)
+            : []),
+        ...(Array.isArray(row?.supplier_price_comparisons)
+            ? row.supplier_price_comparisons.filter((item) => includeSupplierId(item?.supplier_id)).map((item) => item?.supplier_name)
+            : []),
         ...(Array.isArray(row?.variants) ? row.variants.flatMap((variant) => (
-            Array.isArray(variant?.suppliers) ? variant.suppliers.map((item) => item?.name) : []
+            Array.isArray(variant?.suppliers)
+                ? variant.suppliers.filter((item) => includeSupplierId(item?.id)).map((item) => item?.name)
+                : []
         )) : []),
         ...(Array.isArray(row?.variants) ? row.variants.flatMap((variant) => (
-            Array.isArray(variant?.supplier_price_comparisons) ? variant.supplier_price_comparisons.map((item) => item?.supplier_name) : []
+            Array.isArray(variant?.supplier_price_comparisons)
+                ? variant.supplier_price_comparisons.filter((item) => includeSupplierId(item?.supplier_id)).map((item) => item?.supplier_name)
+                : []
         )) : []),
-    ].map((value) => String(value || '').trim()).filter(Boolean)));
+    ];
 
-    return supplierNames.length ? supplierNames.join(', ') : 'Chưa gắn NCC';
+    return Array.from(new Set(supplierNames.map((value) => String(value || '').trim()).filter(Boolean)));
+};
+const summarizeSelectedSupplierNames = (names = []) => {
+    if (!names.length) return 'Tất cả';
+    if (names.length <= 2) return names.join(', ');
+    return `${names.length} NCC đã chọn`;
 };
 const formatDateTime = (value) => {
     if (!value) return '-';
@@ -1631,6 +1665,8 @@ const productColumns = [
     { id: 'total_damaged', label: 'Tổng hỏng', minWidth: 110, align: 'right' },
     { id: 'total_adjusted', label: 'Tổng điều chỉnh', minWidth: 130, align: 'right' },
     { id: 'computed_stock', label: 'Tồn kho', minWidth: 110, align: 'right' },
+    { id: 'pending_export_quantity', label: 'SL chờ xuất', minWidth: 118, align: 'right', headerTooltip: 'Đã bán nhưng chưa xuất kho' },
+    { id: 'actual_stock', label: 'Tồn thực tế', minWidth: 118, align: 'right', headerTooltip: 'Tồn sau khi trừ đơn chưa xuất' },
     { id: 'expected_cost', label: 'Giá nhập dự kiến', minWidth: 145, align: 'right' },
     { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 145, align: 'right' },
     { id: 'inventory_value', label: 'Thành tiền', minWidth: 145, align: 'right' },
@@ -1746,6 +1782,8 @@ const inventorySortColumnMaps = {
         total_damaged: 'total_damaged',
         total_adjusted: 'total_adjusted',
         computed_stock: 'computed_stock',
+        pending_export_quantity: 'pending_export_quantity',
+        actual_stock: 'actual_stock',
         expected_cost: 'expected_cost',
         current_cost: 'cost_price',
         inventory_value: 'inventory_value',
@@ -1914,6 +1952,200 @@ const CellText = ({ primary, secondary = null, mono = false }) => (
         {secondary ? <div className="mt-0.5 truncate text-[11px] text-primary/45">{secondary}</div> : null}
     </div>
 );
+
+const SupplierNameListCell = ({ names = [] }) => {
+    const normalizedNames = Array.from(new Set((names || []).map((value) => String(value || '').trim()).filter(Boolean)));
+    const [open, setOpen] = useState(false);
+    const containerRef = useRef(null);
+
+    useEffect(() => {
+        if (!open) return undefined;
+
+        const handlePointerDown = (event) => {
+            if (containerRef.current && !containerRef.current.contains(event.target)) {
+                setOpen(false);
+            }
+        };
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') setOpen(false);
+        };
+
+        document.addEventListener('mousedown', handlePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [open]);
+
+    if (!normalizedNames.length) {
+        return <span className="block truncate text-[12px] text-primary/45">Chưa gắn NCC</span>;
+    }
+
+    const hiddenCount = Math.max(normalizedNames.length - 2, 0);
+    const visibleLabel = hiddenCount > 0 ? normalizedNames.slice(0, 2).join(', ') : normalizedNames.join(', ');
+    const fullLabel = normalizedNames.join(', ');
+
+    return (
+        <div ref={containerRef} className="relative min-w-0" title={fullLabel}>
+            <div className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+                <span className="min-w-0 truncate font-semibold text-primary">{visibleLabel}</span>
+                {hiddenCount > 0 ? (
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setOpen((prev) => !prev);
+                        }}
+                        className="shrink-0 rounded-full border border-primary/15 bg-primary/[0.05] px-2 py-0.5 text-[10px] font-black text-primary transition hover:border-primary hover:bg-primary/[0.08]"
+                        title={open ? 'Ẩn danh sách nhà cung cấp' : 'Xem đầy đủ nhà cung cấp'}
+                    >
+                        +{hiddenCount}
+                    </button>
+                ) : null}
+            </div>
+            {open ? (
+                <div className="absolute right-0 top-full z-30 mt-1 w-[260px] rounded-sm border border-primary/15 bg-white p-2 shadow-lg">
+                    <div className="mb-1 text-[10px] font-black uppercase tracking-[0.14em] text-primary/40">Nhà cung cấp</div>
+                    <div className="max-h-48 space-y-1 overflow-auto pr-1">
+                        {normalizedNames.map((name) => (
+                            <div key={name} className="rounded-sm bg-[#f6f9fc] px-2 py-1 text-[12px] font-semibold text-primary">
+                                {name}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            ) : null}
+        </div>
+    );
+};
+
+const SupplierMultiSelectFilter = ({
+    suppliers = [],
+    value = [],
+    onChange,
+    disabled = false,
+    placeholder = 'Tất cả',
+    className = '',
+}) => {
+    const [open, setOpen] = useState(false);
+    const containerRef = useRef(null);
+    const selectedIds = useMemo(() => normalizeSupplierFilterIds(value), [value]);
+    const allSupplierIds = useMemo(
+        () => suppliers.map((supplier) => Number(supplier.id)).filter((id) => Number.isFinite(id) && id > 0),
+        [suppliers]
+    );
+    const selectedNames = useMemo(() => {
+        const nameMap = new Map(suppliers.map((supplier) => [Number(supplier.id), supplier.name]));
+        return selectedIds.map((id) => nameMap.get(id)).filter(Boolean);
+    }, [selectedIds, suppliers]);
+    const summaryLabel = selectedIds.length
+        ? (selectedNames.length === selectedIds.length
+            ? summarizeSelectedSupplierNames(selectedNames)
+            : `${selectedIds.length} NCC đã chọn`)
+        : placeholder;
+    const isAllChecked = allSupplierIds.length > 0 && selectedIds.length === allSupplierIds.length;
+
+    useEffect(() => {
+        if (!open) return undefined;
+
+        const handlePointerDown = (event) => {
+            if (containerRef.current && !containerRef.current.contains(event.target)) {
+                setOpen(false);
+            }
+        };
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') setOpen(false);
+        };
+
+        document.addEventListener('mousedown', handlePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [open]);
+
+    const applyNextValue = (nextValue) => {
+        onChange?.(normalizeSupplierFilterIds(nextValue));
+    };
+
+    return (
+        <div ref={containerRef} className={`relative w-[260px] ${className}`.trim()}>
+            <button
+                type="button"
+                onClick={() => {
+                    if (!disabled) setOpen((prev) => !prev);
+                }}
+                disabled={disabled}
+                className={`flex w-full items-center justify-between gap-2 ${selectClass} ${
+                    disabled ? 'cursor-not-allowed opacity-60' : ''
+                }`}
+                title={selectedNames.length ? selectedNames.join(', ') : summaryLabel}
+            >
+                <span className="truncate text-left">{summaryLabel}</span>
+                <span className="material-symbols-outlined shrink-0 text-[18px] text-primary/45">
+                    {open ? 'expand_less' : 'expand_more'}
+                </span>
+            </button>
+            {open ? (
+                <div className="absolute left-0 top-full z-30 mt-1 w-[320px] max-w-[calc(100vw-2rem)] rounded-sm border border-primary/15 bg-white shadow-lg">
+                    <button
+                        type="button"
+                        onClick={() => {
+                            applyNextValue([]);
+                            setOpen(false);
+                        }}
+                        className={`flex w-full items-start justify-between gap-3 border-b border-primary/10 px-3 py-2.5 text-left transition hover:bg-[#f6f9fc] ${
+                            selectedIds.length === 0 ? 'bg-primary/[0.04]' : ''
+                        }`}
+                    >
+                        <div className="min-w-0">
+                            <div className="truncate text-[12px] font-black text-primary">Tất cả</div>
+                            <div className="mt-0.5 text-[11px] text-primary/45">Không lọc theo nhà cung cấp</div>
+                        </div>
+                        {selectedIds.length === 0 ? <span className="material-symbols-outlined text-[18px] text-primary">check</span> : null}
+                    </button>
+                    <div className="flex items-center gap-2 border-b border-primary/10 px-3 py-2">
+                        <button type="button" onClick={() => applyNextValue(allSupplierIds)} disabled={!allSupplierIds.length || isAllChecked} className={ghostButton}>Chọn tất cả</button>
+                        <button type="button" onClick={() => applyNextValue([])} disabled={!selectedIds.length} className={ghostButton}>Bỏ chọn tất cả</button>
+                    </div>
+                    <div className="max-h-64 overflow-auto p-1.5">
+                        {!suppliers.length ? <div className="px-2 py-3 text-[12px] text-primary/45">Chưa có nhà cung cấp.</div> : null}
+                        {suppliers.map((supplier) => {
+                            const supplierId = Number(supplier.id);
+                            const isChecked = selectedIds.includes(supplierId);
+
+                            return (
+                                <label key={supplier.id} className="flex cursor-pointer items-start gap-2 rounded-sm px-2 py-2 transition hover:bg-[#f6f9fc]">
+                                    <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => {
+                                            applyNextValue(
+                                                isChecked
+                                                    ? selectedIds.filter((id) => id !== supplierId)
+                                                    : [...selectedIds, supplierId]
+                                            );
+                                        }}
+                                        className={`${checkboxClass} mt-0.5`}
+                                    />
+                                    <div className="min-w-0">
+                                        <div className="truncate text-[12px] font-semibold text-primary">{supplier.name}</div>
+                                        <div className="truncate text-[11px] text-primary/45">{supplier.code || supplier.phone || 'Chưa có mã NCC'}</div>
+                                    </div>
+                                </label>
+                            );
+                        })}
+                    </div>
+                </div>
+            ) : null}
+        </div>
+    );
+};
 
 const StatusPill = ({ label, color = '#94A3B8', subtle = null }) => (
     <span
@@ -2930,7 +3162,10 @@ const InventoryTable = ({
                                     onDragOver={(event) => event.preventDefault()}
                                     onDrop={column.draggable === false ? undefined : (event) => handleHeaderDrop(event, index)}
                                     onDoubleClick={canSortColumn(column) ? () => onSort(column.id) : undefined}
-                                    title={canSortColumn(column) ? 'Double click to sort' : undefined}
+                                    title={[
+                                        column.headerTooltip || '',
+                                        canSortColumn(column) ? 'Double click để sắp xếp' : '',
+                                    ].filter(Boolean).join(' • ') || undefined}
                                     className={`relative border-b border-r border-primary/10 px-3 py-3 text-center text-[12px] font-bold text-primary ${canSortColumn(column) ? 'cursor-pointer select-none' : ''}`}
                                     style={{ width: columnWidths[column.id] || column.minWidth }}
                                 >
@@ -2954,13 +3189,20 @@ const InventoryTable = ({
                                     onDoubleClick={(event) => {
                                         if (!onRowDoubleClick) return;
                                         if (event.target.closest('input, button, textarea, select, label, a')) return;
-                                        onRowDoubleClick(row);
+                                        const cell = event.target.closest('td[data-column-id]');
+                                        onRowDoubleClick(row, cell?.dataset?.columnId || null, event);
                                     }}
                                     className={rowClassName ? rowClassName(row) : 'hover:bg-primary/[0.02]'}
                                 >
                                     {renderedColumns.map((column) => (
-                                        <td key={`${key}_${column.id}`} className={`overflow-hidden border-b border-r border-primary/10 px-3 py-2.5 text-[13px] text-primary ${column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : 'text-left'}`}>
-                                            <div className="min-w-0 overflow-hidden text-ellipsis">{column.id === 'stt' ? pageOffset + rowIndex + 1 : renderCell(row, column.id, rowIndex)}</div>
+                                        <td
+                                            key={`${key}_${column.id}`}
+                                            data-column-id={column.id}
+                                            className={`${column.id === 'supplier_name' ? 'relative overflow-visible z-[20]' : 'overflow-hidden'} border-b border-r border-primary/10 px-3 py-2.5 text-[13px] text-primary ${column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : 'text-left'}`}
+                                        >
+                                            <div className={`min-w-0 ${column.id === 'supplier_name' ? 'overflow-visible' : 'overflow-hidden'} text-ellipsis`}>
+                                                {column.id === 'stt' ? pageOffset + rowIndex + 1 : renderCell(row, column.id, rowIndex)}
+                                            </div>
                                         </td>
                                     ))}
                                 </tr>
@@ -3033,11 +3275,6 @@ const InventoryMovement = () => {
     const [lots, setLots] = useState([]);
     const [trashItems, setTrashItems] = useState([]);
 
-    const isAllSuppliersSelected = selectedSupplierId === ALL_SUPPLIER_CATALOG_VALUE;
-    const hasSupplierCatalogSelection = selectedSupplierId !== null && selectedSupplierId !== '';
-    const hasSpecificSupplierSelection = typeof selectedSupplierId === 'number' && Number.isFinite(selectedSupplierId);
-    const selectedSupplierCatalogApiId = isAllSuppliersSelected ? 0 : (hasSpecificSupplierSelection ? selectedSupplierId : null);
-
     const [productPagination, setProductPagination] = useState(emptyPagination);
     const [supplierPagination, setSupplierPagination] = useState(emptyPagination);
     const [supplierCatalogPagination, setSupplierCatalogPagination] = useState(emptyPagination);
@@ -3076,6 +3313,42 @@ const InventoryMovement = () => {
     const [supplierCatalogFilters, setSupplierCatalogFilters] = useState(defaultSupplierCatalogFilters);
     const [supplierQuickSearch, setSupplierQuickSearch] = useState('');
     const [simpleFilters, setSimpleFilters] = useState(() => createDefaultSimpleFilters());
+
+    const selectedSupplierCatalogFilterIds = useMemo(
+        () => normalizeSupplierFilterIds(supplierCatalogFilters.supplier_ids),
+        [supplierCatalogFilters.supplier_ids]
+    );
+    const selectedSupplierCatalogFilterId = selectedSupplierCatalogFilterIds.length === 1
+        ? selectedSupplierCatalogFilterIds[0]
+        : null;
+    const isAllSuppliersSelected = selectedSupplierCatalogFilterIds.length === 0;
+    const hasMultipleSupplierSelections = selectedSupplierCatalogFilterIds.length > 1;
+    const hasSupplierCatalogSelection = true;
+    const hasSpecificSupplierSelection = selectedSupplierCatalogFilterId != null;
+    const selectedSupplierCatalogApiId = selectedSupplierCatalogFilterId || 0;
+    const currentSupplierCatalog = useMemo(
+        () => (selectedSupplierCatalogFilterId != null
+            ? (suppliers.find((item) => Number(item.id) === Number(selectedSupplierCatalogFilterId)) || null)
+            : null),
+        [selectedSupplierCatalogFilterId, suppliers]
+    );
+    const selectedSupplierCatalogNames = useMemo(() => {
+        const supplierNameMap = new Map(suppliers.map((supplier) => [Number(supplier.id), supplier.name]));
+        return selectedSupplierCatalogFilterIds
+            .map((id) => supplierNameMap.get(Number(id)))
+            .filter(Boolean);
+    }, [selectedSupplierCatalogFilterIds, suppliers]);
+    const selectedSupplierCatalogSummary = useMemo(() => {
+        if (!selectedSupplierCatalogFilterIds.length) return '';
+        if (selectedSupplierCatalogNames.length === selectedSupplierCatalogFilterIds.length) {
+            return summarizeSelectedSupplierNames(selectedSupplierCatalogNames);
+        }
+        return `${selectedSupplierCatalogFilterIds.length} NCC đã chọn`;
+    }, [selectedSupplierCatalogFilterIds, selectedSupplierCatalogNames]);
+    const supplierCatalogSelectionKey = useMemo(
+        () => (selectedSupplierCatalogFilterIds.length ? selectedSupplierCatalogFilterIds.join(',') : ALL_SUPPLIER_CATALOG_VALUE),
+        [selectedSupplierCatalogFilterIds]
+    );
 
     const [expandedGroups, setExpandedGroups] = useState({});
     const [expandedComparisons, setExpandedComparisons] = useState({});
@@ -3209,7 +3482,7 @@ const InventoryMovement = () => {
         source: 'inventorySupplierPrices',
         target: buildInventoryPath('supplierPrices'),
         activeTab: 'supplierPrices',
-        selectedSupplierId,
+        selectedSupplierId: selectedSupplierCatalogFilterId ?? ALL_SUPPLIER_CATALOG_VALUE,
         supplierQuickSearch,
         supplierCatalogFilters,
         supplierCatalogPage: supplierCatalogPagination.current_page || 1,
@@ -4227,11 +4500,14 @@ const InventoryMovement = () => {
         filtersOverride = supplierCatalogFilters,
         searchOverride = supplierQuickSearch
     ) => {
-        if (selectedSupplierCatalogApiId == null) return;
         setFlag('supplierCatalog', true);
         try {
-            const response = await inventoryApi.getSupplierPrices(selectedSupplierCatalogApiId, {
+            const normalizedFilters = {
                 ...filtersOverride,
+                supplier_ids: normalizeSupplierFilterIds(filtersOverride?.supplier_ids),
+            };
+            const response = await inventoryApi.getSupplierPrices(selectedSupplierCatalogApiId, {
+                ...normalizedFilters,
                 search: String(searchOverride || '').trim(),
                 page,
                 per_page: perPage,
@@ -4375,6 +4651,7 @@ const InventoryMovement = () => {
     const clearSupplierCatalogFilter = (key) => {
         const nextFilters = { ...supplierCatalogFilters, [key]: defaultSupplierCatalogFilters[key] ?? '' };
         setSupplierCatalogFilters(nextFilters);
+        if (key === 'supplier_ids') return;
         if (key === 'sku' || key === 'name') {
             supplierCatalogSearchSyncRef.current = {
                 search: supplierQuickSearch,
@@ -4445,6 +4722,12 @@ const InventoryMovement = () => {
 
     const supplierCatalogFilterChips = [
         buildFilterChip('supplier_prices_search', 'Tìm nhanh', supplierQuickSearch, clearSupplierQuickSearchFilter),
+        buildFilterChip(
+            'supplier_prices_suppliers',
+            'Nhà cung cấp',
+            selectedSupplierCatalogSummary,
+            () => clearSupplierCatalogFilter('supplier_ids')
+        ),
         buildFilterChip('supplier_prices_sku', 'Mã SP / Mã NCC', supplierCatalogFilters.sku, () => clearSupplierCatalogFilter('sku')),
         buildFilterChip('supplier_prices_name', 'Tên sản phẩm', supplierCatalogFilters.name, () => clearSupplierCatalogFilter('name')),
         buildFilterChip('supplier_prices_category', 'Danh mục', supplierCatalogFilters.category_id ? getCategoryNameById(supplierCatalogFilters.category_id) : '', () => clearSupplierCatalogFilter('category_id')),
@@ -4550,18 +4833,19 @@ const InventoryMovement = () => {
         restoredSupplierContextRef.current = true;
         skipSupplierSearchResetRef.current = true;
         goToTab(returnContext.activeTab || 'supplierPrices');
-        if (returnContext.selectedSupplierId !== undefined && returnContext.selectedSupplierId !== null) {
-            const restoredSupplierId = String(returnContext.selectedSupplierId);
-            setSelectedSupplierId(
-                restoredSupplierId === ALL_SUPPLIER_CATALOG_VALUE
-                    ? ALL_SUPPLIER_CATALOG_VALUE
-                    : Number(returnContext.selectedSupplierId)
-            );
-        }
         setSupplierQuickSearch(returnContext.supplierQuickSearch || '');
         setSupplierCatalogFilters((prev) => ({
             ...prev,
             ...(returnContext.supplierCatalogFilters || {}),
+            supplier_ids: normalizeSupplierFilterIds(
+                returnContext.supplierCatalogFilters?.supplier_ids
+                    ?? (
+                        returnContext.selectedSupplierId
+                        && returnContext.selectedSupplierId !== ALL_SUPPLIER_CATALOG_VALUE
+                            ? [returnContext.selectedSupplierId]
+                            : []
+                    )
+            ),
         }));
         if (returnContext.supplierPanels) {
             setOpenPanels((prev) => ({
@@ -4617,13 +4901,8 @@ const InventoryMovement = () => {
 
     useEffect(() => {
         if (activeTab !== 'supplierPrices') return;
-        if (hasSupplierCatalogSelection) {
-            fetchSupplierCatalog(supplierCatalogPagination.current_page || 1);
-        } else {
-            setSupplierCatalog([]);
-            setSupplierCatalogPagination(emptyPagination);
-        }
-    }, [activeTab, hasSupplierCatalogSelection, selectedSupplierId]);
+        fetchSupplierCatalog(supplierCatalogPagination.current_page || 1);
+    }, [activeTab, supplierCatalogSelectionKey]);
 
     useEffect(() => {
         if (!importModal.open) return;
@@ -4671,7 +4950,7 @@ const InventoryMovement = () => {
         setBulkPrice('');
         setBulkNote('');
         setPasteText('');
-    }, [selectedSupplierId]);
+    }, [supplierCatalogSelectionKey]);
 
     useEffect(() => {
         if (activeTab !== 'suppliers') return undefined;
@@ -4741,7 +5020,7 @@ const InventoryMovement = () => {
             fetchSupplierCatalog(1);
         }, 250);
         return () => clearTimeout(timer);
-    }, [activeTab, hasSupplierCatalogSelection, selectedSupplierId, supplierQuickSearch, supplierCatalogFilters.sku, supplierCatalogFilters.name]);
+    }, [activeTab, hasSupplierCatalogSelection, supplierQuickSearch, supplierCatalogFilters.sku, supplierCatalogFilters.name]);
 
     const ensureSuppliersLoaded = async () => {
         if (suppliers.length > 0) {
@@ -4752,18 +5031,25 @@ const InventoryMovement = () => {
     };
 
     const currentSupplier = useMemo(
-        () => (hasSpecificSupplierSelection ? (suppliers.find((item) => item.id === selectedSupplierId) || null) : null),
-        [hasSpecificSupplierSelection, selectedSupplierId, suppliers]
+        () => (typeof selectedSupplierId === 'number' && Number.isFinite(selectedSupplierId)
+            ? (suppliers.find((item) => Number(item.id) === Number(selectedSupplierId)) || null)
+            : null),
+        [selectedSupplierId, suppliers]
     );
-    const supplierCatalogScopeLabel = currentSupplier?.name || (isAllSuppliersSelected ? 'Tất cả' : 'Chưa chọn');
-    const supplierCatalogTitle = currentSupplier
-        ? `Giá nhập - ${currentSupplier.name}`
-        : (isAllSuppliersSelected ? 'Giá nhập - Tất cả nhà cung cấp' : 'Giá nhập từng nhà');
-    const supplierCatalogDescription = currentSupplier
+    const supplierCatalogScopeLabel = currentSupplierCatalog?.name
+        || (hasSpecificSupplierSelection
+            ? (selectedSupplierCatalogSummary || '1 NCC đã chọn')
+            : (hasMultipleSupplierSelections ? selectedSupplierCatalogSummary : 'Tất cả'));
+    const supplierCatalogTitle = hasSpecificSupplierSelection
+        ? `Giá nhập - ${currentSupplierCatalog?.name || '1 nhà cung cấp'}`
+        : (hasMultipleSupplierSelections
+            ? `Giá nhập - ${selectedSupplierCatalogFilterIds.length} nhà cung cấp`
+            : 'Giá nhập từng nhà');
+    const supplierCatalogDescription = hasSpecificSupplierSelection
         ? 'Mỗi nhà cung cấp có một bảng giá nhập riêng. Khi tạo phiếu nhập, giá sẽ tự đổ từ bảng này và vẫn có thể sửa tay.'
         : (isAllSuppliersSelected
             ? 'Đang hiển thị toàn bộ sản phẩm, không lọc theo nhà cung cấp.'
-            : 'Chọn nhà cung cấp trong mục Nhà cung cấp hoặc đổi nhanh ngay tại đây để mở thư viện giá nhập.');
+            : 'Đang lọc theo nhiều nhà cung cấp theo logic OR. Muốn chỉnh giá hoặc mã NCC, hãy lọc đúng 1 nhà cung cấp.');
 
     const supplierCatalogItemRows = useMemo(() => {
         const rows = [];
@@ -4993,10 +5279,10 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         return Math.max(Number(row.supplier_count || 0), comparisonSupplierIds.length);
     };
     const upsertSupplierComparison = (row, unitCost, updatedAt) => {
-        const supplier = suppliers.find((item) => item.id === selectedSupplierId);
+        const supplier = currentSupplierCatalog;
         const existingComparisons = row.supplier_price_comparisons || [];
         const nextComparisons = sortSupplierComparisons([
-            ...existingComparisons.filter((item) => Number(item.supplier_id) !== Number(selectedSupplierId)),
+            ...existingComparisons.filter((item) => Number(item.supplier_id) !== Number(selectedSupplierCatalogApiId)),
             supplier ? {
                 supplier_id: supplier.id,
                 supplier_name: supplier.name,
@@ -5012,8 +5298,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             has_multiple_suppliers: Math.max(Number(row.supplier_count || 0), nextComparisons.length, row.supplier_ids?.length || 0) > 1,
         };
     };
-    const openSupplierCatalogProductEditor = (row) => {
-        if (!row || row.row_kind === 'comparison') return;
+    const openSupplierCatalogProductEditor = (row, columnId) => {
+        if (!row || row.row_kind === 'comparison' || columnId !== 'sku') return;
         navigate(`/admin/products/edit/${row.product_id || row.id}`, {
             state: {
                 returnContext: buildSupplierPriceReturnContext(),
@@ -5062,7 +5348,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         if (!hasSpecificSupplierSelection || !ids.length || !cleaned) return false;
         try {
             const numericValue = Number(cleaned);
-            await inventoryApi.bulkSupplierPrices(selectedSupplierId, {
+            await inventoryApi.bulkSupplierPrices(selectedSupplierCatalogApiId, {
                 items: supplierCatalogItemRows.filter((row) => ids.includes(row.id)).map((row) => ({
                     product_id: row.product_id,
                     supplier_product_code: String(codeDrafts[row.id] ?? row.supplier_product_code ?? '').trim() || null,
@@ -5192,7 +5478,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 unit_cost: numericValue,
                 notes: row.notes || null,
             };
-            const response = await inventoryApi.createSupplierPrice(selectedSupplierId, payload);
+            const response = await inventoryApi.createSupplierPrice(selectedSupplierCatalogApiId, payload);
             const responseData = response.data || {};
             const nextCodeDraft = String(responseData.supplier_product_code ?? supplierProductCode).trim();
             const nextPriceDraft = normalizeRoundedImportCostDraft(responseData.unit_cost ?? numericValue);
@@ -5241,7 +5527,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         if (!hasSpecificSupplierSelection || !selectedIds.length) return showToast({ type: 'warning', message: 'Hãy chọn ít nhất một dòng giá.' });
         setFlag('saving', true);
         try {
-            await inventoryApi.bulkSupplierPrices(selectedSupplierId, {
+            await inventoryApi.bulkSupplierPrices(selectedSupplierCatalogApiId, {
                 items: supplierCatalogItemRows.filter((row) => selectedIds.includes(row.id)).map((row) => ({
                     product_id: row.product_id,
                     supplier_product_code: String(codeDrafts[row.id] ?? row.supplier_product_code ?? '').trim() || null,
@@ -5337,6 +5623,12 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             showToast({ type: 'success', message: 'Đã xóa nhà cung cấp.' });
             fetchSuppliers(supplierPagination.current_page || 1);
             if (selectedSupplierId === supplier.id) setSelectedSupplierId(null);
+            if (selectedSupplierCatalogFilterIds.includes(Number(supplier.id))) {
+                setSupplierCatalogFilters((prev) => ({
+                    ...prev,
+                    supplier_ids: normalizeSupplierFilterIds(prev.supplier_ids).filter((id) => id !== Number(supplier.id)),
+                }));
+            }
         } catch (error) {
             fail(error, 'Không thể xóa nhà cung cấp.');
         }
@@ -5355,7 +5647,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
 
         setFlag('supplierPriceModal', true);
         try {
-            await inventoryApi.createSupplierPrice(selectedSupplierId, {
+            await inventoryApi.createSupplierPrice(selectedSupplierCatalogApiId, {
                 product_id: Number(form.product_id),
                 supplier_product_code: String(form.supplier_product_code || '').trim() || null,
                 unit_cost: normalizeRoundedImportCostNumber(form.unit_cost) ?? 0,
@@ -5376,7 +5668,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         if (!row.supplier_price_id) return showToast({ type: 'warning', message: 'Dòng này chưa có giá nhập để xóa.' });
         if (!window.confirm(`Xóa giá nhập của "${row.name}"?`)) return;
         try {
-            await inventoryApi.deleteSupplierPrice(selectedSupplierId, row.supplier_price_id);
+            await inventoryApi.deleteSupplierPrice(selectedSupplierCatalogApiId, row.supplier_price_id);
             showToast({ type: 'success', message: 'Đã xóa dòng giá nhập.' });
             await fetchSupplierCatalog(supplierCatalogPagination.current_page || 1, pageSizes.supplierPrices);
         } catch (error) {
@@ -5385,7 +5677,10 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     };
 
     const openSupplierPriceTab = (supplierId = selectedSupplierId) => {
-        if (supplierId) setSelectedSupplierId(supplierId);
+        if (supplierId) {
+            setSelectedSupplierId(Number(supplierId));
+            setSupplierCatalogFilters((prev) => ({ ...prev, supplier_ids: [Number(supplierId)] }));
+        }
         goToTab('supplierPrices');
     };
 
@@ -6088,6 +6383,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
 
     const productSummaryItems = useMemo(() => !productSummary ? [] : [
         { label: 'Tổng số lượng tồn kho', value: formatNumber(productSummary.total_stock ?? productSummary.total_sellable_stock) },
+        { label: 'SL chờ xuất', value: formatNumber(productSummary.total_pending_export || 0) },
+        { label: 'Tồn thực tế', value: formatNumber(productSummary.total_actual_stock ?? productSummary.total_sellable_stock ?? 0) },
         { label: 'Tổng giá trị tồn kho', value: formatCurrency(productSummary.total_inventory_value || 0) },
         { label: 'Tổng mã', value: formatNumber(productSummary.total_products) },
         { label: 'Tổng nhập', value: formatNumber(productSummary.total_imported) },
@@ -6122,9 +6419,9 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             { label: 'Đã có giá dự kiến', value: formatNumber(pricedRows.length) },
             { label: 'Chưa có giá', value: formatNumber(Math.max(itemRows.length - pricedRows.length, 0)) },
             { label: 'Đang chọn sửa nhanh', value: formatNumber(selectedIds.length) },
-            { label: 'Tổng tiền nhập', value: currentSupplier ? formatCurrency(currentSupplier.imported_amount_total || 0) : '-' },
+            { label: 'Tổng tiền nhập', value: currentSupplierCatalog ? formatCurrency(currentSupplierCatalog.imported_amount_total || 0) : '-' },
         ];
-    }, [currentSupplier, priceDrafts, selectedIds.length, supplierCatalogScopeLabel, supplierRows]);
+    }, [currentSupplierCatalog, priceDrafts, selectedIds.length, supplierCatalogScopeLabel, supplierRows]);
 
     const simpleSummaryMap = useMemo(() => {
         const trashCounts = trashItems.reduce((result, row) => {
@@ -6239,11 +6536,22 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         if (columnId === 'expected_cost') return row.expected_cost != null ? formatImportCost(row.expected_cost) : '-';
         if (columnId === 'current_cost') return row.current_cost != null ? formatImportCost(row.current_cost) : '-';
         if (columnId === 'computed_stock') {
-            const stockMeta = getProductStockAlertMeta(row);
+            return <span className="text-[14px] font-black text-primary">{formatNumber(row.computed_stock || 0)}</span>;
+        }
+        if (columnId === 'pending_export_quantity') {
+            const waitingQuantity = Number(row.pending_export_quantity || 0);
+            return (
+                <span className={`text-[14px] font-black ${waitingQuantity > 0 ? 'text-amber-600' : 'text-primary/45'}`}>
+                    {formatNumber(waitingQuantity)}
+                </span>
+            );
+        }
+        if (columnId === 'actual_stock') {
+            const stockMeta = getActualStockCellMeta(row);
             return (
                 <div className="flex flex-col items-end gap-0.5">
-                    <span className={`text-[14px] font-black ${stockMeta.textClass}`}>{formatNumber(row.computed_stock || 0)}</span>
-                    <span className="text-[11px] text-primary/45">{stockMeta.label}</span>
+                    <span className={`text-[14px] font-black ${stockMeta.textClass}`}>{formatNumber(row.actual_stock || 0)}</span>
+                    <span className={`text-[11px] ${stockMeta.key === 'available' ? 'text-primary/45' : 'text-rose-600'}`}>{stockMeta.label}</span>
                 </div>
             );
         }
@@ -6299,7 +6607,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 );
             }
             if (columnId === 'supplier_name') {
-                return <CellText primary={buildSupplierCatalogDisplayName({ ...row, supplier_price_comparisons: row.comparison_items })} />;
+                return <SupplierNameListCell names={buildSupplierCatalogDisplayNames({ ...row, supplier_price_comparisons: row.comparison_items }, [], selectedSupplierCatalogFilterIds)} />;
             }
             if (columnId === 'actions') {
                 return (
@@ -6371,7 +6679,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 return effectiveCurrentCost != null ? formatImportCost(effectiveCurrentCost) : '-';
             }
             if (columnId === 'supplier_name') {
-                return <CellText primary={buildSupplierCatalogDisplayName(row, currentSupplier?.name)} />;
+                return <SupplierNameListCell names={buildSupplierCatalogDisplayNames(row, [], selectedSupplierCatalogFilterIds)} />;
             }
             return '-';
         }
@@ -6449,7 +6757,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 return effectiveCurrentCost != null ? formatImportCost(effectiveCurrentCost) : '-';
         }
         if (columnId === 'supplier_name') {
-            return <CellText primary={buildSupplierCatalogDisplayName(row, currentSupplier?.name)} />;
+            return <SupplierNameListCell names={buildSupplierCatalogDisplayNames(row, [], selectedSupplierCatalogFilterIds)} />;
         }
         if (columnId === 'unit_cost') return (
             <div className="flex items-center gap-2">
@@ -7027,23 +7335,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 onClearAllFilters={supplierCatalogFilterChips.length ? clearAllSupplierCatalogFilters : null}
                 actions={
                     <>
-                        <select
-                            value={selectedSupplierId == null ? '' : String(selectedSupplierId)}
-                            onChange={(event) => {
-                                const nextValue = event.target.value;
-                                setSelectedSupplierId(
-                                    nextValue === ''
-                                        ? null
-                                        : (nextValue === ALL_SUPPLIER_CATALOG_VALUE ? ALL_SUPPLIER_CATALOG_VALUE : Number(nextValue))
-                                );
-                            }}
-                            disabled={loading.suppliers && suppliers.length === 0}
-                            className={`w-[220px] ${selectClass}`}
-                        >
-                            <option value="">{loading.suppliers ? 'Đang tải nhà cung cấp' : 'Chọn nhà cung cấp'}</option>
-                            <option value={ALL_SUPPLIER_CATALOG_VALUE}>Tất cả</option>
-                            {suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
-                        </select>
                         <div className="relative w-[220px] min-w-[220px]">
                             <span className="material-symbols-outlined pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">search</span>
                             <input
@@ -7072,6 +7363,13 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             />
             {openPanels.supplierPrices.filters ? (
                 <FilterPanel actions={<button type="button" onClick={() => fetchSupplierCatalog(1)} className={primaryButton}>Lọc</button>}>
+                    <SupplierMultiSelectFilter
+                        suppliers={suppliers}
+                        value={supplierCatalogFilters.supplier_ids}
+                        onChange={(nextSupplierIds) => setSupplierCatalogFilters((prev) => ({ ...prev, supplier_ids: nextSupplierIds }))}
+                        disabled={loading.suppliers && suppliers.length === 0}
+                        placeholder={loading.suppliers && suppliers.length === 0 ? 'Đang tải nhà cung cấp' : 'Tất cả'}
+                    />
                     <input value={supplierCatalogFilters.sku} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, sku: event.target.value }))} placeholder="Lọc theo mã SP / mã NCC" className={`w-[170px] ${inputClass}`} />
                     <input value={supplierCatalogFilters.name} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, name: event.target.value }))} placeholder="Lọc theo tên sản phẩm" className={`w-[180px] ${inputClass}`} />
                     <select value={supplierCatalogFilters.category_id} onChange={(event) => setSupplierCatalogFilters((prev) => ({ ...prev, category_id: event.target.value }))} className={`w-[160px] ${selectClass}`}><option value="">Tất cả danh mục</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>

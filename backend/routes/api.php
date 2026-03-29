@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\FinanceCashbookController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\FinanceController;
@@ -26,14 +27,13 @@ Route::get('/products', [ProductController::class , 'index']);
 Route::get('/products/{id}', [ProductController::class , 'show'])->where('id', '[0-9]+');
 
 Route::get('/categories', [CategoryController::class , 'index']);
-Route::get('/categories/{id}', [CategoryController::class , 'show']);
+Route::get('/categories/{id}', [CategoryController::class , 'show'])->whereNumber('id');
 
 Route::get('/product-groups', [ProductGroupController::class , 'index']);
 Route::get('/product-groups/{id}', [ProductGroupController::class , 'show']);
 
 Route::get('/blog', [\App\Http\Controllers\Api\BlogController::class , 'index']);
 Route::get('/blog/categories', [\App\Http\Controllers\Api\BlogController::class , 'categories']);
-Route::get('/blog/import/template', [\App\Http\Controllers\Api\BlogController::class , 'downloadImportTemplate']);
 Route::get('/blog/{id}', [\App\Http\Controllers\Api\BlogController::class , 'show']);
 
 // Public account resolution by site_code (for frontend)
@@ -81,12 +81,15 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Admin Category routes
     Route::post('/categories', [CategoryController::class , 'store']);
+    Route::get('/categories/export', [CategoryController::class , 'exportExcel']);
+    Route::get('/categories/import/template', [CategoryController::class , 'downloadImportTemplate']);
+    Route::post('/categories/import', [CategoryController::class , 'importExcel']);
     Route::post('/categories/reorder', [CategoryController::class , 'reorder']);
     Route::post('/categories/bulk-layout', [CategoryController::class , 'bulkUpdateLayout']);
     Route::get('/categories/{id}/products', [CategoryController::class , 'products'])->whereNumber('id');
     Route::post('/categories/{id}/products/reorder', [CategoryController::class , 'reorderProducts'])->whereNumber('id');
-    Route::post('/categories/{id}', [CategoryController::class , 'update']);
-    Route::delete('/categories/{id}', [CategoryController::class , 'destroy']);
+    Route::post('/categories/{id}', [CategoryController::class , 'update'])->whereNumber('id');
+    Route::delete('/categories/{id}', [CategoryController::class , 'destroy'])->whereNumber('id');
 
     // Admin Attribute routes
     Route::get('/attributes', [\App\Http\Controllers\AttributeController::class , 'index']); // Move here or public? Admin is fine
@@ -272,6 +275,14 @@ Route::middleware('auth:sanctum')->group(function () {
     // Finance
     Route::get('/finance/dashboard', [FinanceController::class, 'dashboard']);
     Route::get('/finance/options', [FinanceController::class, 'options']);
+    Route::get('/finance/cashbook', [FinanceCashbookController::class, 'index']);
+    Route::post('/finance/cashbook/entries', [FinanceCashbookController::class, 'storeEntry']);
+    Route::put('/finance/cashbook/entries/{kind}/{id}', [FinanceCashbookController::class, 'updateEntry'])
+        ->where('kind', 'transaction|transfer')
+        ->whereNumber('id');
+    Route::delete('/finance/cashbook/entries/{kind}/{id}', [FinanceCashbookController::class, 'destroyEntry'])
+        ->where('kind', 'transaction|transfer')
+        ->whereNumber('id');
     Route::get('/finance/receipts/bootstrap', [FinanceReceiptController::class, 'bootstrap']);
     Route::get('/finance/receipts/summary', [FinanceReceiptController::class, 'summary']);
     Route::get('/finance/receipts', [FinanceReceiptController::class, 'index']);
@@ -292,6 +303,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/finance/wallets', [FinanceController::class, 'wallets']);
     Route::post('/finance/wallets', [FinanceController::class, 'storeWallet']);
     Route::put('/finance/wallets/{id}', [FinanceController::class, 'updateWallet'])->whereNumber('id');
+    Route::delete('/finance/wallets/{id}', [FinanceController::class, 'destroyWallet'])->whereNumber('id');
     Route::post('/finance/wallets/{id}/adjust', [FinanceController::class, 'adjustWallet'])->whereNumber('id');
     Route::get('/finance/wallets/{id}/ledger', [FinanceController::class, 'walletLedger'])->whereNumber('id');
     Route::get('/finance/transfers', [FinanceController::class, 'transfers']);
@@ -366,11 +378,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/blog/categories/{id}', [\App\Http\Controllers\Api\BlogController::class , 'updateCategory']);
         Route::delete('/blog/categories/{id}', [\App\Http\Controllers\Api\BlogController::class , 'destroyCategory']);
         Route::post('/blog/categories/reorder', [\App\Http\Controllers\Api\BlogController::class , 'reorderCategories']);
-        Route::post('/blog', [\App\Http\Controllers\Api\BlogController::class , 'store']);
-        Route::post('/blog/reorder', [\App\Http\Controllers\Api\BlogController::class , 'reorder']);
-        Route::post('/blog/import-word', [\App\Http\Controllers\Api\BlogController::class , 'importWord']);
-        Route::put('/blog/{id}', [\App\Http\Controllers\Api\BlogController::class , 'update']);
-        Route::delete('/blog/{id}', [\App\Http\Controllers\Api\BlogController::class , 'destroy']);
+    Route::post('/blog', [\App\Http\Controllers\Api\BlogController::class , 'store']);
+    Route::post('/blog/reorder', [\App\Http\Controllers\Api\BlogController::class , 'reorder']);
+    Route::post('/blog/export-bundle', [\App\Http\Controllers\Api\BlogController::class , 'exportBundle']);
+    Route::post('/blog/import-bundle', [\App\Http\Controllers\Api\BlogController::class , 'importBundle']);
+    Route::put('/blog/{id}', [\App\Http\Controllers\Api\BlogController::class , 'update']);
+    Route::delete('/blog/{id}', [\App\Http\Controllers\Api\BlogController::class , 'destroy']);
 
         // CMS (Banners & Settings)
         Route::post('/banners', [\App\Http\Controllers\Api\BannerController::class , 'store']);

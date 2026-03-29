@@ -432,6 +432,68 @@ class FinanceService
         });
     }
 
+    public function deleteWallet(FinanceWallet $wallet, ?int $userId = null): void
+    {
+        $hasTransactions = FinanceTransaction::withTrashed()
+            ->where('account_id', $wallet->account_id)
+            ->where('wallet_id', $wallet->id)
+            ->exists();
+
+        $hasTransfers = FinanceTransfer::withTrashed()
+            ->where('account_id', $wallet->account_id)
+            ->where(function (Builder $query) use ($wallet) {
+                $query
+                    ->where('from_wallet_id', $wallet->id)
+                    ->orWhere('to_wallet_id', $wallet->id);
+            })
+            ->exists();
+
+        $hasLoans = FinanceLoan::withTrashed()
+            ->where('account_id', $wallet->account_id)
+            ->where('disbursed_wallet_id', $wallet->id)
+            ->exists();
+
+        $hasFixedExpenses = FinanceFixedExpense::withTrashed()
+            ->where('account_id', $wallet->account_id)
+            ->where('default_wallet_id', $wallet->id)
+            ->exists();
+
+        if ($hasTransactions || $hasTransfers || $hasLoans || $hasFixedExpenses) {
+            throw new InvalidArgumentException('TÃ i khoáº£n Ä‘Ã£ phÃ¡t sinh giao dá»‹ch hoáº·c liÃªn káº¿t, hÃ£y táº¯t hoáº¡t Ä‘á»™ng thay vÃ¬ xÃ³a.');
+        }
+
+        DB::transaction(function () use ($wallet, $userId) {
+            $before = $wallet->getAttributes();
+
+            $wallet->delete();
+
+            if ($wallet->is_default) {
+                $replacement = FinanceWallet::query()
+                    ->where('account_id', $wallet->account_id)
+                    ->where('type', $wallet->type)
+                    ->where('is_active', true)
+                    ->where('id', '!=', $wallet->id)
+                    ->orderBy('sort_order')
+                    ->orderBy('name')
+                    ->first();
+
+                if ($replacement) {
+                    $replacement->is_default = true;
+                    $replacement->saveQuietly();
+                }
+            }
+
+            $this->logChange(
+                (int) $wallet->account_id,
+                $wallet,
+                'deleted',
+                $before,
+                null,
+                $userId ?? auth()->id()
+            );
+        });
+    }
+
     public function adjustWallet(FinanceWallet $wallet, array $data): FinanceTransaction
     {
         $direction = (float) $data['amount'] >= 0 ? 'in' : 'out';
@@ -461,7 +523,7 @@ class FinanceService
         );
     }
 
-    public function storeTransfer(int $accountId, array $data): FinanceTransfer
+    public function storeTransfer(int $accountId, array $data, ?FinanceTransfer $transfer = null): FinanceTransfer
     {
         $this->ensureDefaults($accountId);
 
@@ -469,15 +531,17 @@ class FinanceService
             throw new InvalidArgumentException('Tài khoản chuyển và nhận không được trùng nhau.');
         }
 
-        return DB::transaction(function () use ($accountId, $data) {
-            $transfer = new FinanceTransfer();
+        return DB::transaction(function () use ($accountId, $data, $transfer) {
+            $isNew = !$transfer;
+            $transfer ??= new FinanceTransfer();
+            $before = $transfer->exists ? $transfer->getOriginal() : null;
             $transfer->fill([
                 'account_id' => $accountId,
                 'from_wallet_id' => $data['from_wallet_id'],
                 'to_wallet_id' => $data['to_wallet_id'],
-                'created_by' => $data['user_id'] ?? auth()->id(),
+                'created_by' => $transfer->created_by ?: ($data['user_id'] ?? auth()->id()),
                 'updated_by' => $data['user_id'] ?? auth()->id(),
-                'code' => $this->nextCode(FinanceTransfer::class, 'TR', $accountId),
+                'code' => $transfer->code ?: $this->nextCode(FinanceTransfer::class, 'TR', $accountId),
                 'status' => $data['status'] ?? 'confirmed',
                 'transfer_date' => $data['transfer_date'] ?? now(),
                 'amount' => round((float) $data['amount'], 2),
@@ -485,6 +549,11 @@ class FinanceService
                 'note' => $data['note'] ?? null,
             ]);
             $transfer->save();
+
+            $fromWallet = FinanceWallet::query()->find($transfer->from_wallet_id);
+            $toWallet = FinanceWallet::query()->find($transfer->to_wallet_id);
+            $existingOutgoing = $transfer->outgoingTransaction()->withTrashed()->first();
+            $existingIncoming = $transfer->incomingTransaction()->withTrashed()->first();
 
             $outgoing = $this->storeTransaction($accountId, [
                 'wallet_id' => $transfer->from_wallet_id,
@@ -495,7 +564,7 @@ class FinanceService
                 'transaction_date' => $transfer->transfer_date,
                 'amount' => $transfer->amount,
                 'counterparty_type' => 'wallet',
-                'counterparty_name' => $transfer->toWallet?->name,
+                'counterparty_name' => $toWallet?->name,
                 'reference_type' => 'transfer',
                 'reference_id' => $transfer->id,
                 'content' => $transfer->content,
@@ -507,7 +576,7 @@ class FinanceService
                     'pair' => 'outgoing',
                 ],
                 'user_id' => $data['user_id'] ?? auth()->id(),
-            ]);
+            ], null, $existingOutgoing);
 
             $incoming = $this->storeTransaction($accountId, [
                 'wallet_id' => $transfer->to_wallet_id,
@@ -518,7 +587,7 @@ class FinanceService
                 'transaction_date' => $transfer->transfer_date,
                 'amount' => $transfer->amount,
                 'counterparty_type' => 'wallet',
-                'counterparty_name' => $transfer->fromWallet?->name,
+                'counterparty_name' => $fromWallet?->name,
                 'reference_type' => 'transfer',
                 'reference_id' => $transfer->id,
                 'content' => $transfer->content,
@@ -530,27 +599,27 @@ class FinanceService
                     'pair' => 'incoming',
                 ],
                 'user_id' => $data['user_id'] ?? auth()->id(),
-            ]);
+            ], null, $existingIncoming);
 
             $outgoing->related_transaction_id = $incoming->id;
-            $outgoing->save();
+            $outgoing->saveQuietly();
             $incoming->related_transaction_id = $outgoing->id;
-            $incoming->save();
+            $incoming->saveQuietly();
 
             $transfer->outgoing_transaction_id = $outgoing->id;
             $transfer->incoming_transaction_id = $incoming->id;
-            $transfer->save();
+            $transfer->saveQuietly();
 
             $this->logChange(
                 $accountId,
                 $transfer,
-                'created',
-                null,
+                $isNew ? 'created' : 'updated',
+                $before,
                 $transfer->fresh()->getAttributes(),
                 $data['user_id'] ?? auth()->id()
             );
 
-            return $transfer->fresh(['fromWallet', 'toWallet', 'outgoingTransaction', 'incomingTransaction']);
+            return $transfer->fresh(['fromWallet', 'toWallet', 'outgoingTransaction', 'incomingTransaction', 'creator', 'updater']);
         });
     }
 
@@ -1554,6 +1623,10 @@ class FinanceService
             'to_wallet_name' => $transfer->toWallet?->name,
             'outgoing_transaction_id' => $transfer->outgoing_transaction_id,
             'incoming_transaction_id' => $transfer->incoming_transaction_id,
+            'created_by' => $transfer->created_by,
+            'created_by_name' => $transfer->creator?->name,
+            'updated_by' => $transfer->updated_by,
+            'deleted_at' => optional($transfer->deleted_at)->toIso8601String(),
         ];
     }
 

@@ -221,6 +221,8 @@ class InventoryController extends Controller
             'cost_price',
             'display_cost',
             'computed_stock',
+            'pending_export_quantity',
+            'actual_stock',
             'inventory_value',
             'total_imported',
             'total_exported',
@@ -518,6 +520,9 @@ class InventoryController extends Controller
     {
         $isAllSuppliers = $id === 0;
         $supplier = $isAllSuppliers ? null : Supplier::query()->findOrFail($id);
+        $selectedSupplierIds = $isAllSuppliers
+            ? $this->normalizedSupplierIdsFromRequest($request)
+            : [$supplier->id];
 
         $query = Product::query()
             ->select([
@@ -541,12 +546,15 @@ class InventoryController extends Controller
                 'category:id,name',
                 'unit:id,name',
                 'suppliers:id,name,code',
-                'supplierPrices' => function ($builder) {
+                'supplierPrices' => function ($builder) use ($selectedSupplierIds) {
                     $builder
                         ->select(['id', 'supplier_id', 'product_id', 'supplier_product_code', 'unit_cost', 'updated_at'])
+                        ->when(!empty($selectedSupplierIds), function ($priceQuery) use ($selectedSupplierIds) {
+                            $priceQuery->whereIn('supplier_id', $selectedSupplierIds);
+                        })
                         ->with(['supplier:id,name,code']);
                 },
-                'variations' => function ($builder) use ($isAllSuppliers, $supplier) {
+                'variations' => function ($builder) use ($selectedSupplierIds) {
                     $builder
                         ->select([
                             'products.id',
@@ -565,9 +573,9 @@ class InventoryController extends Controller
                             'products.created_at',
                             'products.deleted_at',
                         ])
-                        ->when(!$isAllSuppliers, function ($variationBuilder) use ($supplier) {
-                            $variationBuilder->where(function ($variationQuery) use ($supplier) {
-                                $this->applySupplierMembershipFilter($variationQuery, $supplier->id);
+                        ->when(!empty($selectedSupplierIds), function ($variationBuilder) use ($selectedSupplierIds) {
+                            $variationBuilder->where(function ($variationQuery) use ($selectedSupplierIds) {
+                                $this->applySupplierMembershipFilterByIds($variationQuery, $selectedSupplierIds);
                             });
                         })
                         ->with([
@@ -575,9 +583,12 @@ class InventoryController extends Controller
                             'unit:id,name',
                             'parentConfigurable:id,name,sku',
                             'suppliers:id,name,code',
-                            'supplierPrices' => function ($priceBuilder) {
+                            'supplierPrices' => function ($priceBuilder) use ($selectedSupplierIds) {
                                 $priceBuilder
                                     ->select(['id', 'supplier_id', 'product_id', 'supplier_product_code', 'unit_cost', 'updated_at'])
+                                    ->when(!empty($selectedSupplierIds), function ($builder) use ($selectedSupplierIds) {
+                                        $builder->whereIn('supplier_id', $selectedSupplierIds);
+                                    })
                                     ->with(['supplier:id,name,code']);
                             },
                         ])
@@ -588,6 +599,9 @@ class InventoryController extends Controller
         if ($isAllSuppliers) {
             $latestSupplierPriceRows = SupplierProductPrice::withoutGlobalScopes()
                 ->selectRaw('MAX(id) as id, product_id')
+                ->when(!empty($selectedSupplierIds), function ($builder) use ($selectedSupplierIds) {
+                    $builder->whereIn('supplier_id', $selectedSupplierIds);
+                })
                 ->groupBy('product_id');
 
             $query
@@ -595,6 +609,15 @@ class InventoryController extends Controller
                     $join->on('latest_supplier_price_rows.product_id', '=', 'products.id');
                 })
                 ->leftJoin('supplier_product_prices as supplier_price_rows', 'supplier_price_rows.id', '=', 'latest_supplier_price_rows.id');
+
+            if (!empty($selectedSupplierIds)) {
+                $query->where(function ($builder) use ($selectedSupplierIds) {
+                    $this->applySupplierMembershipFilterByIds($builder, $selectedSupplierIds);
+                    $builder->orWhereHas('variations', function ($variationQuery) use ($selectedSupplierIds) {
+                        $this->applySupplierMembershipFilterByIds($variationQuery, $selectedSupplierIds);
+                    });
+                });
+            }
         } else {
             $query
                 ->leftJoin('supplier_product_prices as supplier_price_rows', function ($join) use ($supplier) {
@@ -614,14 +637,14 @@ class InventoryController extends Controller
 
         if ($request->filled('search')) {
             $search = trim((string) $request->input('search'));
-            $query->where(function ($productQuery) use ($search, $isAllSuppliers, $supplier) {
+            $query->where(function ($productQuery) use ($search, $selectedSupplierIds) {
                 $productQuery
                     ->where('products.sku', 'like', '%' . $search . '%')
                     ->orWhere('products.name', 'like', '%' . $search . '%')
                     ->orWhere('supplier_price_rows.supplier_product_code', 'like', '%' . $search . '%')
-                    ->orWhereHas('supplierPrices', function ($priceQuery) use ($search, $isAllSuppliers, $supplier) {
-                        if (!$isAllSuppliers && $supplier) {
-                            $priceQuery->where('supplier_id', $supplier->id);
+                    ->orWhereHas('supplierPrices', function ($priceQuery) use ($search, $selectedSupplierIds) {
+                        if (!empty($selectedSupplierIds)) {
+                            $priceQuery->whereIn('supplier_id', $selectedSupplierIds);
                         }
 
                         $priceQuery->where('supplier_product_code', 'like', '%' . $search . '%');
@@ -631,9 +654,9 @@ class InventoryController extends Controller
                             ->where('products.sku', 'like', '%' . $search . '%')
                             ->orWhere('products.name', 'like', '%' . $search . '%');
                     })
-                    ->orWhereHas('variations.supplierPrices', function ($priceQuery) use ($search, $isAllSuppliers, $supplier) {
-                        if (!$isAllSuppliers && $supplier) {
-                            $priceQuery->where('supplier_id', $supplier->id);
+                    ->orWhereHas('variations.supplierPrices', function ($priceQuery) use ($search, $selectedSupplierIds) {
+                        if (!empty($selectedSupplierIds)) {
+                            $priceQuery->whereIn('supplier_id', $selectedSupplierIds);
                         }
 
                         $priceQuery->where('supplier_product_code', 'like', '%' . $search . '%');
@@ -643,13 +666,13 @@ class InventoryController extends Controller
 
         if ($request->filled('sku')) {
             $sku = trim((string) $request->input('sku'));
-            $query->where(function ($productQuery) use ($sku, $isAllSuppliers, $supplier) {
+            $query->where(function ($productQuery) use ($sku, $selectedSupplierIds) {
                 $productQuery
                     ->where('products.sku', 'like', '%' . $sku . '%')
                     ->orWhere('supplier_price_rows.supplier_product_code', 'like', '%' . $sku . '%')
-                    ->orWhereHas('supplierPrices', function ($priceQuery) use ($sku, $isAllSuppliers, $supplier) {
-                        if (!$isAllSuppliers && $supplier) {
-                            $priceQuery->where('supplier_id', $supplier->id);
+                    ->orWhereHas('supplierPrices', function ($priceQuery) use ($sku, $selectedSupplierIds) {
+                        if (!empty($selectedSupplierIds)) {
+                            $priceQuery->whereIn('supplier_id', $selectedSupplierIds);
                         }
 
                         $priceQuery->where('supplier_product_code', 'like', '%' . $sku . '%');
@@ -658,9 +681,9 @@ class InventoryController extends Controller
                         $variationQuery
                             ->where('products.sku', 'like', '%' . $sku . '%');
                     })
-                    ->orWhereHas('variations.supplierPrices', function ($priceQuery) use ($sku, $isAllSuppliers, $supplier) {
-                        if (!$isAllSuppliers && $supplier) {
-                            $priceQuery->where('supplier_id', $supplier->id);
+                    ->orWhereHas('variations.supplierPrices', function ($priceQuery) use ($sku, $selectedSupplierIds) {
+                        if (!empty($selectedSupplierIds)) {
+                            $priceQuery->whereIn('supplier_id', $selectedSupplierIds);
                         }
 
                         $priceQuery->where('supplier_product_code', 'like', '%' . $sku . '%');
@@ -681,16 +704,26 @@ class InventoryController extends Controller
 
         if ($request->boolean('missing_supplier_price')) {
             if ($isAllSuppliers) {
-                $query->where(function ($builder) {
+                $query->where(function ($builder) use ($selectedSupplierIds) {
                     $builder
-                        ->whereDoesntHave('supplierPrices', function ($priceQuery) {
+                        ->whereDoesntHave('supplierPrices', function ($priceQuery) use ($selectedSupplierIds) {
                             $priceQuery
+                                ->when(!empty($selectedSupplierIds), function ($query) use ($selectedSupplierIds) {
+                                    $query->whereIn('supplier_id', $selectedSupplierIds);
+                                })
                                 ->whereNotNull('unit_cost')
                                 ->where('unit_cost', '>', 0);
                         })
-                        ->orWhereHas('variations', function ($variationQuery) {
-                            $variationQuery->whereDoesntHave('supplierPrices', function ($priceQuery) {
+                        ->orWhereHas('variations', function ($variationQuery) use ($selectedSupplierIds) {
+                            if (!empty($selectedSupplierIds)) {
+                                $this->applySupplierMembershipFilterByIds($variationQuery, $selectedSupplierIds);
+                            }
+
+                            $variationQuery->whereDoesntHave('supplierPrices', function ($priceQuery) use ($selectedSupplierIds) {
                                 $priceQuery
+                                    ->when(!empty($selectedSupplierIds), function ($query) use ($selectedSupplierIds) {
+                                        $query->whereIn('supplier_id', $selectedSupplierIds);
+                                    })
                                     ->whereNotNull('unit_cost')
                                     ->where('unit_cost', '>', 0);
                             });
@@ -790,7 +823,7 @@ class InventoryController extends Controller
                 return $ids;
             });
         $supplierPriceMap = $isAllSuppliers
-            ? $this->latestSupplierPriceMap($pageProductIds)
+            ? $this->latestSupplierPriceMap($pageProductIds, $selectedSupplierIds)
             : $this->supplierPriceMapBySupplierId($supplier->id, $pageProductIds);
 
         $paginated->getCollection()->transform(function (Product $product) use ($supplierPriceMap) {
@@ -2444,6 +2477,47 @@ class InventoryController extends Controller
         });
     }
 
+    private function applySupplierMembershipFilterByIds($query, array $supplierIds): void
+    {
+        $normalizedSupplierIds = collect($supplierIds)
+            ->map(fn ($supplierId) => (int) $supplierId)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($normalizedSupplierIds)) {
+            return;
+        }
+
+        $query->where(function ($builder) use ($normalizedSupplierIds) {
+            $builder
+                ->whereHas('suppliers', function ($supplierQuery) use ($normalizedSupplierIds) {
+                    $supplierQuery->whereIn('suppliers.id', $normalizedSupplierIds);
+                })
+                ->orWhereIn('products.supplier_id', $normalizedSupplierIds)
+                ->orWhereHas('supplierPrices', function ($priceQuery) use ($normalizedSupplierIds) {
+                    $priceQuery->whereIn('supplier_id', $normalizedSupplierIds);
+                });
+        });
+    }
+
+    private function normalizedSupplierIdsFromRequest(Request $request): array
+    {
+        $rawSupplierIds = $request->input('supplier_ids', []);
+
+        if (is_string($rawSupplierIds)) {
+            $rawSupplierIds = explode(',', $rawSupplierIds);
+        }
+
+        return collect(is_array($rawSupplierIds) ? $rawSupplierIds : [])
+            ->map(fn ($supplierId) => (int) $supplierId)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
     private function applyInventorySupplierScopeFilter(Builder $query, int $supplierId): void
     {
         $query->where(function (Builder $builder) use ($supplierId) {
@@ -2821,7 +2895,14 @@ class InventoryController extends Controller
             $damagedQtySub->getBindings(),
             $adjustmentQtySub->getBindings(),
         );
-        $inventoryValueSql = '(' . $computedStockSql . ' * COALESCE(products.cost_price, products.expected_cost, 0))';
+        $pendingOutboundQtySub = $this->buildPendingOutboundQuantitySubquery($request);
+        $pendingExportQtySql = 'COALESCE(pending_outbound.pending_export_quantity, 0)';
+        $actualStockSql = '(' . $computedStockSql . ' - ' . $pendingExportQtySql . ')';
+        $inventoryValueSql = '(' . $actualStockSql . ' * COALESCE(products.cost_price, products.expected_cost, 0))';
+
+        $query->leftJoinSub($pendingOutboundQtySub, 'pending_outbound', function ($join) {
+            $join->on('pending_outbound.product_id', '=', 'products.id');
+        });
 
         if ($compact) {
             $query = $query
@@ -2829,6 +2910,8 @@ class InventoryController extends Controller
                 ->selectSub($parentIdSub, 'parent_product_id')
                 ->selectRaw('COALESCE(products.cost_price, products.expected_cost, 0) as display_cost')
                 ->selectRaw($computedStockSql . ' as computed_stock', $computedStockBindings)
+                ->selectRaw($pendingExportQtySql . ' as pending_export_quantity')
+                ->selectRaw($actualStockSql . ' as actual_stock', $computedStockBindings)
                 ->selectRaw($inventoryValueSql . ' as inventory_value', $computedStockBindings);
 
             $this->applyInventoryProductFilters($query, $request);
@@ -2846,6 +2929,8 @@ class InventoryController extends Controller
             ->selectSub($parentIdSub, 'parent_product_id')
             ->selectRaw('COALESCE(products.cost_price, products.expected_cost, 0) as display_cost')
             ->selectRaw($computedStockSql . ' as computed_stock', $computedStockBindings)
+            ->selectRaw($pendingExportQtySql . ' as pending_export_quantity')
+            ->selectRaw($actualStockSql . ' as actual_stock', $computedStockBindings)
             ->selectRaw($inventoryValueSql . ' as inventory_value', $computedStockBindings);
 
         $this->applyInventoryProductFilters($query, $request);
@@ -2854,16 +2939,131 @@ class InventoryController extends Controller
             $stockAlert = trim((string) $request->input('stock_alert'));
             if ($stockAlert === 'low') {
                 $query
-                    ->whereRaw($computedStockSql . ' > 0', $computedStockBindings)
-                    ->whereRaw($computedStockSql . ' <= 5', $computedStockBindings);
+                    ->whereRaw($actualStockSql . ' > 0', $computedStockBindings)
+                    ->whereRaw($actualStockSql . ' <= 5', $computedStockBindings);
             } elseif ($stockAlert === 'out') {
-                $query->whereRaw($computedStockSql . ' <= 0', $computedStockBindings);
+                $query->whereRaw($actualStockSql . ' <= 0', $computedStockBindings);
             } elseif ($stockAlert === 'available') {
-                $query->whereRaw($computedStockSql . ' > 5', $computedStockBindings);
+                $query->whereRaw($actualStockSql . ' > 5', $computedStockBindings);
             }
         }
 
         return $query;
+    }
+
+    private function buildPendingOutboundQuantitySubquery(Request $request)
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+
+        $manualExportQtySub = \App\Models\InventoryDocumentItem::query()
+            ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
+            ->selectRaw('inventory_documents.reference_id as order_id')
+            ->selectRaw('inventory_document_items.product_id')
+            ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0) as exported_quantity')
+            ->where('inventory_documents.type', 'export')
+            ->whereIn('inventory_documents.status', ['draft', 'completed'])
+            ->where('inventory_documents.reference_type', 'order')
+            ->whereNotNull('inventory_documents.reference_id')
+            ->groupBy('inventory_documents.reference_id', 'inventory_document_items.product_id');
+
+        if ($accountId > 0) {
+            $manualExportQtySub->where('inventory_documents.account_id', $accountId);
+        }
+
+        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+            $manualExportQtySub->whereNull('inventory_documents.deleted_at');
+        }
+
+        $pendingOrderItemsSub = OrderItem::query()
+            ->join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->selectRaw('order_items.order_id')
+            ->selectRaw('order_items.product_id')
+            ->selectRaw('COALESCE(SUM(order_items.quantity), 0) as ordered_quantity')
+            ->whereNotNull('order_items.product_id')
+            ->groupBy('order_items.order_id', 'order_items.product_id');
+
+        $this->applyPendingOutboundEligibleOrderScope($pendingOrderItemsSub, $request);
+
+        return DB::query()
+            ->fromSub($pendingOrderItemsSub, 'pending_order_items')
+            ->leftJoinSub($manualExportQtySub, 'manual_exports', function ($join) {
+                $join
+                    ->on('manual_exports.order_id', '=', 'pending_order_items.order_id')
+                    ->on('manual_exports.product_id', '=', 'pending_order_items.product_id');
+            })
+            ->selectRaw('pending_order_items.product_id')
+            ->selectRaw('COALESCE(SUM(GREATEST(pending_order_items.ordered_quantity - COALESCE(manual_exports.exported_quantity, 0), 0)), 0) as pending_export_quantity')
+            ->groupBy('pending_order_items.product_id');
+    }
+
+    private function applyPendingOutboundEligibleOrderScope($query, Request $request): void
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+
+        if ($accountId > 0) {
+            $query->where('orders.account_id', $accountId);
+        }
+
+        if (Schema::hasColumn('orders', 'deleted_at')) {
+            $query->whereNull('orders.deleted_at');
+        }
+
+        $query->where(function ($builder) {
+            $builder
+                ->where('orders.order_kind', Order::KIND_OFFICIAL)
+                ->orWhereNull('orders.order_kind')
+                ->orWhere('orders.order_kind', '');
+        });
+
+        $this->applyPendingOutboundInvalidStatusFilter($query, 'orders.status');
+        $this->applyDateRange($query, 'orders.created_at', $request);
+
+        $query
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('orders.type')
+                    ->orWhere('orders.type', '!=', 'inventory_export');
+            })
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('orders.shipping_tracking_code')
+                    ->orWhere('orders.shipping_tracking_code', '');
+            })
+            ->whereNotExists(function ($shipmentQuery) {
+                $shipmentQuery
+                    ->select(DB::raw(1))
+                    ->from('shipments')
+                    ->whereColumn('shipments.order_id', 'orders.id');
+
+                if (Schema::hasColumn('shipments', 'deleted_at')) {
+                    $shipmentQuery->whereNull('shipments.deleted_at');
+                }
+
+                $shipmentQuery->whereNotIn('shipments.shipment_status', ['canceled']);
+            });
+    }
+
+    private function applyPendingOutboundInvalidStatusFilter($query, string $column): void
+    {
+        $statusExpression = "LOWER(COALESCE({$column}, ''))";
+
+        foreach ([
+            'cancel',
+            'canceled',
+            'cancelled',
+            'return',
+            'returned',
+            'returning',
+            'pending return',
+            'pending_return',
+            'draft',
+            'nhap',
+            'huy',
+            'hoan',
+            'void',
+        ] as $keyword) {
+            $query->whereRaw($statusExpression . ' NOT LIKE ?', ['%' . $keyword . '%']);
+        }
     }
 
     private function applyInventoryProductFilters($query, Request $request): void
@@ -3045,9 +3245,11 @@ class InventoryController extends Controller
             ->selectRaw('COALESCE(SUM(total_returned), 0) as total_returned')
             ->selectRaw('COALESCE(SUM(total_damaged), 0) as total_damaged')
             ->selectRaw('COALESCE(SUM(total_adjusted), 0) as total_adjusted')
-            ->selectRaw('COALESCE(SUM(total_imported - total_exported + total_returned - total_damaged + total_adjusted), 0) as total_stock')
+            ->selectRaw('COALESCE(SUM(computed_stock), 0) as total_stock')
+            ->selectRaw('COALESCE(SUM(pending_export_quantity), 0) as total_pending_export')
+            ->selectRaw('COALESCE(SUM(actual_stock), 0) as total_actual_stock')
             ->selectRaw('COALESCE(SUM(damaged_quantity), 0) as total_damaged_stock')
-            ->selectRaw('COALESCE(SUM((total_imported - total_exported + total_returned - total_damaged + total_adjusted) * COALESCE(cost_price, expected_cost, 0)), 0) as total_inventory_value')
+            ->selectRaw('COALESCE(SUM(inventory_value), 0) as total_inventory_value')
             ->first();
 
         return [
@@ -3058,7 +3260,9 @@ class InventoryController extends Controller
             'total_damaged' => (int) round((float) ($summary->total_damaged ?? 0)),
             'total_adjusted' => (int) round((float) ($summary->total_adjusted ?? 0)),
             'total_stock' => (int) round((float) ($summary->total_stock ?? 0)),
-            'total_sellable_stock' => (int) round((float) ($summary->total_stock ?? 0)),
+            'total_pending_export' => (int) round((float) ($summary->total_pending_export ?? 0)),
+            'total_actual_stock' => (int) round((float) ($summary->total_actual_stock ?? 0)),
+            'total_sellable_stock' => (int) round((float) ($summary->total_actual_stock ?? 0)),
             'total_damaged_stock' => (int) round((float) ($summary->total_damaged_stock ?? 0)),
             'total_inventory_value' => round((float) ($summary->total_inventory_value ?? 0), 2),
         ];
@@ -3117,7 +3321,7 @@ class InventoryController extends Controller
             ->keyBy('product_id');
     }
 
-    private function latestSupplierPriceMap($productIds)
+    private function latestSupplierPriceMap($productIds, array $supplierIds = [])
     {
         $ids = collect($productIds)->map(fn ($id) => (int) $id)->filter()->unique()->values()->all();
         if (empty($ids)) {
@@ -3127,6 +3331,9 @@ class InventoryController extends Controller
         $latestPriceIds = SupplierProductPrice::withoutGlobalScopes()
             ->selectRaw('MAX(id)')
             ->whereIn('product_id', $ids)
+            ->when(!empty($supplierIds), function ($builder) use ($supplierIds) {
+                $builder->whereIn('supplier_id', $supplierIds);
+            })
             ->groupBy('product_id');
 
         return SupplierProductPrice::withoutGlobalScopes()
@@ -3340,12 +3547,20 @@ class InventoryController extends Controller
         $totalReturned = (int) round((float) ($product->total_returned ?? 0));
         $totalDamaged = (int) round((float) ($product->total_damaged ?? 0));
         $totalAdjusted = (int) round((float) ($product->total_adjusted ?? 0));
-        $computedStock = $totalImported - $totalExported + $totalReturned - $totalDamaged + $totalAdjusted;
+        $computedStock = $product->computed_stock !== null
+            ? (int) round((float) $product->computed_stock)
+            : ($totalImported - $totalExported + $totalReturned - $totalDamaged + $totalAdjusted);
+        $pendingExportQuantity = (int) round((float) ($product->pending_export_quantity ?? 0));
+        $actualStock = $product->actual_stock !== null
+            ? (int) round((float) $product->actual_stock)
+            : ($computedStock - $pendingExportQuantity);
         $displayCost = round((float) ($product->display_cost ?? ($currentCost ?? $expectedCost ?? 0)), 2);
-        $inventoryValue = round($computedStock * $displayCost, 2);
-        $stockAlert = $computedStock <= 0
+        $inventoryValue = $product->inventory_value !== null
+            ? round((float) $product->inventory_value, 2)
+            : round($actualStock * $displayCost, 2);
+        $stockAlert = $actualStock <= 0
             ? 'out'
-            : ($computedStock <= 5 ? 'low' : 'available');
+            : ($actualStock <= 5 ? 'low' : 'available');
 
         $payload = [
             'id' => $product->id,
@@ -3385,6 +3600,8 @@ class InventoryController extends Controller
             'total_damaged' => $totalDamaged,
             'total_adjusted' => $totalAdjusted,
             'computed_stock' => $computedStock,
+            'pending_export_quantity' => $pendingExportQuantity,
+            'actual_stock' => $actualStock,
             'inventory_value' => $inventoryValue,
             'stock_alert' => $stockAlert,
             'stock_alert_label' => match ($stockAlert) {

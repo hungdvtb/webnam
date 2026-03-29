@@ -14,6 +14,7 @@ use App\Services\Finance\FinanceReadService;
 use App\Services\Finance\FinanceService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use InvalidArgumentException;
 
 class FinanceController extends Controller
 {
@@ -169,6 +170,19 @@ class FinanceController extends Controller
         $updated = $this->financeService->storeWallet($this->accountId($request), [...$validated, 'user_id' => auth()->id()], $wallet);
 
         return response()->json($this->financeService->walletPayload($updated));
+    }
+
+    public function destroyWallet(Request $request, int $id)
+    {
+        $wallet = FinanceWallet::query()->where('account_id', $this->accountId($request))->findOrFail($id);
+
+        try {
+            $this->financeService->deleteWallet($wallet, auth()->id());
+        } catch (InvalidArgumentException $exception) {
+            return response()->json(['message' => $exception->getMessage()], 422);
+        }
+
+        return response()->json(['message' => 'Da xoa tai khoan tien.']);
     }
 
     public function adjustWallet(Request $request, int $id)

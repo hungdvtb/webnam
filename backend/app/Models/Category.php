@@ -4,12 +4,13 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class Category extends Model
 {
     use \App\Traits\BelongsToAccount;
 
-    protected $fillable = ['name', 'slug', 'parent_id', 'description', 'banner_path', 'status', 'order', 'account_id', 'display_layout', 'filterable_attribute_ids'];
+    protected $fillable = ['name', 'code', 'slug', 'parent_id', 'description', 'banner_path', 'status', 'order', 'account_id', 'display_layout', 'filterable_attribute_ids'];
 
     protected $casts = [
         'filterable_attribute_ids' => 'array',
@@ -36,6 +37,48 @@ class Category extends Model
             ->withTimestamps()
             ->orderBy('category_product.sort_order')
             ->orderBy('category_product.id');
+    }
+
+    public static function normalizeCode(?string $value): ?string
+    {
+        $normalized = Str::slug((string) $value);
+
+        return $normalized !== '' ? $normalized : null;
+    }
+
+    public static function buildUniqueCode(string $source, ?int $exceptId = null): string
+    {
+        $baseCode = static::normalizeCode($source) ?? 'danh-muc';
+        $code = $baseCode;
+        $suffix = 2;
+
+        while (static::codeExists($code, $exceptId)) {
+            $code = $baseCode . '-' . $suffix;
+            $suffix++;
+        }
+
+        return $code;
+    }
+
+    public static function buildUniqueSlug(string $source, ?int $exceptId = null): string
+    {
+        $baseSlug = Str::slug($source) ?: 'danh-muc';
+        $slug = $baseSlug;
+        $suffix = 2;
+
+        while (static::withoutGlobalScopes()->where('slug', $slug)->when($exceptId, fn ($query) => $query->where('id', '!=', $exceptId))->exists()) {
+            $slug = $baseSlug . '-' . $suffix;
+            $suffix++;
+        }
+
+        return $slug;
+    }
+
+    public function resolvedCode(): string
+    {
+        return static::normalizeCode($this->code)
+            ?? static::normalizeCode($this->slug)
+            ?? ('category-' . $this->id);
     }
 
     public static function buildProductSyncPayload(Product $product, array $categoryIds): array
@@ -135,5 +178,13 @@ class Category extends Model
         }
 
         DB::table('category_product')->insert($insertRows);
+    }
+
+    private static function codeExists(string $code, ?int $exceptId = null): bool
+    {
+        return static::query()
+            ->where('code', $code)
+            ->when($exceptId, fn ($query) => $query->where('id', '!=', $exceptId))
+            ->exists();
     }
 }

@@ -57,10 +57,56 @@ const formatDate = (value) => {
     return date.toLocaleDateString('vi-VN');
 };
 
+const extractFilenameFromDisposition = (disposition, fallback) => {
+    const raw = String(disposition || '');
+    const utf8Match = raw.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match?.[1]) {
+        try {
+            return decodeURIComponent(utf8Match[1]);
+        } catch {
+            return utf8Match[1];
+        }
+    }
+
+    const basicMatch = raw.match(/filename="?([^"]+)"?/i);
+    return basicMatch?.[1] || fallback;
+};
+
+const downloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+};
+
+const readBlobErrorPayload = async (blob) => {
+    if (!(blob instanceof Blob)) {
+        return { error: '', errors: [] };
+    }
+
+    try {
+        const text = await blob.text();
+        const parsed = JSON.parse(text);
+        return {
+            error: parsed?.error || '',
+            errors: Array.isArray(parsed?.errors) ? parsed.errors : [],
+        };
+    } catch {
+        return { error: '', errors: [] };
+    }
+};
+
 const BlogList = () => {
     const [posts, setPosts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState(false);
+    const [importingBundle, setImportingBundle] = useState(false);
+    const [exportingBundle, setExportingBundle] = useState(false);
+    const [importResult, setImportResult] = useState(null);
 
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
@@ -100,6 +146,7 @@ const BlogList = () => {
     const [reorderingCategories, setReorderingCategories] = useState(false);
 
     const filterRef = useRef(null);
+    const importInputRef = useRef(null);
 
     const navigate = useNavigate();
     const { showModal, showToast } = useUI();
@@ -768,15 +815,116 @@ const BlogList = () => {
         window.open(`${window.location.origin}/blog/${slugOrId}`, '_blank', 'noopener,noreferrer');
     };
 
+    const triggerImportPicker = () => {
+        importInputRef.current?.click?.();
+    };
+
+    const handleExportBundle = async (ids = [], fallbackName = 'blog-export.zip') => {
+        setExportingBundle(true);
+
+        try {
+            const payload = ids.length > 0 ? { ids } : {};
+            const response = await blogApi.exportBundle(payload);
+            const filename = extractFilenameFromDisposition(
+                response.headers?.['content-disposition'],
+                fallbackName
+            );
+
+            downloadBlob(response.data, filename);
+            showToast({
+                message: ids.length > 0
+                    ? `Đã tải gói export cho ${ids.length} bài viết.`
+                    : 'Đã tải gói export toàn bộ bài viết.',
+                type: 'success',
+            });
+        } catch (error) {
+            const blobPayload = await readBlobErrorPayload(error?.response?.data);
+            const message = blobPayload.error
+                || blobPayload.errors?.[0]
+                || 'Không thể export bài viết lúc này.';
+            showModal({ title: 'Lỗi export', content: message, type: 'error' });
+        } finally {
+            setExportingBundle(false);
+        }
+    };
+
+    const handleImportBundleChange = async (event) => {
+        const file = event.target.files?.[0] || null;
+        event.target.value = '';
+
+        if (!file) {
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        setImportingBundle(true);
+        try {
+            const response = await blogApi.importBundle(formData);
+            const payload = response.data || {};
+            setImportResult(payload);
+            setSelected(new Set());
+            await fetchPosts();
+            await loadCategories();
+            await loadKeywords();
+            showModal({
+                title: 'Import thành công',
+                content: `Đã import ${payload.created ?? 0} bài mới và cập nhật ${payload.updated ?? 0} bài hệ thống.`,
+                type: 'success',
+            });
+        } catch (error) {
+            const payload = error?.response?.data || {};
+            const errors = Array.isArray(payload?.errors) ? payload.errors : [];
+            setImportResult({
+                total_rows: 0,
+                created: 0,
+                updated: 0,
+                categories_created: 0,
+                assets_imported: 0,
+                errors,
+            });
+            showModal({
+                title: 'Lỗi import',
+                content: payload?.error || errors[0] || 'Không thể import gói Excel lúc này.',
+                type: 'error',
+            });
+        } finally {
+            setImportingBundle(false);
+        }
+    };
+
     return (
         <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] p-6 gap-3 overflow-hidden">
+            <input
+                ref={importInputRef}
+                type="file"
+                accept=".zip"
+                onChange={handleImportBundleChange}
+                className="hidden"
+            />
             <div className="flex items-center justify-between gap-3">
                 <div>
                     <h1 className="text-2xl font-display font-bold text-primary italic uppercase tracking-wider">Bài viết trên web</h1>
                     <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.16em]">Quản lý bài viết gọn, nhanh cho kho nội dung lớn</p>
                 </div>
                 <div className="flex items-center gap-2">
-                    <Link to="/admin/blog/import" className="h-9 px-4 bg-white border border-gold/25 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center">Import Word</Link>
+                    <button
+                        type="button"
+                        onClick={() => handleExportBundle([], 'blog-export-all.zip')}
+                        disabled={exportingBundle || importingBundle}
+                        className="h-9 px-4 bg-white border border-gold/25 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center disabled:opacity-60"
+                    >
+                        {exportingBundle ? 'Đang xuất...' : 'Xuất tất cả'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={triggerImportPicker}
+                        disabled={importingBundle || exportingBundle}
+                        className="h-9 px-4 bg-white border border-gold/25 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center disabled:opacity-60"
+                    >
+                        {importingBundle ? 'Đang import...' : 'Nhập gói Excel'}
+                    </button>
                     <Link to="/admin/blog/new" className="h-9 px-4 bg-brick text-white hover:bg-umber rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center">Tạo bài mới</Link>
                 </div>
             </div>
@@ -895,6 +1043,29 @@ const BlogList = () => {
                     </div>
                 )}
 
+                {importResult && (
+                    <div className="border border-gold/15 bg-gold/5 rounded-sm p-3 space-y-2">
+                        <div className="flex flex-wrap items-center gap-3 text-[10px] font-black uppercase tracking-widest text-primary">
+                            <span>Kết quả import</span>
+                            <span>Tổng dòng: {importResult.total_rows ?? 0}</span>
+                            <span>Tạo mới: {importResult.created ?? 0}</span>
+                            <span>Cập nhật: {importResult.updated ?? 0}</span>
+                            <span>Danh mục mới: {importResult.categories_created ?? 0}</span>
+                            <span>Ảnh đã nạp: {importResult.assets_imported ?? 0}</span>
+                        </div>
+                        {Array.isArray(importResult.errors) && importResult.errors.length > 0 && (
+                            <div className="space-y-1">
+                                {importResult.errors.slice(0, 12).map((item, idx) => (
+                                    <div key={`${item}-${idx}`} className="text-[12px] text-brick">{item}</div>
+                                ))}
+                                {importResult.errors.length > 12 && (
+                                    <div className="text-[11px] text-stone/55 italic">Còn {importResult.errors.length - 12} lỗi khác trong gói import.</div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 <div className="flex items-center justify-between gap-2">
                     <div className="text-[10px] font-black uppercase tracking-widest text-stone/45">{posts.length} bài</div>
                     {selectedCount > 0 && (
@@ -906,6 +1077,14 @@ const BlogList = () => {
                     <div className="flex flex-wrap items-center gap-2 bg-primary/5 border border-primary/15 rounded-sm p-2">
                         <span className="text-[10px] font-black uppercase tracking-widest text-primary">Đã chọn {selectedCount} bài</span>
 
+                        <button
+                            type="button"
+                            onClick={() => handleExportBundle(Array.from(selected), `blog-export-${selectedCount}-posts.zip`)}
+                            disabled={busy || exportingBundle || importingBundle}
+                            className="h-8 px-3 bg-white border border-primary/25 text-primary rounded-sm text-[10px] font-bold uppercase tracking-widest hover:bg-primary/5 disabled:opacity-60"
+                        >
+                            {exportingBundle ? 'Đang xuất...' : 'Xuất đã chọn'}
+                        </button>
                         <select value={bulkCategoryId} onChange={(e) => setBulkCategoryId(e.target.value)} className="h-8 min-w-[200px] bg-white border border-gold/20 px-2 text-[12px] text-primary focus:outline-none focus:border-primary rounded-sm">
                             <option value="">Chọn danh mục</option>
                             {categories.map((category) => <option key={`bulk-cat-${category.id}`} value={String(category.id)}>{category.name}</option>)}
@@ -991,6 +1170,14 @@ const BlogList = () => {
                                 <td className="pr-3">
                                     <div className="flex items-center justify-end gap-1">
                                         <button type="button" onClick={() => openOnWeb(post)} className="h-8 px-2.5 border border-gold/20 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest">Xem ngoài web</button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleExportBundle([post.id], `blog-export-${post.slug || post.id}.zip`)}
+                                            disabled={exportingBundle || importingBundle}
+                                            className="h-8 px-2.5 border border-gold/20 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest disabled:opacity-60"
+                                        >
+                                            Xuất
+                                        </button>
                                         <button type="button" onClick={() => navigate(`/admin/blog/edit/${post.id}`)} className="h-8 w-8 inline-flex items-center justify-center border border-gold/20 text-stone/60 hover:text-primary rounded-sm" title="Sửa"><span className="material-symbols-outlined text-[16px]">edit_square</span></button>
                                         {post.is_system ? (
                                             <button type="button" disabled className="h-8 w-8 inline-flex items-center justify-center border border-gold/20 bg-stone/5 text-stone/25 rounded-sm cursor-not-allowed" title="Bài hệ thống không thể xóa"><span className="material-symbols-outlined text-[16px]">delete</span></button>

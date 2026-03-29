@@ -7,6 +7,8 @@ use App\Models\Account;
 use App\Models\BlogCategory;
 use App\Models\Post;
 use App\Models\PostSeoKeyword;
+use App\Services\BlogBundleService;
+use App\Services\BlogMediaGallerySupport;
 use App\Services\BlogSystemPostService;
 use DOMDocument;
 use DOMXPath;
@@ -595,7 +597,7 @@ class BlogController extends Controller
             $validated['blog_category_id'] ?? null
         );
         $validated['seo_keyword'] = $this->normalizeKeyword($validated['seo_keyword'] ?? null);
-        $validated['content'] = $this->normalizeMediaGalleryBlocks((string) ($validated['content'] ?? ''));
+        $validated['content'] = BlogMediaGallerySupport::normalizeHtml((string) ($validated['content'] ?? ''));
         $validated['is_published'] = array_key_exists('is_published', $validated)
             ? (bool) $validated['is_published']
             : true;
@@ -674,7 +676,7 @@ class BlogController extends Controller
         }
 
         if (array_key_exists('content', $validated)) {
-            $validated['content'] = $this->normalizeMediaGalleryBlocks((string) $validated['content']);
+            $validated['content'] = BlogMediaGallerySupport::normalizeHtml((string) $validated['content']);
         }
 
         if (array_key_exists('blog_category_id', $validated)) {
@@ -796,13 +798,61 @@ class BlogController extends Controller
         return response()->json(['message' => 'Posts reordered successfully']);
     }
 
-    /**
-     * Import multiple posts from a single Word (.docx) file.
-     */
-    public function importWord(Request $request)
+    public function exportBundle(Request $request)
     {
         $validated = $request->validate([
-            'file' => 'required|file|mimes:docx|max:20480',
+            'ids' => 'nullable|array',
+            'ids.*' => 'integer',
+        ]);
+
+        $accountId = $this->resolveBlogAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        $ids = array_values(array_unique(array_map('intval', $validated['ids'] ?? [])));
+        $query = Post::query()
+            ->with(['category:id,account_id,name,slug,sort_order'])
+            ->where('account_id', $accountId);
+
+        if (!empty($ids)) {
+            $query->whereIn('id', $ids);
+        }
+
+        if ($this->hasSystemPostSupport()) {
+            $query->orderByDesc('is_system');
+        }
+
+        $posts = $query
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get();
+
+        if ($posts->isEmpty()) {
+            return response()->json(['error' => 'No posts found for export.'], 422);
+        }
+
+        try {
+            $bundle = app(BlogBundleService::class)->export($accountId, $posts->all());
+            return response()->download($bundle['path'], $bundle['filename'])->deleteFileAfterSend(true);
+        } catch (ValidationException $exception) {
+            $errors = $this->flattenValidationErrors($exception);
+            return response()->json([
+                'error' => $errors[0] ?? 'Blog export failed.',
+                'errors' => $errors,
+            ], 422);
+        } catch (Throwable $exception) {
+            return response()->json([
+                'error' => 'Blog export failed.',
+                'detail' => $exception->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function importBundle(Request $request)
+    {
+        $validated = $request->validate([
+            'file' => 'required|file|mimes:zip|max:102400',
         ]);
 
         $accountId = $this->resolveBlogAccountId($request);
@@ -811,99 +861,29 @@ class BlogController extends Controller
         }
 
         try {
-            $plainText = $this->extractDocxText($validated['file']->getRealPath());
-            $entries = $this->parseImportedPosts($plainText);
-        } catch (Throwable $exception) {
+            $result = app(BlogBundleService::class)->import($accountId, $validated['file']);
+
             return response()->json([
-                'error' => 'Unable to read DOCX file.',
-                'detail' => $exception->getMessage(),
-            ], 422);
-        }
-
-        if (empty($entries)) {
+                'message' => 'Import completed.',
+                'total_rows' => $result['total_rows'] ?? 0,
+                'created' => $result['created'] ?? 0,
+                'updated' => $result['updated'] ?? 0,
+                'categories_created' => $result['categories_created'] ?? 0,
+                'assets_imported' => $result['assets_imported'] ?? 0,
+                'errors' => $result['errors'] ?? [],
+            ], 201);
+        } catch (ValidationException $exception) {
+            $errors = $this->flattenValidationErrors($exception);
             return response()->json([
-                'error' => 'No valid post block found in file.',
-                'rule' => 'Use ===POST=== and ===END_POST=== markers as defined in template.',
-            ], 422);
-        }
-
-        $created = 0;
-        $errors = [];
-        $nextSortOrder = $this->nextSortOrder($accountId);
-
-        foreach ($entries as $index => $entry) {
-            try {
-                if (trim((string) ($entry['title'] ?? '')) === '') {
-                    $errors[] = 'Block #' . ($index + 1) . ': Missing TITLE.';
-                    continue;
-                }
-
-                $content = trim((string) ($entry['content'] ?? ''));
-                if ($content === '') {
-                    $errors[] = 'Block #' . ($index + 1) . ': Missing CONTENT_HTML section.';
-                    continue;
-                }
-
-                $normalizedKeyword = $this->normalizeKeyword($entry['seo_keyword'] ?? null);
-                $slugSource = $entry['slug'] ?? $entry['title'];
-                $slug = $this->buildUniqueSlug($slugSource, $accountId);
-
-                $isPublished = array_key_exists('is_published', $entry)
-                    ? (bool) $entry['is_published']
-                    : true;
-
-                Post::create([
-                    'account_id' => $accountId,
-                    'title' => trim((string) $entry['title']),
-                    'slug' => $slug,
-                    'seo_keyword' => $normalizedKeyword,
-                    'excerpt' => trim((string) ($entry['excerpt'] ?? '')),
-                    'content' => $content,
-                    'featured_image' => trim((string) ($entry['featured_image'] ?? '')) ?: null,
-                    'is_starred' => (bool) ($entry['is_starred'] ?? false),
-                    'is_published' => $isPublished,
-                    'published_at' => $isPublished ? now() : null,
-                    'sort_order' => $nextSortOrder++,
-                ]);
-
-                $this->ensureSeoKeywordExists($accountId, $normalizedKeyword);
-                $created++;
-            } catch (Throwable $exception) {
-                $errors[] = 'Block #' . ($index + 1) . ': ' . $exception->getMessage();
-            }
-        }
-
-        $skipped = count($entries) - $created;
-
-        if ($created === 0) {
-            return response()->json([
-                'error' => 'Import failed. No post was created.',
+                'error' => $errors[0] ?? 'Import failed.',
                 'errors' => $errors,
             ], 422);
+        } catch (Throwable $exception) {
+            return response()->json([
+                'error' => 'Import failed.',
+                'detail' => $exception->getMessage(),
+            ], 500);
         }
-
-        return response()->json([
-            'message' => 'Import completed.',
-            'total_blocks' => count($entries),
-            'created' => $created,
-            'skipped' => $skipped,
-            'errors' => $errors,
-        ], 201);
-    }
-
-    /**
-     * Download the DOCX template for batch import.
-     */
-    public function downloadImportTemplate()
-    {
-        $relativePath = 'templates/blog-import-template.docx';
-        $absolutePath = storage_path('app/public/' . $relativePath);
-
-        if (!Storage::disk('public')->exists($relativePath)) {
-            $this->createDocxTemplate($absolutePath);
-        }
-
-        return response()->download($absolutePath, 'mau-import-bai-viet-seo.docx');
     }
 
     private function applyAccountScope(Builder $query, Request $request): ?int
@@ -1653,327 +1633,17 @@ class BlogController extends Controller
         }
     }
 
-    private function extractDocxText(string $realPath): string
-    {
-        $zip = new ZipArchive();
-
-        if ($zip->open($realPath) !== true) {
-            throw new RuntimeException('Failed to open DOCX archive.');
-        }
-
-        $documentXml = $zip->getFromName('word/document.xml');
-        $zip->close();
-
-        if ($documentXml === false) {
-            throw new RuntimeException('DOCX structure is invalid (word/document.xml not found).');
-        }
-
-        $dom = new DOMDocument();
-        $dom->preserveWhiteSpace = false;
-        $dom->loadXML($documentXml, LIBXML_NOERROR | LIBXML_NOWARNING);
-
-        $xpath = new DOMXPath($dom);
-        $xpath->registerNamespace('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main');
-
-        $paragraphs = $xpath->query('//w:body/w:p');
-        $lines = [];
-
-        if (!$paragraphs) {
-            return '';
-        }
-
-        foreach ($paragraphs as $paragraph) {
-            $textNodes = $xpath->query('.//w:t', $paragraph);
-            $line = '';
-
-            if ($textNodes) {
-                foreach ($textNodes as $textNode) {
-                    $line .= $textNode->nodeValue;
-                }
-            }
-
-            $lines[] = trim($line);
-        }
-
-        return trim(implode("\n", $lines));
-    }
-
     /**
-     * Parse file format:
-     * ===POST===
-     * TITLE: ...
-     * SLUG: ...
-     * SEO_KEYWORD: ...
-     * FEATURED_IMAGE: ...
-     * STARRED: yes/no
-     * PUBLISHED: yes/no
-     * EXCERPT:
-     * ...
-     * ===EXCERPT_END===
-     * CONTENT_HTML:
-     * <p>...</p>
-     * ===CONTENT_END===
-     * ===END_POST===
+     * @return array<int, string>
      */
-    private function parseImportedPosts(string $plainText): array
+    private function flattenValidationErrors(ValidationException $exception): array
     {
-        $normalized = str_replace(["\r\n", "\r"], "\n", $plainText);
-        $normalized = preg_replace('/^\xEF\xBB\xBF/', '', $normalized);
-
-        preg_match_all('/===POST===\s*(.*?)\s*===END_POST===/s', $normalized, $matches);
-
-        if (empty($matches[1])) {
-            return [];
-        }
-
-        $entries = [];
-
-        foreach ($matches[1] as $block) {
-            $parsed = $this->parseImportBlock($block);
-
-            if (!empty($parsed['title'])) {
-                $entries[] = $parsed;
-            }
-        }
-
-        return $entries;
+        return collect($exception->errors())
+            ->flatten()
+            ->map(fn ($message) => trim((string) $message))
+            ->filter()
+            ->values()
+            ->all();
     }
 
-    private function parseImportBlock(string $block): array
-    {
-        $data = [
-            'title' => '',
-            'slug' => '',
-            'seo_keyword' => null,
-            'excerpt' => '',
-            'content' => '',
-            'featured_image' => null,
-            'is_starred' => false,
-            'is_published' => true,
-        ];
-
-        $mode = 'fields';
-        $excerptLines = [];
-        $contentLines = [];
-
-        $lines = explode("\n", trim($block));
-
-        foreach ($lines as $line) {
-            $trimmed = trim($line);
-
-            if (strcasecmp($trimmed, 'EXCERPT:') === 0) {
-                $mode = 'excerpt';
-                continue;
-            }
-
-            if (strcasecmp($trimmed, '===EXCERPT_END===') === 0) {
-                $mode = 'fields';
-                continue;
-            }
-
-            if (strcasecmp($trimmed, 'CONTENT_HTML:') === 0 || strcasecmp($trimmed, 'CONTENT:') === 0) {
-                $mode = 'content';
-                continue;
-            }
-
-            if (strcasecmp($trimmed, '===CONTENT_END===') === 0) {
-                $mode = 'fields';
-                continue;
-            }
-
-            if ($mode === 'excerpt') {
-                $excerptLines[] = rtrim($line);
-                continue;
-            }
-
-            if ($mode === 'content') {
-                $contentLines[] = rtrim($line);
-                continue;
-            }
-
-            if (preg_match('/^TITLE\s*:\s*(.+)$/i', $line, $match)) {
-                $data['title'] = trim($match[1]);
-                continue;
-            }
-
-            if (preg_match('/^SLUG\s*:\s*(.*)$/i', $line, $match)) {
-                $data['slug'] = trim($match[1]);
-                continue;
-            }
-
-            if (preg_match('/^SEO_KEYWORD\s*:\s*(.*)$/i', $line, $match)) {
-                $data['seo_keyword'] = trim($match[1]);
-                continue;
-            }
-
-            if (preg_match('/^FEATURED_IMAGE\s*:\s*(.*)$/i', $line, $match)) {
-                $data['featured_image'] = trim($match[1]);
-                continue;
-            }
-
-            if (preg_match('/^STARRED\s*:\s*(.*)$/i', $line, $match)) {
-                $data['is_starred'] = $this->normalizeFlag($match[1], false);
-                continue;
-            }
-
-            if (preg_match('/^PUBLISHED\s*:\s*(.*)$/i', $line, $match)) {
-                $data['is_published'] = $this->normalizeFlag($match[1], true);
-                continue;
-            }
-        }
-
-        $data['excerpt'] = trim(implode("\n", $excerptLines));
-
-        $content = trim(implode("\n", $contentLines));
-
-        if ($content !== '' && strip_tags($content) === $content) {
-            $content = $this->convertPlainTextToHtml($content);
-        }
-
-        if ($content === '' && $data['excerpt'] !== '') {
-            $content = '<p>' . nl2br(e($data['excerpt'])) . '</p>';
-        }
-
-        if ($data['excerpt'] === '' && $content !== '') {
-            $data['excerpt'] = Str::limit(trim(strip_tags($content)), 200, '...');
-        }
-
-        $data['content'] = $content;
-
-        return $data;
-    }
-
-    private function convertPlainTextToHtml(string $text): string
-    {
-        $chunks = preg_split('/\n\s*\n/', trim($text));
-        $htmlBlocks = [];
-
-        foreach ($chunks as $chunk) {
-            $line = trim($chunk);
-            if ($line === '') {
-                continue;
-            }
-
-            $htmlBlocks[] = '<p>' . nl2br(e($line)) . '</p>';
-        }
-
-        return implode("\n", $htmlBlocks);
-    }
-
-    private function createDocxTemplate(string $absolutePath): void
-    {
-        $directory = dirname($absolutePath);
-        if (!is_dir($directory)) {
-            mkdir($directory, 0755, true);
-        }
-
-        $lines = [
-            'HUONG DAN IMPORT BAI VIET SEO HANG LOAT',
-            '',
-            'MOT FILE DOCX CO THE CHUA NHIEU BAI.',
-            'MOI BAI BAT BUOC NAM GIUA 2 MOC: ===POST=== va ===END_POST===',
-            '',
-            'CAU TRUC TUNG BAI:',
-            '===POST===',
-            'TITLE: Tieu de bai viet',
-            'SLUG: slug-bai-viet (co the de trong)',
-            'SEO_KEYWORD: tu khoa seo chinh',
-            'FEATURED_IMAGE: https://duong-dan-anh.jpg (co the de trong)',
-            'STARRED: yes',
-            'PUBLISHED: yes',
-            'EXCERPT:',
-            'Doan mo ta ngan.',
-            '===EXCERPT_END===',
-            'CONTENT_HTML:',
-            '<p>Noi dung HTML day du.</p>',
-            '===CONTENT_END===',
-            '===END_POST===',
-            '',
-            'VI DU BAI 1',
-            '===POST===',
-            'TITLE: Cach chon gom Bat Trang cho phong khach',
-            'SLUG: cach-chon-gom-bat-trang-cho-phong-khach',
-            'SEO_KEYWORD: gom bat trang phong khach',
-            'FEATURED_IMAGE: https://example.com/anh-1.jpg',
-            'STARRED: yes',
-            'PUBLISHED: yes',
-            'EXCERPT:',
-            'Goi y cach chon gom su dep, hop menh va de bai tri.',
-            '===EXCERPT_END===',
-            'CONTENT_HTML:',
-            '<h2>Vi sao nen chon gom Bat Trang?</h2>',
-            '<p>Doan van mo dau...</p>',
-            '<ul><li>Men ben mau</li><li>Dang dep</li></ul>',
-            '===CONTENT_END===',
-            '===END_POST===',
-            '',
-            'VI DU BAI 2',
-            '===POST===',
-            'TITLE: Bao quan do gom dung cach khi vao mua nom',
-            'SLUG: bao-quan-do-gom-dung-cach-khi-vao-mua-nom',
-            'SEO_KEYWORD: bao quan do gom',
-            'FEATURED_IMAGE: ',
-            'STARRED: no',
-            'PUBLISHED: yes',
-            'EXCERPT:',
-            'Tong hop meo giup gom luon sach va ben.',
-            '===EXCERPT_END===',
-            'CONTENT_HTML:',
-            '<p>Noi dung bai viet thu hai...</p>',
-            '===CONTENT_END===',
-            '===END_POST===',
-        ];
-
-        $contentTypesXml = <<<'XML'
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-    <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-    <Default Extension="xml" ContentType="application/xml"/>
-    <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-</Types>
-XML;
-
-        $relsXml = <<<'XML'
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-    <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>
-XML;
-
-        $documentXml = $this->buildWordDocumentXml($lines);
-
-        $zip = new ZipArchive();
-        if ($zip->open($absolutePath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
-            throw new RuntimeException('Cannot create DOCX template.');
-        }
-
-        $zip->addFromString('[Content_Types].xml', $contentTypesXml);
-        $zip->addFromString('_rels/.rels', $relsXml);
-        $zip->addFromString('word/document.xml', $documentXml);
-        $zip->close();
-    }
-
-    private function buildWordDocumentXml(array $lines): string
-    {
-        $paragraphs = [];
-
-        foreach ($lines as $line) {
-            if ($line === '') {
-                $paragraphs[] = '<w:p/>';
-                continue;
-            }
-
-            $paragraphs[] = '<w:p><w:r><w:t xml:space="preserve">' . htmlspecialchars($line, ENT_XML1 | ENT_COMPAT, 'UTF-8') . '</w:t></w:r></w:p>';
-        }
-
-        $body = implode('', $paragraphs);
-
-        return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-            . '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-            . '<w:body>'
-            . $body
-            . '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>'
-            . '</w:body>'
-            . '</w:document>';
-    }
 }

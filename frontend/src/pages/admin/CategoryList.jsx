@@ -170,6 +170,58 @@ const INITIAL_FORM_DATA = {
     filterable_attribute_ids: [],
 };
 
+const escapeHtml = (value = '') => String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const buildImportErrorHtml = (errors = []) => (
+    errors
+        .map((error) => {
+            const rowLabel = error?.row ? `Dòng ${error.row}` : 'Dữ liệu';
+            const columnLabel = error?.column ? ` - ${escapeHtml(error.column)}` : '';
+            const message = escapeHtml(error?.message || 'Lỗi không xác định.');
+            return `${rowLabel}${columnLabel}: ${message}`;
+        })
+        .join('<br />')
+);
+
+const extractFilenameFromDisposition = (headerValue, fallbackFilename) => {
+    if (!headerValue) return fallbackFilename;
+
+    const utfMatch = headerValue.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utfMatch?.[1]) {
+        try {
+            return decodeURIComponent(utfMatch[1]);
+        } catch (error) {
+            return utfMatch[1];
+        }
+    }
+
+    const basicMatch = headerValue.match(/filename="?([^"]+)"?/i);
+    return basicMatch?.[1] || fallbackFilename;
+};
+
+const downloadBlobResponse = (response, fallbackFilename) => {
+    const blob = response?.data instanceof Blob
+        ? response.data
+        : new Blob([response?.data]);
+    const filename = extractFilenameFromDisposition(
+        response?.headers?.['content-disposition'],
+        fallbackFilename,
+    );
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(url);
+};
+
 const CategoryProductRow = ({
     product,
     index,
@@ -306,6 +358,10 @@ const CategoryList = () => {
     const [categoryProductsDirty, setCategoryProductsDirty] = useState(false);
     const [draggingProductId, setDraggingProductId] = useState(null);
     const [dragOverProductId, setDragOverProductId] = useState(null);
+    const importInputRef = useRef(null);
+    const [isExportingExcel, setIsExportingExcel] = useState(false);
+    const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
+    const [isImportingExcel, setIsImportingExcel] = useState(false);
 
     // Close dropdowns on outside click
     useEffect(() => {
@@ -720,6 +776,83 @@ const CategoryList = () => {
         }
     };
 
+    const handleDownloadTemplate = async () => {
+        setIsDownloadingTemplate(true);
+        try {
+            const response = await categoryApi.downloadImportTemplate();
+            downloadBlobResponse(response, 'mau-import-danh-muc-san-pham.xlsx');
+        } catch (error) {
+            console.error('Template download error:', error);
+            showModal({
+                title: 'Lỗi',
+                content: error?.response?.data?.message || 'Không thể tải file mẫu Excel.',
+                type: 'error',
+            });
+        } finally {
+            setIsDownloadingTemplate(false);
+        }
+    };
+
+    const handleDownloadExcel = async () => {
+        setIsExportingExcel(true);
+        try {
+            const response = await categoryApi.downloadExcel();
+            downloadBlobResponse(response, 'danh-muc-san-pham.xlsx');
+        } catch (error) {
+            console.error('Category export error:', error);
+            showModal({
+                title: 'Lỗi',
+                content: error?.response?.data?.message || 'Không thể xuất Excel danh mục sản phẩm.',
+                type: 'error',
+            });
+        } finally {
+            setIsExportingExcel(false);
+        }
+    };
+
+    const handleOpenImportPicker = () => {
+        if (isImportingExcel) return;
+        importInputRef.current?.click();
+    };
+
+    const handleImportFileChange = async (event) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+
+        if (!file) {
+            return;
+        }
+
+        const data = new FormData();
+        data.append('file', file);
+
+        setIsImportingExcel(true);
+        try {
+            const response = await categoryApi.importExcel(data);
+            showToast({
+                message: response?.data?.message || 'Import Excel thành công.',
+                type: 'success',
+                duration: 3500,
+            });
+            await fetchCategories();
+        } catch (error) {
+            console.error('Category import error:', error);
+            const importErrors = Array.isArray(error?.response?.data?.errors)
+                ? error.response.data.errors
+                : [];
+
+            showModal({
+                title: 'Import Excel thất bại',
+                content: importErrors.length > 0
+                    ? buildImportErrorHtml(importErrors)
+                    : (error?.response?.data?.message || 'Không thể import file Excel.'),
+                type: 'error',
+            });
+        } finally {
+            setIsImportingExcel(false);
+        }
+    };
+
     if (loading) return <div className="p-8 text-center text-stone">Đang tải danh sách...</div>;
 
     return (
@@ -755,6 +888,14 @@ const CategoryList = () => {
                         </div>
                     </div>
 
+                    <input
+                        ref={importInputRef}
+                        type="file"
+                        accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        className="hidden"
+                        onChange={handleImportFileChange}
+                    />
+
                     {/* Toolbar */}
                     <div className="bg-white border border-gold/10 p-2 shadow-sm rounded-sm flex items-center justify-between">
                         <div className="flex gap-1.5 items-center w-full max-w-3xl">
@@ -772,6 +913,39 @@ const CategoryList = () => {
                                 disabled={loading}
                             >
                                 <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>refresh</span>
+                            </button>
+
+                            <button
+                                onClick={handleDownloadTemplate}
+                                className={`bg-white border border-gold/20 p-1.5 hover:border-gold/40 hover:text-primary transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 shadow-sm ${isDownloadingTemplate ? 'text-primary' : 'text-stone'}`}
+                                title="Táº£i file máº«u Excel"
+                                disabled={isDownloadingTemplate}
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${isDownloadingTemplate ? 'animate-spin' : ''}`}>
+                                    {isDownloadingTemplate ? 'sync' : 'description'}
+                                </span>
+                            </button>
+
+                            <button
+                                onClick={handleDownloadExcel}
+                                className={`bg-white border border-gold/20 p-1.5 hover:border-gold/40 hover:text-primary transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 shadow-sm ${isExportingExcel ? 'text-primary' : 'text-stone'}`}
+                                title="Xuáº¥t Excel"
+                                disabled={isExportingExcel}
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${isExportingExcel ? 'animate-spin' : ''}`}>
+                                    {isExportingExcel ? 'sync' : 'download'}
+                                </span>
+                            </button>
+
+                            <button
+                                onClick={handleOpenImportPicker}
+                                className={`bg-white border border-gold/20 p-1.5 hover:border-gold/40 hover:text-primary transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 shadow-sm ${isImportingExcel ? 'text-primary' : 'text-stone'}`}
+                                title="Import Excel"
+                                disabled={isImportingExcel}
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${isImportingExcel ? 'animate-spin' : ''}`}>
+                                    {isImportingExcel ? 'sync' : 'upload_file'}
+                                </span>
                             </button>
 
                             <div className="w-px h-5 bg-gold/10 mx-1 shrink-0"></div>

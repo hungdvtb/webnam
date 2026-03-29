@@ -24,30 +24,33 @@ class FinanceReceiptController extends Controller
 
     public function bootstrap(Request $request)
     {
+        $validated = $request->validate([
+            'include_references' => 'nullable|boolean',
+        ]);
+
         return response()->json(
-            $this->financeReadService->receiptVoucherBootstrap($this->accountId($request))
+            $this->financeReadService->receiptVoucherBootstrap(
+                $this->accountId($request),
+                (bool) ($validated['include_references'] ?? false)
+            )
         );
     }
 
     public function index(Request $request)
     {
-        $validated = $request->validate([
-            'search' => 'nullable|string|max:180',
-            'counterparty_name' => 'nullable|string|max:180',
-            'counterparty_phone' => 'nullable|string|max:30',
-            'source_name' => 'nullable|string|max:180',
-            'category_id' => 'nullable|integer',
-            'payment_method' => 'nullable|string|max:60',
-            'status' => 'nullable|string|max:60',
-            'reference_type' => 'nullable|string|max:60',
-            'date_from' => 'nullable|date',
-            'date_to' => 'nullable|date',
-            'view' => 'nullable|string|max:20',
-            'per_page' => 'nullable|integer|min:1|max:100',
-        ]);
+        $validated = $this->validateReceiptListFilters($request);
 
         return response()->json(
             $this->financeReadService->paginatedReceiptVouchers($this->accountId($request), $validated)
+        );
+    }
+
+    public function summary(Request $request)
+    {
+        $validated = $this->validateReceiptListFilters($request);
+
+        return response()->json(
+            $this->financeReadService->receiptVoucherSummary($this->accountId($request), $validated)
         );
     }
 
@@ -245,6 +248,24 @@ class FinanceReceiptController extends Controller
         return $this->receiptVoucherQuery($withTrashed)
             ->whereIn('id', $validated['ids'])
             ->get();
+    }
+
+    private function validateReceiptListFilters(Request $request): array
+    {
+        return $request->validate([
+            'search' => 'nullable|string|max:180',
+            'counterparty_name' => 'nullable|string|max:180',
+            'counterparty_phone' => 'nullable|string|max:30',
+            'source_name' => 'nullable|string|max:180',
+            'category_id' => 'nullable|integer',
+            'payment_method' => 'nullable|string|max:60',
+            'status' => 'nullable|string|max:60',
+            'reference_type' => 'nullable|string|max:60',
+            'date_from' => 'nullable|date',
+            'date_to' => 'nullable|date',
+            'view' => 'nullable|string|max:20',
+            'per_page' => 'nullable|integer|min:1|max:100',
+        ]);
     }
 
     private function receiptVoucherQuery(bool $withTrashed = false)

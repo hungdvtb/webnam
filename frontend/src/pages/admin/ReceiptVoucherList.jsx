@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, NavLink } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import AccountSelector from '../../components/AccountSelector';
 import Pagination from '../../components/Pagination';
 import { receiptVoucherApi } from '../../services/api';
@@ -10,7 +10,6 @@ import {
 } from '../../utils/money';
 
 const panelClass = 'overflow-hidden rounded-sm border border-primary/10 bg-white shadow-sm';
-const toolbarPanelClass = 'rounded-sm border border-primary/10 bg-white p-3 shadow-sm';
 const dataPanelClass = 'overflow-hidden rounded-md border border-primary/10 bg-white shadow-xl';
 const inputClass = 'h-10 rounded-sm border border-primary/15 bg-white px-3 text-[13px] text-primary outline-none transition placeholder:text-primary/35 focus:border-primary';
 const selectClass = 'h-10 rounded-sm border border-primary/15 bg-white px-3 pr-8 text-[13px] text-primary outline-none transition focus:border-primary';
@@ -21,6 +20,7 @@ const iconButtonClass = 'inline-flex h-10 w-10 items-center justify-center round
 const dangerButtonClass = 'inline-flex h-10 items-center justify-center gap-2 rounded-sm bg-brick px-4 text-[13px] font-black text-white transition hover:bg-brick/90 disabled:cursor-not-allowed disabled:opacity-60';
 const summaryCardClass = 'rounded-sm border border-primary/10 bg-white p-4 shadow-sm';
 const checkboxClass = 'h-4 w-4 rounded-sm border-primary/20 accent-primary';
+const pageTitle = 'Phiếu thu';
 
 const toDateInputValue = (dateValue = new Date()) => {
     const date = new Date(dateValue);
@@ -732,41 +732,17 @@ export default function ReceiptVoucherList() {
 
     return (
         <div className="space-y-6">
-            <div className={toolbarPanelClass}>
-                <div className="flex flex-wrap gap-2">
-                    <NavLink
-                        to="/admin/finance"
-                        end
-                        className={({ isActive }) => `inline-flex h-11 items-center justify-center rounded-sm px-4 text-[13px] font-black transition ${isActive ? 'bg-primary text-white' : 'text-primary hover:bg-primary/5'}`}
-                    >
-                        Chi phí cố định
-                    </NavLink>
-                    <NavLink
-                        to="/admin/finance/receipts"
-                        className={({ isActive }) => `inline-flex h-11 items-center justify-center rounded-sm px-4 text-[13px] font-black transition ${isActive ? 'bg-primary text-white' : 'text-primary hover:bg-primary/5'}`}
-                    >
-                        Phiếu thu
-                    </NavLink>
-                    <NavLink
-                        to="/admin/finance/daily-profit"
-                        className={({ isActive }) => `inline-flex h-11 items-center justify-center rounded-sm px-4 text-[13px] font-black transition ${isActive ? 'bg-primary text-white' : 'text-primary hover:bg-primary/5'}`}
-                    >
-                        Tính toán lợi nhuận theo ngày
-                    </NavLink>
-                </div>
-            </div>
-
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div className="space-y-2">
                     <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">
-                        <span>Báo cáo</span>
+                        <span>Tài chính</span>
                         <span>/</span>
-                        <span className="text-primary">Phiếu thu</span>
+                        <span className="text-primary">{pageTitle}</span>
                     </div>
                     <div>
-                        <h1 className="text-[28px] font-black tracking-tight text-primary">Quản lý Phiếu thu</h1>
+                        <h1 className="text-[28px] font-black tracking-tight text-primary">{pageTitle}</h1>
                         <p className="mt-1 max-w-4xl text-[13px] text-primary/60">
-                            Theo dõi toàn bộ các khoản đã thu, liên kết nhanh với đơn hàng, vận đơn, công nợ hoặc phiếu hoàn và quản lý vòng đời phiếu theo đúng chuẩn bảng admin hiện có.
+                            Theo dõi toàn bộ khoản thu, quản lý trạng thái phiếu, lọc nhanh theo thời gian và đối tượng nộp mà không thay đổi luồng thao tác hiện có.
                         </p>
                     </div>
                 </div>

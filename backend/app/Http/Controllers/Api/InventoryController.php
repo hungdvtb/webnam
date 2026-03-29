@@ -516,7 +516,9 @@ class InventoryController extends Controller
 
     public function supplierPrices(Request $request, int $id)
     {
-        $supplier = Supplier::query()->findOrFail($id);
+        $isAllSuppliers = $id === 0;
+        $supplier = $isAllSuppliers ? null : Supplier::query()->findOrFail($id);
+
         $query = Product::query()
             ->select([
                 'products.id',
@@ -534,19 +536,6 @@ class InventoryController extends Controller
                 'products.created_at',
                 'products.deleted_at',
             ])
-            ->leftJoin('supplier_product_prices as supplier_price_rows', function ($join) use ($supplier) {
-                $join
-                    ->on('supplier_price_rows.product_id', '=', 'products.id')
-                    ->where('supplier_price_rows.supplier_id', '=', $supplier->id);
-            })
-            ->where(function ($builder) use ($supplier) {
-                $this->applySupplierMembershipFilter($builder, $supplier->id);
-                $builder
-                    ->orWhereNotNull('supplier_price_rows.id')
-                    ->orWhereHas('variations', function ($variationQuery) use ($supplier) {
-                        $this->applySupplierMembershipFilter($variationQuery, $supplier->id);
-                    });
-            })
             ->whereDoesntHave('parentConfigurable')
             ->with([
                 'category:id,name',
@@ -557,7 +546,7 @@ class InventoryController extends Controller
                         ->select(['id', 'supplier_id', 'product_id', 'supplier_product_code', 'unit_cost', 'updated_at'])
                         ->with(['supplier:id,name,code']);
                 },
-                'variations' => function ($builder) use ($supplier) {
+                'variations' => function ($builder) use ($isAllSuppliers, $supplier) {
                     $builder
                         ->select([
                             'products.id',
@@ -576,8 +565,10 @@ class InventoryController extends Controller
                             'products.created_at',
                             'products.deleted_at',
                         ])
-                        ->where(function ($variationQuery) use ($supplier) {
-                            $this->applySupplierMembershipFilter($variationQuery, $supplier->id);
+                        ->when(!$isAllSuppliers, function ($variationBuilder) use ($supplier) {
+                            $variationBuilder->where(function ($variationQuery) use ($supplier) {
+                                $this->applySupplierMembershipFilter($variationQuery, $supplier->id);
+                            });
                         })
                         ->with([
                             'category:id,name',
@@ -594,40 +585,85 @@ class InventoryController extends Controller
                 },
             ]);
 
+        if ($isAllSuppliers) {
+            $latestSupplierPriceRows = SupplierProductPrice::withoutGlobalScopes()
+                ->selectRaw('MAX(id) as id, product_id')
+                ->groupBy('product_id');
+
+            $query
+                ->leftJoinSub($latestSupplierPriceRows, 'latest_supplier_price_rows', function ($join) {
+                    $join->on('latest_supplier_price_rows.product_id', '=', 'products.id');
+                })
+                ->leftJoin('supplier_product_prices as supplier_price_rows', 'supplier_price_rows.id', '=', 'latest_supplier_price_rows.id');
+        } else {
+            $query
+                ->leftJoin('supplier_product_prices as supplier_price_rows', function ($join) use ($supplier) {
+                    $join
+                        ->on('supplier_price_rows.product_id', '=', 'products.id')
+                        ->where('supplier_price_rows.supplier_id', '=', $supplier->id);
+                })
+                ->where(function ($builder) use ($supplier) {
+                    $this->applySupplierMembershipFilter($builder, $supplier->id);
+                    $builder
+                        ->orWhereNotNull('supplier_price_rows.id')
+                        ->orWhereHas('variations', function ($variationQuery) use ($supplier) {
+                            $this->applySupplierMembershipFilter($variationQuery, $supplier->id);
+                        });
+                });
+        }
+
         if ($request->filled('search')) {
             $search = trim((string) $request->input('search'));
-            $query->where(function ($productQuery) use ($search, $supplier) {
+            $query->where(function ($productQuery) use ($search, $isAllSuppliers, $supplier) {
                 $productQuery
                     ->where('products.sku', 'like', '%' . $search . '%')
                     ->orWhere('products.name', 'like', '%' . $search . '%')
                     ->orWhere('supplier_price_rows.supplier_product_code', 'like', '%' . $search . '%')
+                    ->orWhereHas('supplierPrices', function ($priceQuery) use ($search, $isAllSuppliers, $supplier) {
+                        if (!$isAllSuppliers && $supplier) {
+                            $priceQuery->where('supplier_id', $supplier->id);
+                        }
+
+                        $priceQuery->where('supplier_product_code', 'like', '%' . $search . '%');
+                    })
                     ->orWhereHas('variations', function ($variationQuery) use ($search) {
                         $variationQuery
                             ->where('products.sku', 'like', '%' . $search . '%')
                             ->orWhere('products.name', 'like', '%' . $search . '%');
                     })
-                    ->orWhereHas('variations.supplierPrices', function ($priceQuery) use ($search, $supplier) {
-                        $priceQuery
-                            ->where('supplier_id', $supplier->id)
-                            ->where('supplier_product_code', 'like', '%' . $search . '%');
+                    ->orWhereHas('variations.supplierPrices', function ($priceQuery) use ($search, $isAllSuppliers, $supplier) {
+                        if (!$isAllSuppliers && $supplier) {
+                            $priceQuery->where('supplier_id', $supplier->id);
+                        }
+
+                        $priceQuery->where('supplier_product_code', 'like', '%' . $search . '%');
                     });
             });
         }
 
         if ($request->filled('sku')) {
             $sku = trim((string) $request->input('sku'));
-            $query->where(function ($productQuery) use ($sku, $supplier) {
+            $query->where(function ($productQuery) use ($sku, $isAllSuppliers, $supplier) {
                 $productQuery
                     ->where('products.sku', 'like', '%' . $sku . '%')
                     ->orWhere('supplier_price_rows.supplier_product_code', 'like', '%' . $sku . '%')
+                    ->orWhereHas('supplierPrices', function ($priceQuery) use ($sku, $isAllSuppliers, $supplier) {
+                        if (!$isAllSuppliers && $supplier) {
+                            $priceQuery->where('supplier_id', $supplier->id);
+                        }
+
+                        $priceQuery->where('supplier_product_code', 'like', '%' . $sku . '%');
+                    })
                     ->orWhereHas('variations', function ($variationQuery) use ($sku) {
                         $variationQuery
                             ->where('products.sku', 'like', '%' . $sku . '%');
                     })
-                    ->orWhereHas('variations.supplierPrices', function ($priceQuery) use ($sku, $supplier) {
-                        $priceQuery
-                            ->where('supplier_id', $supplier->id)
-                            ->where('supplier_product_code', 'like', '%' . $sku . '%');
+                    ->orWhereHas('variations.supplierPrices', function ($priceQuery) use ($sku, $isAllSuppliers, $supplier) {
+                        if (!$isAllSuppliers && $supplier) {
+                            $priceQuery->where('supplier_id', $supplier->id);
+                        }
+
+                        $priceQuery->where('supplier_product_code', 'like', '%' . $sku . '%');
                     });
             });
         }
@@ -644,21 +680,39 @@ class InventoryController extends Controller
         }
 
         if ($request->boolean('missing_supplier_price')) {
-            $query->where(function ($builder) use ($supplier) {
-                $builder
-                    ->whereNull('supplier_price_rows.id')
-                    ->orWhereNull('supplier_price_rows.unit_cost')
-                    ->orWhere('supplier_price_rows.unit_cost', '<=', 0)
-                    ->orWhereHas('variations', function ($variationQuery) use ($supplier) {
-                        $this->applySupplierMembershipFilter($variationQuery, $supplier->id);
-                        $variationQuery->whereDoesntHave('supplierPrices', function ($priceQuery) use ($supplier) {
+            if ($isAllSuppliers) {
+                $query->where(function ($builder) {
+                    $builder
+                        ->whereDoesntHave('supplierPrices', function ($priceQuery) {
                             $priceQuery
-                                ->where('supplier_id', $supplier->id)
                                 ->whereNotNull('unit_cost')
                                 ->where('unit_cost', '>', 0);
+                        })
+                        ->orWhereHas('variations', function ($variationQuery) {
+                            $variationQuery->whereDoesntHave('supplierPrices', function ($priceQuery) {
+                                $priceQuery
+                                    ->whereNotNull('unit_cost')
+                                    ->where('unit_cost', '>', 0);
+                            });
                         });
-                    });
-            });
+                });
+            } else {
+                $query->where(function ($builder) use ($supplier) {
+                    $builder
+                        ->whereNull('supplier_price_rows.id')
+                        ->orWhereNull('supplier_price_rows.unit_cost')
+                        ->orWhere('supplier_price_rows.unit_cost', '<=', 0)
+                        ->orWhereHas('variations', function ($variationQuery) use ($supplier) {
+                            $this->applySupplierMembershipFilter($variationQuery, $supplier->id);
+                            $variationQuery->whereDoesntHave('supplierPrices', function ($priceQuery) use ($supplier) {
+                                $priceQuery
+                                    ->where('supplier_id', $supplier->id)
+                                    ->whereNotNull('unit_cost')
+                                    ->where('unit_cost', '>', 0);
+                            });
+                        });
+                });
+            }
         }
 
         if ($request->boolean('multiple_suppliers')) {
@@ -735,7 +789,9 @@ class InventoryController extends Controller
 
                 return $ids;
             });
-        $supplierPriceMap = $this->supplierPriceMapBySupplierId($supplier->id, $pageProductIds);
+        $supplierPriceMap = $isAllSuppliers
+            ? $this->latestSupplierPriceMap($pageProductIds)
+            : $this->supplierPriceMapBySupplierId($supplier->id, $pageProductIds);
 
         $paginated->getCollection()->transform(function (Product $product) use ($supplierPriceMap) {
             return $this->inventoryProductPayload(
@@ -3057,6 +3113,25 @@ class InventoryController extends Controller
             ->where('supplier_id', $supplierId)
             ->whereIn('product_id', $ids)
             ->with(['updater:id,name'])
+            ->get()
+            ->keyBy('product_id');
+    }
+
+    private function latestSupplierPriceMap($productIds)
+    {
+        $ids = collect($productIds)->map(fn ($id) => (int) $id)->filter()->unique()->values()->all();
+        if (empty($ids)) {
+            return collect();
+        }
+
+        $latestPriceIds = SupplierProductPrice::withoutGlobalScopes()
+            ->selectRaw('MAX(id)')
+            ->whereIn('product_id', $ids)
+            ->groupBy('product_id');
+
+        return SupplierProductPrice::withoutGlobalScopes()
+            ->whereIn('id', $latestPriceIds)
+            ->with(['supplier:id,name,code', 'updater:id,name'])
             ->get()
             ->keyBy('product_id');
     }

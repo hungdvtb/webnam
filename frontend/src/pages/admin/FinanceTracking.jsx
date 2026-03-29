@@ -1,10 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { NavLink } from 'react-router-dom';
 import AccountSelector from '../../components/AccountSelector';
 import { financeApi } from '../../services/api';
 
 const panelClass = 'overflow-hidden rounded-sm border border-primary/10 bg-white shadow-sm';
-const toolbarPanelClass = 'rounded-sm border border-primary/10 bg-white p-2 shadow-sm';
 const dataPanelClass = 'overflow-hidden rounded-md border border-primary/10 bg-white shadow-xl';
 const tableFrameClass = 'overflow-auto table-scrollbar relative';
 const sheetTableClass = 'min-w-full border-collapse table-fixed text-left admin-text-13';
@@ -345,30 +343,6 @@ export default function FinanceTracking() {
 
     return (
         <div className="space-y-6">
-            <div className={toolbarPanelClass}>
-                <div className="flex flex-wrap gap-2">
-                    <NavLink
-                        to="/admin/finance"
-                        end
-                        className={({ isActive }) => `inline-flex h-11 items-center justify-center rounded-sm px-4 text-[13px] font-black transition ${isActive ? 'bg-primary text-white' : 'text-primary hover:bg-primary/5'}`}
-                    >
-                        Chi phí cố định
-                    </NavLink>
-                    <NavLink
-                        to="/admin/finance/receipts"
-                        className={({ isActive }) => `inline-flex h-11 items-center justify-center rounded-sm px-4 text-[13px] font-black transition ${isActive ? 'bg-primary text-white' : 'text-primary hover:bg-primary/5'}`}
-                    >
-                        Phiếu thu
-                    </NavLink>
-                    <NavLink
-                        to="/admin/finance/daily-profit"
-                        className={({ isActive }) => `inline-flex h-11 items-center justify-center rounded-sm px-4 text-[13px] font-black transition ${isActive ? 'bg-primary text-white' : 'text-primary hover:bg-primary/5'}`}
-                    >
-                        Tính toán lợi nhuận theo ngày
-                    </NavLink>
-                </div>
-            </div>
-
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div className="space-y-2">
                     <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.14em] text-primary/45">

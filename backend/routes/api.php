@@ -273,6 +273,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/finance/dashboard', [FinanceController::class, 'dashboard']);
     Route::get('/finance/options', [FinanceController::class, 'options']);
     Route::get('/finance/receipts/bootstrap', [FinanceReceiptController::class, 'bootstrap']);
+    Route::get('/finance/receipts/summary', [FinanceReceiptController::class, 'summary']);
     Route::get('/finance/receipts', [FinanceReceiptController::class, 'index']);
     Route::post('/finance/receipts', [FinanceReceiptController::class, 'store']);
     Route::post('/finance/receipts/bulk-delete', [FinanceReceiptController::class, 'bulkDelete']);

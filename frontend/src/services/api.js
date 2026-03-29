@@ -46,10 +46,12 @@ const multipartConfig = (data) => (
 const requestCache = {
     orderBootstrap: new Map(),
     orderDetail: new Map(),
+    receiptBootstrap: new Map(),
 };
 
 const ORDER_BOOTSTRAP_CACHE_TTL_MS = 60 * 1000;
 const ORDER_DETAIL_CACHE_TTL_MS = 30 * 1000;
+const RECEIPT_BOOTSTRAP_CACHE_TTL_MS = 60 * 1000;
 
 const resolveActiveApiCacheNamespace = () => {
     if (typeof window === 'undefined') return 'server';
@@ -107,6 +109,9 @@ const orderBootstrapCacheKey = (params = {}) => {
 };
 
 const orderDetailCacheKey = (id) => `${resolveActiveApiCacheNamespace()}::${id}`;
+const receiptBootstrapCacheKey = (params = {}) => (
+    `${resolveActiveApiCacheNamespace()}::${params?.include_references ? 'with-references' : 'base'}`
+);
 
 export const productApi = {
     getAll: (params, signal) => api.get('/products', { params, signal }),
@@ -431,8 +436,23 @@ export const financeApi = {
 };
 
 export const receiptVoucherApi = {
-    getBootstrap: () => api.get('/finance/receipts/bootstrap'),
-    getAll: (params) => api.get('/finance/receipts', { params }),
+    getBootstrap: (params, signal) => api.get('/finance/receipts/bootstrap', { params, signal }),
+    getBootstrapCached: (params) => primeCachedRequest(
+        requestCache.receiptBootstrap,
+        receiptBootstrapCacheKey(params),
+        () => api.get('/finance/receipts/bootstrap', { params }),
+        RECEIPT_BOOTSTRAP_CACHE_TTL_MS
+    ),
+    invalidateBootstrap: (params) => {
+        if (!params) {
+            requestCache.receiptBootstrap.clear();
+            return;
+        }
+
+        invalidateCachedResponse(requestCache.receiptBootstrap, receiptBootstrapCacheKey(params));
+    },
+    getAll: (params, signal) => api.get('/finance/receipts', { params, signal }),
+    getSummary: (params, signal) => api.get('/finance/receipts/summary', { params, signal }),
     getOne: (id) => api.get(`/finance/receipts/${id}`),
     create: (data) => api.post('/finance/receipts', data),
     update: (id, data) => api.put(`/finance/receipts/${id}`, data),

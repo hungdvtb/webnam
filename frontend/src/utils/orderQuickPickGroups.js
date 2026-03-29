@@ -1,3 +1,5 @@
+import { normalizeRoundedImportCostNumber } from './money';
+
 export const ORDER_QUICK_PICK_MAX_ITEMS = 15;
 
 const normalizeText = (value) => String(value ?? '').trim();
@@ -37,7 +39,7 @@ export const normalizeOrderQuickPickItems = (items = []) => (
                 option_label: normalizeText(item?.option_label),
                 main_image: normalizeText(item?.main_image),
                 price: Number(item?.price ?? 0) || 0,
-                cost_price: Number(item?.cost_price ?? 0) || 0,
+                cost_price: normalizeRoundedImportCostNumber(item?.cost_price) ?? 0,
                 order: index + 1,
             };
         })

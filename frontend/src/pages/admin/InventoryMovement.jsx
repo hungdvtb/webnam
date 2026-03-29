@@ -103,6 +103,7 @@ const trashSlipTypeLabels = {
 const defaultProductFilters = { search: '', status: '', cost_source: '', stock_alert: '', type: '', category_id: '', variant_scope: '', date_from: '', date_to: '' };
 const defaultSupplierFilters = { search: '', status: '', month: '', date_from: '', date_to: '' };
 const defaultSupplierCatalogFilters = { sku: '', name: '', category_id: '', type: '', variant_scope: '', missing_supplier_price: '', multiple_suppliers: '' };
+const ALL_SUPPLIER_CATALOG_VALUE = 'all';
 const createDefaultSimpleFilters = () => ({
     imports: { search: '', date_from: '', date_to: '', inventory_import_status_id: '', entry_mode: '', has_invoice: '' },
     exports: { search: '', date_from: '', date_to: '', export_kind: '' },
@@ -602,6 +603,24 @@ const sortSupplierComparisons = (items = []) => [...items]
         ...item,
         is_lowest: index === 0,
     }));
+const buildSupplierCatalogDisplayName = (row, selectedSupplierName = '') => {
+    if (String(selectedSupplierName || '').trim()) {
+        return selectedSupplierName;
+    }
+
+    const supplierNames = Array.from(new Set([
+        ...(Array.isArray(row?.suppliers) ? row.suppliers.map((item) => item?.name) : []),
+        ...(Array.isArray(row?.supplier_price_comparisons) ? row.supplier_price_comparisons.map((item) => item?.supplier_name) : []),
+        ...(Array.isArray(row?.variants) ? row.variants.flatMap((variant) => (
+            Array.isArray(variant?.suppliers) ? variant.suppliers.map((item) => item?.name) : []
+        )) : []),
+        ...(Array.isArray(row?.variants) ? row.variants.flatMap((variant) => (
+            Array.isArray(variant?.supplier_price_comparisons) ? variant.supplier_price_comparisons.map((item) => item?.supplier_name) : []
+        )) : []),
+    ].map((value) => String(value || '').trim()).filter(Boolean)));
+
+    return supplierNames.length ? supplierNames.join(', ') : 'Chưa gắn NCC';
+};
 const formatDateTime = (value) => {
     if (!value) return '-';
     const date = new Date(value);
@@ -900,7 +919,7 @@ const applyImportProductData = (item, product) => ({
     product_sku: product.sku,
     supplier_product_code: product.supplier_product_code || item.supplier_product_code || '',
     unit_name: product.unit_name || product.unit?.name || item.unit_name || '',
-    unit_cost: String(Math.round(Number(product.supplier_unit_cost ?? product.current_cost ?? product.expected_cost ?? 0))),
+    unit_cost: String(normalizeRoundedImportCostNumber(product.supplier_unit_cost ?? product.current_cost ?? product.expected_cost ?? 0) ?? 0),
     received_quantity: item.received_quantity || '0',
     mapping_status: 'matched',
     mapping_label: item.mapping_status === 'unmatched' ? 'Đã map thủ công' : '',
@@ -1713,6 +1732,7 @@ const supplierPriceTableBaseColumns = [
     { id: 'price', label: 'Giá bán', minWidth: 110, align: 'right' },
     { id: 'unit_cost', label: 'Giá nhập dự kiến', minWidth: 160, align: 'right' },
     { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 125, align: 'right' },
+    { id: 'supplier_name', label: 'Nhà CC', minWidth: 180 },
     { id: 'updated_at', label: 'Sửa gần nhất', minWidth: 150, align: 'center' },
     { id: 'actions', label: 'Thao tác', minWidth: 120, align: 'center' },
 ];
@@ -3013,6 +3033,11 @@ const InventoryMovement = () => {
     const [lots, setLots] = useState([]);
     const [trashItems, setTrashItems] = useState([]);
 
+    const isAllSuppliersSelected = selectedSupplierId === ALL_SUPPLIER_CATALOG_VALUE;
+    const hasSupplierCatalogSelection = selectedSupplierId !== null && selectedSupplierId !== '';
+    const hasSpecificSupplierSelection = typeof selectedSupplierId === 'number' && Number.isFinite(selectedSupplierId);
+    const selectedSupplierCatalogApiId = isAllSuppliersSelected ? 0 : (hasSpecificSupplierSelection ? selectedSupplierId : null);
+
     const [productPagination, setProductPagination] = useState(emptyPagination);
     const [supplierPagination, setSupplierPagination] = useState(emptyPagination);
     const [supplierCatalogPagination, setSupplierCatalogPagination] = useState(emptyPagination);
@@ -4182,7 +4207,12 @@ const InventoryMovement = () => {
             setSuppliers(rows);
             setSupplierSummary(response.data.summary || null);
             pageState(setSupplierPagination, response);
-            setSelectedSupplierId((prev) => rows.some((item) => item.id === prev) ? prev : (rows[0]?.id || null));
+            setSelectedSupplierId((prev) => {
+                if (prev === ALL_SUPPLIER_CATALOG_VALUE) {
+                    return prev;
+                }
+                return rows.some((item) => item.id === prev) ? prev : (rows[0]?.id || null);
+            });
         } catch (error) {
             fail(error, 'Không thể tải nhà cung cấp.');
         } finally {
@@ -4197,10 +4227,10 @@ const InventoryMovement = () => {
         filtersOverride = supplierCatalogFilters,
         searchOverride = supplierQuickSearch
     ) => {
-        if (!selectedSupplierId) return;
+        if (selectedSupplierCatalogApiId == null) return;
         setFlag('supplierCatalog', true);
         try {
-            const response = await inventoryApi.getSupplierPrices(selectedSupplierId, {
+            const response = await inventoryApi.getSupplierPrices(selectedSupplierCatalogApiId, {
                 ...filtersOverride,
                 search: String(searchOverride || '').trim(),
                 page,
@@ -4229,7 +4259,7 @@ const InventoryMovement = () => {
     };
 
     const refreshSupplierCatalog = async () => {
-        if (!selectedSupplierId) return;
+        if (!hasSupplierCatalogSelection) return;
         setPriceDrafts({});
         setCodeDrafts({});
         setGroupPriceDrafts({});
@@ -4520,8 +4550,13 @@ const InventoryMovement = () => {
         restoredSupplierContextRef.current = true;
         skipSupplierSearchResetRef.current = true;
         goToTab(returnContext.activeTab || 'supplierPrices');
-        if (returnContext.selectedSupplierId) {
-            setSelectedSupplierId(Number(returnContext.selectedSupplierId));
+        if (returnContext.selectedSupplierId !== undefined && returnContext.selectedSupplierId !== null) {
+            const restoredSupplierId = String(returnContext.selectedSupplierId);
+            setSelectedSupplierId(
+                restoredSupplierId === ALL_SUPPLIER_CATALOG_VALUE
+                    ? ALL_SUPPLIER_CATALOG_VALUE
+                    : Number(returnContext.selectedSupplierId)
+            );
         }
         setSupplierQuickSearch(returnContext.supplierQuickSearch || '');
         setSupplierCatalogFilters((prev) => ({
@@ -4582,13 +4617,13 @@ const InventoryMovement = () => {
 
     useEffect(() => {
         if (activeTab !== 'supplierPrices') return;
-        if (selectedSupplierId) {
+        if (hasSupplierCatalogSelection) {
             fetchSupplierCatalog(supplierCatalogPagination.current_page || 1);
         } else {
             setSupplierCatalog([]);
             setSupplierCatalogPagination(emptyPagination);
         }
-    }, [activeTab, selectedSupplierId]);
+    }, [activeTab, hasSupplierCatalogSelection, selectedSupplierId]);
 
     useEffect(() => {
         if (!importModal.open) return;
@@ -4682,7 +4717,7 @@ const InventoryMovement = () => {
     ]);
 
     useEffect(() => {
-        if (activeTab !== 'supplierPrices' || !selectedSupplierId) return undefined;
+        if (activeTab !== 'supplierPrices' || !hasSupplierCatalogSelection) return undefined;
         const currentSearchState = {
             search: supplierQuickSearch,
             sku: supplierCatalogFilters.sku,
@@ -4706,7 +4741,7 @@ const InventoryMovement = () => {
             fetchSupplierCatalog(1);
         }, 250);
         return () => clearTimeout(timer);
-    }, [activeTab, selectedSupplierId, supplierQuickSearch, supplierCatalogFilters.sku, supplierCatalogFilters.name]);
+    }, [activeTab, hasSupplierCatalogSelection, selectedSupplierId, supplierQuickSearch, supplierCatalogFilters.sku, supplierCatalogFilters.name]);
 
     const ensureSuppliersLoaded = async () => {
         if (suppliers.length > 0) {
@@ -4717,9 +4752,18 @@ const InventoryMovement = () => {
     };
 
     const currentSupplier = useMemo(
-        () => suppliers.find((item) => item.id === selectedSupplierId) || null,
-        [selectedSupplierId, suppliers]
+        () => (hasSpecificSupplierSelection ? (suppliers.find((item) => item.id === selectedSupplierId) || null) : null),
+        [hasSpecificSupplierSelection, selectedSupplierId, suppliers]
     );
+    const supplierCatalogScopeLabel = currentSupplier?.name || (isAllSuppliersSelected ? 'Tất cả' : 'Chưa chọn');
+    const supplierCatalogTitle = currentSupplier
+        ? `Giá nhập - ${currentSupplier.name}`
+        : (isAllSuppliersSelected ? 'Giá nhập - Tất cả nhà cung cấp' : 'Giá nhập từng nhà');
+    const supplierCatalogDescription = currentSupplier
+        ? 'Mỗi nhà cung cấp có một bảng giá nhập riêng. Khi tạo phiếu nhập, giá sẽ tự đổ từ bảng này và vẫn có thể sửa tay.'
+        : (isAllSuppliersSelected
+            ? 'Đang hiển thị toàn bộ sản phẩm, không lọc theo nhà cung cấp.'
+            : 'Chọn nhà cung cấp trong mục Nhà cung cấp hoặc đổi nhanh ngay tại đây để mở thư viện giá nhập.');
 
     const supplierCatalogItemRows = useMemo(() => {
         const rows = [];
@@ -5015,7 +5059,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     ], [allVisibleSelected, someVisibleSelected, visibleSupplierItemIds]);
 
     const applyPriceToIds = async (ids, cleaned) => {
-        if (!selectedSupplierId || !ids.length || !cleaned) return false;
+        if (!hasSpecificSupplierSelection || !ids.length || !cleaned) return false;
         try {
             const numericValue = Number(cleaned);
             await inventoryApi.bulkSupplierPrices(selectedSupplierId, {
@@ -5041,7 +5085,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
 
     const applyBulkPrice = async () => {
         const cleaned = normalizeRoundedImportCostDraft(bulkPrice);
-        if (!selectedSupplierId || !selectedIds.length || !cleaned) return showToast({ type: 'warning', message: 'Hãy chọn dòng và nhập giá.' });
+        if (!hasSpecificSupplierSelection || !selectedIds.length || !cleaned) return showToast({ type: 'warning', message: 'Hãy chọn dòng và nhập giá.' });
         const success = await applyPriceToIds(selectedIds, cleaned);
         if (success) {
             showToast({ type: 'success', message: 'Đã áp giá cho các dòng đã chọn.' });
@@ -5125,7 +5169,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         const supplierProductCode = String(hasSupplierCodeOverride ? (overrides.supplier_product_code ?? '') : (row.supplier_product_code ?? '')).trim();
         const currentSupplierCode = String(row.supplier_product_code || '').trim();
         const productId = Number(row.product_id || row.id || 0);
-        if (!selectedSupplierId || row.row_kind === 'group') return false;
+        if (!hasSpecificSupplierSelection || row.row_kind === 'group') return false;
         if (!productId) return false;
         if (Number(row.unit_cost || 0) === numericValue && currentSupplierCode === supplierProductCode) return false;
         if (savingSupplierPriceRowsRef.current.has(row.id)) return false;
@@ -5178,7 +5222,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     const saveSingleSupplierPrice = async (row, explicitValue = null) => {
         const rawValue = explicitValue ?? priceDrafts[row.id] ?? row.unit_cost ?? '';
         const cleaned = normalizeRoundedImportCostDraft(rawValue);
-        if (!selectedSupplierId || row.row_kind === 'group' || cleaned === '') return;
+        if (!hasSpecificSupplierSelection || row.row_kind === 'group' || cleaned === '') return;
 
         await saveSupplierPriceRow(row, { unit_cost: cleaned });
     };
@@ -5186,7 +5230,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     const saveSingleSupplierCode = async (row, explicitValue = null) => {
         const normalizedCode = String(explicitValue ?? codeDrafts[row.id] ?? row.supplier_product_code ?? '').trim();
         const currentCode = String(row.supplier_product_code || '').trim();
-        if (!selectedSupplierId || row.row_kind === 'group' || normalizedCode === currentCode) return;
+        if (!hasSpecificSupplierSelection || row.row_kind === 'group' || normalizedCode === currentCode) return;
 
         await saveSupplierPriceRow(row, {
             supplier_product_code: normalizedCode,
@@ -5194,7 +5238,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     };
 
     const saveSupplierPrices = async () => {
-        if (!selectedSupplierId || !selectedIds.length) return showToast({ type: 'warning', message: 'Hãy chọn ít nhất một dòng giá.' });
+        if (!hasSpecificSupplierSelection || !selectedIds.length) return showToast({ type: 'warning', message: 'Hãy chọn ít nhất một dòng giá.' });
         setFlag('saving', true);
         try {
             await inventoryApi.bulkSupplierPrices(selectedSupplierId, {
@@ -5299,12 +5343,12 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     };
 
     const openCreateSupplierPrice = () => {
-        if (!selectedSupplierId) return showToast({ type: 'warning', message: 'Hãy chọn nhà cung cấp trước.' });
+        if (!hasSpecificSupplierSelection) return showToast({ type: 'warning', message: 'Hãy chọn nhà cung cấp trước.' });
         setSupplierPriceModal({ open: true, form: createSupplierPriceForm() });
     };
 
     const saveSupplierPriceEntry = async () => {
-        if (!selectedSupplierId) return showToast({ type: 'warning', message: 'Hãy chọn nhà cung cấp trước.' });
+        if (!hasSpecificSupplierSelection) return showToast({ type: 'warning', message: 'Hãy chọn nhà cung cấp trước.' });
         const form = supplierPriceModal.form;
         if (!form.product_id) return showToast({ type: 'warning', message: 'Vui lòng chọn sản phẩm.' });
         if (!String(form.unit_cost || '').trim()) return showToast({ type: 'warning', message: 'Vui lòng nhập giá nhập.' });
@@ -5328,7 +5372,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     };
 
     const removeSupplierPrice = async (row) => {
-        if (!selectedSupplierId) return;
+        if (!hasSpecificSupplierSelection) return;
         if (!row.supplier_price_id) return showToast({ type: 'warning', message: 'Dòng này chưa có giá nhập để xóa.' });
         if (!window.confirm(`Xóa giá nhập của "${row.name}"?`)) return;
         try {
@@ -5721,7 +5765,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             fetchOverview();
             fetchLots(lotPagination.current_page || 1);
             fetchSuppliers(supplierPagination.current_page || 1);
-            if (selectedSupplierId) fetchSupplierCatalog(supplierCatalogPagination.current_page || 1);
+            if (hasSupplierCatalogSelection) fetchSupplierCatalog(supplierCatalogPagination.current_page || 1);
         } catch (error) {
             fail(error, 'Không thể lưu phiếu nhập.');
         } finally {
@@ -6062,25 +6106,25 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
 
     const supplierPriceSummaryItems = useMemo(() => {
         return [
-            { label: 'Nhà cung cấp', value: currentSupplier?.name || 'Chưa chọn' },
+            { label: 'Nhà cung cấp', value: supplierCatalogScopeLabel },
             { label: 'Dòng đã chọn', value: formatNumber(selectedIds.length) },
             { label: 'Dòng đang hiển thị', value: formatNumber(visibleSupplierItemIds.length) },
             { label: 'Dòng đã nhập giá', value: formatNumber(Object.keys(priceDrafts).length) },
         ];
-    }, [currentSupplier?.name, priceDrafts, selectedIds.length, visibleSupplierItemIds.length]);
+    }, [priceDrafts, selectedIds.length, supplierCatalogScopeLabel, visibleSupplierItemIds.length]);
 
     const supplierPriceSummaryCards = useMemo(() => {
         const itemRows = supplierRows.filter((row) => row.row_kind === 'item');
         const pricedRows = itemRows.filter((row) => Number(priceDrafts[row.id] ?? row.unit_cost ?? 0) > 0);
         return [
-            { label: 'Nhà cung cấp', value: currentSupplier?.name || 'Chưa chọn' },
+            { label: 'Nhà cung cấp', value: supplierCatalogScopeLabel },
             { label: 'Mã đang hiển thị', value: formatNumber(itemRows.length) },
             { label: 'Đã có giá dự kiến', value: formatNumber(pricedRows.length) },
             { label: 'Chưa có giá', value: formatNumber(Math.max(itemRows.length - pricedRows.length, 0)) },
             { label: 'Đang chọn sửa nhanh', value: formatNumber(selectedIds.length) },
-            { label: 'Tổng tiền nhập', value: formatCurrency(currentSupplier?.imported_amount_total || 0) },
+            { label: 'Tổng tiền nhập', value: currentSupplier ? formatCurrency(currentSupplier.imported_amount_total || 0) : '-' },
         ];
-    }, [currentSupplier?.imported_amount_total, currentSupplier?.name, priceDrafts, selectedIds.length, supplierRows]);
+    }, [currentSupplier, priceDrafts, selectedIds.length, supplierCatalogScopeLabel, supplierRows]);
 
     const simpleSummaryMap = useMemo(() => {
         const trashCounts = trashItems.reduce((result, row) => {
@@ -6254,6 +6298,9 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     </div>
                 );
             }
+            if (columnId === 'supplier_name') {
+                return <CellText primary={buildSupplierCatalogDisplayName({ ...row, supplier_price_comparisons: row.comparison_items })} />;
+            }
             if (columnId === 'actions') {
                 return (
                     <button
@@ -6313,14 +6360,18 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                             onChange={(event) => setGroupPriceDrafts((prev) => ({ ...prev, [row.id]: normalizeRoundedImportCostDraft(event.target.value) }))}
                             placeholder="Giá nhóm"
                             className="h-8 w-full rounded-sm border border-primary/15 px-2 text-right text-[13px] outline-none focus:border-primary"
+                            disabled={!hasSpecificSupplierSelection}
                         />
-                        <button type="button" onClick={() => applyGroupPrice(row.id)} className={ghostButton}>Áp nhóm</button>
+                        <button type="button" onClick={() => applyGroupPrice(row.id)} disabled={!hasSpecificSupplierSelection} className={ghostButton}>Áp nhóm</button>
                     </div>
                 );
             }
             if (columnId === 'current_cost') {
                 const effectiveCurrentCost = row.current_cost ?? row.display_cost ?? row.expected_cost ?? null;
                 return effectiveCurrentCost != null ? formatImportCost(effectiveCurrentCost) : '-';
+            }
+            if (columnId === 'supplier_name') {
+                return <CellText primary={buildSupplierCatalogDisplayName(row, currentSupplier?.name)} />;
             }
             return '-';
         }
@@ -6383,6 +6434,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                 ? 'border-rose-300 bg-rose-50 text-rose-700 focus:border-rose-500'
                                 : 'border-primary/15 focus:border-primary'
                         }`}
+                        disabled={!hasSpecificSupplierSelection}
                         placeholder="Nhập mã NCC"
                         title={hasDuplicateSupplierCode ? 'Mã NCC đang bị trùng trong bảng giá nhà cung cấp này.' : (row.supplier_product_code || '')}
                     />
@@ -6395,6 +6447,9 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         if (columnId === 'current_cost') {
             const effectiveCurrentCost = row.current_cost ?? row.display_cost ?? row.expected_cost ?? null;
                 return effectiveCurrentCost != null ? formatImportCost(effectiveCurrentCost) : '-';
+        }
+        if (columnId === 'supplier_name') {
+            return <CellText primary={buildSupplierCatalogDisplayName(row, currentSupplier?.name)} />;
         }
         if (columnId === 'unit_cost') return (
             <div className="flex items-center gap-2">
@@ -6409,12 +6464,13 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                         }
                     }}
                     className="h-8 w-full rounded-sm border border-primary/15 px-2 text-right text-[13px] outline-none focus:border-primary"
+                    disabled={!hasSpecificSupplierSelection}
                 />
                 {savingPriceIds[row.id] ? <span className="shrink-0 text-[11px] text-primary/45">Đang lưu...</span> : null}
             </div>
         );
         if (columnId === 'updated_at') return row.updated_at ? formatDateTime(row.updated_at) : '-';
-        if (columnId === 'actions') return <div className="flex items-center justify-center gap-2"><button type="button" onClick={() => removeSupplierPrice(row)} disabled={!row.supplier_price_id} className={dangerButton}>{row.supplier_price_id ? 'Xóa' : 'Chưa có giá'}</button></div>;
+        if (columnId === 'actions') return <div className="flex items-center justify-center gap-2"><button type="button" onClick={() => removeSupplierPrice(row)} disabled={!hasSpecificSupplierSelection || !row.supplier_price_id} className={dangerButton}>{row.supplier_price_id ? 'Xóa' : 'Chưa có giá'}</button></div>;
         return typeof row[columnId] === 'number' ? formatNumber(row[columnId]) : (row[columnId] || '-');
     };
 
@@ -6965,19 +7021,27 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     const supplierPricesTabContent = (
         <div className={panelClass}>
             <PanelHeader
-                title={currentSupplier ? `Giá nhập - ${currentSupplier.name}` : 'Giá nhập từng nhà'}
-                description={currentSupplier ? 'Mỗi nhà cung cấp có một bảng giá nhập riêng. Khi tạo phiếu nhập, giá sẽ tự đổ từ bảng này và vẫn có thể sửa tay.' : 'Chọn nhà cung cấp trong mục Nhà cung cấp hoặc đổi nhanh ngay tại đây để mở thư viện giá nhập.'}
+                title={supplierCatalogTitle}
+                description={supplierCatalogDescription}
                 activeFilterChips={supplierCatalogFilterChips}
                 onClearAllFilters={supplierCatalogFilterChips.length ? clearAllSupplierCatalogFilters : null}
                 actions={
                     <>
                         <select
-                            value={selectedSupplierId ? String(selectedSupplierId) : ''}
-                            onChange={(event) => setSelectedSupplierId(event.target.value ? Number(event.target.value) : null)}
+                            value={selectedSupplierId == null ? '' : String(selectedSupplierId)}
+                            onChange={(event) => {
+                                const nextValue = event.target.value;
+                                setSelectedSupplierId(
+                                    nextValue === ''
+                                        ? null
+                                        : (nextValue === ALL_SUPPLIER_CATALOG_VALUE ? ALL_SUPPLIER_CATALOG_VALUE : Number(nextValue))
+                                );
+                            }}
                             disabled={loading.suppliers && suppliers.length === 0}
                             className={`w-[220px] ${selectClass}`}
                         >
                             <option value="">{loading.suppliers ? 'Đang tải nhà cung cấp' : 'Chọn nhà cung cấp'}</option>
+                            <option value={ALL_SUPPLIER_CATALOG_VALUE}>Tất cả</option>
                             {suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
                         </select>
                         <div className="relative w-[220px] min-w-[220px]">
@@ -6986,14 +7050,14 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                 value={supplierQuickSearch}
                                 onChange={(event) => setSupplierQuickSearch(event.target.value)}
                                 placeholder="Tìm SKU / tên / mã NCC"
-                                disabled={!selectedSupplierId}
+                                disabled={!hasSupplierCatalogSelection}
                                 className={`w-full pl-9 ${inputClass}`}
                             />
                         </div>
-<input value={formatRoundedImportCost(bulkPrice)} onChange={(event) => setBulkPrice(normalizeRoundedImportCostDraft(event.target.value))} placeholder="Giá áp chọn" disabled={!selectedSupplierId} className={`w-[125px] ${inputClass}`} />
-                        <button type="button" onClick={() => setShowPasteBox((value) => !value)} disabled={!selectedSupplierId} className={ghostButton}>{showPasteBox ? 'Ẩn dán nhanh' : 'Dán nhanh'}</button>
-                        <button type="button" onClick={applyBulkPrice} disabled={!selectedSupplierId || !selectedIds.length} className={ghostButton}>Áp giá chọn</button>
-                        <button type="button" onClick={refreshSupplierCatalog} disabled={!selectedSupplierId || loading.supplierCatalog} className={ghostButton}><span className={`material-symbols-outlined text-[18px] ${loading.supplierCatalog ? 'animate-spin' : ''}`}>refresh</span>Làm mới</button>
+<input value={formatRoundedImportCost(bulkPrice)} onChange={(event) => setBulkPrice(normalizeRoundedImportCostDraft(event.target.value))} placeholder="Giá áp chọn" disabled={!hasSpecificSupplierSelection} className={`w-[125px] ${inputClass}`} />
+                        <button type="button" onClick={() => setShowPasteBox((value) => !value)} disabled={!hasSpecificSupplierSelection} className={ghostButton}>{showPasteBox ? 'Ẩn dán nhanh' : 'Dán nhanh'}</button>
+                        <button type="button" onClick={applyBulkPrice} disabled={!hasSpecificSupplierSelection || !selectedIds.length} className={ghostButton}>Áp giá chọn</button>
+                        <button type="button" onClick={refreshSupplierCatalog} disabled={!hasSupplierCatalogSelection || loading.supplierCatalog} className={ghostButton}><span className={`material-symbols-outlined text-[18px] ${loading.supplierCatalog ? 'animate-spin' : ''}`}>refresh</span>Làm mới</button>
                         {[
                             { id: 'supplierPrices_filters', icon: 'filter_alt', label: 'Bộ lọc', active: openPanels.supplierPrices.filters, onClick: () => togglePanel('supplierPrices', 'filters') },
                             { id: 'supplierPrices_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.supplierPrices.stats, onClick: () => togglePanel('supplierPrices', 'stats') },
@@ -7432,13 +7496,13 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                             value={supplierQuickSearch}
                                             onChange={(event) => setSupplierQuickSearch(event.target.value)}
                                             placeholder="Tìm SKU / tên / mã NCC"
-                                            disabled={!selectedSupplierId}
+                                            disabled={!hasSupplierCatalogSelection}
                                             className={`w-full pl-9 ${inputClass}`}
                                         />
                                     </div>
-<input value={formatRoundedImportCost(bulkPrice)} onChange={(event) => setBulkPrice(normalizeRoundedImportCostDraft(event.target.value))} placeholder="Giá áp chọn" disabled={!selectedSupplierId} className={`w-[125px] ${inputClass}`} />
-                                    <button type="button" onClick={() => setShowPasteBox((value) => !value)} disabled={!selectedSupplierId} className={ghostButton}>{showPasteBox ? 'Ẩn dán nhanh' : 'Dán nhanh'}</button>
-                                    <button type="button" onClick={applyBulkPrice} disabled={!selectedSupplierId || !selectedIds.length} className={ghostButton}>Áp giá chọn</button>
+<input value={formatRoundedImportCost(bulkPrice)} onChange={(event) => setBulkPrice(normalizeRoundedImportCostDraft(event.target.value))} placeholder="Giá áp chọn" disabled={!hasSpecificSupplierSelection} className={`w-[125px] ${inputClass}`} />
+                                    <button type="button" onClick={() => setShowPasteBox((value) => !value)} disabled={!hasSpecificSupplierSelection} className={ghostButton}>{showPasteBox ? 'Ẩn dán nhanh' : 'Dán nhanh'}</button>
+                                    <button type="button" onClick={applyBulkPrice} disabled={!hasSpecificSupplierSelection || !selectedIds.length} className={ghostButton}>Áp giá chọn</button>
                                     {[
                                         { id: 'supplierPrices_filters', icon: 'filter_alt', label: 'Bộ lọc', active: openPanels.supplierPrices.filters, onClick: () => togglePanel('supplierPrices', 'filters') },
                                         { id: 'supplierPrices_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.supplierPrices.stats, onClick: () => togglePanel('supplierPrices', 'stats') },

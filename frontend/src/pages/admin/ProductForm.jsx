@@ -16,7 +16,14 @@ import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { PRODUCT_TYPE_FORM_META } from '../../config/productTypes';
 import { compressImage, formatBytes } from '../../utils/imageUtils';
-import { formatWholeMoneyInput, normalizeWholeMoneyDraft, normalizeWholeMoneyNumber } from '../../utils/money';
+import {
+    formatRoundedImportCost,
+    formatWholeMoneyInput,
+    normalizeRoundedImportCostDraft,
+    normalizeRoundedImportCostNumber,
+    normalizeWholeMoneyDraft,
+    normalizeWholeMoneyNumber,
+} from '../../utils/money';
 
 const ItemType = {
     IMAGE: 'image',
@@ -402,6 +409,10 @@ const BundleOptionPostSelector = ({
 
 const formatNumberOutput = (num) => {
     return formatWholeMoneyInput(num);
+};
+
+const formatImportCostOutput = (num) => {
+    return formatRoundedImportCost(num);
 };
 
 const removeAccents = (str) => {
@@ -931,12 +942,17 @@ const ProductForm = () => {
         return parsedValue ?? '';
     };
 
+    const normalizeImportCostValue = (value) => {
+        const parsedValue = normalizeRoundedImportCostNumber(value);
+        return parsedValue ?? '';
+    };
+
     const resolveDuplicateSafeCost = (primaryValue, fallbackValue = null) => {
         if (isDuplicate) {
             return '';
         }
 
-        return normalizeMoneyValue(primaryValue ?? fallbackValue);
+        return normalizeImportCostValue(primaryValue ?? fallbackValue);
     };
 
     const localSkuValidation = useMemo(() => {
@@ -1687,7 +1703,7 @@ const ProductForm = () => {
                 category_ids: data.categories ? data.categories.map(c => c.id) : [],
                 price: normalizeMoneyValue(data.price),
                 price_type: data.price_type || 'fixed',
-                expected_cost: normalizeMoneyValue(data.expected_cost),
+                expected_cost: normalizeImportCostValue(data.expected_cost),
                 cost_price: resolveDuplicateSafeCost(data.cost_price),
                 weight: data.weight || '',
                 inventory_unit_id: data.inventory_unit_id ? String(data.inventory_unit_id) : '',
@@ -1852,7 +1868,7 @@ const ProductForm = () => {
                     return {
                         ...v,
                         price: normalizeMoneyValue(v.price),
-                        expected_cost: normalizeMoneyValue(v.expected_cost),
+                        expected_cost: normalizeImportCostValue(v.expected_cost),
                         current_cost: resolveDuplicateSafeCost(v.cost_price),
                         weight: v.weight ?? '',
                         inventory_unit_id: v.inventory_unit_id ? String(v.inventory_unit_id) : (data.inventory_unit_id ? String(data.inventory_unit_id) : ''),
@@ -2337,7 +2353,9 @@ const ProductForm = () => {
     };
 
     const handlePriceInputChange = (e, field) => {
-        const raw = normalizeWholeMoneyDraft(e.target.value);
+        const raw = field === 'expected_cost' || field === 'cost_price'
+            ? normalizeRoundedImportCostDraft(e.target.value)
+            : normalizeWholeMoneyDraft(e.target.value);
         setFormData(prev => ({ ...prev, [field]: raw }));
     };
 
@@ -2393,8 +2411,10 @@ const ProductForm = () => {
 
     const handleVariantChange = (index, field, value) => {
         const updated = [...variants];
-        if (field === 'price' || field === 'expected_cost') {
+        if (field === 'price') {
             value = normalizeWholeMoneyDraft(value);
+        } else if (field === 'expected_cost') {
+            value = normalizeRoundedImportCostDraft(value);
         } else if (field === 'weight') {
             value = value.toString().replace(/[^0-9]/g, '');
         }
@@ -2462,8 +2482,10 @@ const ProductForm = () => {
 
     const handleVariantQuickUpdateFieldChange = useCallback((field, value) => {
         let nextValue = value;
-        if (field === 'price' || field === 'expected_cost') {
+        if (field === 'price') {
             nextValue = normalizeWholeMoneyDraft(value);
+        } else if (field === 'expected_cost') {
+            nextValue = normalizeRoundedImportCostDraft(value);
         } else if (field === 'weight') {
             nextValue = value.replace(/[^0-9]/g, '');
         }
@@ -2670,7 +2692,7 @@ const ProductForm = () => {
                 name: product.name,
                 sku: product.sku,
                 price: product.price,
-                cost_price: isDuplicate ? '' : normalizeMoneyValue(product.cost_price),
+                cost_price: isDuplicate ? '' : normalizeImportCostValue(product.cost_price),
                 quantity: 1,
                 is_required: true,
                 is_default: o.items.length === 0,
@@ -2735,7 +2757,7 @@ const ProductForm = () => {
                         variant_label: selectedVariant.name || (selectedVariant.attribute_values || []).map(av => av.value).join(' / '),
                         sku: selectedVariant.sku,
                         price: selectedVariant.price,
-                        cost_price: isDuplicate ? '' : normalizeMoneyValue(selectedVariant.cost_price),
+                        cost_price: isDuplicate ? '' : normalizeImportCostValue(selectedVariant.cost_price),
                         image_url: (selectedVariant.images?.find(img => img.is_primary) || selectedVariant.images?.[0])?.image_url || it.image_url
                     };
                 })
@@ -2783,7 +2805,7 @@ const ProductForm = () => {
                     // Root product price
                     updatedItemsMap[pId] = {
                         price: product.price,
-                        cost_price: isDuplicate ? '' : normalizeMoneyValue(product.cost_price),
+                        cost_price: isDuplicate ? '' : normalizeImportCostValue(product.cost_price),
                         sku: product.sku
                     };
 
@@ -2793,7 +2815,7 @@ const ProductForm = () => {
                         variants.forEach(v => {
                             updatedItemsMap[`${pId}_${v.id}`] = {
                                 price: v.price,
-                                cost_price: isDuplicate ? '' : normalizeMoneyValue(v.cost_price),
+                                cost_price: isDuplicate ? '' : normalizeImportCostValue(v.cost_price),
                                 sku: v.sku
                             };
                         });
@@ -3389,7 +3411,7 @@ const ProductForm = () => {
                                                 <input
                                                     type="text"
                                                     name="expected_cost"
-                                                    value={formatNumberOutput(formData.expected_cost)}
+                                                    value={formatImportCostOutput(formData.expected_cost)}
                                                     onChange={(e) => handlePriceInputChange(e, 'expected_cost')}
                                                     className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]"
                                                 />
@@ -3401,7 +3423,7 @@ const ProductForm = () => {
                                                 <input
                                                     type="text"
                                                     name="cost_price"
-                                                    value={formatNumberOutput(formData.cost_price)}
+                                                    value={formatImportCostOutput(formData.cost_price)}
                                                     readOnly
                                                     className="w-full cursor-not-allowed bg-transparent border-none focus:outline-none focus:ring-0 text-primary/70 font-bold text-[15px]"
                                                 />
@@ -4063,7 +4085,7 @@ const ProductForm = () => {
                                                                 <div className="relative flex items-center justify-center">
                                                                     <input
                                                                         className="w-full bg-stone/5 border border-transparent focus:border-primary/50 focus:bg-white pl-2 pr-5 py-2 rounded text-[13px] font-bold text-primary text-center transition-all"
-                                                                        value={formatNumberOutput(v.expected_cost)}
+                                                                        value={formatImportCostOutput(v.expected_cost)}
                                                                         onChange={(e) => handleVariantChange(index, 'expected_cost', e.target.value)}
                                                                     />
                                                                     <span className="absolute right-2 text-[10px] text-primary/30 font-bold">₫</span>
@@ -4073,7 +4095,7 @@ const ProductForm = () => {
                                                                 <div className="relative flex items-center justify-center">
                                                                     <input
                                                                         className="w-full cursor-not-allowed bg-stone/10 border border-transparent pl-2 pr-5 py-2 rounded text-[13px] font-bold text-primary/60 text-center transition-all"
-                                                                        value={formatNumberOutput(v.current_cost)}
+                                                                        value={formatImportCostOutput(v.current_cost)}
                                                                         readOnly
                                                                     />
                                                                     <span className="absolute right-2 text-[10px] text-primary/30 font-bold">₫</span>
@@ -5343,7 +5365,7 @@ const ProductForm = () => {
                                         </label>
                                         <div className="relative">
                                             <input
-                                                value={formatNumberOutput(variantQuickUpdateForm.expected_cost)}
+                                                value={formatImportCostOutput(variantQuickUpdateForm.expected_cost)}
                                                 onChange={(event) => handleVariantQuickUpdateFieldChange('expected_cost', event.target.value)}
                                                 className="w-full bg-transparent py-2 pr-5 text-[14px] font-bold text-primary focus:outline-none"
                                                 placeholder="Nhập giá nhập dự kiến"

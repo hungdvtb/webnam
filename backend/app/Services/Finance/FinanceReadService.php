@@ -254,7 +254,7 @@ class FinanceReadService
         ];
     }
 
-    public function receiptVoucherBootstrap(int $accountId): array
+    public function receiptVoucherBootstrap(int $accountId, bool $includeReferences = false): array
     {
         $this->financeService->ensureDefaults($accountId);
 
@@ -280,71 +280,78 @@ class FinanceReadService
                 ->get()
                 ->map(fn (FinanceWallet $wallet) => $this->financeService->walletPayload($wallet))
                 ->values(),
-            'recent_orders' => Order::query()
-                ->where('account_id', $accountId)
-                ->whereNull('deleted_at')
-                ->orderByDesc('created_at')
-                ->limit(80)
-                ->get(['id', 'order_number', 'customer_name', 'customer_phone', 'status', 'total_price', 'created_at'])
-                ->map(function (Order $order) {
-                    return [
-                        'id' => (int) $order->id,
-                        'code' => $order->order_number,
-                        'customer_name' => $order->customer_name,
-                        'customer_phone' => $order->customer_phone,
-                        'status' => $order->status,
-                        'amount' => round((float) $order->total_price, 2),
-                        'created_at' => optional($order->created_at)->toIso8601String(),
-                    ];
-                })
-                ->values(),
-            'recent_shipments' => Shipment::query()
-                ->where('account_id', $accountId)
-                ->whereNull('deleted_at')
-                ->orderByDesc('created_at')
-                ->limit(80)
-                ->get([
-                    'id',
-                    'shipment_number',
-                    'tracking_number',
-                    'carrier_tracking_code',
-                    'customer_name',
-                    'customer_phone',
-                    'shipment_status',
-                    'cod_amount',
-                    'created_at',
-                ])
-                ->map(function (Shipment $shipment) {
-                    return [
-                        'id' => (int) $shipment->id,
-                        'code' => $shipment->carrier_tracking_code ?: $shipment->tracking_number ?: $shipment->shipment_number,
-                        'customer_name' => $shipment->customer_name,
-                        'customer_phone' => $shipment->customer_phone,
-                        'status' => $shipment->shipment_status,
-                        'amount' => round((float) $shipment->cod_amount, 2),
-                        'created_at' => optional($shipment->created_at)->toIso8601String(),
-                    ];
-                })
-                ->values(),
-            'recent_return_documents' => InventoryDocument::query()
-                ->where('account_id', $accountId)
-                ->where('type', 'return')
-                ->orderByDesc('document_date')
-                ->orderByDesc('id')
-                ->limit(60)
-                ->get(['id', 'document_number', 'status', 'document_date', 'reference_type', 'reference_id', 'notes'])
-                ->map(function (InventoryDocument $document) {
-                    return [
-                        'id' => (int) $document->id,
-                        'code' => $document->document_number,
-                        'status' => $document->status,
-                        'document_date' => optional($document->document_date)->toDateString(),
-                        'reference_type' => $document->reference_type,
-                        'reference_id' => $document->reference_id,
-                        'notes' => $document->notes,
-                    ];
-                })
-                ->values(),
+            'references_included' => $includeReferences,
+            'recent_orders' => $includeReferences
+                ? Order::query()
+                    ->where('account_id', $accountId)
+                    ->whereNull('deleted_at')
+                    ->orderByDesc('created_at')
+                    ->limit(80)
+                    ->get(['id', 'order_number', 'customer_name', 'customer_phone', 'status', 'total_price', 'created_at'])
+                    ->map(function (Order $order) {
+                        return [
+                            'id' => (int) $order->id,
+                            'code' => $order->order_number,
+                            'customer_name' => $order->customer_name,
+                            'customer_phone' => $order->customer_phone,
+                            'status' => $order->status,
+                            'amount' => round((float) $order->total_price, 2),
+                            'created_at' => optional($order->created_at)->toIso8601String(),
+                        ];
+                    })
+                    ->values()
+                : [],
+            'recent_shipments' => $includeReferences
+                ? Shipment::query()
+                    ->where('account_id', $accountId)
+                    ->whereNull('deleted_at')
+                    ->orderByDesc('created_at')
+                    ->limit(80)
+                    ->get([
+                        'id',
+                        'shipment_number',
+                        'tracking_number',
+                        'carrier_tracking_code',
+                        'customer_name',
+                        'customer_phone',
+                        'shipment_status',
+                        'cod_amount',
+                        'created_at',
+                    ])
+                    ->map(function (Shipment $shipment) {
+                        return [
+                            'id' => (int) $shipment->id,
+                            'code' => $shipment->carrier_tracking_code ?: $shipment->tracking_number ?: $shipment->shipment_number,
+                            'customer_name' => $shipment->customer_name,
+                            'customer_phone' => $shipment->customer_phone,
+                            'status' => $shipment->shipment_status,
+                            'amount' => round((float) $shipment->cod_amount, 2),
+                            'created_at' => optional($shipment->created_at)->toIso8601String(),
+                        ];
+                    })
+                    ->values()
+                : [],
+            'recent_return_documents' => $includeReferences
+                ? InventoryDocument::query()
+                    ->where('account_id', $accountId)
+                    ->where('type', 'return')
+                    ->orderByDesc('document_date')
+                    ->orderByDesc('id')
+                    ->limit(60)
+                    ->get(['id', 'document_number', 'status', 'document_date', 'reference_type', 'reference_id', 'notes'])
+                    ->map(function (InventoryDocument $document) {
+                        return [
+                            'id' => (int) $document->id,
+                            'code' => $document->document_number,
+                            'status' => $document->status,
+                            'document_date' => optional($document->document_date)->toDateString(),
+                            'reference_type' => $document->reference_type,
+                            'reference_id' => $document->reference_id,
+                            'notes' => $document->notes,
+                        ];
+                    })
+                    ->values()
+                : [],
         ];
     }
 
@@ -397,56 +404,83 @@ class FinanceReadService
             ->orderByDesc('id')
             ->paginate($this->financeService->resolvePerPage($filters, 20, 100));
 
+        $pageItems = collect($page->items());
+        $resolvedReferences = $this->preloadReceiptVoucherReferences($pageItems);
+
+        return [
+            ...$page->toArray(),
+            'data' => $pageItems
+                ->map(fn (FinanceTransaction $transaction) => $this->financeService->receiptVoucherPayload(
+                    $transaction,
+                    $resolvedReferences[$transaction->id] ?? null
+                ))
+                ->values(),
+        ];
+    }
+
+    public function receiptVoucherSummary(int $accountId, array $filters = []): array
+    {
+        $this->financeService->ensureDefaults($accountId);
+
         $summaryQuery = FinanceTransaction::query()
             ->where('account_id', $accountId)
             ->receiptVouchers();
 
         $this->applyReceiptVoucherFilters($summaryQuery, $filters);
 
+        $aggregate = (clone $summaryQuery)
+            ->selectRaw("
+                COUNT(*) AS total_records,
+                SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) AS confirmed_count,
+                SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) AS draft_count,
+                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count,
+                COALESCE(SUM(CASE WHEN status = 'confirmed' THEN amount ELSE 0 END), 0) AS total_amount,
+                COALESCE(SUM(CASE WHEN status = 'confirmed' AND payment_method = 'cash' THEN amount ELSE 0 END), 0) AS cash_amount,
+                COALESCE(SUM(CASE WHEN status = 'confirmed' AND payment_method = 'bank_transfer' THEN amount ELSE 0 END), 0) AS bank_transfer_amount,
+                COALESCE(SUM(CASE WHEN status = 'confirmed' AND payment_method = 'cod' THEN amount ELSE 0 END), 0) AS cod_amount
+            ")
+            ->first();
+
         $confirmedSummaryQuery = (clone $summaryQuery)->where('status', 'confirmed');
         $groupRows = (clone $confirmedSummaryQuery)
             ->selectRaw('category_id, COUNT(*) AS total_count, COALESCE(SUM(amount), 0) AS total_amount')
             ->groupBy('category_id')
             ->get();
-        $groupCategories = FinanceCatalog::query()
-            ->whereIn('id', $groupRows->pluck('category_id')->filter()->values())
-            ->get()
-            ->keyBy('id');
+        $groupCategories = $groupRows->isEmpty()
+            ? collect()
+            : FinanceCatalog::query()
+                ->whereIn('id', $groupRows->pluck('category_id')->filter()->values())
+                ->get()
+                ->keyBy('id');
 
         return [
-            ...$page->toArray(),
-            'data' => collect($page->items())
-                ->map(fn (FinanceTransaction $transaction) => $this->financeService->receiptVoucherPayload($transaction))
-                ->values(),
-            'summary' => [
-                'total_records' => (int) (clone $summaryQuery)->count(),
-                'confirmed_count' => (int) (clone $summaryQuery)->where('status', 'confirmed')->count(),
-                'draft_count' => (int) (clone $summaryQuery)->where('status', 'draft')->count(),
-                'cancelled_count' => (int) (clone $summaryQuery)->where('status', 'cancelled')->count(),
-                'trash_count' => (int) FinanceTransaction::query()
-                    ->where('account_id', $accountId)
-                    ->receiptVouchers()
-                    ->onlyTrashed()
-                    ->count(),
-                'total_amount' => round((float) (clone $confirmedSummaryQuery)->sum('amount'), 2),
-                'cash_amount' => round((float) (clone $confirmedSummaryQuery)->where('payment_method', 'cash')->sum('amount'), 2),
-                'bank_transfer_amount' => round((float) (clone $confirmedSummaryQuery)->where('payment_method', 'bank_transfer')->sum('amount'), 2),
-                'cod_amount' => round((float) (clone $confirmedSummaryQuery)->where('payment_method', 'cod')->sum('amount'), 2),
-                'main_groups' => $groupRows
-                    ->map(function ($row) use ($groupCategories) {
-                        $category = $row->category_id ? $groupCategories->get((int) $row->category_id) : null;
+            'total_records' => (int) ($aggregate->total_records ?? 0),
+            'confirmed_count' => (int) ($aggregate->confirmed_count ?? 0),
+            'draft_count' => (int) ($aggregate->draft_count ?? 0),
+            'cancelled_count' => (int) ($aggregate->cancelled_count ?? 0),
+            'trash_count' => (int) FinanceTransaction::query()
+                ->where('account_id', $accountId)
+                ->receiptVouchers()
+                ->onlyTrashed()
+                ->count(),
+            'total_amount' => round((float) ($aggregate->total_amount ?? 0), 2),
+            'cash_amount' => round((float) ($aggregate->cash_amount ?? 0), 2),
+            'bank_transfer_amount' => round((float) ($aggregate->bank_transfer_amount ?? 0), 2),
+            'cod_amount' => round((float) ($aggregate->cod_amount ?? 0), 2),
+            'main_groups' => $groupRows
+                ->map(function ($row) use ($groupCategories) {
+                    $category = $row->category_id ? $groupCategories->get((int) $row->category_id) : null;
 
-                        return [
-                            'category_id' => $row->category_id ? (int) $row->category_id : null,
-                            'category_name' => $category?->name ?? 'Chua phan loai',
-                            'category_color' => $category?->color,
-                            'total_count' => (int) $row->total_count,
-                            'total_amount' => round((float) $row->total_amount, 2),
-                        ];
-                    })
-                    ->sortByDesc('total_amount')
-                    ->values(),
-            ],
+                    return [
+                        'category_id' => $row->category_id ? (int) $row->category_id : null,
+                        'category_name' => $category?->name ?? 'Chua phan loai',
+                        'category_color' => $category?->color,
+                        'total_count' => (int) $row->total_count,
+                        'total_amount' => round((float) $row->total_amount, 2),
+                    ];
+                })
+                ->sortByDesc('total_amount')
+                ->values(),
         ];
     }
 
@@ -1001,12 +1035,119 @@ class FinanceReadService
         }
 
         if (!empty($filters['date_from'])) {
-            $query->whereDate('transaction_date', '>=', $filters['date_from']);
+            $query->where('transaction_date', '>=', Carbon::parse($filters['date_from'])->startOfDay());
         }
 
         if (!empty($filters['date_to'])) {
-            $query->whereDate('transaction_date', '<=', $filters['date_to']);
+            $query->where('transaction_date', '<=', Carbon::parse($filters['date_to'])->endOfDay());
         }
+    }
+
+    private function preloadReceiptVoucherReferences(Collection $transactions): array
+    {
+        $transactions = $transactions
+            ->filter(fn ($transaction) => $transaction instanceof FinanceTransaction)
+            ->values();
+
+        if ($transactions->isEmpty()) {
+            return [];
+        }
+
+        $accountIds = $transactions->pluck('account_id')->filter()->unique()->values();
+        $orderIds = $transactions
+            ->where('reference_type', 'order')
+            ->pluck('reference_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+        $shipmentIds = $transactions
+            ->where('reference_type', 'shipment')
+            ->pluck('reference_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+        $returnDocumentIds = $transactions
+            ->where('reference_type', 'return_slip')
+            ->pluck('reference_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        $orders = $orderIds->isEmpty()
+            ? collect()
+            : Order::query()
+                ->withTrashed()
+                ->whereIn('account_id', $accountIds)
+                ->whereIn('id', $orderIds)
+                ->get(['id', 'order_number', 'customer_name', 'status'])
+                ->keyBy('id');
+        $shipments = $shipmentIds->isEmpty()
+            ? collect()
+            : Shipment::query()
+                ->withTrashed()
+                ->whereIn('account_id', $accountIds)
+                ->whereIn('id', $shipmentIds)
+                ->get(['id', 'shipment_number', 'tracking_number', 'carrier_tracking_code', 'customer_name', 'shipment_status', 'status'])
+                ->keyBy('id');
+        $returnDocuments = $returnDocumentIds->isEmpty()
+            ? collect()
+            : InventoryDocument::query()
+                ->withTrashed()
+                ->whereIn('account_id', $accountIds)
+                ->whereIn('id', $returnDocumentIds)
+                ->get(['id', 'document_number', 'status'])
+                ->keyBy('id');
+
+        return $transactions
+            ->mapWithKeys(function (FinanceTransaction $transaction) use ($orders, $shipments, $returnDocuments) {
+                $code = $transaction->reference_code;
+                $label = $transaction->reference_label;
+                $route = null;
+                $status = null;
+                $referenceId = $transaction->reference_id ? (int) $transaction->reference_id : null;
+
+                if ($transaction->reference_type === 'order' && $referenceId) {
+                    $order = $orders->get($referenceId);
+
+                    if ($order) {
+                        $code = $order->order_number ?: $code;
+                        $label = $order->customer_name ?: $label;
+                        $route = '/admin/orders/' . $order->id;
+                        $status = $order->status;
+                    }
+                } elseif ($transaction->reference_type === 'shipment' && $referenceId) {
+                    $shipment = $shipments->get($referenceId);
+
+                    if ($shipment) {
+                        $code = $shipment->carrier_tracking_code ?: $shipment->tracking_number ?: $shipment->shipment_number ?: $code;
+                        $label = $shipment->customer_name ?: $label;
+                        $route = '/admin/shipments';
+                        $status = $shipment->shipment_status ?: $shipment->status;
+                    }
+                } elseif ($transaction->reference_type === 'return_slip' && $referenceId) {
+                    $document = $returnDocuments->get($referenceId);
+
+                    if ($document) {
+                        $code = $document->document_number ?: $code;
+                        $label = $label ?: 'Phiáº¿u hoÃ n';
+                        $route = '/admin/inventory';
+                        $status = $document->status;
+                    }
+                }
+
+                return [
+                    $transaction->id => [
+                        'code' => $code,
+                        'label' => $label,
+                        'route' => $route,
+                        'status' => $status,
+                    ],
+                ];
+            })
+            ->all();
     }
 
     private function applyTransactionFilters(Builder $query, array $filters, int $accountId): void

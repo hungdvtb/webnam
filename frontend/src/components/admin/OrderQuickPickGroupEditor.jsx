@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { productApi } from '../../services/api';
+import { normalizeRoundedImportCostNumber } from '../../utils/money';
 import {
     ORDER_QUICK_PICK_MAX_ITEMS,
     getOrderQuickPickAttribute,
@@ -96,7 +97,7 @@ const createQuickPickItem = (parentProduct, targetProduct, type, excludedAttribu
     option_label: type === 'variation' ? buildOptionLabel(targetProduct, excludedAttributeId) : '',
     main_image: normalizeText(parentProduct?.main_image || targetProduct?.main_image),
     price: Number(targetProduct?.price ?? 0) || 0,
-    cost_price: Number(targetProduct?.cost_price ?? 0) || 0,
+    cost_price: normalizeRoundedImportCostNumber(targetProduct?.cost_price) ?? 0,
     order: 999,
 });
 

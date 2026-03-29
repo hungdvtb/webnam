@@ -33,41 +33,58 @@ class FinanceService
             return;
         }
 
-        foreach ($this->defaultCatalogs() as $item) {
-            FinanceCatalog::withTrashed()->updateOrCreate(
-                [
-                    'account_id' => $accountId,
-                    'group_key' => $item['group_key'],
-                    'code' => $item['code'],
-                ],
-                [
-                    'name' => $item['name'],
-                    'color' => $item['color'],
-                    'is_system' => true,
-                    'is_active' => true,
-                    'sort_order' => $item['sort_order'],
-                    'deleted_at' => null,
-                ]
-            );
-        }
-
-        foreach ($this->defaultWallets() as $wallet) {
-            FinanceWallet::withTrashed()->updateOrCreate(
-                [
-                    'account_id' => $accountId,
-                    'code' => $wallet['code'],
-                ],
-                [
-                    ...$wallet,
-                    'deleted_at' => null,
-                ]
-            );
-        }
-
-        FinanceWallet::query()
+        $existingCatalogs = FinanceCatalog::withTrashed()
             ->where('account_id', $accountId)
             ->get()
-            ->each(fn (FinanceWallet $wallet) => $this->recalculateWalletBalance($wallet));
+            ->keyBy(fn (FinanceCatalog $catalog) => $catalog->group_key . '::' . $catalog->code);
+
+        foreach ($this->defaultCatalogs() as $item) {
+            $key = $item['group_key'] . '::' . $item['code'];
+            $existing = $existingCatalogs->get($key);
+
+            if ($existing) {
+                if ($existing->trashed()) {
+                    $existing->restore();
+                }
+
+                continue;
+            }
+
+            FinanceCatalog::query()->create([
+                'account_id' => $accountId,
+                'group_key' => $item['group_key'],
+                'code' => $item['code'],
+                'name' => $item['name'],
+                'color' => $item['color'],
+                'is_system' => true,
+                'is_active' => true,
+                'sort_order' => $item['sort_order'],
+            ]);
+        }
+
+        $existingWallets = FinanceWallet::withTrashed()
+            ->where('account_id', $accountId)
+            ->get()
+            ->keyBy('code');
+
+        foreach ($this->defaultWallets() as $wallet) {
+            $existing = $existingWallets->get($wallet['code']);
+
+            if ($existing) {
+                if ($existing->trashed()) {
+                    $existing->restore();
+                }
+
+                continue;
+            }
+
+            FinanceWallet::query()->create([
+                'account_id' => $accountId,
+                ...$wallet,
+                'current_balance' => $wallet['current_balance'] ?? $wallet['opening_balance'] ?? 0,
+                'balance_updated_at' => now(),
+            ]);
+        }
     }
 
     public function resolveDateRange(array $filters, int $defaultDays = 30): array
@@ -1458,10 +1475,10 @@ class FinanceService
         ];
     }
 
-    public function receiptVoucherPayload(FinanceTransaction $transaction): array
+    public function receiptVoucherPayload(FinanceTransaction $transaction, ?array $reference = null): array
     {
         $base = $this->transactionPayload($transaction);
-        $reference = $this->resolveReceiptVoucherReferenceForTransaction($transaction);
+        $referencePayload = $reference ?? $this->receiptVoucherReferencePayload($transaction);
 
         return [
             ...$base,
@@ -1472,8 +1489,13 @@ class FinanceService
             'payer_phone' => $transaction->counterparty_phone,
             'payment_method_label' => $this->receiptVoucherPaymentMethodLabel($transaction->payment_method),
             'status_label' => $this->receiptVoucherStatusLabel($transaction->status),
-            'reference' => $reference,
+            'reference' => $referencePayload,
         ];
+    }
+
+    public function receiptVoucherReferencePayload(FinanceTransaction $transaction, array $resolvedReference = []): array
+    {
+        return $this->resolveReceiptVoucherReferenceForTransaction($transaction, $resolvedReference);
     }
 
     public function walletPayload(FinanceWallet $wallet, ?Carbon $from = null, ?Carbon $to = null): array
@@ -1864,16 +1886,17 @@ class FinanceService
         throw new InvalidArgumentException('Loại liên kết phiếu thu không hợp lệ.');
     }
 
-    private function resolveReceiptVoucherReferenceForTransaction(FinanceTransaction $transaction): array
+    private function resolveReceiptVoucherReferenceForTransaction(FinanceTransaction $transaction, array $resolvedReference = []): array
     {
         $type = $transaction->reference_type;
         $id = $transaction->reference_id ? (int) $transaction->reference_id : null;
-        $code = $transaction->reference_code;
-        $label = $transaction->reference_label;
-        $route = null;
-        $status = null;
+        $hasPreloadedReference = $resolvedReference !== [];
+        $code = array_key_exists('code', $resolvedReference) ? $resolvedReference['code'] : $transaction->reference_code;
+        $label = array_key_exists('label', $resolvedReference) ? $resolvedReference['label'] : $transaction->reference_label;
+        $route = $resolvedReference['route'] ?? null;
+        $status = $resolvedReference['status'] ?? null;
 
-        if ($type === 'order' && $id) {
+        if (!$hasPreloadedReference && $type === 'order' && $id) {
             $order = Order::query()
                 ->withTrashed()
                 ->where('account_id', $transaction->account_id)
@@ -1885,7 +1908,7 @@ class FinanceService
                 $route = '/admin/orders/' . $order->id;
                 $status = $order->status;
             }
-        } elseif ($type === 'shipment' && $id) {
+        } elseif (!$hasPreloadedReference && $type === 'shipment' && $id) {
             $shipment = Shipment::query()
                 ->withTrashed()
                 ->where('account_id', $transaction->account_id)
@@ -1897,7 +1920,7 @@ class FinanceService
                 $route = '/admin/shipments';
                 $status = $shipment->shipment_status ?: $shipment->status;
             }
-        } elseif ($type === 'return_slip' && $id) {
+        } elseif (!$hasPreloadedReference && $type === 'return_slip' && $id) {
             $document = InventoryDocument::query()
                 ->withTrashed()
                 ->where('account_id', $transaction->account_id)

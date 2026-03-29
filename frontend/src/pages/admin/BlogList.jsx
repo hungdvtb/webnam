@@ -1136,7 +1136,17 @@ const BlogList = () => {
                                         <span className="material-symbols-outlined text-[16px]">drag_indicator</span>
                                     </button>
                                 </td>
-                                <td><div className="w-12 h-12 mx-auto bg-stone/10 border border-gold/20 rounded-sm overflow-hidden"><img src={post.featured_image || 'https://placehold.co/120x120?text=No+Img'} alt={post.title} className="w-full h-full object-cover" /></div></td>
+                                <td>
+                                    <div className="w-12 h-12 mx-auto bg-stone/10 border border-gold/20 rounded-sm overflow-hidden">
+                                        {post.featured_image ? (
+                                            <img src={post.featured_image} alt={post.title} className="w-full h-full object-cover" />
+                                        ) : (
+                                            <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,rgba(27,54,93,0.96),rgba(197,160,101,0.82))] text-white/90">
+                                                <span className="material-symbols-outlined text-[18px]">auto_stories</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                </td>
                                 <td className="px-2 py-2">
                                     <div className="flex flex-wrap items-center gap-2">
                                         <button type="button" onClick={() => navigate(`/admin/blog/edit/${post.id}`)} className="block max-w-full text-left text-[14px] font-bold text-primary hover:text-brick truncate" title={post.title}>{post.title}</button>

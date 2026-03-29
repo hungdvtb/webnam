@@ -78,6 +78,8 @@ class OrderBatchReturnSlipTest extends TestCase
             ->first();
 
         $this->assertNotNull($adjustmentDocument);
+        $this->assertSame(InventoryDocument::ADJUSTMENT_KIND_EXPORT, (string) $adjustmentDocument->adjustment_kind);
+        $this->assertSame(InventoryDocument::ADJUSTMENT_SOURCE_RETURN_RECONCILIATION, (string) $adjustmentDocument->adjustment_source);
         $this->assertDatabaseCount('inventory_document_order_links', 2);
         $this->assertDatabaseHas('inventory_document_items', [
             'inventory_document_id' => $returnDocumentId,

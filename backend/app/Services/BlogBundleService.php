@@ -153,10 +153,13 @@ class BlogBundleService
             'exported_at' => now()->toAtomString(),
             'post_count' => count($rows),
             'asset_count' => count($assetMap),
-            'categories' => array_values(array_sort($usedCategories, fn (array $category) => [
-                (int) ($category['sort_order'] ?? 0),
-                (string) ($category['name'] ?? ''),
-            ])),
+            'categories' => collect($usedCategories)
+                ->sortBy(fn (array $category) => [
+                    (int) ($category['sort_order'] ?? 0),
+                    (string) ($category['name'] ?? ''),
+                ])
+                ->values()
+                ->all(),
         ];
 
         file_put_contents(
@@ -680,6 +683,10 @@ class BlogBundleService
         $normalizedReference = trim(html_entity_decode($reference, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
         if ($normalizedReference === '') {
             return '';
+        }
+
+        if (Str::startsWith($normalizedReference, 'bundle://')) {
+            return $normalizedReference;
         }
 
         if (isset($assetMap[$normalizedReference])) {

@@ -1553,6 +1553,17 @@ class InventoryController extends Controller
             ->with(['supplier:id,name', 'creator:id,name'])
             ->withCount('items');
 
+        if ($type === 'adjustment') {
+            $query->with([
+                'items' => function ($itemQuery) {
+                    $itemQuery
+                        ->with('product:id,sku,name')
+                        ->orderBy('id');
+                },
+                'parentDocument:id,document_number,type',
+            ]);
+        }
+
         if ($request->boolean('trash')) {
             $query->onlyTrashed();
         }
@@ -1580,6 +1591,12 @@ class InventoryController extends Controller
                         $this->applyCaseInsensitiveSearch($productQuery, ['name', 'sku'], $search);
                     });
                 });
+
+                if ($type === 'adjustment') {
+                    $builder->orWhereHas('parentDocument', function ($parentQuery) use ($search) {
+                        $this->applyCaseInsensitiveSearch($parentQuery, ['document_number'], $search);
+                    });
+                }
             });
         }
 
@@ -1596,6 +1613,8 @@ class InventoryController extends Controller
         $this->applyMappedSort($query, $request, [
             'code' => 'document_number',
             'supplier' => 'supplier_id',
+            'kind' => 'adjustment_kind',
+            'source' => 'adjustment_source',
             'date' => 'document_date',
             'line_count' => 'items_count',
             'qty' => 'total_quantity',
@@ -1603,9 +1622,15 @@ class InventoryController extends Controller
             'note' => 'notes',
         ], 'date', ['id' => 'desc']);
 
-        return response()->json(
-            $query->paginate($perPage)
-        );
+        $paginated = $query->paginate($perPage);
+
+        if ($type === 'adjustment') {
+            $paginated->getCollection()->transform(function (InventoryDocument $document) {
+                return $this->serializeAdjustmentDocumentListRow($document);
+            });
+        }
+
+        return response()->json($paginated);
     }
 
     public function storeDocument(Request $request, string $type)
@@ -1641,6 +1666,12 @@ class InventoryController extends Controller
         }
 
         $validated = $request->validate($rules);
+
+        if ($type === 'adjustment') {
+            $validated['adjustment_kind'] = InventoryDocument::ADJUSTMENT_KIND_STOCK;
+            $validated['adjustment_source'] = InventoryDocument::ADJUSTMENT_SOURCE_MANUAL;
+        }
+
         $document = $this->inventoryService->createDocument($type, $validated, $accountId, auth()->id());
 
         return response()->json($document, 201);
@@ -1704,6 +1735,17 @@ class InventoryController extends Controller
         }
 
         $validated = $request->validate($rules);
+
+        if ($type === 'adjustment') {
+            if ($this->normalizeAdjustmentKind($document->adjustment_kind ?? null) === InventoryDocument::ADJUSTMENT_KIND_EXPORT) {
+                throw ValidationException::withMessages([
+                    'document' => ['Phiếu điều chỉnh phiếu xuất được tạo tự động. Hãy cập nhật từ phiếu hoàn nguồn.'],
+                ]);
+            }
+
+            $validated['adjustment_kind'] = $this->normalizeAdjustmentKind($document->adjustment_kind ?? null);
+            $validated['adjustment_source'] = $document->adjustment_source ?: InventoryDocument::ADJUSTMENT_SOURCE_MANUAL;
+        }
 
         if ($type === 'return' && $this->orderInventorySlipService->isManagedReturnDocument($document)) {
             return response()->json(
@@ -2817,6 +2859,7 @@ class InventoryController extends Controller
         $this->applyDateRange($importQtySub, 'imports.import_date', $request);
 
         $exportQtySub = $this->buildExportQuantitySubquery($request);
+        $exportAdjustmentQtySub = $this->buildExportAdjustmentQuantitySubquery($request);
 
         $returnQtySub = \App\Models\InventoryDocumentItem::query()
             ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
@@ -2854,7 +2897,12 @@ class InventoryController extends Controller
                 ), 0)
             ")
             ->whereColumn('inventory_document_items.product_id', 'products.id')
-            ->where('inventory_documents.type', 'adjustment');
+            ->where('inventory_documents.type', 'adjustment')
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('inventory_documents.adjustment_kind')
+                    ->orWhere('inventory_documents.adjustment_kind', InventoryDocument::ADJUSTMENT_KIND_STOCK);
+            });
         if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
             $adjustmentQtySub->whereNull('inventory_documents.deleted_at');
         }
@@ -2870,11 +2918,20 @@ class InventoryController extends Controller
             ->whereColumn('product_links.linked_product_id', 'products.id')
             ->where('product_links.link_type', 'super_link')
             ->limit(1);
-        $computedStockSql = '(('
-            . $importQtySub->toSql()
-            . ') - ('
+        $correctedExportQtySql = '(('
             . $exportQtySub->toSql()
             . ') + ('
+            . $exportAdjustmentQtySub->toSql()
+            . '))';
+        $exportQtyBindings = array_merge(
+            $exportQtySub->getBindings(),
+            $exportAdjustmentQtySub->getBindings(),
+        );
+        $computedStockSql = '(('
+            . $importQtySub->toSql()
+            . ') - '
+            . $correctedExportQtySql
+            . ' + ('
             . $returnQtySub->toSql()
             . ') - ('
             . $damagedQtySub->toSql()
@@ -2883,7 +2940,7 @@ class InventoryController extends Controller
             . '))';
         $computedStockBindings = array_merge(
             $importQtySub->getBindings(),
-            $exportQtySub->getBindings(),
+            $exportQtyBindings,
             $returnQtySub->getBindings(),
             $damagedQtySub->getBindings(),
             $adjustmentQtySub->getBindings(),
@@ -2920,7 +2977,7 @@ class InventoryController extends Controller
 
         $query = $query
             ->selectSub($importQtySub, 'total_imported')
-            ->selectSub($exportQtySub, 'total_exported')
+            ->selectRaw($correctedExportQtySql . ' as total_exported', $exportQtyBindings)
             ->selectSub($returnQtySub, 'total_returned')
             ->selectSub($damagedQtySub, 'total_damaged')
             ->selectSub($adjustmentQtySub, 'total_adjusted')
@@ -2954,17 +3011,23 @@ class InventoryController extends Controller
     private function buildExportQuantitySubquery(Request $request)
     {
         $accountId = (int) $request->header('X-Account-Id');
+        $manualExportScopeSql = "
+            CASE
+                WHEN inventory_documents.reference_type = 'order'
+                    AND inventory_documents.reference_id IS NOT NULL
+                    THEN inventory_documents.reference_id
+                ELSE -inventory_documents.id
+            END
+        ";
 
         $manualExportQtySub = \App\Models\InventoryDocumentItem::query()
             ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
-            ->selectRaw('inventory_documents.reference_id as order_id')
+            ->selectRaw($manualExportScopeSql . ' as order_id')
             ->selectRaw('inventory_document_items.product_id')
             ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0) as manual_export_quantity')
             ->where('inventory_documents.type', 'export')
-            ->where('inventory_documents.reference_type', 'order')
-            ->whereNotNull('inventory_documents.reference_id')
             ->where('inventory_documents.status', 'completed')
-            ->groupBy('inventory_documents.reference_id', 'inventory_document_items.product_id');
+            ->groupByRaw($manualExportScopeSql . ', inventory_document_items.product_id');
 
         if ($accountId > 0) {
             $manualExportQtySub->where('inventory_documents.account_id', $accountId);
@@ -3080,6 +3143,35 @@ class InventoryController extends Controller
             })
             ->selectRaw('COALESCE(SUM(GREATEST(COALESCE(manual_exports.manual_export_quantity, 0), COALESCE(automatic_exports.automatic_export_quantity, 0))), 0)')
             ->whereColumn('export_keys.product_id', 'products.id');
+    }
+
+    private function buildExportAdjustmentQuantitySubquery(Request $request)
+    {
+        $query = \App\Models\InventoryDocumentItem::query()
+            ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
+            ->selectRaw("
+                COALESCE(SUM(
+                    CASE
+                        WHEN inventory_document_items.direction = 'in'
+                            THEN inventory_document_items.quantity
+                        WHEN inventory_document_items.direction = 'out'
+                            THEN -inventory_document_items.quantity
+                        ELSE 0
+                    END
+                ), 0)
+            ")
+            ->whereColumn('inventory_document_items.product_id', 'products.id')
+            ->where('inventory_documents.type', 'adjustment')
+            ->where('inventory_documents.adjustment_kind', InventoryDocument::ADJUSTMENT_KIND_EXPORT)
+            ->where('inventory_document_items.stock_bucket', 'sellable');
+
+        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+            $query->whereNull('inventory_documents.deleted_at');
+        }
+
+        $this->applyDateRange($query, 'inventory_documents.document_date', $request);
+
+        return $query;
     }
 
     private function buildPendingOutboundQuantitySubquery(Request $request)
@@ -3754,6 +3846,121 @@ class InventoryController extends Controller
         }
 
         return $code;
+    }
+
+    private function normalizeAdjustmentKind(?string $kind): string
+    {
+        return (string) $kind === InventoryDocument::ADJUSTMENT_KIND_EXPORT
+            ? InventoryDocument::ADJUSTMENT_KIND_EXPORT
+            : InventoryDocument::ADJUSTMENT_KIND_STOCK;
+    }
+
+    private function normalizeAdjustmentSource(?string $source, string $adjustmentKind): string
+    {
+        if ($adjustmentKind === InventoryDocument::ADJUSTMENT_KIND_EXPORT) {
+            return InventoryDocument::ADJUSTMENT_SOURCE_RETURN_RECONCILIATION;
+        }
+
+        $normalized = trim((string) ($source ?? ''));
+
+        return $normalized !== ''
+            ? $normalized
+            : InventoryDocument::ADJUSTMENT_SOURCE_MANUAL;
+    }
+
+    private function serializeAdjustmentDocumentListRow(InventoryDocument $document): array
+    {
+        $adjustmentKind = $this->normalizeAdjustmentKind($document->adjustment_kind ?? null);
+        $adjustmentSource = $this->normalizeAdjustmentSource($document->adjustment_source ?? null, $adjustmentKind);
+        $meta = is_array($document->meta) ? $document->meta : [];
+        $sourceDocumentType = $meta['source_document_type'] ?? $document->parentDocument?->type;
+        $sourceDocumentId = (int) ($meta['source_document_id'] ?? $document->parent_document_id ?? 0) ?: null;
+        $sourceDocumentNumber = $meta['source_document_number'] ?? $document->parentDocument?->document_number;
+        $sourceOrderNumbers = collect($meta['source_order_numbers'] ?? [])
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->values()
+            ->all();
+        $adjustmentLines = $document->items
+            ->map(function ($item) use ($adjustmentKind) {
+                return $this->serializeAdjustmentDocumentLine($item, $adjustmentKind);
+            })
+            ->values()
+            ->all();
+
+        return [
+            'id' => (int) $document->id,
+            'document_number' => $document->document_number,
+            'document_date' => optional($document->document_date)->toDateString(),
+            'supplier_id' => $document->supplier_id ? (int) $document->supplier_id : null,
+            'supplier' => $document->supplier ? [
+                'id' => (int) $document->supplier->id,
+                'name' => $document->supplier->name,
+            ] : null,
+            'notes' => $document->notes,
+            'total_quantity' => (int) ($document->total_quantity ?? 0),
+            'total_amount' => round((float) ($document->total_amount ?? 0), 2),
+            'items_count' => (int) ($document->items_count ?? $document->items->count()),
+            'adjustment_kind' => $adjustmentKind,
+            'adjustment_source' => $adjustmentSource,
+            'source_document_type' => $sourceDocumentType,
+            'source_document_id' => $sourceDocumentId,
+            'source_document_number' => $sourceDocumentNumber,
+            'source_order_numbers' => $sourceOrderNumbers,
+            'adjustment_lines' => $adjustmentLines,
+            'can_edit' => $adjustmentKind === InventoryDocument::ADJUSTMENT_KIND_STOCK,
+            'can_open_source' => $sourceDocumentType === 'return' && $sourceDocumentId !== null,
+            'creator' => $document->creator ? [
+                'id' => (int) $document->creator->id,
+                'name' => $document->creator->name,
+            ] : null,
+        ];
+    }
+
+    private function serializeAdjustmentDocumentLine($item, string $adjustmentKind): array
+    {
+        $meta = is_array($item->meta) ? $item->meta : [];
+        $differenceQuantity = array_key_exists('difference_quantity', $meta)
+            ? (int) $meta['difference_quantity']
+            : $this->signedAdjustmentDocumentLineQuantity($item);
+        $oldQuantity = array_key_exists('old_quantity', $meta) ? (int) $meta['old_quantity'] : null;
+        $newQuantity = array_key_exists('new_quantity', $meta)
+            ? (int) $meta['new_quantity']
+            : ($oldQuantity !== null ? $oldQuantity + $differenceQuantity : null);
+        $quantityScope = $meta['quantity_scope']
+            ?? ($adjustmentKind === InventoryDocument::ADJUSTMENT_KIND_EXPORT
+                ? 'export_quantity'
+                : ((string) ($item->stock_bucket ?? 'sellable') === 'damaged' ? 'damaged_stock' : 'sellable_stock'));
+
+        return [
+            'id' => (int) $item->id,
+            'product_id' => (int) $item->product_id,
+            'product_name' => $item->product_name_snapshot ?: $item->product?->name ?: ('Product #' . (int) $item->product_id),
+            'product_sku' => $item->product_sku_snapshot ?: $item->product?->sku,
+            'quantity_scope' => $quantityScope,
+            'old_quantity' => $oldQuantity,
+            'new_quantity' => $newQuantity,
+            'difference_quantity' => $differenceQuantity,
+            'impact_code' => $adjustmentKind === InventoryDocument::ADJUSTMENT_KIND_EXPORT
+                ? 'export_rewrite'
+                : ($differenceQuantity >= 0 ? 'stock_in' : 'stock_out'),
+            'stock_bucket' => (string) ($item->stock_bucket ?? 'sellable'),
+            'direction' => (string) ($item->direction ?? 'in'),
+            'order_breakdown' => collect($meta['source_order_breakdown'] ?? [])
+                ->filter(fn ($row) => is_array($row))
+                ->values()
+                ->all(),
+            'notes' => $item->notes,
+        ];
+    }
+
+    private function signedAdjustmentDocumentLineQuantity($item): int
+    {
+        $quantity = abs((int) ($item->quantity ?? 0));
+
+        return (string) ($item->direction ?? 'in') === 'out'
+            ? -$quantity
+            : $quantity;
     }
 
     private function inventoryProductPayload(Product $product, ?SupplierProductPrice $supplierPrice = null, $supplierPriceMap = null, bool $compact = false): array

@@ -2,15 +2,32 @@ import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { blogApi } from '../services/api';
 
+const HeroFallback = () => (
+    <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,rgba(27,54,93,0.96),rgba(197,160,101,0.82))]">
+        <div className="flex flex-col items-center gap-4 px-6 text-center text-white/90">
+            <span className="material-symbols-outlined text-6xl">auto_stories</span>
+            <div className="space-y-2">
+                <p className="text-xs font-black uppercase tracking-[0.35em] text-white/80">Cam Nang Gom Su</p>
+                <p className="text-base font-medium text-white/75">Hinh anh bai viet dang duoc cap nhat</p>
+            </div>
+        </div>
+    </div>
+);
+
 const PostDetail = () => {
     const { slug } = useParams();
     const [post, setPost] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [heroImageFailed, setHeroImageFailed] = useState(false);
 
     useEffect(() => {
         fetchPost();
         window.scrollTo(0, 0);
     }, [slug]);
+
+    useEffect(() => {
+        setHeroImageFailed(false);
+    }, [post?.featured_image, post?.image]);
 
     const fetchPost = async () => {
         setLoading(true);
@@ -41,11 +58,23 @@ const PostDetail = () => {
         );
     }
 
+    const heroImage = post.featured_image || post.image || '';
+    const shouldRenderHeroImage = heroImage && !heroImageFailed;
+
     return (
         <article className="w-full bg-background-light min-h-screen">
             {/* Featured Image Banner */}
             <div className="relative h-[60vh] overflow-hidden border-b-4 border-gold group">
-                <img src={post.featured_image || post.image || 'https://placehold.co/1920x1080'} alt={post.title} className="w-full h-full object-cover transition-transform duration-[2s] group-hover:scale-105" />
+                {shouldRenderHeroImage ? (
+                    <img
+                        src={heroImage}
+                        alt={post.title}
+                        onError={() => setHeroImageFailed(true)}
+                        className="w-full h-full object-cover transition-transform duration-[2s] group-hover:scale-105"
+                    />
+                ) : (
+                    <HeroFallback />
+                )}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent"></div>
                 <div className="absolute inset-x-6 bottom-16 lg:px-24">
                     <div className="max-w-4xl mx-auto space-y-6">

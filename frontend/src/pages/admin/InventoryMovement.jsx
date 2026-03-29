@@ -267,7 +267,7 @@ const isSlipTab = (tabKey) => isDocumentTab(tabKey) || tabKey === 'trash';
 const documentTypeMap = { returns: 'return', damaged: 'damaged', adjustments: 'adjustment' };
 const documentTitleMap = { returns: 'Phiếu hàng hoàn', damaged: 'Phiếu hàng hỏng', adjustments: 'Phiếu điều chỉnh' };
 const pageSizeOptions = [20, 50, 100, 500];
-const inventoryTableStorageVersion = 'v9';
+const inventoryTableStorageVersion = 'v10';
 const emptySortConfig = { key: null, direction: 'none' };
 const getStoredPageSize = (key) => {
     if (typeof window === 'undefined') return 20;
@@ -448,6 +448,43 @@ const formatCompactDecimal = (value) => {
     return text
         .replace(/(\.\d*?[1-9])0+$/, '$1')
         .replace(/\.0+$/, '');
+};
+const adjustmentKindMetaMap = {
+    export_adjustment: {
+        label: 'Điều chỉnh phiếu xuất',
+        color: '#0F766E',
+        subtle: '#CCFBF1',
+        description: 'Chỉ sửa lại số liệu xuất, không vào tổng điều chỉnh tồn.',
+    },
+    stock_adjustment: {
+        label: 'Điều chỉnh tồn kho độc lập',
+        color: '#B45309',
+        subtle: '#FEF3C7',
+        description: 'Cộng hoặc trừ trực tiếp vào tồn kho.',
+    },
+};
+const adjustmentSourceMetaMap = {
+    manual_inventory: {
+        label: 'Tạo tay từ quản lý kho',
+        description: 'Phiếu này tác động trực tiếp vào tồn kho.',
+    },
+    return_reconciliation: {
+        label: 'Tự động từ phiếu hoàn / chênh lệch xuất-hoàn',
+        description: 'Phiếu này chỉ sửa số liệu xuất để công thức tồn kho tự tính lại.',
+    },
+};
+const adjustmentQuantityScopeMetaMap = {
+    export_quantity: { oldLabel: 'Xuất cũ', newLabel: 'Xuất mới' },
+    sellable_stock: { oldLabel: 'Tồn cũ', newLabel: 'Tồn mới' },
+    damaged_stock: { oldLabel: 'Hỏng cũ', newLabel: 'Hỏng mới' },
+};
+const getAdjustmentKindMeta = (value) => adjustmentKindMetaMap[value] || adjustmentKindMetaMap.stock_adjustment;
+const getAdjustmentSourceMeta = (value) => adjustmentSourceMetaMap[value] || adjustmentSourceMetaMap.manual_inventory;
+const getAdjustmentQuantityScopeMeta = (value) => adjustmentQuantityScopeMetaMap[value] || adjustmentQuantityScopeMetaMap.sellable_stock;
+const formatSignedNumber = (value) => {
+    const numericValue = Number(value || 0);
+    if (numericValue > 0) return `+${formatNumber(numericValue)}`;
+    return formatNumber(numericValue);
 };
 const extractLeadingSign = (value) => {
     const trimmed = String(value ?? '').trim();
@@ -1180,6 +1217,8 @@ const buildPersistableImportModalDraft = ({
 const createDocumentForm = (tabKey, data = null) => ({
     id: data?.id || null,
     type: documentTypeMap[tabKey],
+    adjustment_kind: data?.adjustment_kind || 'stock_adjustment',
+    adjustment_source: data?.adjustment_source || 'manual_inventory',
     document_date: data?.document_date ? String(data.document_date).slice(0, 10) : todayValue,
     supplier_id: data?.supplier_id ? String(data.supplier_id) : '',
     notes: data?.notes || '',
@@ -1669,7 +1708,7 @@ const productColumns = [
     { id: 'total_exported', label: 'Tổng xuất', minWidth: 72, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'xuất') },
     { id: 'total_returned', label: 'Tổng hoàn', minWidth: 72, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'hoàn') },
     { id: 'total_damaged', label: 'Tổng hỏng', minWidth: 72, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'hỏng') },
-    { id: 'total_adjusted', label: 'Tổng điều chỉnh', minWidth: 82, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'điều chỉnh') },
+    { id: 'total_adjusted', label: 'Điều chỉnh tồn', minWidth: 92, align: 'right', headerTooltip: 'Chỉ lấy từ phiếu điều chỉnh tồn kho độc lập', headerRender: () => renderTwoLineHeader('Điều chỉnh', 'tồn') },
     { id: 'computed_stock', label: 'Tồn kho', minWidth: 76, align: 'right', headerRender: () => renderTwoLineHeader('Tồn', 'kho') },
     { id: 'pending_export_quantity', label: 'SL chờ xuất', minWidth: 82, align: 'right', headerTooltip: 'Đã bán nhưng chưa xuất kho', headerRender: () => renderTwoLineHeader('SL chờ', 'xuất') },
     { id: 'pending_return_quantity', label: 'SL hoàn chờ về', minWidth: 90, align: 'right', headerTooltip: 'Đơn hoàn chưa tạo phiếu hoàn nhập lại kho', headerRender: () => renderTwoLineHeader('SL hoàn', 'chờ về') },
@@ -1734,6 +1773,19 @@ const documentColumns = [
     { id: 'amount', label: 'Giá trị', minWidth: 120, align: 'right' },
     { id: 'note', label: 'Ghi chú', minWidth: 200 },
     { id: 'actions', label: 'Thao tác', minWidth: 145, align: 'center' },
+];
+
+const adjustmentColumns = [
+    { id: 'code', label: 'Mã phiếu', minWidth: 150 },
+    { id: 'kind', label: 'Loại điều chỉnh', minWidth: 180 },
+    { id: 'source', label: 'Nguồn tạo phiếu', minWidth: 240 },
+    { id: 'product', label: 'Sản phẩm', minWidth: 240 },
+    { id: 'old_quantity', label: 'Số lượng cũ', minWidth: 120, align: 'right' },
+    { id: 'new_quantity', label: 'Số lượng mới', minWidth: 120, align: 'right' },
+    { id: 'difference', label: 'Chênh lệch', minWidth: 120, align: 'right' },
+    { id: 'impact', label: 'Ảnh hưởng', minWidth: 220 },
+    { id: 'date', label: 'Ngày', minWidth: 140 },
+    { id: 'actions', label: 'Thao tác', minWidth: 160, align: 'center' },
 ];
 
 const lotColumns = [
@@ -1841,6 +1893,12 @@ const inventorySortColumnMaps = {
         qty: 'qty',
         amount: 'amount',
         note: 'note',
+    },
+    adjustments: {
+        code: 'code',
+        kind: 'kind',
+        source: 'source',
+        date: 'date',
     },
     lots: {
         code: 'code',
@@ -6215,7 +6273,10 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     };
 
     const deleteDocument = async (tabKey, row) => {
-        if (!window.confirm(`Xóa ${documentTitleMap[tabKey].toLowerCase()} ${row.document_number}?`)) return;
+        const confirmLabel = tabKey === 'adjustments' && row?.adjustment_kind === 'export_adjustment'
+            ? `Xóa phiếu hoàn nguồn của ${row.document_number}?`
+            : `Xóa ${documentTitleMap[tabKey].toLowerCase()} ${row.document_number}?`;
+        if (!window.confirm(confirmLabel)) return;
         try {
             await inventoryApi.deleteDocument(documentTypeMap[tabKey], row.id);
             showToast({ type: 'success', message: 'Đã chuyển phiếu vào thùng rác.' });
@@ -6223,6 +6284,15 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         } catch (error) {
             fail(error, 'Không thể xóa phiếu kho.');
         }
+    };
+
+    const openAdjustmentSource = async (row) => {
+        if (row?.source_document_type === 'return' && row?.source_document_id) {
+            await openEditDocument('returns', { id: row.source_document_id });
+            return;
+        }
+
+        showToast({ type: 'warning', message: 'Phiếu này chưa có nguồn liên kết để mở nhanh.' });
     };
 
     const closeBatchReturnModal = () => {
@@ -6401,7 +6471,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         { label: 'Tổng xuất', value: formatNumber(productSummary.total_exported) },
         { label: 'Tổng hoàn', value: formatNumber(productSummary.total_returned) },
         { label: 'Tổng hỏng', value: formatNumber(productSummary.total_damaged) },
-        { label: 'Tổng điều chỉnh', value: formatNumber(productSummary.total_adjusted) },
+        { label: 'Điều chỉnh tồn độc lập', value: formatNumber(productSummary.total_adjusted) },
     ], [productSummary]);
 
     const supplierSummaryItems = useMemo(() => !supplierSummary ? [] : [
@@ -6464,7 +6534,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             ],
             adjustments: [
                 { label: 'Tổng phiếu', value: formatNumber(adjustmentPagination.total) },
-                { label: 'Số lượng trang', value: formatNumber(adjustments.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0)) },
+                { label: 'Chênh lệch trang', value: formatNumber(adjustments.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0)) },
                 { label: 'Giá trị trang', value: formatCurrency(adjustments.reduce((sum, row) => sum + Number(row.total_amount || 0), 0)) },
             ],
             lots: [
@@ -6957,6 +7027,140 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         return '-';
     };
 
+    const renderAdjustmentQuantityCell = (row, field) => {
+        const lines = Array.isArray(row.adjustment_lines) ? row.adjustment_lines : [];
+        if (!lines.length) return <span className="text-[12px] text-primary/45">-</span>;
+
+        return (
+            <div className="space-y-1 text-right">
+                {lines.map((line) => {
+                    const scopeMeta = getAdjustmentQuantityScopeMeta(line.quantity_scope);
+                    const label = field === 'old_quantity'
+                        ? scopeMeta.oldLabel
+                        : field === 'new_quantity'
+                            ? scopeMeta.newLabel
+                            : 'Chênh lệch';
+                    const rawValue = field === 'difference'
+                        ? line.difference_quantity
+                        : line[field];
+                    const value = field === 'difference'
+                        ? formatSignedNumber(line.difference_quantity || 0)
+                        : (rawValue == null ? '-' : formatNumber(rawValue));
+                    const valueClassName = field === 'difference'
+                        ? (Number(line.difference_quantity || 0) > 0 ? 'text-emerald-700' : Number(line.difference_quantity || 0) < 0 ? 'text-rose-700' : 'text-primary')
+                        : 'text-primary';
+
+                    return (
+                        <div key={`${field}_${line.id}`} className="rounded-sm bg-primary/[0.03] px-2 py-1">
+                            <div className={`text-[12px] font-black ${valueClassName}`}>{value}</div>
+                            <div className="text-[10px] text-primary/45">{label}</div>
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    };
+
+    const renderAdjustmentCell = (row, columnId) => {
+        const lines = Array.isArray(row.adjustment_lines) ? row.adjustment_lines : [];
+        const kindMeta = getAdjustmentKindMeta(row.adjustment_kind);
+        const sourceMeta = getAdjustmentSourceMeta(row.adjustment_source);
+        const differenceValues = lines.map((line) => Number(line.difference_quantity || 0));
+        const allPositive = differenceValues.length > 0 && differenceValues.every((value) => value >= 0);
+        const allNegative = differenceValues.length > 0 && differenceValues.every((value) => value <= 0);
+        const impactLabel = row.adjustment_kind === 'export_adjustment'
+            ? 'Sửa dữ liệu xuất'
+            : allPositive
+                ? 'Cộng trực tiếp vào tồn'
+                : allNegative
+                    ? 'Trừ trực tiếp vào tồn'
+                    : 'Cộng/trừ trực tiếp vào tồn';
+        const impactDescription = row.adjustment_kind === 'export_adjustment'
+            ? 'Không cộng vào tổng điều chỉnh, bảng tồn tự tính lại theo số xuất mới.'
+            : 'Có tính vào cột tổng điều chỉnh của bảng tồn kho.';
+        const sourceSecondary = row.adjustment_kind === 'export_adjustment'
+            ? [
+                row.source_document_number ? `Phiếu hoàn ${row.source_document_number}` : null,
+                Array.isArray(row.source_order_numbers) && row.source_order_numbers.length ? row.source_order_numbers.join(', ') : null,
+            ].filter(Boolean).join(' • ')
+            : sourceMeta.description;
+
+        if (columnId === 'select') {
+            return (
+                <div className="flex items-center justify-center">
+                    <IndeterminateCheckbox
+                        checked={Boolean(selectedSlipIds.adjustments?.[String(row.id)])}
+                        onChange={(event) => setSlipRowSelected('adjustments', row, event.target.checked)}
+                        title="Chọn phiếu điều chỉnh"
+                    />
+                </div>
+            );
+        }
+        if (columnId === 'code') {
+            return <CellText primary={row.document_number} secondary={row.notes || null} mono />;
+        }
+        if (columnId === 'kind') {
+            return (
+                <div className="space-y-1">
+                    <StatusPill label={kindMeta.label} color={kindMeta.color} subtle={kindMeta.subtle} />
+                    <div className="text-[11px] text-primary/55">{kindMeta.description}</div>
+                </div>
+            );
+        }
+        if (columnId === 'source') {
+            return (
+                <CellText
+                    primary={sourceMeta.label}
+                    secondary={sourceSecondary || 'Không có nguồn liên kết'}
+                />
+            );
+        }
+        if (columnId === 'product') {
+            if (!lines.length) return <span className="text-[12px] text-primary/45">-</span>;
+            return (
+                <div className="space-y-1">
+                    {lines.map((line) => (
+                        <CellText
+                            key={`product_${line.id}`}
+                            primary={line.product_name || '-'}
+                            secondary={line.product_sku || null}
+                        />
+                    ))}
+                </div>
+            );
+        }
+        if (columnId === 'old_quantity' || columnId === 'new_quantity') {
+            return renderAdjustmentQuantityCell(row, columnId);
+        }
+        if (columnId === 'difference') {
+            return renderAdjustmentQuantityCell(row, 'difference');
+        }
+        if (columnId === 'impact') {
+            return (
+                <div className="space-y-1">
+                    <div className={`text-[12px] font-black ${row.adjustment_kind === 'export_adjustment' ? 'text-teal-700' : 'text-amber-700'}`}>{impactLabel}</div>
+                    <div className="text-[11px] text-primary/55">{impactDescription}</div>
+                </div>
+            );
+        }
+        if (columnId === 'date') return formatDateTime(row.document_date);
+        if (columnId === 'actions') {
+            return (
+                <div className="flex items-center justify-center gap-2">
+                    {row.adjustment_kind === 'export_adjustment' && row.can_open_source ? (
+                        <button type="button" onClick={() => openAdjustmentSource(row)} className={ghostButton}>Mở nguồn</button>
+                    ) : (
+                        <button type="button" onClick={() => openEditDocument('adjustments', row)} className={ghostButton} disabled={!row.can_edit}>Sửa</button>
+                    )}
+                    <button type="button" onClick={() => deleteDocument('adjustments', row)} className={dangerButton}>
+                        {row.adjustment_kind === 'export_adjustment' ? 'Xóa nguồn' : 'Xóa'}
+                    </button>
+                </div>
+            );
+        }
+        return '-';
+    };
+
     const renderDocumentCell = (row, columnId, tabKey) => {
         if (columnId === 'select') {
             return (
@@ -7049,8 +7253,22 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                             : tabKey === 'damaged'
                                 ? damagedListColumns
                                 : adjustmentListColumns;
-        const renderCell = isImportTab ? renderImportCell : tabKey === 'exports' ? renderExportCell : tabKey === 'lots' ? renderLotCell : tabKey === 'trash' ? renderTrashCell : (row, columnId) => renderDocumentCell(row, columnId, tabKey);
-        const sortMap = ['returns', 'damaged', 'adjustments'].includes(tabKey) ? inventorySortColumnMaps.documents : inventorySortColumnMaps[tabKey];
+        const renderCell = isImportTab
+            ? renderImportCell
+            : tabKey === 'exports'
+                ? renderExportCell
+                : tabKey === 'adjustments'
+                    ? renderAdjustmentCell
+                    : tabKey === 'lots'
+                        ? renderLotCell
+                        : tabKey === 'trash'
+                            ? renderTrashCell
+                            : (row, columnId) => renderDocumentCell(row, columnId, tabKey);
+        const sortMap = tabKey === 'adjustments'
+            ? inventorySortColumnMaps.adjustments
+            : ['returns', 'damaged'].includes(tabKey)
+                ? inventorySortColumnMaps.documents
+                : inventorySortColumnMaps[tabKey];
         const simpleFilterChips = [
             buildFilterChip(`${tabKey}_search`, 'Tìm kiếm', filters.search, () => clearSimpleFilter(tabKey, 'search')),
             buildFilterChip(`${tabKey}_date_from`, 'Từ ngày', filters.date_from ? formatPrintDate(filters.date_from) : '', () => clearSimpleFilter(tabKey, 'date_from')),
@@ -7603,7 +7821,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         [slipSelectionStates.damaged]
     );
     const adjustmentListColumns = useMemo(
-        () => buildSelectableColumns('adjustments', documentColumns, 'Chọn tất cả phiếu điều chỉnh trên trang hiện tại'),
+        () => buildSelectableColumns('adjustments', adjustmentColumns, 'Chọn tất cả phiếu điều chỉnh trên trang hiện tại'),
         [slipSelectionStates.adjustments]
     );
     const trashListColumns = useMemo(
@@ -8773,7 +8991,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
 
                     {documentModal.tabKey === 'adjustments' ? (
                         <div className="rounded-sm border border-primary/10 bg-[#f8fbff] px-3 py-2 text-[12px] font-medium text-primary/75">
-                            Nhập số dương để tăng tồn thực tế, nhập số âm để giảm tồn thực tế.
+                            Phiếu tạo tay tại đây luôn là điều chỉnh tồn kho độc lập: nhập số dương để cộng tồn, nhập số âm để trừ tồn. Các phiếu điều chỉnh phiếu xuất sẽ được hệ thống tự sinh từ phiếu hoàn hoặc chênh lệch xuất-hoàn.
                         </div>
                     ) : null}
 

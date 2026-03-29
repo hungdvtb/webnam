@@ -1326,14 +1326,22 @@ class InventoryService
                 continue;
             }
 
-            if ($item->stock_bucket === 'sellable' && $item->direction === 'in') {
+            $inventoryDirection = (string) ($item->direction ?? 'in');
+            if ((string) $document->type === 'adjustment') {
+                $inventoryDirection = $this->effectiveAdjustmentStockDirection(
+                    $this->normalizeAdjustmentKind($document->adjustment_kind ?? null),
+                    $inventoryDirection
+                );
+            }
+
+            if ($item->stock_bucket === 'sellable' && $inventoryDirection === 'in') {
                 $relatedBatches = $documentBatches->get($item->id, collect())
                     ->merge($documentBatches->get($item->product_id, collect()))
                     ->unique('id');
                 foreach ($relatedBatches as $batch) {
                     $batch->delete();
                 }
-            } elseif ($item->stock_bucket === 'sellable' && $item->direction === 'out') {
+            } elseif ($item->stock_bucket === 'sellable' && $inventoryDirection === 'out') {
                 $allocations = InventoryDocumentAllocation::query()
                     ->where('inventory_document_item_id', $item->id)
                     ->with('batch')
@@ -1351,10 +1359,10 @@ class InventoryService
                 }
 
                 InventoryDocumentAllocation::query()->where('inventory_document_item_id', $item->id)->delete();
-            } elseif ($item->stock_bucket === 'damaged' && $item->direction === 'in') {
+            } elseif ($item->stock_bucket === 'damaged' && $inventoryDirection === 'in') {
                 $product->damaged_quantity = max(0, (int) ($product->damaged_quantity ?? 0) - (int) $item->quantity);
                 $product->save();
-            } elseif ($item->stock_bucket === 'damaged' && $item->direction === 'out') {
+            } elseif ($item->stock_bucket === 'damaged' && $inventoryDirection === 'out') {
                 $product->damaged_quantity = (int) ($product->damaged_quantity ?? 0) + (int) $item->quantity;
                 $product->save();
             }
@@ -1415,8 +1423,16 @@ class InventoryService
 
             $stockBucket = (string) ($item->stock_bucket ?? 'sellable');
             $direction = (string) ($item->direction ?? 'in');
+            $inventoryDirection = (string) $direction;
 
-            if ($stockBucket === 'sellable' && $direction === 'in') {
+            if ((string) $document->type === 'adjustment') {
+                $inventoryDirection = $this->effectiveAdjustmentStockDirection(
+                    $this->normalizeAdjustmentKind($document->adjustment_kind ?? null),
+                    $direction
+                );
+            }
+
+            if ($stockBucket === 'sellable' && $inventoryDirection === 'in') {
                 $this->createSellableBatch(
                     (int) $document->account_id,
                     $product,
@@ -1428,7 +1444,7 @@ class InventoryService
                     $index + 1,
                     $this->storedDocumentBatchMeta($document, $item)
                 );
-            } elseif ($stockBucket === 'sellable' && $direction === 'out') {
+            } elseif ($stockBucket === 'sellable' && $inventoryDirection === 'out') {
                 $allowOversold = (bool) data_get($item->meta, 'allow_oversold', false);
                 $allocation = $allowOversold
                     ? $this->allocateOrderSellableBatches((int) $document->account_id, $product, $quantity)
@@ -1455,10 +1471,10 @@ class InventoryService
                     'unit_cost' => $quantity > 0 ? round((float) $allocation['total_cost'] / $quantity, 2) : 0,
                     'total_cost' => round((float) $allocation['total_cost'], 2),
                 ])->save();
-            } elseif ($stockBucket === 'damaged' && $direction === 'in') {
+            } elseif ($stockBucket === 'damaged' && $inventoryDirection === 'in') {
                 $product->damaged_quantity = (int) ($product->damaged_quantity ?? 0) + $quantity;
                 $product->save();
-            } elseif ($stockBucket === 'damaged' && $direction === 'out') {
+            } elseif ($stockBucket === 'damaged' && $inventoryDirection === 'out') {
                 $currentDamaged = (int) ($product->damaged_quantity ?? 0);
                 if ($currentDamaged < $quantity) {
                     throw ValidationException::withMessages([
@@ -1482,7 +1498,7 @@ class InventoryService
         $sourceName = match ((string) $document->type) {
             'export' => 'Phieu xuat',
             'return' => (string) $document->reference_type === 'order' ? 'Phieu hoan don hang' : 'Phieu hang hoan',
-            'adjustment' => 'Phieu dieu chinh',
+            'adjustment' => $this->adjustmentBatchSourceName($this->normalizeAdjustmentKind($document->adjustment_kind ?? null)),
             default => 'Phieu kho',
         };
 
@@ -1731,6 +1747,14 @@ class InventoryService
     private function createAdjustmentDocument(array $payload, int $accountId, ?int $userId): InventoryDocument
     {
         return DB::transaction(function () use ($payload, $accountId, $userId) {
+            $adjustmentKind = $this->normalizeAdjustmentKind($payload['adjustment_kind'] ?? null);
+            $adjustmentSource = $this->normalizeAdjustmentSource(
+                $payload['adjustment_source'] ?? null,
+                $adjustmentKind
+            );
+            $payload['adjustment_kind'] = $adjustmentKind;
+            $payload['adjustment_source'] = $adjustmentSource;
+            $payload['meta'] = $this->buildAdjustmentDocumentMeta($payload, $adjustmentKind, $adjustmentSource);
             $items = $this->normalizeAdjustmentItems($payload);
 
             if ($items->isEmpty()) {
@@ -1756,15 +1780,60 @@ class InventoryService
             $document = $this->createDocumentHead('adjustment', $payload, $accountId, $userId, $documentDate);
             $supplierId = isset($payload['supplier_id']) ? (int) $payload['supplier_id'] : null;
             $touchedProductIds = [];
+            $sellableStockByProduct = $products->mapWithKeys(
+                fn (Product $product) => [(int) $product->id => (int) ($product->stock_quantity ?? 0)]
+            )->all();
+            $damagedStockByProduct = $products->mapWithKeys(
+                fn (Product $product) => [(int) $product->id => (int) ($product->damaged_quantity ?? 0)]
+            )->all();
 
             foreach ($items as $index => $item) {
                 $product = $products->get((int) $item['product_id']);
                 $quantity = (int) $item['quantity'];
                 $stockBucket = $item['stock_bucket'] ?? 'sellable';
                 $direction = $item['direction'] ?? 'in';
+                $effectiveStockDirection = $this->effectiveAdjustmentStockDirection($adjustmentKind, $direction);
                 $allowOversold = (bool) ($item['allow_oversold'] ?? $payload['allow_oversold'] ?? false);
                 $unitCost = $this->resolveAdjustmentUnitCost($product, $item, $supplierId);
                 $totalCost = round($quantity * $unitCost, 2);
+                $signedQuantity = $this->signedAdjustmentQuantityFromAttributes($item);
+                $stockDelta = $this->signedStockDeltaForAdjustmentItem($item, $adjustmentKind);
+                $itemMeta = is_array($item['meta'] ?? null) ? $item['meta'] : [];
+                $itemMeta['adjustment_kind'] = $adjustmentKind;
+                $itemMeta['adjustment_source'] = $adjustmentSource;
+
+                if ($adjustmentKind === InventoryDocument::ADJUSTMENT_KIND_EXPORT) {
+                    $oldQuantity = (int) ($item['old_quantity'] ?? ($itemMeta['old_quantity'] ?? 0));
+                    $newQuantity = (int) ($item['new_quantity'] ?? ($itemMeta['new_quantity'] ?? max(0, $oldQuantity + $signedQuantity)));
+                    $itemMeta['quantity_scope'] = $item['quantity_scope'] ?? ($itemMeta['quantity_scope'] ?? 'export_quantity');
+                    $itemMeta['old_quantity'] = $oldQuantity;
+                    $itemMeta['new_quantity'] = $newQuantity;
+                    $itemMeta['difference_quantity'] = (int) ($item['difference_quantity'] ?? ($itemMeta['difference_quantity'] ?? $signedQuantity));
+                    $itemMeta['affects_inventory_totals'] = false;
+                    $itemMeta['affects_inventory_directly'] = false;
+                } else {
+                    $stockMap = $stockBucket === 'damaged' ? $damagedStockByProduct : $sellableStockByProduct;
+                    $beforeQuantity = (int) ($stockMap[$product->id] ?? 0);
+                    $afterQuantity = $beforeQuantity + $stockDelta;
+
+                    if ($stockBucket === 'damaged') {
+                        $damagedStockByProduct[$product->id] = $afterQuantity;
+                        $itemMeta['quantity_scope'] = 'damaged_stock';
+                    } else {
+                        $sellableStockByProduct[$product->id] = $afterQuantity;
+                        $itemMeta['quantity_scope'] = 'sellable_stock';
+                    }
+
+                    $itemMeta['old_quantity'] = $beforeQuantity;
+                    $itemMeta['new_quantity'] = $afterQuantity;
+                    $itemMeta['difference_quantity'] = $stockDelta;
+                    $itemMeta['affects_inventory_totals'] = true;
+                    $itemMeta['affects_inventory_directly'] = true;
+                }
+
+                if ($allowOversold) {
+                    $itemMeta['allow_oversold'] = true;
+                }
 
                 $documentItem = InventoryDocumentItem::create([
                     'account_id' => $accountId,
@@ -1778,27 +1847,27 @@ class InventoryService
                     'unit_cost' => $unitCost,
                     'total_cost' => $totalCost,
                     'notes' => $item['notes'] ?? null,
-                    'meta' => $allowOversold ? ['allow_oversold' => true] : null,
+                    'meta' => $itemMeta,
                 ]);
 
-                if ($stockBucket === 'sellable' && $direction === 'in') {
+                if ($stockBucket === 'sellable' && $effectiveStockDirection === 'in') {
                     $this->createSellableBatch(
                         $accountId,
                         $product,
                         $document->document_number,
                         $document->id,
                         $documentDate,
-                        $quantity,
-                        $unitCost,
-                        $index + 1,
-                        [
-                            'source_name' => 'Phiếu điều chỉnh',
-                            'source_label' => $document->document_number,
-                            'document_type' => 'adjustment',
-                            'document_item_id' => $documentItem->id,
-                        ]
+                    $quantity,
+                    $unitCost,
+                    $index + 1,
+                    [
+                        'source_name' => $this->adjustmentBatchSourceName($adjustmentKind),
+                        'source_label' => $document->document_number,
+                        'document_type' => 'adjustment',
+                        'document_item_id' => $documentItem->id,
+                    ]
                     );
-                } elseif ($stockBucket === 'sellable' && $direction === 'out') {
+                } elseif ($stockBucket === 'sellable' && $effectiveStockDirection === 'out') {
                     $allocation = $allowOversold
                         ? $this->allocateOrderSellableBatches($accountId, $product, $quantity)
                         : $this->allocateSellableBatches($accountId, $product, $quantity);
@@ -1819,10 +1888,10 @@ class InventoryService
                             'allocated_at' => now(),
                         ]);
                     }
-                } elseif ($stockBucket === 'damaged' && $direction === 'in') {
+                } elseif ($stockBucket === 'damaged' && $effectiveStockDirection === 'in') {
                     $product->damaged_quantity = (int) ($product->damaged_quantity ?? 0) + $quantity;
                     $product->save();
-                } elseif ($stockBucket === 'damaged' && $direction === 'out') {
+                } elseif ($stockBucket === 'damaged' && $effectiveStockDirection === 'out') {
                     $currentDamaged = (int) ($product->damaged_quantity ?? 0);
                     if ($currentDamaged < $quantity) {
                         throw ValidationException::withMessages([
@@ -1842,6 +1911,44 @@ class InventoryService
 
             return $document->load(['items.product:id,sku,name', 'creator:id,name']);
         });
+    }
+
+    private function normalizeAdjustmentKind(?string $kind): string
+    {
+        return (string) $kind === InventoryDocument::ADJUSTMENT_KIND_EXPORT
+            ? InventoryDocument::ADJUSTMENT_KIND_EXPORT
+            : InventoryDocument::ADJUSTMENT_KIND_STOCK;
+    }
+
+    private function normalizeAdjustmentSource(?string $source, string $adjustmentKind): string
+    {
+        if ($adjustmentKind === InventoryDocument::ADJUSTMENT_KIND_EXPORT) {
+            return InventoryDocument::ADJUSTMENT_SOURCE_RETURN_RECONCILIATION;
+        }
+
+        $normalized = trim((string) ($source ?? ''));
+
+        return $normalized !== ''
+            ? $normalized
+            : InventoryDocument::ADJUSTMENT_SOURCE_MANUAL;
+    }
+
+    private function buildAdjustmentDocumentMeta(array $payload, string $adjustmentKind, string $adjustmentSource): array
+    {
+        $meta = is_array($payload['meta'] ?? null) ? $payload['meta'] : [];
+        $meta['adjustment_kind'] = $adjustmentKind;
+        $meta['adjustment_source'] = $adjustmentSource;
+        $meta['affects_inventory_totals'] = $adjustmentKind === InventoryDocument::ADJUSTMENT_KIND_STOCK;
+        $meta['affects_inventory_directly'] = $adjustmentKind === InventoryDocument::ADJUSTMENT_KIND_STOCK;
+
+        return $meta;
+    }
+
+    private function adjustmentBatchSourceName(string $adjustmentKind): string
+    {
+        return $adjustmentKind === InventoryDocument::ADJUSTMENT_KIND_EXPORT
+            ? 'Dieu chinh phieu xuat'
+            : 'Phieu dieu chinh ton kho';
     }
 
     private function normalizeAdjustmentItems(array $payload): \Illuminate\Support\Collection
@@ -1876,6 +1983,35 @@ class InventoryService
         return strtolower((string) ($item['direction'] ?? '')) === 'out'
             ? -abs($quantity)
             : abs($quantity);
+    }
+
+    private function signedAdjustmentQuantityFromAttributes(array $item): int
+    {
+        $quantity = abs((int) ($item['quantity'] ?? 0));
+
+        return (string) ($item['direction'] ?? 'in') === 'out'
+            ? -$quantity
+            : $quantity;
+    }
+
+    private function signedStockDeltaForAdjustmentItem(array $item, string $adjustmentKind): int
+    {
+        $signedQuantity = $this->signedAdjustmentQuantityFromAttributes($item);
+
+        return $adjustmentKind === InventoryDocument::ADJUSTMENT_KIND_EXPORT
+            ? -$signedQuantity
+            : $signedQuantity;
+    }
+
+    private function effectiveAdjustmentStockDirection(string $adjustmentKind, string $direction): string
+    {
+        $normalizedDirection = (string) $direction === 'out' ? 'out' : 'in';
+
+        if ($adjustmentKind !== InventoryDocument::ADJUSTMENT_KIND_EXPORT) {
+            return $normalizedDirection;
+        }
+
+        return $normalizedDirection === 'out' ? 'in' : 'out';
     }
 
     private function resolveAdjustmentUnitCost(Product $product, array $item, ?int $supplierId = null): float
@@ -1916,6 +2052,15 @@ class InventoryService
             'supplier_id' => $payload['supplier_id'] ?? null,
             'document_number' => $this->generateDocumentNumber($type, $accountId),
             'type' => $type,
+            'adjustment_kind' => $type === 'adjustment'
+                ? $this->normalizeAdjustmentKind($payload['adjustment_kind'] ?? null)
+                : null,
+            'adjustment_source' => $type === 'adjustment'
+                ? $this->normalizeAdjustmentSource(
+                    $payload['adjustment_source'] ?? null,
+                    $this->normalizeAdjustmentKind($payload['adjustment_kind'] ?? null)
+                )
+                : null,
             'document_date' => $documentDate->toDateString(),
             'status' => 'completed',
             'reference_type' => $payload['reference_type'] ?? null,

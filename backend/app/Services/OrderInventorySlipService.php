@@ -2625,6 +2625,25 @@ class OrderInventorySlipService
             ->filter(fn (array $item) => (int) ($item['discrepancy_quantity'] ?? 0) !== 0)
             ->map(function (array $item) {
                 $discrepancyQuantity = (int) $item['discrepancy_quantity'];
+                $oldQuantity = (int) ($item['exported_quantity'] ?? 0);
+                $newQuantity = max(0, $oldQuantity + $discrepancyQuantity);
+                $orderBreakdown = collect($item['order_breakdown'] ?? [])
+                    ->map(function (array $allocation) {
+                        $exportedQuantity = (int) ($allocation['exported_quantity'] ?? 0);
+                        $differenceQuantity = (int) ($allocation['discrepancy_quantity'] ?? 0);
+
+                        return [
+                            'order_id' => (int) ($allocation['order_id'] ?? 0) ?: null,
+                            'order_number' => $allocation['order_number'] ?? null,
+                            'customer_name' => $allocation['customer_name'] ?? null,
+                            'old_quantity' => $exportedQuantity,
+                            'new_quantity' => max(0, $exportedQuantity + $differenceQuantity),
+                            'difference_quantity' => $differenceQuantity,
+                        ];
+                    })
+                    ->filter(fn (array $row) => (int) ($row['difference_quantity'] ?? 0) !== 0)
+                    ->values()
+                    ->all();
 
                 return [
                     'product_id' => (int) $item['product_id'],
@@ -2635,7 +2654,15 @@ class OrderInventorySlipService
                     'notes' => $discrepancyQuantity > 0
                         ? 'Phần lệch dương từ phiếu hoàn đối chiếu'
                         : 'Phần lệch âm từ phiếu hoàn đối chiếu',
-                    'allow_oversold' => $discrepancyQuantity < 0,
+                    'allow_oversold' => $discrepancyQuantity > 0,
+                    'quantity_scope' => 'export_quantity',
+                    'old_quantity' => $oldQuantity,
+                    'new_quantity' => $newQuantity,
+                    'difference_quantity' => $discrepancyQuantity,
+                    'meta' => [
+                        'source_order_breakdown' => $orderBreakdown,
+                        'is_extra_product' => (bool) ($item['is_extra_product'] ?? false),
+                    ],
                 ];
             })
             ->values();
@@ -2650,17 +2677,31 @@ class OrderInventorySlipService
             return null;
         }
 
+        $sourceOrderNumbers = $document->orderLinks
+            ->pluck('order.order_number')
+            ->filter()
+            ->values()
+            ->all();
+
         $payload = [
             'document_date' => optional($document->document_date)->toDateString() ?: now()->toDateString(),
             'notes' => 'Tự động cập nhật từ phiếu hoàn đối chiếu ' . $document->document_number,
+            'adjustment_kind' => InventoryDocument::ADJUSTMENT_KIND_EXPORT,
+            'adjustment_source' => InventoryDocument::ADJUSTMENT_SOURCE_RETURN_RECONCILIATION,
             'reference_type' => 'inventory_document',
             'reference_id' => (int) $document->id,
             'parent_document_id' => (int) $document->id,
             'batch_group_key' => $document->batch_group_key,
             'meta' => [
                 'managed_by' => self::MANAGED_RETURN_ADJUSTMENT_SOURCE,
+                'adjustment_kind' => InventoryDocument::ADJUSTMENT_KIND_EXPORT,
+                'adjustment_source' => InventoryDocument::ADJUSTMENT_SOURCE_RETURN_RECONCILIATION,
                 'return_document_id' => (int) $document->id,
                 'return_document_number' => $document->document_number,
+                'source_document_type' => 'return',
+                'source_document_id' => (int) $document->id,
+                'source_document_number' => $document->document_number,
+                'source_order_numbers' => $sourceOrderNumbers,
             ],
             'allow_oversold' => true,
             'items' => $adjustmentItems->all(),

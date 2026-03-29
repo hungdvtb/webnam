@@ -12,24 +12,28 @@ return new class extends Migration
     public function up(): void
     {
         // Add fields to carriers
-        Schema::table('carriers', function (Blueprint $table) {
-            if (!Schema::hasColumn('carriers', 'sort_order')) {
-                $table->integer('sort_order')->default(0)->after('is_active');
-            }
-            if (!Schema::hasColumn('carriers', 'is_visible')) {
-                $table->boolean('is_visible')->default(true)->after('sort_order');
-            }
-            if (!Schema::hasColumn('carriers', 'color')) {
-                $table->string('color', 20)->nullable()->after('name');
-            }
-        });
+        if (Schema::hasTable('carriers')) {
+            Schema::table('carriers', function (Blueprint $table) {
+                if (!Schema::hasColumn('carriers', 'sort_order')) {
+                    $table->integer('sort_order')->default(0)->after('is_active');
+                }
+                if (!Schema::hasColumn('carriers', 'is_visible')) {
+                    $table->boolean('is_visible')->default(true)->after('sort_order');
+                }
+                if (!Schema::hasColumn('carriers', 'color')) {
+                    $table->string('color', 20)->nullable()->after('name');
+                }
+            });
+        }
 
         // Add description to mappings
-        Schema::table('carrier_status_mappings', function (Blueprint $table) {
-            if (!Schema::hasColumn('carrier_status_mappings', 'description')) {
-                $table->text('description')->nullable()->after('mapped_order_status');
-            }
-        });
+        if (Schema::hasTable('carrier_status_mappings')) {
+            Schema::table('carrier_status_mappings', function (Blueprint $table) {
+                if (!Schema::hasColumn('carrier_status_mappings', 'description')) {
+                    $table->text('description')->nullable()->after('mapped_order_status');
+                }
+            });
+        }
 
         // Create carrier_raw_statuses for discovered statuses from API
         if (!Schema::hasTable('carrier_raw_statuses')) {
@@ -55,12 +59,24 @@ return new class extends Migration
     {
         Schema::dropIfExists('carrier_raw_statuses');
 
-        Schema::table('carrier_status_mappings', function (Blueprint $table) {
-            $table->dropColumn('description');
-        });
+        if (Schema::hasTable('carrier_status_mappings') && Schema::hasColumn('carrier_status_mappings', 'description')) {
+            Schema::table('carrier_status_mappings', function (Blueprint $table) {
+                $table->dropColumn('description');
+            });
+        }
 
-        Schema::table('carriers', function (Blueprint $table) {
-            $table->dropColumn(['sort_order', 'is_visible', 'color']);
-        });
+        if (Schema::hasTable('carriers')) {
+            $columnsToDrop = array_values(array_filter([
+                Schema::hasColumn('carriers', 'sort_order') ? 'sort_order' : null,
+                Schema::hasColumn('carriers', 'is_visible') ? 'is_visible' : null,
+                Schema::hasColumn('carriers', 'color') ? 'color' : null,
+            ]));
+
+            if (!empty($columnsToDrop)) {
+                Schema::table('carriers', function (Blueprint $table) use ($columnsToDrop) {
+                    $table->dropColumn($columnsToDrop);
+                });
+            }
+        }
     }
 };

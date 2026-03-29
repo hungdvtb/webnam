@@ -9,11 +9,19 @@ class InventoryDocument extends Model
 {
     use \App\Traits\BelongsToAccount, OptionalSoftDeletes;
 
+    public const ADJUSTMENT_KIND_STOCK = 'stock_adjustment';
+    public const ADJUSTMENT_KIND_EXPORT = 'export_adjustment';
+
+    public const ADJUSTMENT_SOURCE_MANUAL = 'manual_inventory';
+    public const ADJUSTMENT_SOURCE_RETURN_RECONCILIATION = 'return_reconciliation';
+
     protected $fillable = [
         'account_id',
         'supplier_id',
         'document_number',
         'type',
+        'adjustment_kind',
+        'adjustment_source',
         'document_date',
         'status',
         'reference_type',

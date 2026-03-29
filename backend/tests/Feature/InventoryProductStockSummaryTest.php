@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\InventoryDocument;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
@@ -165,6 +166,73 @@ class InventoryProductStockSummaryTest extends TestCase
         $this->assertSame('low', (string) ($rows->first()['stock_alert'] ?? ''));
         $this->assertSame(3, (int) ($rows->first()['computed_stock'] ?? 0));
         $this->assertSame(3, (int) ($summary['total_stock'] ?? 0));
+    }
+
+    public function test_export_adjustment_documents_revise_export_totals_without_touching_total_adjusted(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham sua lai xuat',
+            'sku' => 'EXPORT-ADJ-001',
+        ]);
+
+        $service = app(InventoryService::class);
+
+        $service->createImport([
+            'supplier_id' => $supplier->id,
+            'import_date' => now()->subDays(2)->toDateString(),
+            'items' => [[
+                'product_id' => $product->id,
+                'quantity' => 10,
+                'received_quantity' => 10,
+                'unit_cost' => 100000,
+            ]],
+        ], $account->id, $user->id);
+
+        $service->createDocument('export', [
+            'document_date' => now()->subDay()->toDateString(),
+            'items' => [[
+                'product_id' => $product->id,
+                'quantity' => 4,
+            ]],
+        ], $account->id, $user->id);
+
+        $service->createDocument('adjustment', [
+            'document_date' => now()->toDateString(),
+            'adjustment_kind' => InventoryDocument::ADJUSTMENT_KIND_EXPORT,
+            'adjustment_source' => InventoryDocument::ADJUSTMENT_SOURCE_RETURN_RECONCILIATION,
+            'notes' => 'Export correction',
+            'items' => [[
+                'product_id' => $product->id,
+                'quantity' => -1,
+                'unit_cost' => 100000,
+                'quantity_scope' => 'export_quantity',
+                'old_quantity' => 4,
+                'new_quantity' => 3,
+                'difference_quantity' => -1,
+            ]],
+        ], $account->id, $user->id);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/inventory/products?per_page=20');
+
+        $response->assertOk();
+
+        $row = collect($response->json('data'))->firstWhere('id', $product->id);
+        $summary = $response->json('summary');
+
+        $this->assertNotNull($row);
+        $this->assertSame(10, (int) ($row['total_imported'] ?? 0));
+        $this->assertSame(3, (int) ($row['total_exported'] ?? 0));
+        $this->assertSame(0, (int) ($row['total_adjusted'] ?? 0));
+        $this->assertSame(7, (int) ($row['computed_stock'] ?? 0));
+        $this->assertSame(7, (int) $product->fresh()->stock_quantity);
+
+        $this->assertSame(3, (int) ($summary['total_exported'] ?? 0));
+        $this->assertSame(0, (int) ($summary['total_adjusted'] ?? 0));
+        $this->assertSame(7, (int) ($summary['total_stock'] ?? 0));
     }
 
     private function authenticate(): array

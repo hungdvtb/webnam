@@ -79,6 +79,8 @@ class InventoryAdjustmentDocumentTest extends TestCase
         $response
             ->assertCreated()
             ->assertJsonPath('type', 'adjustment')
+            ->assertJsonPath('adjustment_kind', InventoryDocument::ADJUSTMENT_KIND_STOCK)
+            ->assertJsonPath('adjustment_source', InventoryDocument::ADJUSTMENT_SOURCE_MANUAL)
             ->assertJsonPath('total_quantity', 5)
             ->assertJsonPath('total_amount', 547000);
 
@@ -102,14 +104,24 @@ class InventoryAdjustmentDocumentTest extends TestCase
         $this->assertSame('out', (string) $negativeItem->direction);
         $this->assertSame(125000.0, (float) $negativeItem->unit_cost);
         $this->assertSame(250000.0, (float) $negativeItem->total_cost);
+        $this->assertSame('sellable_stock', data_get($negativeItem->meta, 'quantity_scope'));
+        $this->assertSame(5, (int) data_get($negativeItem->meta, 'old_quantity'));
+        $this->assertSame(3, (int) data_get($negativeItem->meta, 'new_quantity'));
+        $this->assertSame(-2, (int) data_get($negativeItem->meta, 'difference_quantity'));
 
         $this->assertSame(3, (int) $currentCostItem->quantity);
         $this->assertSame('in', (string) $currentCostItem->direction);
         $this->assertSame(135000.0, (float) $currentCostItem->unit_cost);
+        $this->assertSame(0, (int) data_get($currentCostItem->meta, 'old_quantity'));
+        $this->assertSame(3, (int) data_get($currentCostItem->meta, 'new_quantity'));
+        $this->assertSame(3, (int) data_get($currentCostItem->meta, 'difference_quantity'));
 
         $this->assertSame(4, (int) $expectedCostItem->quantity);
         $this->assertSame('in', (string) $expectedCostItem->direction);
         $this->assertSame(98000.0, (float) $expectedCostItem->unit_cost);
+        $this->assertSame(0, (int) data_get($expectedCostItem->meta, 'old_quantity'));
+        $this->assertSame(4, (int) data_get($expectedCostItem->meta, 'new_quantity'));
+        $this->assertSame(4, (int) data_get($expectedCostItem->meta, 'difference_quantity'));
 
         $this->assertSame(3, (int) $negativeProduct->fresh()->stock_quantity);
         $this->assertSame(3, (int) $currentCostProduct->fresh()->stock_quantity);

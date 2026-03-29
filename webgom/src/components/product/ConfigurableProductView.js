@@ -11,13 +11,16 @@ import TrustBadges from './common/TrustBadges';
 
 import Breadcrumb from './common/Breadcrumb';
 
-function VariantActionPopover({ variantLabel, onAddToCart, onBuyNow, className = '' }) {
+function VariantActionPopover({ variantLabel, onAddToCart, onBuyNow, className = '', panelRef = null }) {
   if (!variantLabel) {
     return null;
   }
 
   return (
-    <div className={`${styles.bundleActionPopover} ${styles.variantActionPopover} ${className}`.trim()}>
+    <div
+      ref={panelRef}
+      className={`${styles.bundleActionPopover} ${styles.variantActionPopover} ${className}`.trim()}
+    >
       <div className={styles.bundleActionContent}>
         <p className={styles.bundleActionEyebrow}>Chọn phân loại</p>
         <h3 className={styles.bundleActionTitle}>{variantLabel}</h3>
@@ -59,6 +62,7 @@ export default function ConfigurableProductView({
   const [variantActionId, setVariantActionId] = useState(null);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const pendingStructuredOpenRef = useRef(false);
+  const variantActionPanelRef = useRef(null);
   const isConcreteVariant = currentProduct?.id && currentProduct.id !== product?.id;
 
   const getFallbackVariantLabel = (variant) => {
@@ -165,6 +169,41 @@ export default function ConfigurableProductView({
       setVariantActionId(null);
     }
   }, [currentProduct?.id, isConcreteVariant]);
+
+  useEffect(() => {
+    if (!isMobileViewport || variantActionId !== currentProduct?.id || !variantActionPanelRef.current) {
+      return undefined;
+    }
+
+    let frameId = 0;
+    let timeoutId = 0;
+
+    const revealVariantPanel = () => {
+      const panel = variantActionPanelRef.current;
+      if (!panel) {
+        return;
+      }
+
+      try {
+        panel.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest',
+          inline: 'nearest',
+        });
+      } catch {
+        panel.scrollIntoView(false);
+      }
+    };
+
+    frameId = window.requestAnimationFrame(() => {
+      timeoutId = window.setTimeout(revealVariantPanel, 60);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.clearTimeout(timeoutId);
+    };
+  }, [currentProduct?.id, isMobileViewport, variantActionId]);
 
   const handleOptionChoose = (attrCode, value) => {
     pendingStructuredOpenRef.current = true;
@@ -341,6 +380,7 @@ export default function ConfigurableProductView({
                     ) : null}
                     {isMobileViewport && variantActionId === currentProduct.id ? (
                       <VariantActionPopover
+                        panelRef={variantActionPanelRef}
                         className={styles.variantActionPanelMobile}
                         variantLabel={getVariantDisplayName(currentProduct)}
                         onAddToCart={handleVariantPopupAddToCart}

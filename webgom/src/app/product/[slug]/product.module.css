@@ -813,6 +813,8 @@
     max-width: none;
     display: block;
     margin-top: 0.65rem;
+    scroll-margin-top: 1rem;
+    scroll-margin-bottom: 7.5rem;
     bottom: auto;
     left: auto;
     z-index: auto;

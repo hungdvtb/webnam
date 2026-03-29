@@ -4,6 +4,10 @@ namespace Tests\Feature;
 
 use App\Models\Account;
 use App\Models\Order;
+use App\Models\OrderItem;
+use App\Models\Product;
+use App\Models\Shipment;
+use App\Models\ShipmentItem;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
@@ -39,6 +43,116 @@ class OrderQuickSelectTest extends TestCase
 
         $this->assertContains($targetOrder->id, $orderIds);
         $this->assertCount(1, $orderIds);
+    }
+
+    public function test_order_list_search_matches_any_keyword_across_products_phone_and_tracking_code(): void
+    {
+        [$account, $user] = $this->authenticate();
+
+        $alphaProduct = $this->createProduct($account, [
+            'name' => 'San pham Alpha dac biet',
+            'sku' => 'SKU-ALPHA-001',
+        ]);
+        $genericProduct = $this->createProduct($account, [
+            'name' => 'San pham thong thuong',
+            'sku' => 'SKU-GENERIC-001',
+        ]);
+
+        $productMatchOrder = $this->createOrder($account, [
+            'order_number' => 'OR-MULTI-10001',
+            'customer_name' => 'Khach San Pham',
+        ]);
+        $this->createOrderItem($account, $productMatchOrder, $alphaProduct);
+
+        $phoneMatchOrder = $this->createOrder($account, [
+            'order_number' => 'OR-MULTI-20002',
+            'customer_name' => 'Khach Dien Thoai',
+            'customer_phone' => '0987654321',
+        ]);
+        $this->createOrderItem($account, $phoneMatchOrder, $genericProduct);
+
+        $trackingMatchOrder = $this->createOrder($account, [
+            'order_number' => 'OR-MULTI-30003',
+            'customer_name' => 'Khach Van Don',
+        ]);
+        $trackingItem = $this->createOrderItem($account, $trackingMatchOrder, $genericProduct);
+        $this->createShipment($account, $trackingMatchOrder, $user, [
+            'shipment_number' => 'SHIP-MULTI-30003',
+            'carrier_tracking_code' => 'TRACK-MULTI-999',
+        ], [
+            [
+                'order_item_id' => $trackingItem->id,
+                'qty' => 1,
+            ],
+        ]);
+
+        $ignoredOrder = $this->createOrder($account, [
+            'order_number' => 'OR-MULTI-40004',
+            'customer_name' => 'Khach Khong Khop',
+        ]);
+        $this->createOrderItem($account, $ignoredOrder, $genericProduct);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders?search_terms[]=Alpha&search_terms[]=0987654321&search_terms[]=TRACK-MULTI-999');
+
+        $response->assertOk();
+
+        $orderNumbers = collect($response->json('data'))
+            ->pluck('order_number')
+            ->all();
+
+        $this->assertEqualsCanonicalizing([
+            'OR-MULTI-10001',
+            'OR-MULTI-20002',
+            'OR-MULTI-30003',
+        ], $orderNumbers);
+        $this->assertCount(3, $orderNumbers);
+    }
+
+    public function test_order_list_search_parses_comma_delimited_keywords_from_legacy_search_param(): void
+    {
+        [$account] = $this->authenticate();
+
+        $skuProduct = $this->createProduct($account, [
+            'name' => 'San pham SKU',
+            'sku' => 'SKU-STACK-222',
+        ]);
+        $anotherProduct = $this->createProduct($account, [
+            'name' => 'San pham khac',
+            'sku' => 'SKU-OTHER-333',
+        ]);
+
+        $skuMatchOrder = $this->createOrder($account, [
+            'order_number' => 'OR-DELIM-11111',
+        ]);
+        $this->createOrderItem($account, $skuMatchOrder, $skuProduct);
+
+        $orderNumberMatchOrder = $this->createOrder($account, [
+            'order_number' => 'OR-DELIM-33333',
+        ]);
+        $this->createOrderItem($account, $orderNumberMatchOrder, $anotherProduct);
+
+        $ignoredOrder = $this->createOrder($account, [
+            'order_number' => 'OR-DELIM-99999',
+        ]);
+        $this->createOrderItem($account, $ignoredOrder, $anotherProduct);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders?search=SKU-STACK-222,OR-DELIM-33333');
+
+        $response->assertOk();
+
+        $orderNumbers = collect($response->json('data'))
+            ->pluck('order_number')
+            ->all();
+
+        $this->assertEqualsCanonicalizing([
+            'OR-DELIM-11111',
+            'OR-DELIM-33333',
+        ], $orderNumbers);
+        $this->assertCount(2, $orderNumbers);
     }
 
     public function test_quick_select_reports_duplicates_and_missing_codes_without_auto_selecting_ambiguous_matches(): void
@@ -161,5 +275,78 @@ class OrderQuickSelectTest extends TestCase
             'profit_total' => 0,
             'shipping_status_source' => 'manual',
         ], $overrides));
+    }
+
+    private function createProduct(Account $account, array $overrides = []): Product
+    {
+        $name = $overrides['name'] ?? ('San pham ' . Str::lower(Str::random(5)));
+
+        return Product::query()->create(array_merge([
+            'account_id' => $account->id,
+            'type' => 'simple',
+            'name' => $name,
+            'slug' => Str::slug($name) . '-' . Str::lower(Str::random(5)),
+            'sku' => $overrides['sku'] ?? ('SKU-' . Str::upper(Str::random(6))),
+            'price' => 100000,
+            'stock_quantity' => 0,
+            'status' => true,
+        ], $overrides));
+    }
+
+    private function createOrderItem(Account $account, Order $order, Product $product, int $quantity = 1): OrderItem
+    {
+        return OrderItem::query()->create([
+            'order_id' => $order->id,
+            'account_id' => $account->id,
+            'product_id' => $product->id,
+            'product_name_snapshot' => $product->name,
+            'product_sku_snapshot' => $product->sku,
+            'quantity' => $quantity,
+            'price' => $product->price,
+        ]);
+    }
+
+    private function createShipment(Account $account, Order $order, User $user, array $overrides = [], array $items = []): Shipment
+    {
+        $shipment = Shipment::query()->create(array_merge([
+            'account_id' => $account->id,
+            'order_id' => $order->id,
+            'order_code' => $order->order_number,
+            'shipment_number' => 'SHIP-' . Str::upper(Str::random(8)),
+            'tracking_number' => 'TRACK-' . Str::upper(Str::random(6)),
+            'carrier_tracking_code' => 'TRACK-' . Str::upper(Str::random(6)),
+            'carrier_code' => 'viettel_post',
+            'carrier_name' => 'Viettel Post',
+            'channel' => 'manual',
+            'customer_name' => $order->customer_name,
+            'customer_phone' => $order->customer_phone,
+            'customer_address' => $order->shipping_address,
+            'customer_ward' => $order->ward,
+            'customer_district' => $order->district,
+            'customer_province' => $order->province,
+            'status' => 'created',
+            'shipment_status' => 'created',
+            'order_status_snapshot' => $order->status,
+            'cod_amount' => (float) $order->total_price,
+            'shipping_cost' => 0,
+            'service_fee' => 0,
+            'return_fee' => 0,
+            'insurance_fee' => 0,
+            'other_fee' => 0,
+            'reconciled_amount' => 0,
+            'actual_received_amount' => (float) $order->total_price,
+            'reconciliation_status' => 'pending',
+            'created_by' => $user->id,
+        ], $overrides));
+
+        foreach ($items as $item) {
+            ShipmentItem::query()->create([
+                'shipment_id' => $shipment->id,
+                'order_item_id' => (int) ($item['order_item_id'] ?? 0),
+                'qty' => (int) ($item['qty'] ?? 0),
+            ]);
+        }
+
+        return $shipment;
     }
 }

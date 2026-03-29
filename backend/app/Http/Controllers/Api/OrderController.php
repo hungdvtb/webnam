@@ -137,6 +137,69 @@ class OrderController extends Controller
         $query->{$method}("{$expression} LIKE ? ESCAPE '\\'", [$like]);
     }
 
+    private function extractSearchTerms(Request $request): array
+    {
+        $rawSearchTerms = $request->input('search_terms');
+        $sources = [];
+
+        if (is_array($rawSearchTerms)) {
+            $sources = $rawSearchTerms;
+        } elseif (is_string($rawSearchTerms) && trim($rawSearchTerms) !== '') {
+            $sources[] = $rawSearchTerms;
+        }
+
+        if (empty($sources) && $request->filled('search')) {
+            $sources[] = (string) $request->input('search');
+        }
+
+        return collect($sources)
+            ->flatMap(function ($value) {
+                return preg_split('/[,\n;\t]+/u', (string) $value) ?: [];
+            })
+            ->map(function ($value) {
+                $collapsed = preg_replace('/\s+/u', ' ', (string) $value);
+                return $this->normalizeSearchText((string) $collapsed);
+            })
+            ->filter()
+            ->unique()
+            ->take(20)
+            ->values()
+            ->all();
+    }
+
+    private function applyOrderSearchTerm($query, string $term): void
+    {
+        $containsLike = $this->containsLike($term);
+
+        if ($containsLike === null) {
+            return;
+        }
+
+        $this->applyInsensitiveLike($query, 'order_number', $containsLike);
+        $this->applyInsensitiveLike($query, 'customer_name', $containsLike, true);
+        $this->applyInsensitiveLike($query, 'customer_phone', $containsLike, true);
+        $this->applyInsensitiveLike($query, 'shipping_address', $containsLike, true);
+        $this->applyInsensitiveLike($query, 'notes', $containsLike, true);
+        $this->applyInsensitiveLike($query, 'shipping_tracking_code', $containsLike, true);
+        $this->applyInsensitiveLike($query, 'return_tracking_code', $containsLike, true);
+
+        $query
+            ->orWhereHas('items', function ($itemQuery) use ($containsLike) {
+                $this->applyInsensitiveLike($itemQuery, 'product_sku_snapshot', $containsLike);
+                $this->applyInsensitiveLike($itemQuery, 'product_name_snapshot', $containsLike, true);
+            })
+            ->orWhereHas('items.product', function ($productQuery) use ($containsLike) {
+                $this->applyInsensitiveLike($productQuery, 'sku', $containsLike);
+                $this->applyInsensitiveLike($productQuery, 'name', $containsLike, true);
+            })
+            ->orWhereHas('shipments', function ($shipmentQuery) use ($containsLike) {
+                $this->applyInsensitiveLike($shipmentQuery, 'shipment_number', $containsLike);
+                $this->applyInsensitiveLike($shipmentQuery, 'tracking_number', $containsLike, true);
+                $this->applyInsensitiveLike($shipmentQuery, 'carrier_tracking_code', $containsLike, true);
+                $this->applyInsensitiveLike($shipmentQuery, 'external_order_number', $containsLike, true);
+            });
+    }
+
     private function freshShippingState(): array
     {
         return [
@@ -1130,6 +1193,8 @@ class OrderController extends Controller
 
     private function applyOrderListFilters($query, Request $request): void
     {
+        $searchTerms = $this->extractSearchTerms($request);
+
         if ($request->input('trashed') == '1') {
             $query->onlyTrashed();
         }
@@ -1175,27 +1240,14 @@ class OrderController extends Controller
         }
 
         $query
-            ->when($request->filled('search'), function ($q) use ($request) {
-                $searchContainsLike = $this->containsLike((string) $request->input('search'));
-                $searchPrefixLike = $this->prefixLike((string) $request->input('search'));
-
-                $q->where(function ($sub) use ($searchContainsLike, $searchPrefixLike) {
-                    $this->applyInsensitiveLike($sub, 'order_number', $searchContainsLike);
-                    $this->applyInsensitiveLike($sub, 'customer_name', $searchContainsLike, true);
-                    $this->applyInsensitiveLike($sub, 'customer_phone', $searchPrefixLike, true);
-                    $this->applyInsensitiveLike($sub, 'shipping_address', $searchContainsLike, true);
-                    $this->applyInsensitiveLike($sub, 'notes', $searchContainsLike, true);
-                    $this->applyInsensitiveLike($sub, 'shipping_tracking_code', $searchContainsLike, true);
-                    $this->applyInsensitiveLike($sub, 'return_tracking_code', $searchContainsLike, true);
-
-                    $sub->orWhereHas('items', function ($itemQuery) use ($searchContainsLike) {
-                        $this->applyInsensitiveLike($itemQuery, 'product_sku_snapshot', $searchContainsLike);
-                        $this->applyInsensitiveLike($itemQuery, 'product_name_snapshot', $searchContainsLike, true);
-                    })
-                        ->orWhereHas('items.product', function ($productQuery) use ($searchContainsLike) {
-                            $this->applyInsensitiveLike($productQuery, 'sku', $searchContainsLike);
-                            $this->applyInsensitiveLike($productQuery, 'name', $searchContainsLike, true);
+            ->when(!empty($searchTerms), function ($q) use ($searchTerms) {
+                $q->where(function ($searchQuery) use ($searchTerms) {
+                    foreach ($searchTerms as $index => $term) {
+                        $method = $index === 0 ? 'where' : 'orWhere';
+                        $searchQuery->{$method}(function ($termQuery) use ($term) {
+                            $this->applyOrderSearchTerm($termQuery, $term);
                         });
+                    }
                 });
             })
             ->when($request->filled('customer_name'), function ($q) use ($request) {

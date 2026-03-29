@@ -861,6 +861,7 @@ class ProductController extends Controller
             'products.name',
             'products.price',
             'products.cost_price',
+            'products.expected_cost',
             'products.stock_quantity',
             'products.type',
         ]);
@@ -910,6 +911,7 @@ class ProductController extends Controller
                     'sku' => $product->sku,
                     'name' => $product->name,
                     'price' => (float) ($product->price ?? 0),
+                    'expected_cost' => $product->expected_cost !== null ? (float) $product->expected_cost : null,
                     'cost_price' => (float) ($product->cost_price ?? $product->expected_cost ?? 0),
                     'stock_quantity' => (float) ($product->stock_quantity ?? 0),
                     'type' => $product->type,
@@ -927,6 +929,7 @@ class ProductController extends Controller
                             'sku' => $variation->sku,
                             'name' => $variation->name,
                             'price' => (float) ($variation->price ?? 0),
+                            'expected_cost' => $variation->expected_cost !== null ? (float) $variation->expected_cost : null,
                             'cost_price' => (float) ($variation->cost_price ?? $variation->expected_cost ?? 0),
                             'type' => $variation->type,
                             'attribute_values' => $variation->attributeValues
@@ -1776,6 +1779,7 @@ class ProductController extends Controller
                 'sku' => $product->sku,
                 'name' => $product->name,
                 'price' => (float) ($product->price ?? 0),
+                'expected_cost' => $product->expected_cost !== null ? (float) $product->expected_cost : null,
                 'cost_price' => (float) ($product->cost_price ?? $product->expected_cost ?? 0),
                 'status' => (bool) $product->status,
                 'deleted' => $product->trashed(),
@@ -2072,7 +2076,7 @@ class ProductController extends Controller
             foreach ($incomingVariants as $idx => $vData) {
                 if (isset($vData['id'])) {
                     $variant = Product::findOrFail($vData['id']);
-                    $variant->update([
+                    $variantPayload = [
                         'name' => $vData['name'] ?? $variant->name,
                         'sku' => $vData['sku'],
                         'price' => $vData['price'] ?? $variant->price,
@@ -2080,8 +2084,13 @@ class ProductController extends Controller
                         'weight' => $vData['weight'] ?? null,
                         'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
                         'supplier_id' => $variant->supplier_id ?? $product->supplier_id,
-                        'stock_quantity' => $vData['stock_quantity'] ?? 0,
-                    ]);
+                    ];
+
+                    if (array_key_exists('stock_quantity', $vData)) {
+                        $variantPayload['stock_quantity'] = $vData['stock_quantity'];
+                    }
+
+                    $variant->update($variantPayload);
 
                     if ($incomingSupplierIds) {
                         $this->syncProductSuppliers($variant, $supplierIds);

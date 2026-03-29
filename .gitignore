@@ -10,3 +10,4 @@ webgom/.tmp-edge-profile/
 
 # Local Codex backup files
 *.bak-codex-*
+.codex-backups/

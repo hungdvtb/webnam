@@ -275,7 +275,14 @@ class ProductController extends Controller
         }
 
         // For price filter, calculate min/max
-        $priceStats = (clone $filterQuery)->selectRaw('MIN(price) as min_price, MAX(price) as max_price')->getQuery()->first();
+        $priceStatsQuery = (clone $filterQuery)
+            ->getQuery()
+            ->cloneWithout(['columns', 'orders', 'limit', 'offset'])
+            ->cloneWithoutBindings(['select', 'order']);
+
+        $priceStats = $priceStatsQuery
+            ->selectRaw('MIN(products.price) as min_price, MAX(products.price) as max_price')
+            ->first();
         if ($priceStats && $priceStats->min_price !== null) {
             $availableFilters[] = [
                 'name' => 'Giá',

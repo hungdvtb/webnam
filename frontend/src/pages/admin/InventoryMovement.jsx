@@ -3,18 +3,20 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import Pagination from '../../components/Pagination';
 import SortIndicator from '../../components/SortIndicator';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
-import { DEFAULT_INVENTORY_SECTION_KEY, buildInventoryPath, getInventoryNavItem, resolveInventorySectionKey } from '../../config/adminInventoryNavigation';
+import { DEFAULT_INVENTORY_SECTION_KEY, buildInventoryPath, resolveInventorySectionKey } from '../../config/adminInventoryNavigation';
 import { useUI } from '../../context/UIContext';
 import useAiAvailability from '../../hooks/useAiAvailability';
 import { useTableColumns } from '../../hooks/useTableColumns';
 import { ACTIVE_PRODUCT_TYPE_OPTIONS } from '../../config/productTypes';
 import { aiApi, categoryApi, cmsApi, inventoryApi, orderApi, productApi } from '../../services/api';
 import BatchReturnSlipModal from '../../components/admin/BatchReturnSlipModal';
+import InventoryProductDailyOutboundDrawer from '../../components/admin/InventoryProductDailyOutboundDrawer';
 import { formatWholeMoneyInput, normalizeWholeMoneyDraft, normalizeWholeMoneyNumber, parseWholeMoneyValue } from '../../utils/money';
 
 const emptyPagination = { current_page: 1, last_page: 1, total: 0, per_page: 20 };
 const todayValue = new Date().toISOString().slice(0, 10);
 const tableViewportClass = 'max-h-[calc(100vh-310px)] overflow-auto';
+const stretchedTableViewportClass = 'min-h-0 flex-1 overflow-auto';
 const panelClass = 'overflow-hidden rounded-sm border border-primary/10 bg-white shadow-sm';
 const inputClass = 'h-8 rounded-sm border border-primary/15 bg-white px-3 text-[13px] text-primary outline-none transition placeholder:text-primary/35 focus:border-primary';
 const selectClass = `${inputClass} pr-8`;
@@ -31,11 +33,44 @@ const importActionButtonClass = 'inline-flex h-11 w-full items-center justify-ce
 const importFieldLabelClass = 'mb-1 text-[12px] font-black uppercase tracking-[0.1em] text-primary/50';
 const importFieldLabelHiddenClass = `${importFieldLabelClass} select-none opacity-0`;
 const inventorySearchCache = new Map();
+const COPY_FEEDBACK_RESET_MS = 1800;
+
+const copyTextToClipboard = async (value) => {
+    const text = String(value ?? '').trim();
+    if (!text) return;
+
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+    }
+
+    if (typeof document === 'undefined') {
+        throw new Error('Clipboard API is unavailable');
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    textarea.style.pointerEvents = 'none';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textarea);
+
+    if (!copied) {
+        throw new Error('Clipboard copy failed');
+    }
+};
 const INVENTORY_SEARCH_CACHE_LIMIT = 80;
 const INVENTORY_SEARCH_CACHE_TTL = 60 * 1000;
 const IMPORT_PRINT_SETTINGS_KEY = 'inventory_import_print_templates';
 const IMPORT_PRINT_DEFAULT_TEMPLATE_ID = 'inventory_import_default_template';
 const IMPORT_PRINT_DEFAULT_TEMPLATE_NAME = 'Bản chính';
+const IMPORT_MODAL_DRAFT_STORAGE_KEY = 'inventory_import_modal_draft_v1';
 
 const documentTabs = [
     ['imports', 'Phiếu nhập'],
@@ -57,7 +92,7 @@ const trashSlipTypeLabels = {
     adjustment: 'Phiếu điều chỉnh',
 };
 
-const defaultProductFilters = { search: '', status: '', cost_source: '', type: '', category_id: '', variant_scope: '', date_from: '', date_to: '' };
+const defaultProductFilters = { search: '', status: '', cost_source: '', stock_alert: '', type: '', category_id: '', variant_scope: '', date_from: '', date_to: '' };
 const defaultSupplierFilters = { search: '', status: '', month: '', date_from: '', date_to: '' };
 const defaultSupplierCatalogFilters = { sku: '', name: '', category_id: '', type: '', variant_scope: '', missing_supplier_price: '', multiple_suppliers: '' };
 const createDefaultSimpleFilters = () => ({
@@ -90,6 +125,11 @@ const productCostSourceFilterOptions = [
     { value: 'actual', label: 'Đang dùng giá vốn' },
     { value: 'expected', label: 'Đang dùng giá dự kiến' },
     { value: 'empty', label: 'Chưa có giá' },
+];
+const productStockAlertFilterOptions = [
+    { value: 'low', label: 'Sắp hết' },
+    { value: 'out', label: 'Hết hàng' },
+    { value: 'available', label: 'Tồn ổn' },
 ];
 const productTypeFilterOptions = ACTIVE_PRODUCT_TYPE_OPTIONS;
 const productVariantScopeFilterOptions = [
@@ -241,6 +281,35 @@ const nextSortConfig = (current, columnId) => {
 const formatCurrency = (value) => `${new Intl.NumberFormat('vi-VN').format(Math.round(Number(value || 0)))}đ`;
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0));
 const stripNumericValue = (value) => String(value ?? '').replace(/[^0-9]/g, '');
+const getProductStockAlertMeta = (row) => {
+    const stock = Number(row?.computed_stock ?? 0);
+    const normalizedAlert = String(row?.stock_alert || '').trim();
+
+    if (normalizedAlert === 'out' || stock <= 0) {
+        return {
+            key: 'out',
+            label: 'Hết hàng',
+            badgeClass: 'border-rose-200 bg-rose-50 text-rose-700',
+            textClass: 'text-rose-700',
+        };
+    }
+
+    if (normalizedAlert === 'low' || stock <= 5) {
+        return {
+            key: 'low',
+            label: 'Sắp hết',
+            badgeClass: 'border-amber-200 bg-amber-50 text-amber-700',
+            textClass: 'text-amber-700',
+        };
+    }
+
+    return {
+        key: 'available',
+        label: 'An toàn',
+        badgeClass: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+        textClass: 'text-emerald-700',
+    };
+};
 const supplierPasteModeConfigs = {
     sku_price: {
         label: 'SKU + Giá',
@@ -735,8 +804,50 @@ const updateInventoryImportStarInProductCollection = (rows = [], productId, star
             : row?.variants,
     }))
 );
+const hasImportSourceSnapshot = (item = {}) => [
+    item.source_product_name,
+    item.source_product_sku,
+    item.source_supplier_product_code,
+    item.source_unit_name,
+    item.source_unit_cost,
+    item.source_notes,
+]
+    .some((value) => String(value ?? '').trim() !== '');
+const resolveImportSourceSnapshot = (item = {}) => {
+    if (hasImportSourceSnapshot(item)) {
+        return {
+            source_product_name: item.source_product_name || '',
+            source_product_sku: item.source_product_sku || '',
+            source_supplier_product_code: item.source_supplier_product_code || '',
+            source_unit_name: item.source_unit_name || '',
+            source_unit_cost: item.source_unit_cost || '',
+            source_notes: item.source_notes || '',
+        };
+    }
+
+    if (!item.product_id || item.mapping_status === 'unmatched' || item.mapping_label === 'Đã map thủ công') {
+        return {
+            source_product_name: item.product_name || '',
+            source_product_sku: item.product_sku || '',
+            source_supplier_product_code: item.supplier_product_code || '',
+            source_unit_name: item.unit_name || '',
+            source_unit_cost: item.unit_cost || '',
+            source_notes: item.notes || '',
+        };
+    }
+
+    return {
+        source_product_name: '',
+        source_product_sku: '',
+        source_supplier_product_code: '',
+        source_unit_name: '',
+        source_unit_cost: '',
+        source_notes: '',
+    };
+};
 const applyImportProductData = (item, product) => ({
     ...item,
+    ...resolveImportSourceSnapshot(item),
     product_id: product.id,
     product_name: product.name,
     product_sku: product.sku,
@@ -748,6 +859,25 @@ const applyImportProductData = (item, product) => ({
     mapping_label: item.mapping_status === 'unmatched' ? 'Đã map thủ công' : '',
     inventory_import_starred: Boolean(product.inventory_import_starred),
 });
+const resetImportProductData = (item = {}) => {
+    const sourceSnapshot = resolveImportSourceSnapshot(item);
+    const hasSourceValues = Object.values(sourceSnapshot).some((value) => String(value ?? '').trim() !== '');
+
+    return {
+        ...item,
+        ...sourceSnapshot,
+        product_id: '',
+        product_name: sourceSnapshot.source_product_name || '',
+        product_sku: sourceSnapshot.source_product_sku || '',
+        supplier_product_code: sourceSnapshot.source_supplier_product_code || '',
+        unit_name: sourceSnapshot.source_unit_name || '',
+        unit_cost: sourceSnapshot.source_unit_cost || '',
+        notes: sourceSnapshot.source_notes || '',
+        mapping_status: hasSourceValues ? 'unmatched' : 'manual',
+        mapping_label: '',
+        inventory_import_starred: false,
+    };
+};
 
 const createLine = (overrides = {}) => ({
     key: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -764,6 +894,12 @@ const createLine = (overrides = {}) => ({
     inventory_import_starred: false,
     mapping_status: 'manual',
     mapping_label: '',
+    source_product_name: '',
+    source_product_sku: '',
+    source_supplier_product_code: '',
+    source_unit_name: '',
+    source_unit_cost: '',
+    source_notes: '',
     stock_bucket: 'sellable',
     direction: 'in',
     ...overrides,
@@ -879,6 +1015,60 @@ const createImportInvoiceModalState = () => ({
     importInfo: null,
     attachments: [],
     selectedAttachmentId: null,
+});
+const buildImportModalDraftStorageKey = () => {
+    if (typeof window === 'undefined') return IMPORT_MODAL_DRAFT_STORAGE_KEY;
+    const activeAccountId = Number(localStorage.getItem('activeAccountId') || 0);
+    return `${IMPORT_MODAL_DRAFT_STORAGE_KEY}_${activeAccountId > 0 ? activeAccountId : 'default'}`;
+};
+const normalizePersistedImportDraftItems = (items = []) => (
+    Array.isArray(items)
+        ? items.map((item) => createLine({
+            ...item,
+            key: item?.key || undefined,
+        }))
+        : []
+);
+const restorePersistedImportForm = (draftForm = null) => {
+    const baseForm = createImportForm();
+    if (!draftForm || typeof draftForm !== 'object') {
+        return baseForm;
+    }
+
+    const restoredItems = normalizePersistedImportDraftItems(draftForm.items);
+
+    return {
+        ...baseForm,
+        ...draftForm,
+        attachments: Array.isArray(draftForm.attachments) ? draftForm.attachments.map(mapImportAttachment) : [],
+        local_attachment_files: [],
+        items: restoredItems,
+    };
+};
+const buildPersistableImportModalDraft = ({
+    form,
+    importTableExpanded = false,
+    importTableSettingsOpen = false,
+    importCompleteToggleSnapshot = null,
+}) => ({
+    version: 1,
+    saved_at: new Date().toISOString(),
+    form: {
+        ...form,
+        analysis_log: null,
+        attachments: Array.isArray(form?.attachments) ? form.attachments.map(mapImportAttachment) : [],
+        local_attachment_files: [],
+    },
+    importTableExpanded: Boolean(importTableExpanded),
+    importTableSettingsOpen: Boolean(importTableSettingsOpen),
+    importCompleteToggleSnapshot: importCompleteToggleSnapshot
+        ? {
+            inventory_import_status_id: importCompleteToggleSnapshot.inventory_import_status_id || '',
+            status_is_manual: Boolean(importCompleteToggleSnapshot.status_is_manual),
+            items: normalizePersistedImportDraftItems(importCompleteToggleSnapshot.items),
+        }
+        : null,
+    had_local_attachment_files: Array.isArray(form?.local_attachment_files) && form.local_attachment_files.length > 0,
 });
 
 const createDocumentForm = (tabKey, data = null) => ({
@@ -1348,14 +1538,16 @@ const isCompletedImportStatus = (status) => {
 };
 
 const productColumns = [
-    { id: 'sku', label: 'Mã', minWidth: 150 },
-    { id: 'name', label: 'Tên sản phẩm', minWidth: 250 },
+    { id: 'product', label: 'Sản phẩm', minWidth: 290 },
     { id: 'total_imported', label: 'Tổng nhập', minWidth: 110, align: 'right' },
     { id: 'total_exported', label: 'Tổng xuất', minWidth: 110, align: 'right' },
     { id: 'total_returned', label: 'Tổng hoàn', minWidth: 110, align: 'right' },
     { id: 'total_damaged', label: 'Tổng hỏng', minWidth: 110, align: 'right' },
     { id: 'total_adjusted', label: 'Tổng điều chỉnh', minWidth: 130, align: 'right' },
     { id: 'computed_stock', label: 'Tồn kho', minWidth: 110, align: 'right' },
+    { id: 'expected_cost', label: 'Giá nhập dự kiến', minWidth: 145, align: 'right' },
+    { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 145, align: 'right' },
+    { id: 'inventory_value', label: 'Thành tiền', minWidth: 145, align: 'right' },
     { id: 'actions', label: 'Thao tác', minWidth: 145, align: 'center' },
 ];
 
@@ -1375,7 +1567,7 @@ const supplierPriceBaseColumns = [
     { id: 'name', label: 'Tên sản phẩm', minWidth: 280 },
     { id: 'price', label: 'Giá bán', minWidth: 110, align: 'right' },
     { id: 'supplier_unit_cost', label: 'Giá dự kiến', minWidth: 160, align: 'right' },
-    { id: 'current_cost', label: 'Giá vốn hiện tại', minWidth: 125, align: 'right' },
+    { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 125, align: 'right' },
     { id: 'supplier_price_updated_at', label: 'Sửa gần nhất', minWidth: 150, align: 'center' },
 ];
 
@@ -1453,20 +1645,23 @@ const supplierPriceTableBaseColumns = [
     { id: 'name', label: 'Tên sản phẩm', minWidth: 280 },
     { id: 'price', label: 'Giá bán', minWidth: 110, align: 'right' },
     { id: 'unit_cost', label: 'Giá nhập dự kiến', minWidth: 160, align: 'right' },
-    { id: 'current_cost', label: 'Giá vốn hiện tại', minWidth: 125, align: 'right' },
+    { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 125, align: 'right' },
     { id: 'updated_at', label: 'Sửa gần nhất', minWidth: 150, align: 'center' },
     { id: 'actions', label: 'Thao tác', minWidth: 120, align: 'center' },
 ];
 
 const inventorySortColumnMaps = {
     products: {
-        sku: 'sku',
-        name: 'name',
+        product: 'name',
         total_imported: 'total_imported',
         total_exported: 'total_exported',
         total_returned: 'total_returned',
         total_damaged: 'total_damaged',
         total_adjusted: 'total_adjusted',
+        computed_stock: 'computed_stock',
+        expected_cost: 'expected_cost',
+        current_cost: 'cost_price',
+        inventory_value: 'inventory_value',
     },
     suppliers: {
         name: 'name',
@@ -1971,6 +2166,7 @@ const ImportLineProductLookupInput = ({
     supplierId = null,
     onDraftChange = null,
     onSelect = null,
+    onClearSelection = null,
     disabled = false,
     placeholder = 'Mã SP',
 }) => {
@@ -2014,6 +2210,12 @@ const ImportLineProductLookupInput = ({
         }
 
         if (Number(selectedProductId || 0) > 0) {
+            if (!draftValue.trim()) {
+                pendingSelectionRef.current = true;
+                closeDropdown();
+                void Promise.resolve(onClearSelection?.());
+                return;
+            }
             setDraftValue(value || '');
             closeDropdown();
             return;
@@ -2145,6 +2347,13 @@ const ImportLineProductLookupInput = ({
                     }
 
                     if (!showDropdown || !results.length) {
+                        if (event.key === 'Enter' && Number(selectedProductId || 0) > 0 && !draftValue.trim()) {
+                            event.preventDefault();
+                            pendingSelectionRef.current = true;
+                            closeDropdown();
+                            void Promise.resolve(onClearSelection?.());
+                            return;
+                        }
                         if (event.key === 'Enter' && exactMatch) {
                             event.preventDefault();
                             void selectProduct(exactMatch);
@@ -2237,6 +2446,7 @@ const ImportItemsEditorTable = ({
     onOpenPrint,
     onUpdateLine,
     onSelectProduct = null,
+    onClearProduct = null,
     onRemoveLine,
     onMoveLine = null,
     onToggleProductStar = null,
@@ -2377,6 +2587,7 @@ const ImportItemsEditorTable = ({
                     supplierId={supplierId}
                     onDraftChange={(nextValue) => onUpdateLine(row._row_index, 'product_sku', nextValue)}
                     onSelect={(product) => onSelectProduct(row._row_index, product)}
+                    onClearSelection={() => onClearProduct?.(row._row_index)}
                     placeholder="Tìm / nhập mã SP"
                 />
             ) : <input value={row.product_sku} onChange={(event) => onUpdateLine(row._row_index, 'product_sku', event.target.value)} className={`w-full ${importFieldClass}`} placeholder="Mã SP" />;
@@ -2572,6 +2783,8 @@ const InventoryTable = ({
     onSort,
     sortColumnMap = null,
     onRowDoubleClick,
+    wrapperClassName = '',
+    viewportClassName = tableViewportClass,
 }) => {
     const tableColumns = useMemo(() => {
         const baseColumns = columns.filter((column) => column.id !== 'stt');
@@ -2605,7 +2818,7 @@ const InventoryTable = ({
     };
 
     return (
-        <div className={panelClass}>
+        <div className={`${panelClass} ${wrapperClassName}`.trim()}>
             {settingsOpen ? (
                 <TableColumnSettingsPanel
                     availableColumns={availableColumns}
@@ -2618,7 +2831,7 @@ const InventoryTable = ({
                     storageKey={storageKey}
                 />
             ) : null}
-            <div className={tableViewportClass}>
+            <div className={viewportClassName}>
                 <table className="w-full border-collapse table-fixed" style={{ minWidth: `${Math.max(totalTableWidth, 900)}px` }}>
                     <thead className="sticky top-0 z-10 bg-[#f6f9fc]">
                         <tr>
@@ -2696,8 +2909,10 @@ const InventoryMovement = () => {
     const { showToast } = useUI();
     const { available: aiAvailable, disabledReason: aiDisabledReason } = useAiAvailability();
     const resolvedRouteSection = resolveInventorySectionKey(sectionSlug);
-    const currentInventorySection = getInventoryNavItem(resolvedRouteSection || DEFAULT_INVENTORY_SECTION_KEY);
     const restoredSupplierContextRef = useRef(false);
+    const restoredImportDraftRef = useRef(false);
+    const importModalOpenRef = useRef(false);
+    const productCopyFeedbackTimeoutRef = useRef(null);
     const skipSupplierSearchResetRef = useRef(false);
     const savingSupplierPriceRowsRef = useRef(new Set());
     const supplierSearchSyncRef = useRef('');
@@ -2811,6 +3026,7 @@ const InventoryMovement = () => {
     const [documentModal, setDocumentModal] = useState({ open: false, tabKey: 'returns', form: createDocumentForm('returns') });
     const [batchReturnModal, setBatchReturnModal] = useState({ open: false, documentId: null });
     const [exportModal, setExportModal] = useState({ open: false, form: createExportForm() });
+    const [dailyOutboundDrawer, setDailyOutboundDrawer] = useState({ open: false, product: null });
     const [pageSizes, setPageSizes] = useState(() => ({
         products: getStoredPageSize('products'),
         suppliers: getStoredPageSize('suppliers'),
@@ -2824,6 +3040,31 @@ const InventoryMovement = () => {
         trash: getStoredPageSize('trash'),
     }));
     const [sortConfigs, setSortConfigs] = useState(() => createSortState());
+    const [copiedProductCellId, setCopiedProductCellId] = useState(null);
+
+    const clearPersistedImportDraft = () => {
+        if (typeof window === 'undefined') return;
+        localStorage.removeItem(buildImportModalDraftStorageKey());
+    };
+
+    const persistImportDraft = (draftPayload) => {
+        if (typeof window === 'undefined') return;
+        localStorage.setItem(buildImportModalDraftStorageKey(), JSON.stringify(draftPayload));
+    };
+
+    const readPersistedImportDraft = () => {
+        if (typeof window === 'undefined') return null;
+        const raw = localStorage.getItem(buildImportModalDraftStorageKey());
+        if (!raw) return null;
+
+        try {
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch (error) {
+            localStorage.removeItem(buildImportModalDraftStorageKey());
+            return null;
+        }
+    };
 
     const setFlag = (key, value) => setLoading((prev) => ({ ...prev, [key]: value }));
     const fail = (error, fallback) => {
@@ -2831,6 +3072,34 @@ const InventoryMovement = () => {
             ? Object.values(error.response.data.errors).flat().join('\n')
             : (error?.response?.data?.message || error?.message || fallback);
         showToast({ type: 'error', message });
+    };
+    const handleCopyProductCellValue = async (value, label, event, copyId) => {
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+
+        const normalizedValue = String(value ?? '').trim();
+        if (!normalizedValue) return;
+
+        try {
+            await copyTextToClipboard(normalizedValue);
+            const nextCopyId = copyId || normalizedValue;
+            setCopiedProductCellId(nextCopyId);
+
+            if (productCopyFeedbackTimeoutRef.current) {
+                window.clearTimeout(productCopyFeedbackTimeoutRef.current);
+            }
+
+            productCopyFeedbackTimeoutRef.current = window.setTimeout(() => {
+                setCopiedProductCellId((current) => (current === nextCopyId ? null : current));
+            }, COPY_FEEDBACK_RESET_MS);
+
+            showToast({ type: 'success', message: `Đã sao chép ${label}.` });
+        } catch (error) {
+            console.error('Failed to copy inventory product cell value', error);
+            showToast({ type: 'error', message: `Không thể sao chép ${label}.` });
+        }
     };
     const pageState = (setter, response) => setter({
         current_page: response.data.current_page,
@@ -3202,6 +3471,7 @@ const InventoryMovement = () => {
     };
 
     const closeImportModal = () => {
+        clearPersistedImportDraft();
         setImportTableSettingsOpen(false);
         setImportTableExpanded(false);
         closeImportPrintModal();
@@ -3746,6 +4016,24 @@ const InventoryMovement = () => {
         });
     };
 
+    const clearImportProductFromLine = (index) => {
+        setImportModal((prev) => {
+            const nextItems = prev.form.items.map((item, itemIndex) => (
+                itemIndex === index
+                    ? resetImportProductData(item)
+                    : item
+            ));
+
+            return {
+                ...prev,
+                form: synchronizeImportFormCompletion({
+                    ...prev.form,
+                    items: nextItems,
+                }),
+            };
+        });
+    };
+
     const appendImportProductFromQuickSearch = (product) => {
         setImportModal((prev) => {
             let targetIndex = prev.form.items.findIndex((item) => !item.product_id);
@@ -3794,6 +4082,15 @@ const InventoryMovement = () => {
         } catch (error) {
             fail(error, 'Không thể tải danh sách đơn vị tính.');
         }
+    };
+
+    const openProductDailyOutboundDrawer = (product) => {
+        if (!product?.id) return;
+        setDailyOutboundDrawer({ open: true, product });
+    };
+
+    const closeProductDailyOutboundDrawer = () => {
+        setDailyOutboundDrawer({ open: false, product: null });
     };
 
     const fetchProducts = async (page = 1, perPage = pageSizes.products, sortOverride = null, filtersOverride = productFilters) => {
@@ -4023,10 +4320,17 @@ const InventoryMovement = () => {
         fetchSimpleTabByKey(tabKey, 1, pageSizes[tabKey], null, nextFilters);
     };
 
+    useEffect(() => () => {
+        if (productCopyFeedbackTimeoutRef.current) {
+            window.clearTimeout(productCopyFeedbackTimeoutRef.current);
+        }
+    }, []);
+
     const productFilterChips = [
         buildFilterChip('products_search', 'Tìm kiếm', productFilters.search, () => clearProductFilter('search')),
         buildFilterChip('products_status', 'Trạng thái bán', productFilters.status ? filterOptionLabel(productStatusFilterOptions, productFilters.status) : '', () => clearProductFilter('status')),
         buildFilterChip('products_cost_source', 'Trạng thái giá', productFilters.cost_source ? filterOptionLabel(productCostSourceFilterOptions, productFilters.cost_source) : '', () => clearProductFilter('cost_source')),
+        buildFilterChip('products_stock_alert', 'Cảnh báo tồn', productFilters.stock_alert ? filterOptionLabel(productStockAlertFilterOptions, productFilters.stock_alert) : '', () => clearProductFilter('stock_alert')),
         buildFilterChip('products_type', 'Loại sản phẩm', productFilters.type ? filterOptionLabel(productTypeFilterOptions, productFilters.type) : '', () => clearProductFilter('type')),
         buildFilterChip('products_category', 'Danh mục', productFilters.category_id ? getCategoryNameById(productFilters.category_id) : '', () => clearProductFilter('category_id')),
         buildFilterChip('products_variant_scope', 'Biến thể', productFilters.variant_scope ? filterOptionLabel(productVariantScopeFilterOptions, productFilters.variant_scope) : '', () => clearProductFilter('variant_scope')),
@@ -4084,6 +4388,60 @@ const InventoryMovement = () => {
         fetchOverview();
         fetchInventoryUnits();
         fetchImportStatuses();
+    }, []);
+
+    useEffect(() => {
+        importModalOpenRef.current = importModal.open;
+    }, [importModal.open]);
+
+    useEffect(() => {
+        if (restoredImportDraftRef.current) return undefined;
+
+        const draft = readPersistedImportDraft();
+        restoredImportDraftRef.current = true;
+        if (!draft?.form) return undefined;
+
+        let active = true;
+        const restoreDraft = async () => {
+            goToTab('imports', { replace: location.pathname !== buildInventoryPath('imports') });
+
+            await ensureSuppliersLoaded();
+            await fetchInventoryUnits();
+            if (!importStatuses.length) {
+                await fetchImportStatuses();
+            }
+
+            if (!active || importModalOpenRef.current) return;
+
+            setImportTableSettingsOpen(Boolean(draft.importTableSettingsOpen));
+            setImportTableExpanded(Boolean(draft.importTableExpanded));
+            setImportCompleteToggleSnapshot(
+                draft.importCompleteToggleSnapshot
+                    ? {
+                        inventory_import_status_id: draft.importCompleteToggleSnapshot.inventory_import_status_id || '',
+                        status_is_manual: Boolean(draft.importCompleteToggleSnapshot.status_is_manual),
+                        items: normalizePersistedImportDraftItems(draft.importCompleteToggleSnapshot.items),
+                    }
+                    : null
+            );
+            setImportStarLoadingProductIds([]);
+            setImportModal({
+                open: true,
+                form: synchronizeImportFormCompletion(restorePersistedImportForm(draft.form)),
+            });
+
+            showToast({
+                type: draft.had_local_attachment_files ? 'warning' : 'success',
+                message: draft.had_local_attachment_files
+                    ? 'Đã khôi phục phiếu nhập đang làm dở. Tệp đính kèm chưa tải lên cần chọn lại.'
+                    : 'Đã khôi phục phiếu nhập đang làm dở.',
+            });
+        };
+
+        void restoreDraft();
+        return () => {
+            active = false;
+        };
     }, []);
 
     useEffect(() => {
@@ -4178,6 +4536,16 @@ const InventoryMovement = () => {
             }),
         }));
     }, [importModal.open, importModal.form.inventory_import_status_id, importStatuses]);
+
+    useEffect(() => {
+        if (!importModal.open) return;
+        persistImportDraft(buildPersistableImportModalDraft({
+            form: importModal.form,
+            importTableExpanded,
+            importTableSettingsOpen,
+            importCompleteToggleSnapshot,
+        }));
+    }, [importCompleteToggleSnapshot, importModal, importTableExpanded, importTableSettingsOpen]);
 
     useEffect(() => {
         if (!importModal.open && importPrintSource.mode === 'modal') {
@@ -5600,15 +5968,16 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         ];
     }, [dashboard]);
 
-const productSummaryItems = useMemo(() => !productSummary ? [] : [
-    { label: 'Tổng mã', value: formatNumber(productSummary.total_products) },
-    { label: 'Tổng nhập', value: formatNumber(productSummary.total_imported) },
-    { label: 'Tổng xuất', value: formatNumber(productSummary.total_exported) },
-    { label: 'Tổng hoàn', value: formatNumber(productSummary.total_returned) },
-    { label: 'Tổng hỏng', value: formatNumber(productSummary.total_damaged) },
-    { label: 'Tổng điều chỉnh', value: formatNumber(productSummary.total_adjusted) },
-    { label: 'Tồn kho', value: formatNumber(productSummary.total_stock ?? productSummary.total_sellable_stock) },
-], [productSummary]);
+    const productSummaryItems = useMemo(() => !productSummary ? [] : [
+        { label: 'Tổng số lượng tồn kho', value: formatNumber(productSummary.total_stock ?? productSummary.total_sellable_stock) },
+        { label: 'Tổng giá trị tồn kho', value: formatCurrency(productSummary.total_inventory_value || 0) },
+        { label: 'Tổng mã', value: formatNumber(productSummary.total_products) },
+        { label: 'Tổng nhập', value: formatNumber(productSummary.total_imported) },
+        { label: 'Tổng xuất', value: formatNumber(productSummary.total_exported) },
+        { label: 'Tổng hoàn', value: formatNumber(productSummary.total_returned) },
+        { label: 'Tổng hỏng', value: formatNumber(productSummary.total_damaged) },
+        { label: 'Tổng điều chỉnh', value: formatNumber(productSummary.total_adjusted) },
+    ], [productSummary]);
 
     const supplierSummaryItems = useMemo(() => !supplierSummary ? [] : [
         { label: 'Tổng nhà cung cấp', value: formatNumber(supplierSummary.total_suppliers) },
@@ -5689,14 +6058,80 @@ const productSummaryItems = useMemo(() => !productSummary ? [] : [
     }, [adjustmentPagination.total, adjustments, damagedData, damagedPagination.total, exportPagination.total, exportsData, importPagination.total, imports, lotPagination.total, lots, returnPagination.total, returnsData, trashItems, trashPagination.total]);
 
     const productCell = (row, columnId) => {
-        if (columnId === 'sku') return <CellText primary={row.sku} secondary={row.is_variant && row.parent_name ? `Thuộc: ${row.parent_name}` : null} mono />;
-        if (columnId === 'name') return <CellText primary={row.name} secondary={row.category_name || 'Chưa phân loại'} />;
-        if (columnId === 'expected_cost') return row.expected_cost != null ? formatCurrency(row.expected_cost) : '-';
-        if (columnId === 'current_cost') {
-            const effectiveCurrentCost = row.display_cost ?? row.current_cost ?? row.expected_cost ?? null;
-            return effectiveCurrentCost != null ? formatCurrency(effectiveCurrentCost) : '-';
+        if (columnId === 'product') {
+            const stockMeta = getProductStockAlertMeta(row);
+            const skuValue = String(row.sku || '').trim();
+            const nameValue = String(row.name || '').trim();
+            const copyBaseId = String(row.product_id || row.id || row.sku || row.name || 'product');
+
+            return (
+                <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openProductDailyOutboundDrawer(row)}
+                    onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            openProductDailyOutboundDrawer(row);
+                        }
+                    }}
+                    className="group/productcell w-full rounded-sm text-left transition hover:bg-primary/[0.03] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                    title="Bấm để xem hàng đi hàng ngày"
+                >
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                            <div className="flex items-start gap-2">
+                                <div className="min-w-0 flex flex-1 flex-wrap items-center gap-2">
+                                    <span className="truncate font-mono text-[12px] font-black text-primary">{row.sku || 'Chưa có mã'}</span>
+                                    <span className={`rounded-sm border px-2 py-0.5 text-[10px] font-black ${stockMeta.badgeClass}`}>{stockMeta.label}</span>
+                                </div>
+                                {skuValue ? (
+                                    <button
+                                        type="button"
+                                        onClick={(event) => { void handleCopyProductCellValue(skuValue, 'mã sản phẩm', event, `${copyBaseId}-sku`); }}
+                                        className={`inline-flex size-5 shrink-0 items-center justify-center rounded-sm transition-all ${copiedProductCellId === `${copyBaseId}-sku` ? 'text-green-600 opacity-100' : 'text-primary/20 opacity-0 group-hover/productcell:opacity-100 hover:text-primary'}`}
+                                        title="Sao chép mã sản phẩm"
+                                    >
+                                        <span className="material-symbols-outlined text-[14px]">{copiedProductCellId === `${copyBaseId}-sku` ? 'check' : 'content_copy'}</span>
+                                    </button>
+                                ) : null}
+                            </div>
+                            <div className="mt-1 flex items-start gap-2">
+                                <div className="min-w-0 flex-1 truncate text-[13px] font-semibold text-primary" title={row.name || '-'}>
+                                    {row.name || '-'}
+                                </div>
+                                {nameValue ? (
+                                    <button
+                                        type="button"
+                                        onClick={(event) => { void handleCopyProductCellValue(nameValue, 'tên sản phẩm', event, `${copyBaseId}-name`); }}
+                                        className={`inline-flex size-5 shrink-0 items-center justify-center rounded-sm transition-all ${copiedProductCellId === `${copyBaseId}-name` ? 'text-green-600 opacity-100' : 'text-primary/20 opacity-0 group-hover/productcell:opacity-100 hover:text-primary'}`}
+                                        title="Sao chép tên sản phẩm"
+                                    >
+                                        <span className="material-symbols-outlined text-[14px]">{copiedProductCellId === `${copyBaseId}-name` ? 'check' : 'content_copy'}</span>
+                                    </button>
+                                ) : null}
+                            </div>
+                        </div>
+                        <span className="material-symbols-outlined mt-0.5 shrink-0 text-[18px] text-primary/30 transition group-hover/productcell:text-primary/55">chevron_right</span>
+                    </div>
+                </div>
+            );
         }
-        if (columnId === 'inventory_value') return formatCurrency(row.inventory_value);
+        if (columnId === 'expected_cost') return row.expected_cost != null ? formatCurrency(row.expected_cost) : '-';
+        if (columnId === 'current_cost') return row.current_cost != null ? formatCurrency(row.current_cost) : '-';
+        if (columnId === 'computed_stock') {
+            const stockMeta = getProductStockAlertMeta(row);
+            return (
+                <div className="flex flex-col items-end gap-0.5">
+                    <span className={`text-[14px] font-black ${stockMeta.textClass}`}>{formatNumber(row.computed_stock || 0)}</span>
+                    <span className="text-[11px] text-primary/45">{stockMeta.label}</span>
+                </div>
+            );
+        }
+        if (columnId === 'inventory_value') {
+            if (row.current_cost == null && row.expected_cost == null) return '-';
+            return formatCurrency(row.inventory_value);
+        }
         if (columnId === 'actions') return <div className="flex items-center justify-center gap-2"><button type="button" onClick={() => navigate(`/admin/products/edit/${row.id}`)} className={ghostButton}>Sửa</button><button type="button" onClick={() => removeProduct(row.id)} className={dangerButton}>Xóa</button></div>;
         return typeof row[columnId] === 'number' ? formatNumber(row[columnId]) : (row[columnId] || '-');
     };
@@ -6308,7 +6743,7 @@ const productSummaryItems = useMemo(() => !productSummary ? [] : [
     };
 
     const productsTabContent = (
-        <div className={panelClass}>
+        <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
             <PanelHeader
                 title="Tồn kho"
                 activeFilterChips={productFilterChips}
@@ -6334,6 +6769,10 @@ const productSummaryItems = useMemo(() => !productSummary ? [] : [
                         <option value="expected">Đang dùng giá dự kiến</option>
                         <option value="empty">Chưa có giá</option>
                     </select>
+                    <select value={productFilters.stock_alert} onChange={(event) => setProductFilters((prev) => ({ ...prev, stock_alert: event.target.value }))} className={`w-[150px] ${selectClass}`}>
+                        <option value="">Tất cả tồn kho</option>
+                        {productStockAlertFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
                     <select value={productFilters.type} onChange={(event) => setProductFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[165px] ${selectClass}`}>
                         <option value="">Tất cả loại sản phẩm</option>
                         {productTypeFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
@@ -6355,7 +6794,7 @@ const productSummaryItems = useMemo(() => !productSummary ? [] : [
             ) : null}
             {openPanels.products.stats ? <SummaryPanel items={productSummaryItems} /> : null}
             <InventoryTable
-                storageKey={`inventory_products_table_stock_v2_${inventoryTableStorageVersion}`}
+                storageKey={`inventory_products_table_stock_v3_${inventoryTableStorageVersion}`}
                 columns={productColumns}
                 rows={products}
                 renderCell={productCell}
@@ -6370,6 +6809,8 @@ const productSummaryItems = useMemo(() => !productSummary ? [] : [
                 sortConfig={sortConfigs.products}
                 onSort={(columnId) => handleTableSort('products', columnId)}
                 sortColumnMap={inventorySortColumnMaps.products}
+                wrapperClassName="flex min-h-0 flex-1 flex-col"
+                viewportClassName={stretchedTableViewportClass}
             />
         </div>
     );
@@ -6804,11 +7245,7 @@ const productSummaryItems = useMemo(() => !productSummary ? [] : [
     const documentWorkspace = isDocumentTab(activeTab) ? renderSimpleTab(activeTab) : null;
 
     return (
-        <div className="space-y-4 px-5 pb-6 pt-4">
-            <div className="space-y-1">
-                <div className="text-[11px] font-black uppercase tracking-[0.18em] text-primary/45">Quản lý kho</div>
-                <div className="text-[16px] font-black uppercase tracking-[0.18em] text-primary">{currentInventorySection?.label || 'Tổng quan'}</div>
-            </div>
+        <div className="flex h-full min-h-0 flex-col gap-3">
             {activeTab === 'overview' ? <div className={panelClass}><PanelHeader title="Tổng quan kho" toggles={[{ id: 'overview_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.overview.stats, onClick: () => togglePanel('overview', 'stats') }]} />{openPanels.overview.stats ? <SummaryPanel items={overviewItems} /> : null}</div> : null}
             {activeTab === 'products' ? productsTabContent : null}
             {activeTab === 'suppliers' ? suppliersTabContent : null}
@@ -7351,6 +7788,7 @@ const productSummaryItems = useMemo(() => !productSummary ? [] : [
                         onOpenPrint={openImportPrintModal}
                         onUpdateLine={updateImportLine}
                         onSelectProduct={attachImportProductToLine}
+                        onClearProduct={clearImportProductFromLine}
                         onRemoveLine={removeImportLine}
                         onMoveLine={moveImportLine}
                         onToggleProductStar={toggleImportProductStar}
@@ -7386,6 +7824,7 @@ const productSummaryItems = useMemo(() => !productSummary ? [] : [
                     onOpenPrint={openImportPrintModal}
                     onUpdateLine={updateImportLine}
                     onSelectProduct={attachImportProductToLine}
+                    onClearProduct={clearImportProductFromLine}
                     onRemoveLine={removeImportLine}
                     onMoveLine={moveImportLine}
                     onToggleProductStar={toggleImportProductStar}
@@ -7788,6 +8227,11 @@ const productSummaryItems = useMemo(() => !productSummary ? [] : [
                 </div>
             </ModalShell>
             <ModalShell open={documentModal.open} title={documentModal.form.id ? `Sửa ${documentTitleMap[documentModal.tabKey]}` : `Tạo ${documentTitleMap[documentModal.tabKey]}`} onClose={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} footer={<div className="flex items-center justify-between gap-3"><div className="text-[13px] font-black text-primary">{documentModal.tabKey === 'damaged' ? `Tổng số lượng: ${formatNumber(documentModal.form.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0))}` : `Tổng giá trị tạm tính: ${formatCurrency(documentLineTotal)}`}</div><div className="flex gap-2"><button type="button" onClick={() => setDocumentModal({ open: false, tabKey: 'returns', form: createDocumentForm('returns') })} className={ghostButton}>Hủy</button><button type="button" onClick={saveDocument} className={primaryButton} disabled={loading.saving}>{loading.saving ? 'Đang lưu' : 'Lưu phiếu'}</button></div></div>}><div className="space-y-4"><div className="grid gap-3 md:grid-cols-3"><input type="date" value={documentModal.form.document_date} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, document_date: event.target.value } }))} className={inputClass} /><select value={documentModal.form.supplier_id} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, supplier_id: event.target.value } }))} className={selectClass}><option value="">Không gắn nhà cung cấp</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select><div className="flex items-center rounded-sm border border-primary/15 px-3 text-[13px] font-semibold text-primary">{documentTitleMap[documentModal.tabKey]}</div></div><ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => { const index = documentModal.form.items.findIndex((item) => !item.product_id); const targetIndex = index >= 0 ? index : documentModal.form.items.length; if (index < 0) addLine(setDocumentModal); attachProductToLine(setDocumentModal, targetIndex, product); }} buttonLabel="Thêm vào phiếu" /><div className="overflow-hidden rounded-sm border border-primary/10"><table className="w-full border-collapse"><thead className="bg-[#f6f9fc]"><tr>{['Sản phẩm', 'Số lượng', documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? 'Giá vốn' : null, documentModal.tabKey === 'adjustments' ? 'Loại tồn' : null, documentModal.tabKey === 'adjustments' ? 'Hướng' : null, 'Ghi chú', 'Xóa'].filter(Boolean).map((label) => <th key={label} className="border-b border-r border-primary/10 px-3 py-2.5 text-center text-[12px] font-bold text-primary">{label}</th>)}</tr></thead><tbody>{documentModal.form.items.map((item, index) => <tr key={item.key}><td className="border-b border-r border-primary/10 px-3 py-2"><div className="space-y-2">{item.product_id ? <CellText primary={item.product_name || '-'} secondary={item.product_sku || '-'} /> : <div className="text-[12px] text-primary/45">Chưa chọn sản phẩm</div>}<ProductLookupInput supplierId={documentModal.form.supplier_id ? Number(documentModal.form.supplier_id) : null} onSelect={(product) => attachProductToLine(setDocumentModal, index, product)} placeholder="Đổi sản phẩm" buttonLabel="Chọn" /></div></td><td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.quantity} onChange={(event) => updateLine(setDocumentModal, index, 'quantity', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} /></td>{documentModal.tabKey === 'returns' || documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><input value={formatWholeNumberInput(item.unit_cost)} onChange={(event) => updateLine(setDocumentModal, index, 'unit_cost', normalizeWholeMoneyDraft(event.target.value))} className={`w-full text-right ${inputClass}`} /></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.stock_bucket} onChange={(event) => updateLine(setDocumentModal, index, 'stock_bucket', event.target.value)} className={`w-full ${selectClass}`}><option value="sellable">Tồn bán được</option><option value="damaged">Tồn hỏng</option></select></td> : null}{documentModal.tabKey === 'adjustments' ? <td className="border-b border-r border-primary/10 px-3 py-2"><select value={item.direction} onChange={(event) => updateLine(setDocumentModal, index, 'direction', event.target.value)} className={`w-full ${selectClass}`}><option value="in">Cộng</option><option value="out">Trừ</option></select></td> : null}<td className="border-b border-r border-primary/10 px-3 py-2"><input value={item.notes} onChange={(event) => updateLine(setDocumentModal, index, 'notes', event.target.value)} className={`w-full ${inputClass}`} placeholder="Ghi chú" /></td><td className="border-b border-primary/10 px-3 py-2 text-center"><button type="button" onClick={() => removeLine(setDocumentModal, index)} className={dangerButton}>Xóa</button></td></tr>)}</tbody></table></div><div className="flex justify-between gap-2"><button type="button" onClick={() => addLine(setDocumentModal)} className={ghostButton}>Thêm dòng</button><textarea value={documentModal.form.notes} onChange={(event) => setDocumentModal((prev) => ({ ...prev, form: { ...prev.form, notes: event.target.value } }))} placeholder="Ghi chú phiếu kho" className="min-h-[96px] flex-1 rounded-sm border border-primary/15 p-3 text-[13px] outline-none focus:border-primary" /></div></div></ModalShell>
+            <InventoryProductDailyOutboundDrawer
+                open={dailyOutboundDrawer.open}
+                product={dailyOutboundDrawer.product}
+                onClose={closeProductDailyOutboundDrawer}
+            />
             <BatchReturnSlipModal
                 open={batchReturnModal.open}
                 mode="edit"

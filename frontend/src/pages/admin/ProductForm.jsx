@@ -451,6 +451,13 @@ const buildAutoVariantSkuList = (parentSku, variants) => {
     });
 };
 
+const createEmptyVariantQuickUpdateForm = () => ({
+    price: '',
+    expected_cost: '',
+    weight: '',
+    inventory_unit_id: '',
+});
+
 const Field = ({ label, children, className = "", labelClassName = "" }) => (
     <div className={`relative border border-stone/30 rounded-sm px-3 focus-within:border-primary/30 transition-colors flex items-center min-h-[40px] bg-white ${className}`}>
         <label className={`absolute -top-3 left-2 bg-white px-1.5 font-sans text-[13px] font-bold text-orange-700 tracking-tight leading-none ${labelClassName}`}>
@@ -787,6 +794,9 @@ const ProductForm = () => {
     const location = useLocation();
     const queryParams = new URLSearchParams(location.search);
     const isDuplicate = queryParams.get('mode') === 'duplicate';
+    const isCreateFlow = !isEdit || isDuplicate;
+    const expectedCostLabel = isCreateFlow ? 'Giá nhập dự kiến' : 'Giá dự kiến';
+    const currentCostLabel = isCreateFlow ? 'Giá nhập thực tế' : 'Giá vốn hiện tại';
     const returnContext = location.state?.returnContext || null;
 
     const { showModal, showToast } = useUI();
@@ -862,7 +872,11 @@ const ProductForm = () => {
     const [variants, setVariants] = useState([]);
     const [serverValidationErrors, setServerValidationErrors] = useState({});
     const [selectedSuperAttributes, setSelectedSuperAttributes] = useState([]);
+    const [selectedVariantIds, setSelectedVariantIds] = useState([]);
     const [showVariantConfig, setShowVariantConfig] = useState(false);
+    const [showVariantQuickUpdateModal, setShowVariantQuickUpdateModal] = useState(false);
+    const [variantQuickUpdateScope, setVariantQuickUpdateScope] = useState('all');
+    const [variantQuickUpdateForm, setVariantQuickUpdateForm] = useState(createEmptyVariantQuickUpdateForm);
     const [refreshingAttributes, setRefreshingAttributes] = useState(false);
     const [bundleOptions, setBundleOptions] = useState([]); // [{ id, title, post_id, post_title, items: [] }]
     const [showBundleSearch, setShowBundleSearch] = useState(null); // optionId
@@ -881,6 +895,7 @@ const ProductForm = () => {
     const [stagedRelatedData, setStagedRelatedData] = useState([]);
 
     const [variantTableWidths, setVariantTableWidths] = useState({
+        select: 64,
         image: 80,
         name: 320,
         sku: 200,
@@ -889,7 +904,6 @@ const ProductForm = () => {
         current_cost: 150,
         weight: 100,
         unit: 96,
-        stock: 100,
         actions: 60
     });
 
@@ -975,6 +989,40 @@ const ProductForm = () => {
         || serverValidationErrors?.[`variants.${index}.id`]?.[0]
         || ''
     ), [localSkuValidation.variants, serverValidationErrors]);
+
+    const getVariantSelectionKey = useCallback((variant, index) => (
+        String(variant?.id ?? `variant_${index}`)
+    ), []);
+
+    const selectedVariantIdSet = useMemo(() => new Set(selectedVariantIds), [selectedVariantIds]);
+    const selectedVariantCount = useMemo(
+        () => variants.reduce((count, variant, index) => (
+            selectedVariantIdSet.has(getVariantSelectionKey(variant, index)) ? count + 1 : count
+        ), 0),
+        [getVariantSelectionKey, selectedVariantIdSet, variants]
+    );
+    const isAllVariantsSelected = variants.length > 0 && selectedVariantCount === variants.length;
+    const hasPartialVariantSelection = selectedVariantCount > 0 && !isAllVariantsSelected;
+    const variantQuickUpdateTargetCount = variantQuickUpdateScope === 'selected' ? selectedVariantCount : variants.length;
+    const canApplyVariantQuickUpdate = useMemo(
+        () => variantQuickUpdateTargetCount > 0 && Object.values(variantQuickUpdateForm).some((value) => value !== ''),
+        [variantQuickUpdateForm, variantQuickUpdateTargetCount]
+    );
+
+    useEffect(() => {
+        setSelectedVariantIds((prev) => {
+            if (prev.length === 0) return prev;
+            const validIds = new Set(variants.map((variant, index) => getVariantSelectionKey(variant, index)));
+            const next = prev.filter((id) => validIds.has(id));
+            return next.length === prev.length ? prev : next;
+        });
+    }, [getVariantSelectionKey, variants]);
+
+    useEffect(() => {
+        if (variantQuickUpdateScope === 'selected' && selectedVariantCount === 0) {
+            setVariantQuickUpdateScope('all');
+        }
+    }, [selectedVariantCount, variantQuickUpdateScope]);
 
     const appendAiInstruction = useCallback((suggestion) => {
         setAiInstruction((prev) => {
@@ -1605,6 +1653,7 @@ const ProductForm = () => {
 
     const handleResetVariants = () => {
         setVariants([]);
+        setSelectedVariantIds([]);
         setSelectedSuperAttributes([]);
         setShowVariantConfig(true);
         clearServerValidationErrors(['variants.']);
@@ -1619,7 +1668,6 @@ const ProductForm = () => {
             current_cost: '',
             weight: formData.weight,
             inventory_unit_id: formData.inventory_unit_id || '',
-            stock: 10,
             attributes: {},
             label: 'Biến thể tùy chỉnh',
             sku_auto: true,
@@ -1808,7 +1856,6 @@ const ProductForm = () => {
                         current_cost: resolveDuplicateSafeCost(v.cost_price),
                         weight: v.weight ?? '',
                         inventory_unit_id: v.inventory_unit_id ? String(v.inventory_unit_id) : (data.inventory_unit_id ? String(data.inventory_unit_id) : ''),
-                        stock: v.stock_quantity ?? 0,
                         sku: v.sku ?? '',
                         sku_auto: false,
                         attributes: attrs,
@@ -2333,7 +2380,6 @@ const ProductForm = () => {
                 current_cost: '',
                 weight: formData.weight,
                 inventory_unit_id: formData.inventory_unit_id || '',
-                stock: 10,
                 attributes: combo,
                 label: `${formData.name} - ${attrLabel}`,
                 sku_auto: true,
@@ -2349,7 +2395,7 @@ const ProductForm = () => {
         const updated = [...variants];
         if (field === 'price' || field === 'expected_cost') {
             value = normalizeWholeMoneyDraft(value);
-        } else if (field === 'stock' || field === 'weight') {
+        } else if (field === 'weight') {
             value = value.toString().replace(/[^0-9]/g, '');
         }
         if (field === 'sku') {
@@ -2384,6 +2430,105 @@ const ProductForm = () => {
         setVariants(variants.filter((_, i) => i !== index));
         clearServerValidationErrors(['variants.']);
     };
+
+    const toggleVariantSelection = useCallback((selectionKey) => {
+        setSelectedVariantIds((prev) => (
+            prev.includes(selectionKey)
+                ? prev.filter((id) => id !== selectionKey)
+                : [...prev, selectionKey]
+        ));
+    }, []);
+
+    const toggleSelectAllVariants = useCallback(() => {
+        const allIds = variants.map((variant, index) => getVariantSelectionKey(variant, index));
+        setSelectedVariantIds((prev) => (
+            prev.length === allIds.length && allIds.every((id) => prev.includes(id))
+                ? []
+                : allIds
+        ));
+    }, [getVariantSelectionKey, variants]);
+
+    const openVariantQuickUpdateModal = useCallback(() => {
+        setVariantQuickUpdateForm(createEmptyVariantQuickUpdateForm());
+        setVariantQuickUpdateScope(selectedVariantCount > 0 ? 'selected' : 'all');
+        setShowVariantQuickUpdateModal(true);
+    }, [selectedVariantCount]);
+
+    const closeVariantQuickUpdateModal = useCallback(() => {
+        setShowVariantQuickUpdateModal(false);
+        setVariantQuickUpdateForm(createEmptyVariantQuickUpdateForm());
+        setVariantQuickUpdateScope(selectedVariantCount > 0 ? 'selected' : 'all');
+    }, [selectedVariantCount]);
+
+    const handleVariantQuickUpdateFieldChange = useCallback((field, value) => {
+        let nextValue = value;
+        if (field === 'price' || field === 'expected_cost') {
+            nextValue = normalizeWholeMoneyDraft(value);
+        } else if (field === 'weight') {
+            nextValue = value.replace(/[^0-9]/g, '');
+        }
+
+        setVariantQuickUpdateForm((prev) => ({
+            ...prev,
+            [field]: nextValue,
+        }));
+    }, []);
+
+    const handleApplyVariantQuickUpdate = useCallback(() => {
+        if (!canApplyVariantQuickUpdate) {
+            showToast({
+                type: 'warning',
+                message: 'Vui lòng nhập ít nhất một trường để cập nhật nhanh cho biến thể.',
+            });
+            return;
+        }
+
+        if (variantQuickUpdateScope === 'selected' && selectedVariantCount === 0) {
+            showToast({
+                type: 'warning',
+                message: 'Hãy chọn ít nhất một biến thể trước khi áp dụng cập nhật nhanh.',
+            });
+            return;
+        }
+
+        const updates = {};
+        if (variantQuickUpdateForm.price !== '') updates.price = variantQuickUpdateForm.price;
+        if (variantQuickUpdateForm.expected_cost !== '') updates.expected_cost = variantQuickUpdateForm.expected_cost;
+        if (variantQuickUpdateForm.weight !== '') updates.weight = variantQuickUpdateForm.weight;
+        if (variantQuickUpdateForm.inventory_unit_id !== '') updates.inventory_unit_id = variantQuickUpdateForm.inventory_unit_id;
+
+        const targetIds = variantQuickUpdateScope === 'selected' ? new Set(selectedVariantIds) : null;
+
+        setVariants((prev) => prev.map((variant, index) => {
+            const selectionKey = getVariantSelectionKey(variant, index);
+            if (targetIds && !targetIds.has(selectionKey)) {
+                return variant;
+            }
+
+            return {
+                ...variant,
+                ...updates,
+            };
+        }));
+
+        setShowVariantQuickUpdateModal(false);
+        setVariantQuickUpdateForm(createEmptyVariantQuickUpdateForm());
+        showToast({
+            type: 'success',
+            message: variantQuickUpdateScope === 'selected'
+                ? `Đã cập nhật nhanh ${selectedVariantCount} biến thể đã chọn.`
+                : `Đã cập nhật nhanh toàn bộ ${variants.length} biến thể.`,
+        });
+    }, [
+        canApplyVariantQuickUpdate,
+        getVariantSelectionKey,
+        selectedVariantCount,
+        selectedVariantIds,
+        showToast,
+        variantQuickUpdateForm,
+        variantQuickUpdateScope,
+        variants.length,
+    ]);
 
     const handleWeightInputChange = (e) => {
         const raw = e.target.value.replace(/[^0-9]/g, '');
@@ -2808,7 +2953,6 @@ const ProductForm = () => {
                     submitData.append(`variants[${idx}][expected_cost]`, v.expected_cost || '');
                     submitData.append(`variants[${idx}][weight]`, v.weight || '');
                     submitData.append(`variants[${idx}][inventory_unit_id]`, v.inventory_unit_id || formData.inventory_unit_id || '');
-                    submitData.append(`variants[${idx}][stock_quantity]`, v.stock);
 
                     if (v.image_file) {
                         submitData.append(`variants[${idx}][image]`, v.image_file);
@@ -3240,7 +3384,7 @@ const ProductForm = () => {
                                                 <span className="font-bold text-brick opacity-40 ml-2">₫</span>
                                             </div>
                                         </Field>
-                                        <Field label="Giá dự kiến" className="border-primary/20 bg-stone/5">
+                                        <Field label={expectedCostLabel} className="border-primary/20 bg-stone/5">
                                             <div className="flex items-center w-full">
                                                 <input
                                                     type="text"
@@ -3252,7 +3396,7 @@ const ProductForm = () => {
                                                 <span className="font-bold text-primary opacity-30 ml-2">₫</span>
                                             </div>
                                         </Field>
-                                        <Field label="Giá vốn hiện tại" className="border-primary/20 bg-stone/10">
+                                        <Field label={currentCostLabel} className="border-primary/20 bg-stone/10">
                                             <div className="flex items-center w-full">
                                                 <input
                                                     type="text"
@@ -3701,7 +3845,17 @@ const ProductForm = () => {
                                             </div>
                                         </div>
 
-                                        <div className="flex justify-end pt-4 border-t border-purple-100">
+                                        <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-purple-100">
+                                            {variants.length > 0 && (
+                                                <button
+                                                    type="button"
+                                                    onClick={openVariantQuickUpdateModal}
+                                                    className="flex items-center gap-2 px-5 py-2 bg-white border border-purple-200 text-purple-700 rounded-sm font-bold text-[11px] uppercase tracking-widest hover:bg-purple-50 transition-all shadow-sm"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">tune</span>
+                                                    Cập nhật nhanh
+                                                </button>
+                                            )}
                                             <button
                                                 type="button"
                                                 onClick={generateVariants}
@@ -3714,10 +3868,46 @@ const ProductForm = () => {
                                 )}
 
                                 {variants.length > 0 ? (
-                                    <div className="overflow-x-auto border border-stone/10 rounded-sm custom-scrollbar bg-white">
+                                    <>
+                                        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-purple-100 bg-purple-50/40 px-4 py-3">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-purple-700 shadow-sm">
+                                                    {variants.length} biến thể
+                                                </span>
+                                                <span className={`inline-flex items-center rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${selectedVariantCount > 0 ? 'bg-purple-600 text-white' : 'bg-white text-purple-400'}`}>
+                                                    {selectedVariantCount > 0 ? `Đã chọn ${selectedVariantCount}` : 'Chưa chọn biến thể'}
+                                                </span>
+                                                <span className="text-[11px] text-purple-900/55">
+                                                    Tồn kho không chỉnh tại đây, chỉ cập nhật giá và thông tin biến thể.
+                                                </span>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={toggleSelectAllVariants}
+                                                className="inline-flex items-center gap-1.5 text-[11px] font-bold text-purple-700 transition-colors hover:text-purple-900"
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]">
+                                                    {isAllVariantsSelected ? 'check_box' : hasPartialVariantSelection ? 'indeterminate_check_box' : 'check_box_outline_blank'}
+                                                </span>
+                                                {isAllVariantsSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
+                                            </button>
+                                        </div>
+                                        <div className="overflow-x-auto border border-stone/10 rounded-sm custom-scrollbar bg-white">
                                         <table className="w-full text-left border-collapse" style={{ tableLayout: 'fixed' }}>
                                             <thead>
                                                 <tr className="bg-stone/5 text-[10px] font-black uppercase tracking-widest text-stone/50 border-b border-stone/10">
+                                                    <th className="px-3 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.select }}>
+                                                        <button
+                                                            type="button"
+                                                            onClick={toggleSelectAllVariants}
+                                                            className="inline-flex items-center justify-center text-purple-700 transition-colors hover:text-purple-900"
+                                                            title={isAllVariantsSelected ? 'Bỏ chọn tất cả biến thể' : 'Chọn tất cả biến thể'}
+                                                        >
+                                                            <span className="material-symbols-outlined text-[18px]">
+                                                                {isAllVariantsSelected ? 'check_box' : hasPartialVariantSelection ? 'indeterminate_check_box' : 'check_box_outline_blank'}
+                                                            </span>
+                                                        </button>
+                                                    </th>
                                                     <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.image }}>
                                                         Ảnh
                                                         <div onMouseDown={(e) => handleVariantColumnResize('image', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
@@ -3735,11 +3925,11 @@ const ProductForm = () => {
                                                         <div onMouseDown={(e) => handleVariantColumnResize('price', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
                                                     </th>
                                                     <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.expected_cost }}>
-                                                        Giá dự kiến
+                                                        {expectedCostLabel}
                                                         <div onMouseDown={(e) => handleVariantColumnResize('expected_cost', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
                                                     </th>
                                                     <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.current_cost }}>
-                                                        Giá vốn hiện tại
+                                                        {currentCostLabel}
                                                         <div onMouseDown={(e) => handleVariantColumnResize('current_cost', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
                                                     </th>
                                                     <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.weight }}>
@@ -3750,10 +3940,6 @@ const ProductForm = () => {
                                                         ĐVT
                                                         <div onMouseDown={(e) => handleVariantColumnResize('unit', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
                                                     </th>
-                                                    <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.stock }}>
-                                                        Kho hàng
-                                                        <div onMouseDown={(e) => handleVariantColumnResize('stock', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
-                                                    </th>
                                                     <th className="relative px-4 py-3" style={{ width: variantTableWidths.actions }}></th>
                                                 </tr>
                                             </thead>
@@ -3761,9 +3947,23 @@ const ProductForm = () => {
                                                 {variants.map((v, index) => {
                                                     const parentPrimaryImage = images.find(img => img.is_primary) || images[0];
                                                     const displayImageUrl = v.image_url || parentPrimaryImage?.image_url;
+                                                    const variantSelectionKey = getVariantSelectionKey(v, index);
+                                                    const isVariantSelected = selectedVariantIdSet.has(variantSelectionKey);
 
                                                     return (
-                                                        <tr key={v.id} className="hover:bg-purple-50/30 transition-colors">
+                                                        <tr key={v.id} className={`transition-colors ${isVariantSelected ? 'bg-purple-50/50 hover:bg-purple-50/70' : 'hover:bg-purple-50/30'}`}>
+                                                            <td className="px-3 py-3 border-r border-stone/20 text-center align-top">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => toggleVariantSelection(variantSelectionKey)}
+                                                                    className={`inline-flex items-center justify-center transition-colors ${isVariantSelected ? 'text-purple-700' : 'text-stone/35 hover:text-purple-700'}`}
+                                                                    title={isVariantSelected ? 'Bỏ chọn biến thể này' : 'Chọn biến thể này'}
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[20px]">
+                                                                        {isVariantSelected ? 'check_box' : 'check_box_outline_blank'}
+                                                                    </span>
+                                                                </button>
+                                                            </td>
                                                             <td className="px-3 py-2 border-r border-stone/20 text-center">
                                                                 <div className="relative group/vimg mx-auto size-16 bg-white border border-stone/15 rounded flex items-center justify-center overflow-hidden shadow-sm">
                                                                     {displayImageUrl ? (
@@ -3911,16 +4111,6 @@ const ProductForm = () => {
                                                                     <option value="__create__">+ Thêm mới</option>
                                                                 </select>
                                                             </td>
-                                                            <td className="px-4 py-3 border-r border-stone/20">
-                                                                <div className="flex items-center justify-center">
-                                                                    <input
-                                                                        type="number"
-                                                                        className="w-full bg-[#e0f2fe] border border-transparent focus:border-blue-400 focus:bg-white px-2 py-2 rounded text-[13px] font-black text-blue-700 text-center transition-all"
-                                                                        value={v.stock ?? 0}
-                                                                        onChange={(e) => handleVariantChange(index, 'stock', e.target.value)}
-                                                                    />
-                                                                </div>
-                                                            </td>
                                                             <td className="px-4 py-3 text-center">
                                                                 <button
                                                                     type="button"
@@ -3936,6 +4126,7 @@ const ProductForm = () => {
                                             </tbody>
                                         </table>
                                     </div>
+                                    </>
                                 ) : (
                                     <div className="flex flex-col items-center justify-center py-12 bg-stone/5 border-2 border-dashed border-purple-100 rounded-sm">
                                         <span className="material-symbols-outlined text-4xl text-purple-200 mb-3">account_tree</span>
@@ -5046,6 +5237,176 @@ const ProductForm = () => {
                 </form>
             </div>
             </DndProvider>
+
+            <AnimatePresence>
+                {showVariantQuickUpdateModal && (
+                    <div className="fixed inset-0 z-[105] flex items-center justify-center p-4">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={closeVariantQuickUpdateModal}
+                            className="absolute inset-0 bg-primary/45 backdrop-blur-sm"
+                        />
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.96, y: 24 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.96, y: 24 }}
+                            className="relative w-full max-w-3xl overflow-hidden rounded-sm bg-white shadow-premium-lg"
+                        >
+                            <div className="flex items-start justify-between gap-4 border-b border-purple-100 bg-[#fcfafc] px-6 py-5">
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-3">
+                                        <span className="material-symbols-outlined rounded-full bg-purple-100 p-2 text-purple-700">tune</span>
+                                        <div>
+                                            <h3 className="text-[16px] font-bold uppercase tracking-tight text-purple-950">Cập nhật nhanh biến thể</h3>
+                                            <p className="mt-1 text-[12px] text-purple-900/55">
+                                                Nhập giá trị một lần, hệ thống sẽ tự đổ xuống đúng các biến thể theo phạm vi bạn chọn.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={closeVariantQuickUpdateModal}
+                                    className="text-stone/35 transition-colors hover:text-brick"
+                                    title="Đóng popup"
+                                >
+                                    <span className="material-symbols-outlined">close</span>
+                                </button>
+                            </div>
+
+                            <div className="space-y-6 px-6 py-6">
+                                <div className="rounded-sm border border-purple-100 bg-purple-50/40 p-4">
+                                    <div className="mb-3 text-[11px] font-black uppercase tracking-[0.14em] text-purple-900/45">
+                                        Phạm vi áp dụng
+                                    </div>
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setVariantQuickUpdateScope('all')}
+                                            className={`rounded-sm border px-4 py-4 text-left transition-all ${variantQuickUpdateScope === 'all' ? 'border-purple-500 bg-white shadow-sm' : 'border-purple-100 bg-white/70 hover:border-purple-300'}`}
+                                        >
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <div className="text-[13px] font-bold text-purple-950">Tất cả biến thể</div>
+                                                    <div className="mt-1 text-[11px] text-purple-900/55">Áp dụng cho toàn bộ danh sách biến thể hiện tại.</div>
+                                                </div>
+                                                <span className="rounded-full bg-purple-100 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-purple-700">
+                                                    {variants.length} biến thể
+                                                </span>
+                                            </div>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => selectedVariantCount > 0 && setVariantQuickUpdateScope('selected')}
+                                            disabled={selectedVariantCount === 0}
+                                            className={`rounded-sm border px-4 py-4 text-left transition-all ${variantQuickUpdateScope === 'selected' ? 'border-purple-500 bg-white shadow-sm' : 'border-purple-100 bg-white/70'} ${selectedVariantCount === 0 ? 'cursor-not-allowed opacity-50' : 'hover:border-purple-300'}`}
+                                        >
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <div className="text-[13px] font-bold text-purple-950">Biến thể đã chọn</div>
+                                                    <div className="mt-1 text-[11px] text-purple-900/55">
+                                                        Chỉ cập nhật cho những biến thể đã tick trong bảng bên dưới.
+                                                    </div>
+                                                </div>
+                                                <span className="rounded-full bg-stone/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-purple-700">
+                                                    {selectedVariantCount} đã chọn
+                                                </span>
+                                            </div>
+                                        </button>
+                                    </div>
+                                    <p className="mt-3 text-[11px] text-purple-900/50">
+                                        Ô nào để trống sẽ được giữ nguyên. Tổng số biến thể sẽ được cập nhật: <span className="font-black text-purple-800">{variantQuickUpdateTargetCount}</span>.
+                                    </p>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                    <div className="relative rounded-sm border border-stone/20 bg-white px-3 pt-3 pb-2 focus-within:border-purple-300">
+                                        <label className="absolute -top-3 left-2 bg-white px-1.5 text-[11px] font-black uppercase tracking-[0.14em] text-brick">
+                                            Giá bán (VNĐ)
+                                        </label>
+                                        <div className="relative">
+                                            <input
+                                                value={formatNumberOutput(variantQuickUpdateForm.price)}
+                                                onChange={(event) => handleVariantQuickUpdateFieldChange('price', event.target.value)}
+                                                className="w-full bg-transparent py-2 pr-5 text-[14px] font-black text-brick focus:outline-none"
+                                                placeholder="Nhập giá bán áp dụng"
+                                            />
+                                            <span className="absolute right-0 top-1/2 -translate-y-1/2 text-[10px] font-bold text-brick/40">₫</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="relative rounded-sm border border-stone/20 bg-white px-3 pt-3 pb-2 focus-within:border-purple-300">
+                                        <label className="absolute -top-3 left-2 bg-white px-1.5 text-[11px] font-black uppercase tracking-[0.14em] text-primary">
+                                            {expectedCostLabel}
+                                        </label>
+                                        <div className="relative">
+                                            <input
+                                                value={formatNumberOutput(variantQuickUpdateForm.expected_cost)}
+                                                onChange={(event) => handleVariantQuickUpdateFieldChange('expected_cost', event.target.value)}
+                                                className="w-full bg-transparent py-2 pr-5 text-[14px] font-bold text-primary focus:outline-none"
+                                                placeholder="Nhập giá nhập dự kiến"
+                                            />
+                                            <span className="absolute right-0 top-1/2 -translate-y-1/2 text-[10px] font-bold text-primary/35">₫</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="relative rounded-sm border border-stone/20 bg-white px-3 pt-3 pb-2 focus-within:border-purple-300">
+                                        <label className="absolute -top-3 left-2 bg-white px-1.5 text-[11px] font-black uppercase tracking-[0.14em] text-primary">
+                                            Khối lượng SP
+                                        </label>
+                                        <div className="relative">
+                                            <input
+                                                value={variantQuickUpdateForm.weight}
+                                                onChange={(event) => handleVariantQuickUpdateFieldChange('weight', event.target.value)}
+                                                className="w-full bg-transparent py-2 pr-10 text-[14px] font-bold text-primary focus:outline-none"
+                                                placeholder="Nhập khối lượng"
+                                            />
+                                            <span className="absolute right-0 top-1/2 -translate-y-1/2 text-[10px] font-bold italic text-primary/35">gram</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="relative rounded-sm border border-stone/20 bg-white px-3 pt-3 pb-2 focus-within:border-purple-300">
+                                        <label className="absolute -top-3 left-2 bg-white px-1.5 text-[11px] font-black uppercase tracking-[0.14em] text-primary">
+                                            Đơn vị tính
+                                        </label>
+                                        <select
+                                            value={variantQuickUpdateForm.inventory_unit_id}
+                                            onChange={(event) => handleVariantQuickUpdateFieldChange('inventory_unit_id', event.target.value)}
+                                            className="w-full bg-transparent py-2 text-[14px] font-bold text-primary focus:outline-none"
+                                        >
+                                            <option value="">Giữ nguyên ĐVT hiện tại</option>
+                                            {inventoryUnits.map((unit) => (
+                                                <option key={unit.id} value={unit.id}>{unit.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-end gap-3 border-t border-stone/10 bg-stone/5 px-6 py-4">
+                                <button
+                                    type="button"
+                                    onClick={closeVariantQuickUpdateModal}
+                                    className="px-6 py-2 text-[11px] font-bold uppercase tracking-widest text-stone transition-all hover:text-primary"
+                                >
+                                    Hủy bỏ
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleApplyVariantQuickUpdate}
+                                    disabled={!canApplyVariantQuickUpdate}
+                                    className="inline-flex items-center gap-2 rounded-sm bg-purple-700 px-8 py-2 text-[11px] font-bold uppercase tracking-widest text-white shadow-sm transition-all hover:bg-purple-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    <span className="material-symbols-outlined text-[16px]">bolt</span>
+                                    Cập nhật
+                                </button>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
 
             {/* Slug Management Modal */}
             <AnimatePresence>

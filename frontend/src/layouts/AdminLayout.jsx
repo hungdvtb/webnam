@@ -15,6 +15,7 @@ const AdminLayout = () => {
     const [isInventoryOpen, setIsInventoryOpen] = React.useState(location.pathname.startsWith('/admin/inventory'));
 
     const isOrderForm = location.pathname.startsWith('/admin/orders/new') || location.pathname.startsWith('/admin/orders/edit');
+    const isInventoryRoute = location.pathname.startsWith('/admin/inventory');
 
     React.useEffect(() => {
         if (location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users') || location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/shipping-settings')) setIsSettingsOpen(true);
@@ -351,7 +352,7 @@ const AdminLayout = () => {
 
             {/* Main Content */}
             <main className={`flex-grow flex flex-col overflow-hidden bg-background-light relative ${isOrderForm ? 'w-full' : ''}`}>
-                <div className={`flex-grow overflow-auto relative ${isOrderForm ? 'p-0' : 'p-8'}`}>
+                <div className={`flex-grow min-h-0 relative ${isOrderForm ? 'overflow-auto p-0' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
                     {(() => {
                         const permNeeded = getCurrentPermId();
                         if (permNeeded && !canAccess(permNeeded)) {

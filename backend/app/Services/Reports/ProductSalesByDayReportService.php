@@ -293,6 +293,15 @@ class ProductSalesByDayReportService
             $query->whereDate('orders.shipping_dispatched_at', '<=', $filters['shipping_dispatched_to']);
         }
 
+        if (($filters['product_id'] ?? 0) > 0) {
+            $productId = (int) $filters['product_id'];
+            $query->where(function ($productQuery) use ($productId) {
+                $productQuery
+                    ->where('order_items.product_id', $productId)
+                    ->orWhere('parent_products.id', $productId);
+            });
+        }
+
         if ($filters['export_slip_state'] !== '') {
             $this->orderInventorySlipService->applyExportSlipStateFilter($query, $filters['export_slip_state']);
         }
@@ -402,6 +411,7 @@ class ProductSalesByDayReportService
             'date_from' => trim((string) ($filters['date_from'] ?? '')),
             'date_to' => trim((string) ($filters['date_to'] ?? '')),
             'search' => trim((string) ($filters['search'] ?? '')),
+            'product_id' => max((int) ($filters['product_id'] ?? 0), 0),
             'status' => $status,
             'customer_name' => trim((string) ($filters['customer_name'] ?? '')),
             'order_number' => trim((string) ($filters['order_number'] ?? '')),
@@ -426,6 +436,7 @@ class ProductSalesByDayReportService
             'date_from' => $from->toDateString(),
             'date_to' => $to->toDateString(),
             'search' => $filters['search'],
+            'product_id' => $filters['product_id'],
             'status' => $filters['status'],
             'customer_name' => $filters['customer_name'],
             'order_number' => $filters['order_number'],

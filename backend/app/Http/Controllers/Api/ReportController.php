@@ -42,6 +42,7 @@ class ReportController extends Controller
             'date_from' => 'nullable|date',
             'date_to' => 'nullable|date',
             'search' => 'nullable|string|max:255',
+            'product_id' => 'nullable|integer|min:1',
             'force_refresh' => 'nullable|boolean',
             'status' => 'nullable',
             'customer_name' => 'nullable|string|max:255',

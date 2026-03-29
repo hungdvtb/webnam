@@ -17,6 +17,11 @@ import SortIndicator from '../../components/SortIndicator';
 import { SHIPPING_SOUND_STORAGE_KEY, defaultSoundSettings, beep } from '../../components/admin/ShippingSettingsPanel';
 import OrderInventorySlipDrawer from '../../components/admin/OrderInventorySlipDrawer';
 import BatchReturnSlipModal from '../../components/admin/BatchReturnSlipModal';
+import MultiKeywordSearchInput, {
+    buildActiveKeywordTokens,
+    parseKeywordTokens,
+    serializeKeywordTokens,
+} from '../../components/admin/MultiKeywordSearchInput';
 import { printOrders } from '../../utils/orderPrint';
 import {
     addOrderIdsToReturnWorkbench,
@@ -383,7 +388,8 @@ const parseOrderListRouteScope = (search = '') => {
     };
 };
 const createDefaultOrderFilters = (search = '', orderIds = []) => ({
-    search,
+    search_terms: parseKeywordTokens(search),
+    search_input: '',
     status: [],
     customer_name: '',
     order_number: '',
@@ -401,6 +407,10 @@ const createDefaultOrderFilters = (search = '', orderIds = []) => ({
     order_ids: parseOrderIdList(orderIds),
 });
 
+const buildOrderSearchTerms = (filters = {}) => (
+    buildActiveKeywordTokens(filters?.search_terms, filters?.search_input)
+);
+
 const buildOrderListRequestParams = ({
     filters,
     sortConfig,
@@ -413,6 +423,7 @@ const buildOrderListRequestParams = ({
     const effectiveScopedIds = Array.isArray(scopedOrderIds)
         ? parseOrderIdList(scopedOrderIds)
         : parseOrderIdList(filters?.order_ids);
+    const searchTerms = buildOrderSearchTerms(filters);
 
     const params = {
         page,
@@ -428,7 +439,10 @@ const buildOrderListRequestParams = ({
         params.order_kind = DRAFT_ORDER_KIND;
     }
 
-    if (filters.search?.trim()) params.search = filters.search.trim();
+    if (searchTerms.length) {
+        params.search = serializeKeywordTokens(searchTerms);
+        params.search_terms = searchTerms;
+    }
     if (effectiveScopedIds.length) params.order_ids = effectiveScopedIds.join(',');
     if (filters.status?.length) params.status = filters.status.join(',');
     if (filters.customer_name?.trim()) params.customer_name = filters.customer_name.trim();
@@ -1051,7 +1065,20 @@ const OrderList = () => {
     const [selectedWarehouseId, setSelectedWarehouseId] = useState('');
     const [searchHistory, setSearchHistory] = useState(() => {
         const saved = localStorage.getItem('order_search_history');
-        return saved ? JSON.parse(saved) : [];
+
+        if (!saved) {
+            return [];
+        }
+
+        try {
+            const parsed = JSON.parse(saved);
+            return (Array.isArray(parsed) ? parsed : [])
+                .map((entry) => serializeKeywordTokens(parseKeywordTokens(entry)))
+                .filter(Boolean);
+        } catch (error) {
+            console.warn('Cannot parse order search history.', error);
+            return [];
+        }
     });
     const [showSearchHistory, setShowSearchHistory] = useState(false);
     const [tempFilters, setTempFilters] = useState(null);
@@ -1061,6 +1088,7 @@ const OrderList = () => {
     const previousUnreadRef = useRef([]);
     const orderRequestAbortRef = useRef(null);
     const suppressSearchSyncRef = useRef(false);
+    const previousSearchDraftRef = useRef('');
 
     const [pagination, setPagination] = useState({ current_page: 1, last_page: 1, total: 0, per_page: 20 });
     const [filters, setFilters] = useState(() => createDefaultOrderFilters(
@@ -1102,6 +1130,23 @@ const OrderList = () => {
         () => new Map(orderStatuses.map((status) => [String(status.code), status])),
         [orderStatuses]
     );
+    const activeSearchTerms = useMemo(
+        () => buildOrderSearchTerms(filters),
+        [filters.search_input, filters.search_terms]
+    );
+    const activeSearchValue = useMemo(
+        () => serializeKeywordTokens(activeSearchTerms),
+        [activeSearchTerms]
+    );
+    const normalizedActiveSearchTerms = useMemo(
+        () => activeSearchTerms.map((term) => term.toLowerCase()),
+        [activeSearchTerms]
+    );
+    const matchesAnySearchKeyword = useCallback((...values) => (
+        normalizedActiveSearchTerms.some((term) => (
+            values.some((value) => String(value || '').toLowerCase().includes(term))
+        ))
+    ), [normalizedActiveSearchTerms]);
     const carrierMap = useMemo(
         () => new Map(connectedCarriers.map((carrier) => [String(carrier.carrier_code), carrier])),
         [connectedCarriers]
@@ -1311,9 +1356,11 @@ const OrderList = () => {
     };
 
     const addToSearchHistory = (term) => {
-        if (!term?.trim() || term.length < 2) return;
+        const normalizedTerm = serializeKeywordTokens(parseKeywordTokens(term));
+        if (!normalizedTerm || normalizedTerm.length < 2) return;
         setSearchHistory(prev => {
-            const updated = [term, ...prev.filter(h => h !== term)].slice(0, 10);
+            const normalizedKey = normalizedTerm.toLowerCase();
+            const updated = [normalizedTerm, ...prev.filter(h => String(h).toLowerCase() !== normalizedKey)].slice(0, 10);
             localStorage.setItem('order_search_history', JSON.stringify(updated));
             return updated;
         });
@@ -1614,7 +1661,7 @@ const OrderList = () => {
 
         const nextFilters = createDefaultOrderFilters('', routeOrderScope.orderIds);
         setFilters((prev) => (
-            areOrderIdListsEqual(prev.order_ids, nextFilters.order_ids) && !prev.search && !prev.status?.length
+            areOrderIdListsEqual(prev.order_ids, nextFilters.order_ids) && !prev.search_terms?.length && !prev.search_input && !prev.status?.length
                 && !prev.customer_name && !prev.order_number && !prev.created_at_from && !prev.created_at_to
                 && !prev.customer_phone && !prev.order_type && !prev.shipping_address
                 && !prev.shipping_carrier_code && !prev.export_slip_state && !prev.return_slip_state
@@ -1638,11 +1685,13 @@ const OrderList = () => {
         }
 
         const timer = setTimeout(() => {
-            if (filters.search !== localStorage.getItem('order_list_search_current')) {
-                if (filters.search) {
-                    localStorage.setItem('order_list_search_current', filters.search);
+            if (activeSearchValue !== (localStorage.getItem('order_list_search_current') || '')) {
+                if (activeSearchValue) {
+                    localStorage.setItem('order_list_search_current', activeSearchValue);
                     fetchOrders(1);
-                    addToSearchHistory(filters.search);
+                    if (!filters.search_input) {
+                        addToSearchHistory(activeSearchValue);
+                    }
                 } else if (localStorage.getItem('order_list_search_current')) {
                     localStorage.removeItem('order_list_search_current');
                     fetchOrders(1);
@@ -1650,7 +1699,15 @@ const OrderList = () => {
             }
         }, 250);
         return () => clearTimeout(timer);
-    }, [filters.search]);
+    }, [activeSearchValue, filters.search_input]);
+
+    useEffect(() => {
+        if (previousSearchDraftRef.current && !filters.search_input && activeSearchValue) {
+            addToSearchHistory(activeSearchValue);
+        }
+
+        previousSearchDraftRef.current = filters.search_input;
+    }, [activeSearchValue, filters.search_input]);
 
     useEffect(() => {
         if (!routeOrderIdsKey) {
@@ -1792,9 +1849,14 @@ const OrderList = () => {
     };
 
     const applyFilters = () => {
-        setFilters(tempFilters);
+        const nextFilters = {
+            ...tempFilters,
+            search_terms: filters.search_terms,
+            search_input: filters.search_input,
+        };
+        setFilters(nextFilters);
         setShowFilters(false);
-        fetchOrders(1, tempFilters);
+        fetchOrders(1, nextFilters);
     };
 
     const removeFilter = (key, value = null) => {
@@ -2068,7 +2130,8 @@ const OrderList = () => {
         setShowShippingAlerts(false);
         const nextFilters = {
             ...filters,
-            search: alert.shipping_tracking_code || alert.order_number || filters.search,
+            search_terms: parseKeywordTokens(alert.shipping_tracking_code || alert.order_number || activeSearchValue),
+            search_input: '',
         };
         setFilters(nextFilters);
         fetchOrders(1, nextFilters);
@@ -2545,15 +2608,25 @@ const OrderList = () => {
                     </div>
 
                     <div className="flex-1 relative" ref={searchContainerRef}>
-                        <span className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-primary/40 text-[16px] pointer-events-none z-10">search</span>
-                        <input type="text" autoComplete="off" placeholder="Tìm chứa trong mã đơn, mã đơn hoàn, tên, SĐT, mã vận đơn..." className="w-full bg-primary/5 border border-primary/10 px-8 py-1.5 rounded-sm text-[14px] focus:outline-none focus:border-primary/30 transition-all relative z-0" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} onFocus={() => setShowSearchHistory(true)} onKeyDown={(e) => { if (e.key === 'Enter') { setShowSearchHistory(false); addToSearchHistory(filters.search); } }} />
-                        {filters.search && <button onClick={() => { setFilters(prev => ({ ...prev, search: '' })); setShowSearchHistory(false); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors"><span className="material-symbols-outlined text-[16px]">cancel</span></button>}
+                        <MultiKeywordSearchInput
+                            keywords={filters.search_terms}
+                            draftValue={filters.search_input}
+                            placeholder="Tìm tên SP, mã SP, mã đơn, khách hàng, SĐT, mã vận đơn... Enter hoặc dấu phẩy để thêm"
+                            onFocus={() => setShowSearchHistory(true)}
+                            onChange={({ keywords, draftValue }) => {
+                                setFilters((prev) => ({
+                                    ...prev,
+                                    search_terms: keywords,
+                                    search_input: draftValue,
+                                }));
+                            }}
+                        />
                         {showSearchHistory && searchHistory.length > 0 && (
                             <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[60] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
                                 <div className="flex justify-between items-center px-3 mb-2 border-b border-primary/10 pb-1"><span className="text-[10px] font-bold text-primary/40 uppercase tracking-widest">Tìm kiếm gần đây</span><button onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('order_search_history'); }} className="text-[10px] text-brick hover:underline font-bold">Xóa tất cả</button></div>
                                 <div className="max-h-56 overflow-y-auto custom-scrollbar">
                                     {searchHistory.map((h, i) => (
-                                        <div key={i} className="group flex items-center justify-between px-3 py-1.5 hover:bg-primary/5 cursor-pointer transition-colors" onClick={() => { setFilters({ ...filters, search: h }); setShowSearchHistory(false); }}>
+                                        <div key={i} className="group flex items-center justify-between px-3 py-1.5 hover:bg-primary/5 cursor-pointer transition-colors" onClick={() => { setFilters((prev) => ({ ...prev, search_terms: parseKeywordTokens(h), search_input: '' })); setShowSearchHistory(false); }}>
                                             <div className="flex items-center gap-2 overflow-hidden"><span className="material-symbols-outlined text-[16px] text-primary/30">history</span><span className="text-[13px] text-[#0F172A] truncate font-medium">{h}</span></div>
                                             <button onClick={(e) => { e.stopPropagation(); const updated = searchHistory.filter(x => x !== h); setSearchHistory(updated); localStorage.setItem('order_search_history', JSON.stringify(updated)); }} className="opacity-0 group-hover:opacity-100 p-1 hover:text-brick transition-all rounded-full hover:bg-primary/5"><span className="material-symbols-outlined text-[14px]">close</span></button>
                                         </div>
@@ -3116,17 +3189,16 @@ const OrderList = () => {
 
                                             // Smart re-ordering based on search query
                                             let itemsToShow = [...rawItems];
-                                            if (filters.search && filters.search.trim()) {
-                                                const query = filters.search.toLowerCase().trim();
+                                            if (normalizedActiveSearchTerms.length > 0) {
                                                 const matches = itemsToShow.filter(item => {
                                                     const name = (item.product?.name || item.product_name_snapshot || '').toLowerCase();
                                                     const sku = (item.product?.sku || item.product_sku_snapshot || '').toLowerCase();
-                                                    return name.includes(query) || sku.includes(query);
+                                                    return normalizedActiveSearchTerms.some((term) => name.includes(term) || sku.includes(term));
                                                 });
                                                 const nonMatches = itemsToShow.filter(item => {
                                                     const name = (item.product?.name || item.product_name_snapshot || '').toLowerCase();
                                                     const sku = (item.product?.sku || item.product_sku_snapshot || '').toLowerCase();
-                                                    return !name.includes(query) && !sku.includes(query);
+                                                    return !normalizedActiveSearchTerms.some((term) => name.includes(term) || sku.includes(term));
                                                 });
                                                 itemsToShow = [...matches, ...nonMatches];
                                             }
@@ -3140,10 +3212,7 @@ const OrderList = () => {
                                                                 const itemSku = item.product?.sku || item.product_sku_snapshot || '';
 
                                                                 // Check if this item is a match to highlight
-                                                                const isMatch = filters.search && (
-                                                                    itemName.toLowerCase().includes(filters.search.toLowerCase().trim()) ||
-                                                                    itemSku.toLowerCase().includes(filters.search.toLowerCase().trim())
-                                                                );
+                                                                const isMatch = matchesAnySearchKeyword(itemName, itemSku);
 
                                                                 const skuToneClass = isMatch ? 'text-orange-600' : 'text-orange-600/60';
                                                                 const itemNameClass = isMatch ? 'font-black text-primary' : 'font-bold text-primary';

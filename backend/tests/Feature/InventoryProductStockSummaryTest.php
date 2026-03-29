@@ -118,6 +118,9 @@ class InventoryProductStockSummaryTest extends TestCase
         $this->assertSame(2, (int) ($row['total_damaged'] ?? 0));
         $this->assertSame(2, (int) ($row['total_adjusted'] ?? 0));
         $this->assertSame(7, (int) ($row['computed_stock'] ?? 0));
+        $this->assertSame(80000.0, (float) ($row['display_cost'] ?? 0));
+        $this->assertSame(560000.0, (float) ($row['inventory_value'] ?? 0));
+        $this->assertSame('available', (string) ($row['stock_alert'] ?? ''));
         $this->assertSame(7, (int) $product->fresh()->stock_quantity);
 
         $this->assertSame(10, (int) ($summary['total_imported'] ?? 0));
@@ -127,6 +130,57 @@ class InventoryProductStockSummaryTest extends TestCase
         $this->assertSame(2, (int) ($summary['total_adjusted'] ?? 0));
         $this->assertSame(7, (int) ($summary['total_stock'] ?? 0));
         $this->assertSame(7, (int) ($summary['total_sellable_stock'] ?? 0));
+        $this->assertSame(560000.0, (float) ($summary['total_inventory_value'] ?? 0));
+    }
+
+    public function test_inventory_products_can_filter_low_stock_using_current_inventory_state(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $lowProduct = $this->createProduct($account, $supplier, [
+            'name' => 'San pham sap het',
+            'sku' => 'LOW-STOCK-001',
+        ]);
+        $healthyProduct = $this->createProduct($account, $supplier, [
+            'name' => 'San pham ton on dinh',
+            'sku' => 'SAFE-STOCK-001',
+        ]);
+
+        $service = app(InventoryService::class);
+
+        $service->createImport([
+            'supplier_id' => $supplier->id,
+            'import_date' => now()->subDays(2)->toDateString(),
+            'items' => [
+                [
+                    'product_id' => $lowProduct->id,
+                    'quantity' => 3,
+                    'received_quantity' => 3,
+                    'unit_cost' => 100000,
+                ],
+                [
+                    'product_id' => $healthyProduct->id,
+                    'quantity' => 9,
+                    'received_quantity' => 9,
+                    'unit_cost' => 100000,
+                ],
+            ],
+        ], $account->id, $user->id);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/inventory/products?per_page=20&stock_alert=low');
+
+        $response->assertOk();
+
+        $rows = collect($response->json('data'));
+        $summary = $response->json('summary');
+
+        $this->assertCount(1, $rows);
+        $this->assertSame($lowProduct->id, (int) ($rows->first()['id'] ?? 0));
+        $this->assertSame('low', (string) ($rows->first()['stock_alert'] ?? ''));
+        $this->assertSame(3, (int) ($rows->first()['computed_stock'] ?? 0));
+        $this->assertSame(3, (int) ($summary['total_stock'] ?? 0));
     }
 
     private function authenticate(): array

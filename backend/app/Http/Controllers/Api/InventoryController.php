@@ -220,6 +220,7 @@ class InventoryController extends Controller
             'expected_cost',
             'cost_price',
             'display_cost',
+            'computed_stock',
             'inventory_value',
             'total_imported',
             'total_exported',
@@ -2665,8 +2666,6 @@ class InventoryController extends Controller
             'products.deleted_at',
         ]);
 
-        $this->applyInventoryProductFilters($query, $request);
-
         $importQtySub = \App\Models\ImportItem::query()
             ->join('imports', 'imports.id', '=', 'import_items.import_id')
             ->leftJoin('inventory_import_statuses', 'inventory_import_statuses.id', '=', 'imports.inventory_import_status_id')
@@ -2744,16 +2743,40 @@ class InventoryController extends Controller
             ->whereColumn('product_links.linked_product_id', 'products.id')
             ->where('product_links.link_type', 'super_link')
             ->limit(1);
+        $computedStockSql = '(('
+            . $importQtySub->toSql()
+            . ') - ('
+            . $exportQtySub->toSql()
+            . ') + ('
+            . $returnQtySub->toSql()
+            . ') - ('
+            . $damagedQtySub->toSql()
+            . ') + ('
+            . $adjustmentQtySub->toSql()
+            . '))';
+        $computedStockBindings = array_merge(
+            $importQtySub->getBindings(),
+            $exportQtySub->getBindings(),
+            $returnQtySub->getBindings(),
+            $damagedQtySub->getBindings(),
+            $adjustmentQtySub->getBindings(),
+        );
+        $inventoryValueSql = '(' . $computedStockSql . ' * COALESCE(products.cost_price, products.expected_cost, 0))';
 
         if ($compact) {
-            return $query
+            $query = $query
                 ->selectSub($variantCountSub, 'variant_count')
                 ->selectSub($parentIdSub, 'parent_product_id')
                 ->selectRaw('COALESCE(products.cost_price, products.expected_cost, 0) as display_cost')
-                ->selectRaw('products.stock_quantity * COALESCE(products.cost_price, products.expected_cost, 0) as inventory_value');
+                ->selectRaw($computedStockSql . ' as computed_stock', $computedStockBindings)
+                ->selectRaw($inventoryValueSql . ' as inventory_value', $computedStockBindings);
+
+            $this->applyInventoryProductFilters($query, $request);
+
+            return $query;
         }
 
-        return $query
+        $query = $query
             ->selectSub($importQtySub, 'total_imported')
             ->selectSub($exportQtySub, 'total_exported')
             ->selectSub($returnQtySub, 'total_returned')
@@ -2762,7 +2785,25 @@ class InventoryController extends Controller
             ->selectSub($variantCountSub, 'variant_count')
             ->selectSub($parentIdSub, 'parent_product_id')
             ->selectRaw('COALESCE(products.cost_price, products.expected_cost, 0) as display_cost')
-            ->selectRaw('products.stock_quantity * COALESCE(products.cost_price, products.expected_cost, 0) as inventory_value');
+            ->selectRaw($computedStockSql . ' as computed_stock', $computedStockBindings)
+            ->selectRaw($inventoryValueSql . ' as inventory_value', $computedStockBindings);
+
+        $this->applyInventoryProductFilters($query, $request);
+
+        if ($request->filled('stock_alert')) {
+            $stockAlert = trim((string) $request->input('stock_alert'));
+            if ($stockAlert === 'low') {
+                $query
+                    ->whereRaw($computedStockSql . ' > 0', $computedStockBindings)
+                    ->whereRaw($computedStockSql . ' <= 5', $computedStockBindings);
+            } elseif ($stockAlert === 'out') {
+                $query->whereRaw($computedStockSql . ' <= 0', $computedStockBindings);
+            } elseif ($stockAlert === 'available') {
+                $query->whereRaw($computedStockSql . ' > 5', $computedStockBindings);
+            }
+        }
+
+        return $query;
     }
 
     private function applyInventoryProductFilters($query, Request $request): void
@@ -2946,7 +2987,7 @@ class InventoryController extends Controller
             ->selectRaw('COALESCE(SUM(total_adjusted), 0) as total_adjusted')
             ->selectRaw('COALESCE(SUM(total_imported - total_exported + total_returned - total_damaged + total_adjusted), 0) as total_stock')
             ->selectRaw('COALESCE(SUM(damaged_quantity), 0) as total_damaged_stock')
-            ->selectRaw('COALESCE(SUM(inventory_value), 0) as total_inventory_value')
+            ->selectRaw('COALESCE(SUM((total_imported - total_exported + total_returned - total_damaged + total_adjusted) * COALESCE(cost_price, expected_cost, 0)), 0) as total_inventory_value')
             ->first();
 
         return [
@@ -3221,6 +3262,11 @@ class InventoryController extends Controller
         $totalDamaged = (int) round((float) ($product->total_damaged ?? 0));
         $totalAdjusted = (int) round((float) ($product->total_adjusted ?? 0));
         $computedStock = $totalImported - $totalExported + $totalReturned - $totalDamaged + $totalAdjusted;
+        $displayCost = round((float) ($product->display_cost ?? ($currentCost ?? $expectedCost ?? 0)), 2);
+        $inventoryValue = round($computedStock * $displayCost, 2);
+        $stockAlert = $computedStock <= 0
+            ? 'out'
+            : ($computedStock <= 5 ? 'low' : 'available');
 
         $payload = [
             'id' => $product->id,
@@ -3247,7 +3293,7 @@ class InventoryController extends Controller
             'category_name' => $product->relationLoaded('category') ? $product->category?->name : null,
             'current_cost' => $currentCost,
             'expected_cost' => $expectedCost,
-            'display_cost' => round((float) ($product->display_cost ?? ($currentCost ?? $expectedCost ?? 0)), 2),
+            'display_cost' => $displayCost,
             'cost_source' => $costSource,
             'price_status' => match ($costSource) {
                 'current_cost' => 'Đang dùng giá vốn',
@@ -3260,7 +3306,13 @@ class InventoryController extends Controller
             'total_damaged' => $totalDamaged,
             'total_adjusted' => $totalAdjusted,
             'computed_stock' => $computedStock,
-            'inventory_value' => round((float) ($product->inventory_value ?? 0), 2),
+            'inventory_value' => $inventoryValue,
+            'stock_alert' => $stockAlert,
+            'stock_alert_label' => match ($stockAlert) {
+                'out' => "H\u{1EBF}t h\u{00E0}ng",
+                'low' => "S\u{1EAF}p h\u{1EBF}t",
+                default => "An to\u{00E0}n",
+            },
             'has_variants' => $variantCount > 0,
             'variant_count' => $variantCount,
             'is_variant' => $parentProduct !== null || !empty($product->parent_product_id),

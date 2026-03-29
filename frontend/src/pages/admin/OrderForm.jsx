@@ -203,7 +203,8 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                 sku: String(item?.sku ?? '').trim(),
                 name: String(item?.name ?? '').trim(),
                 price: Number(item?.price ?? 0) || 0,
-                cost_price: Number(item?.cost_price ?? item?.expected_cost ?? 0) || 0,
+                expected_cost: parseMoneyNumber(item?.expected_cost),
+                cost_price: resolveProductCostPrice(item),
                 main_image: String(item?.main_image ?? '').trim(),
                 type: String(item?.type ?? '').trim(),
             };
@@ -366,6 +367,42 @@ const parseMoneyNumber = (value, fallback = null) => {
     const numericValue = Number(value);
     return Number.isFinite(numericValue) ? numericValue : fallback;
 };
+const resolveMoneyValue = (...candidates) => {
+    for (const candidate of candidates) {
+        const normalizedValue = parseMoneyNumber(candidate);
+        if (normalizedValue !== null) {
+            return normalizedValue;
+        }
+    }
+
+    return 0;
+};
+const resolveProductCostPrice = (product, fallback = 0) => resolveMoneyValue(
+    product?.current_cost_price,
+    product?.cost_price,
+    product?.expected_cost,
+    product?.product?.cost_price,
+    product?.product?.expected_cost,
+    fallback
+);
+const normalizeProductPickerEntry = (product) => {
+    if (!product || typeof product !== 'object') return product;
+
+    return {
+        ...product,
+        price: resolveMoneyValue(product?.price, 0),
+        expected_cost: parseMoneyNumber(product?.expected_cost),
+        cost_price: resolveProductCostPrice(product),
+        variations: Array.isArray(product?.variations)
+            ? product.variations.map((variation) => ({
+                ...variation,
+                price: resolveMoneyValue(variation?.price, 0),
+                expected_cost: parseMoneyNumber(variation?.expected_cost),
+                cost_price: resolveProductCostPrice(variation),
+            }))
+            : product?.variations,
+    };
+};
 const calculateItemsCostTotal = (items = []) => items.reduce(
     (sum, item) => sum + ((parseMoneyNumber(item?.cost_price, 0) || 0) * (parseMoneyNumber(item?.quantity, 0) || 0)),
     0
@@ -395,27 +432,20 @@ const buildCompactSupplementCodeSummary = (codes = []) => {
     return `${codes.slice(0, 2).join(', ')} +${codes.length - 2}`;
 };
 const resolveOrderItemCostPrice = (item, useCurrentProductCost = false) => {
-    const preferredValues = useCurrentProductCost
-        ? [
+    return useCurrentProductCost
+        ? resolveMoneyValue(
             item?.current_cost_price,
             item?.product?.cost_price,
             item?.product?.expected_cost,
             item?.cost_price,
-        ]
-        : [
+            0
+        )
+        : resolveMoneyValue(
             item?.cost_price,
             item?.product?.cost_price,
             item?.product?.expected_cost,
-        ];
-
-    for (const value of preferredValues) {
-        const normalizedValue = parseMoneyNumber(value);
-        if (normalizedValue !== null) {
-            return normalizedValue;
-        }
-    }
-
-    return 0;
+            0
+        );
 };
 
 const waitForNodeImages = async (node) => {
@@ -771,6 +801,54 @@ const OrderForm = () => {
     }, [activeProductQuickSetupKey, productQuickSetupStore]);
     const isProductQuickModeActive = productQuickModeEnabled && activeProductQuickSetupItems.length > 0;
     const shouldShowProductQuickFilterPanel = showSearchDropdown && showProductQuickFilterPanel && productQuickFilterAttributes.length > 0;
+    const syncLatestProductsIntoLocalSources = useCallback((latestMap) => {
+        if (!(latestMap instanceof Map) || latestMap.size === 0) return;
+
+        const syncCacheRef = (cacheRef) => {
+            cacheRef.current.forEach((entries, key) => {
+                const nextEntries = (Array.isArray(entries) ? entries : []).map((product) => {
+                    const latest = latestMap.get(Number(product?.id ?? product?.product_id));
+                    return latest ? normalizeProductPickerEntry({ ...product, ...latest }) : normalizeProductPickerEntry(product);
+                });
+
+                cacheRef.current.set(key, nextEntries);
+            });
+        };
+
+        syncCacheRef(productSearchCacheRef);
+        syncCacheRef(productQuickSetupCacheRef);
+
+        setProductQuickSetupStore((prev) => {
+            let hasChanged = false;
+            const nextStore = Object.fromEntries(
+                Object.entries(prev || {}).map(([namespace, groupMap]) => [
+                    namespace,
+                    Object.fromEntries(
+                        Object.entries(groupMap || {}).map(([groupKey, items]) => [
+                            groupKey,
+                            (Array.isArray(items) ? items : []).map((item) => {
+                                const latest = latestMap.get(Number(item?.product_id ?? item?.id));
+                                if (!latest) return item;
+
+                                hasChanged = true;
+
+                                return {
+                                    ...item,
+                                    sku: latest.sku ?? item?.sku ?? '',
+                                    name: latest.name ?? item?.name ?? '',
+                                    price: resolveMoneyValue(latest.price, item?.price, 0),
+                                    expected_cost: parseMoneyNumber(latest.expected_cost, parseMoneyNumber(item?.expected_cost)),
+                                    cost_price: resolveProductCostPrice({ ...item, ...latest }),
+                                };
+                            }),
+                        ])
+                    ),
+                ])
+            );
+
+            return hasChanged ? nextStore : prev;
+        });
+    }, []);
 
     const navigateBack = useCallback(() => {
         if (returnTo && returnTo.startsWith('/admin/')) {
@@ -1180,7 +1258,9 @@ const OrderForm = () => {
             const prodRes = await productApi.getAll(params, controller.signal);
             if (controller.signal.aborted) return;
 
-            const nextProducts = prodRes.data.data || [];
+            const nextProducts = Array.isArray(prodRes.data.data)
+                ? prodRes.data.data.map((product) => normalizeProductPickerEntry(product))
+                : [];
             productSearchCacheRef.current.set(cacheKey, nextProducts);
             setProducts(nextProducts);
         } catch (error) {
@@ -1286,7 +1366,8 @@ const OrderForm = () => {
                 sku: product.sku,
                 name: product.name,
                 price: product.price,
-                cost_price: product.cost_price ?? product.expected_cost ?? 0,
+                expected_cost: parseMoneyNumber(product?.expected_cost),
+                cost_price: resolveProductCostPrice(product),
                 main_image: product.main_image,
                 type: product.type,
             },
@@ -1361,7 +1442,9 @@ const OrderForm = () => {
             const response = await productApi.getAll(params, controller.signal);
             if (controller.signal.aborted) return;
 
-            const nextProducts = response.data.data || [];
+            const nextProducts = Array.isArray(response.data.data)
+                ? response.data.data.map((product) => normalizeProductPickerEntry(product))
+                : [];
             productQuickSetupCacheRef.current.set(cacheKey, nextProducts);
             setProductQuickSetupProducts(nextProducts);
         } catch (error) {

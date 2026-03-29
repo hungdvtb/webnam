@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\BlogCategory;
 use App\Models\Post;
 use App\Models\PostSeoKeyword;
+use App\Support\SslVerifyOptionResolver;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -42,7 +43,8 @@ class BlogBundleService
     ];
 
     public function __construct(
-        private readonly SimpleXlsxService $xlsxService
+        private readonly SimpleXlsxService $xlsxService,
+        private readonly SslVerifyOptionResolver $sslVerifyOptionResolver
     ) {
     }
 
@@ -795,7 +797,12 @@ class BlogBundleService
             throw new RuntimeException('Duong dan anh khong hop le: ' . $reference);
         }
 
-        $response = Http::timeout(20)->retry(1, 200)->get($reference);
+        $response = Http::timeout(20)
+            ->retry(1, 200)
+            ->withOptions([
+                'verify' => $this->resolveDownloadVerifyOption(),
+            ])
+            ->get($reference);
         if (!$response->successful()) {
             throw new RuntimeException('Khong tai duoc anh tu URL: ' . $reference);
         }
@@ -810,6 +817,14 @@ class BlogBundleService
             'mime' => trim((string) $response->header('Content-Type')) ?: $this->guessMimeType($contents),
             'extension' => pathinfo(parse_url($reference, PHP_URL_PATH) ?: '', PATHINFO_EXTENSION) ?: null,
         ];
+    }
+
+    private function resolveDownloadVerifyOption(): bool|string
+    {
+        return $this->sslVerifyOptionResolver->resolve(
+            config('services.blog_bundle.verify_ssl', true),
+            config('services.blog_bundle.ca_bundle_path')
+        );
     }
 
     private function resolveLocalAssetPath(string $reference): ?string

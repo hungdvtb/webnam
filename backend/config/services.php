@@ -44,4 +44,9 @@ return [
         'connect_timeout' => env('GEMINI_CONNECT_TIMEOUT', 15),
     ],
 
+    'blog_bundle' => [
+        'ca_bundle_path' => env('BLOG_EXPORT_CA_BUNDLE_PATH'),
+        'verify_ssl' => env('BLOG_EXPORT_VERIFY_SSL', true),
+    ],
+
 ];

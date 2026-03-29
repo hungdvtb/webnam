@@ -62,7 +62,7 @@ const defaultSupplierFilters = { search: '', status: '', month: '', date_from: '
 const defaultSupplierCatalogFilters = { sku: '', name: '', category_id: '', type: '', variant_scope: '', missing_supplier_price: '', multiple_suppliers: '' };
 const createDefaultSimpleFilters = () => ({
     imports: { search: '', date_from: '', date_to: '', inventory_import_status_id: '', entry_mode: '', has_invoice: '' },
-    exports: { search: '', date_from: '', date_to: '' },
+    exports: { search: '', date_from: '', date_to: '', export_kind: '' },
     returns: { search: '', date_from: '', date_to: '' },
     damaged: { search: '', date_from: '', date_to: '' },
     adjustments: { search: '', date_from: '', date_to: '' },
@@ -115,6 +115,11 @@ const importEntryModeFilterOptions = [
 const importHasInvoiceFilterOptions = [
     { value: 'with_invoice', label: 'Đã có hóa đơn' },
     { value: 'without_invoice', label: 'Chưa có hóa đơn' },
+];
+const exportKindFilterOptions = [
+    { value: 'manual', label: 'Phiếu tạo tay' },
+    { value: 'dispatch_auto', label: 'Phiếu tạo tự động' },
+    { value: 'document', label: 'Phiếu theo đơn' },
 ];
 const exportSourceOptions = [
     { value: 'online', label: 'Bán online' },
@@ -547,6 +552,17 @@ const buildInventorySearchMeta = (row) => [
 ]
     .filter(Boolean)
     .join(' • ');
+const findExactInventorySearchMatch = (rows = [], query = '') => {
+    const normalizedQuery = normalizeSearchText(query);
+    if (!normalizedQuery) return null;
+
+    const exactMatches = rows.filter((row) => (
+        normalizeSearchText(row?.sku) === normalizedQuery
+        || normalizeSearchText(row?.supplier_product_code) === normalizedQuery
+    ));
+
+    return exactMatches.length === 1 ? exactMatches[0] : null;
+};
 const compareInventorySearchRows = (left, right, prioritizeImportStar = false) => {
     if (prioritizeImportStar && Boolean(right?.inventory_import_starred) !== Boolean(left?.inventory_import_starred)) {
         return left?.inventory_import_starred ? -1 : 1;
@@ -1334,17 +1350,12 @@ const isCompletedImportStatus = (status) => {
 const productColumns = [
     { id: 'sku', label: 'Mã', minWidth: 150 },
     { id: 'name', label: 'Tên sản phẩm', minWidth: 250 },
-    { id: 'type_label', label: 'Loại', minWidth: 150 },
     { id: 'total_imported', label: 'Tổng nhập', minWidth: 110, align: 'right' },
-    { id: 'total_exported', label: 'Tổng xuất bán', minWidth: 125, align: 'right' },
+    { id: 'total_exported', label: 'Tổng xuất', minWidth: 110, align: 'right' },
     { id: 'total_returned', label: 'Tổng hoàn', minWidth: 110, align: 'right' },
     { id: 'total_damaged', label: 'Tổng hỏng', minWidth: 110, align: 'right' },
-    { id: 'stock_quantity', label: 'Tồn bán được', minWidth: 120, align: 'right' },
-    { id: 'damaged_quantity', label: 'Tồn hỏng', minWidth: 110, align: 'right' },
-    { id: 'expected_cost', label: 'Giá dự kiến', minWidth: 120, align: 'right' },
-    { id: 'current_cost', label: 'Giá vốn hiện tại', minWidth: 130, align: 'right' },
-    { id: 'inventory_value', label: 'Thành tiền tồn', minWidth: 140, align: 'right' },
-    { id: 'price_status', label: 'Trạng thái giá', minWidth: 150 },
+    { id: 'total_adjusted', label: 'Tổng điều chỉnh', minWidth: 130, align: 'right' },
+    { id: 'computed_stock', label: 'Tồn kho', minWidth: 110, align: 'right' },
     { id: 'actions', label: 'Thao tác', minWidth: 145, align: 'center' },
 ];
 
@@ -1390,7 +1401,6 @@ const exportColumns = [
     { id: 'date', label: 'Ngày xuất', minWidth: 150 },
     { id: 'line_count', label: 'Số dòng', minWidth: 90, align: 'right' },
     { id: 'qty', label: 'Tổng SL', minWidth: 110, align: 'right' },
-    { id: 'status', label: 'Trạng thái', minWidth: 120 },
     { id: 'actions', label: 'Thao tác', minWidth: 145, align: 'center' },
 ];
 
@@ -1456,11 +1466,7 @@ const inventorySortColumnMaps = {
         total_exported: 'total_exported',
         total_returned: 'total_returned',
         total_damaged: 'total_damaged',
-        stock_quantity: 'stock_quantity',
-        damaged_quantity: 'damaged_quantity',
-        expected_cost: 'expected_cost',
-        current_cost: 'display_cost',
-        inventory_value: 'inventory_value',
+        total_adjusted: 'total_adjusted',
     },
     suppliers: {
         name: 'name',
@@ -1498,7 +1504,6 @@ const inventorySortColumnMaps = {
         date: 'date',
         line_count: 'line_count',
         qty: 'qty',
-        status: 'status',
     },
     documents: {
         code: 'code',
@@ -1960,6 +1965,241 @@ const ImportProductQuickSearch = ({
     );
 };
 
+const ImportLineProductLookupInput = ({
+    value = '',
+    selectedProductId = null,
+    supplierId = null,
+    onDraftChange = null,
+    onSelect = null,
+    disabled = false,
+    placeholder = 'Mã SP',
+}) => {
+    const [draftValue, setDraftValue] = useState(value || '');
+    const [results, setResults] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [open, setOpen] = useState(false);
+    const [activeIndex, setActiveIndex] = useState(-1);
+    const containerRef = useRef(null);
+    const inputRef = useRef(null);
+    const blurTimerRef = useRef(null);
+    const autoAppliedRef = useRef('');
+    const pendingSelectionRef = useRef(false);
+
+    useEffect(() => {
+        setDraftValue(value || '');
+        pendingSelectionRef.current = false;
+    }, [value, selectedProductId]);
+
+    useEffect(() => () => {
+        if (blurTimerRef.current) {
+            clearTimeout(blurTimerRef.current);
+        }
+    }, []);
+
+    const closeDropdown = () => {
+        setOpen(false);
+        setActiveIndex(-1);
+        setResults([]);
+    };
+
+    const finalizeDraft = () => {
+        if (blurTimerRef.current) {
+            clearTimeout(blurTimerRef.current);
+            blurTimerRef.current = null;
+        }
+
+        if (pendingSelectionRef.current) {
+            closeDropdown();
+            return;
+        }
+
+        if (Number(selectedProductId || 0) > 0) {
+            setDraftValue(value || '');
+            closeDropdown();
+            return;
+        }
+
+        onDraftChange?.(draftValue);
+        closeDropdown();
+    };
+
+    useEffect(() => {
+        const handleOutsideClick = (event) => {
+            if (!containerRef.current?.contains(event.target)) {
+                finalizeDraft();
+            }
+        };
+
+        document.addEventListener('mousedown', handleOutsideClick);
+        return () => document.removeEventListener('mousedown', handleOutsideClick);
+    });
+
+    useEffect(() => {
+        const trimmed = draftValue.trim();
+        if (disabled || !open || trimmed.length < 1) {
+            setResults([]);
+            setLoading(false);
+            return undefined;
+        }
+
+        let active = true;
+        const controller = new AbortController();
+        const timer = setTimeout(async () => {
+            setLoading(true);
+            try {
+                const nextResults = await fetchInventorySearchResults({
+                    query: trimmed,
+                    supplierId,
+                    limit: 12,
+                    signal: controller.signal,
+                    prioritizeImportStar: true,
+                });
+
+                if (active) {
+                    setResults(nextResults);
+                    setActiveIndex(nextResults.length ? 0 : -1);
+                }
+            } catch (error) {
+                if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED' || error?.message === 'canceled') {
+                    return;
+                }
+                if (active) {
+                    setResults([]);
+                    setActiveIndex(-1);
+                }
+            } finally {
+                if (active) setLoading(false);
+            }
+        }, 120);
+
+        return () => {
+            active = false;
+            controller.abort();
+            clearTimeout(timer);
+        };
+    }, [draftValue, disabled, open, supplierId]);
+
+    const exactMatch = useMemo(() => findExactInventorySearchMatch(results, draftValue), [results, draftValue]);
+
+    const selectProduct = async (product) => {
+        pendingSelectionRef.current = true;
+        setDraftValue(product?.sku || draftValue);
+        setResults([]);
+        closeDropdown();
+        await Promise.resolve(onSelect?.(product));
+    };
+
+    useEffect(() => {
+        if (!exactMatch) {
+            autoAppliedRef.current = '';
+            return;
+        }
+
+        const autoKey = `${normalizeSearchText(draftValue)}::${exactMatch.id}`;
+        if (Number(selectedProductId || 0) === Number(exactMatch.id)) {
+            autoAppliedRef.current = autoKey;
+            return;
+        }
+        if (autoAppliedRef.current === autoKey) {
+            return;
+        }
+
+        autoAppliedRef.current = autoKey;
+        pendingSelectionRef.current = true;
+        setDraftValue(exactMatch?.sku || draftValue);
+        setOpen(false);
+        setActiveIndex(-1);
+        setResults([]);
+        void Promise.resolve(onSelect?.(exactMatch));
+    }, [draftValue, exactMatch, onSelect, selectedProductId]);
+
+    const showDropdown = open && (draftValue.trim().length > 0 || loading);
+
+    return (
+        <div ref={containerRef} className="relative">
+            <input
+                ref={inputRef}
+                value={draftValue}
+                onChange={(event) => {
+                    setDraftValue(event.target.value);
+                    setOpen(true);
+                }}
+                onFocus={() => {
+                    if (blurTimerRef.current) {
+                        clearTimeout(blurTimerRef.current);
+                        blurTimerRef.current = null;
+                    }
+                    setOpen(true);
+                }}
+                onBlur={() => {
+                    blurTimerRef.current = setTimeout(() => {
+                        finalizeDraft();
+                    }, 120);
+                }}
+                onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                        event.preventDefault();
+                        finalizeDraft();
+                        inputRef.current?.blur();
+                        return;
+                    }
+
+                    if (!showDropdown || !results.length) {
+                        if (event.key === 'Enter' && exactMatch) {
+                            event.preventDefault();
+                            void selectProduct(exactMatch);
+                        }
+                        return;
+                    }
+
+                    if (event.key === 'ArrowDown') {
+                        event.preventDefault();
+                        setActiveIndex((prev) => (prev + 1 >= results.length ? 0 : prev + 1));
+                    }
+                    if (event.key === 'ArrowUp') {
+                        event.preventDefault();
+                        setActiveIndex((prev) => (prev - 1 < 0 ? results.length - 1 : prev - 1));
+                    }
+                    if (event.key === 'Enter' && activeIndex >= 0) {
+                        event.preventDefault();
+                        void selectProduct(results[activeIndex]);
+                    }
+                }}
+                disabled={disabled}
+                placeholder={placeholder}
+                className={`w-full ${importFieldClass}`}
+            />
+
+            {showDropdown ? (
+                <div className="absolute left-0 top-[calc(100%+4px)] z-[160] w-[360px] max-w-[min(420px,calc(100vw-48px))] overflow-hidden rounded-sm border border-primary/20 bg-white shadow-2xl">
+                    <div className="max-h-72 overflow-auto">
+                        {loading ? <div className="px-3 py-4 text-[12px] text-primary/55">Đang tìm sản phẩm...</div> : null}
+                        {!loading && results.length === 0 ? <div className="px-3 py-4 text-[12px] text-primary/55">Không tìm thấy sản phẩm phù hợp.</div> : null}
+                        {!loading && results.map((row, index) => (
+                            <button
+                                key={`import_line_lookup_${row.id}`}
+                                type="button"
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => { void selectProduct(row); }}
+                                className={`flex w-full items-center justify-between border-b border-primary/10 px-3 py-2 text-left transition last:border-b-0 ${activeIndex === index ? 'bg-primary/[0.07]' : 'hover:bg-primary/[0.04]'}`}
+                            >
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-1.5">
+                                        <div className="truncate text-[13px] font-semibold text-primary">{row.name}</div>
+                                        {row.inventory_import_starred ? <span className="material-symbols-outlined text-[16px] text-amber-500">star</span> : null}
+                                    </div>
+                                    <div className="truncate text-[11px] text-primary/50">{buildInventorySearchMeta(row) || 'Chưa có thông tin mã sản phẩm'}</div>
+                                </div>
+                                <span className="ml-3 shrink-0 text-[11px] font-bold text-primary/70">Map</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            ) : null}
+        </div>
+    );
+};
+
 const QuantityStepperInput = ({ value, onChange, min = 0 }) => {
     const currentValue = parseLineQuantity(value, min);
 
@@ -1988,6 +2228,7 @@ const QuantityStepperInput = ({ value, onChange, min = 0 }) => {
 const ImportItemsEditorTable = ({
     items,
     inventoryUnits,
+    supplierId = null,
     settingsOpen,
     onCloseSettings,
     onToggleSettings,
@@ -1995,6 +2236,7 @@ const ImportItemsEditorTable = ({
     onToggleExpanded,
     onOpenPrint,
     onUpdateLine,
+    onSelectProduct = null,
     onRemoveLine,
     onMoveLine = null,
     onToggleProductStar = null,
@@ -2128,7 +2370,16 @@ const ImportItemsEditorTable = ({
             if (readOnly) {
                 return row.product_sku ? <span className="block truncate font-mono text-[12px] font-bold text-primary/80">{row.product_sku}</span> : <span className="text-[12px] text-primary/45">-</span>;
             }
-            return <input value={row.product_sku} onChange={(event) => onUpdateLine(row._row_index, 'product_sku', event.target.value)} className={`w-full ${importFieldClass}`} placeholder="Mã SP" />;
+            return onSelectProduct ? (
+                <ImportLineProductLookupInput
+                    value={row.product_sku}
+                    selectedProductId={row.product_id}
+                    supplierId={supplierId}
+                    onDraftChange={(nextValue) => onUpdateLine(row._row_index, 'product_sku', nextValue)}
+                    onSelect={(product) => onSelectProduct(row._row_index, product)}
+                    placeholder="Tìm / nhập mã SP"
+                />
+            ) : <input value={row.product_sku} onChange={(event) => onUpdateLine(row._row_index, 'product_sku', event.target.value)} className={`w-full ${importFieldClass}`} placeholder="Mã SP" />;
         }
 
         if (columnId === 'supplier_product_code') {
@@ -2289,7 +2540,7 @@ const ImportItemsEditorTable = ({
                                 ].filter(Boolean).join(' ')}
                             >
                                 {renderedColumns.map((column) => (
-                                    <td key={`${row.key}_${column.id}`} className={`overflow-hidden border-b border-r border-primary/10 px-2.5 py-1.5 align-middle text-[12px] text-primary ${column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : 'text-left'}`}>
+                                    <td key={`${row.key}_${column.id}`} className={`${column.id === 'product_sku' && !readOnly ? 'relative overflow-visible z-[20]' : 'overflow-hidden'} border-b border-r border-primary/10 px-2.5 py-1.5 align-middle text-[12px] text-primary ${column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : 'text-left'}`}>
                                         <div className="min-w-0">{renderCell(row, column.id, rowIndex)}</div>
                                     </td>
                                 ))}
@@ -5349,16 +5600,15 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         ];
     }, [dashboard]);
 
-    const productSummaryItems = useMemo(() => !productSummary ? [] : [
-        { label: 'Tổng mã', value: formatNumber(productSummary.total_products) },
-        { label: 'Tổng nhập', value: formatNumber(productSummary.total_imported) },
-        { label: 'Tổng xuất bán', value: formatNumber(productSummary.total_exported) },
-        { label: 'Tổng hoàn', value: formatNumber(productSummary.total_returned) },
-        { label: 'Tổng hỏng', value: formatNumber(productSummary.total_damaged) },
-        { label: 'Tồn bán được', value: formatNumber(productSummary.total_sellable_stock) },
-        { label: 'Tồn hỏng', value: formatNumber(productSummary.total_damaged_stock) },
-        { label: 'Tổng giá trị tồn', value: formatCurrency(productSummary.total_inventory_value) },
-    ], [productSummary]);
+const productSummaryItems = useMemo(() => !productSummary ? [] : [
+    { label: 'Tổng mã', value: formatNumber(productSummary.total_products) },
+    { label: 'Tổng nhập', value: formatNumber(productSummary.total_imported) },
+    { label: 'Tổng xuất', value: formatNumber(productSummary.total_exported) },
+    { label: 'Tổng hoàn', value: formatNumber(productSummary.total_returned) },
+    { label: 'Tổng hỏng', value: formatNumber(productSummary.total_damaged) },
+    { label: 'Tổng điều chỉnh', value: formatNumber(productSummary.total_adjusted) },
+    { label: 'Tồn kho', value: formatNumber(productSummary.total_stock ?? productSummary.total_sellable_stock) },
+], [productSummary]);
 
     const supplierSummaryItems = useMemo(() => !supplierSummary ? [] : [
         { label: 'Tổng nhà cung cấp', value: formatNumber(supplierSummary.total_suppliers) },
@@ -5918,6 +6168,9 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 buildFilterChip(`${tabKey}_entry_mode`, 'Cách tạo', filters.entry_mode ? filterOptionLabel(importEntryModeFilterOptions, filters.entry_mode) : '', () => clearSimpleFilter(tabKey, 'entry_mode')),
                 buildFilterChip(`${tabKey}_has_invoice`, 'Hóa đơn', filters.has_invoice ? filterOptionLabel(importHasInvoiceFilterOptions, filters.has_invoice) : '', () => clearSimpleFilter(tabKey, 'has_invoice')),
             ] : []),
+            ...(tabKey === 'exports' ? [
+                buildFilterChip(`${tabKey}_export_kind`, 'Nguồn xuất', filters.export_kind ? filterOptionLabel(exportKindFilterOptions, filters.export_kind) : '', () => clearSimpleFilter(tabKey, 'export_kind')),
+            ] : []),
         ].filter(Boolean);
         const quickSearchControl = (
             <div className="relative w-full sm:w-[220px] sm:min-w-[220px]">
@@ -6020,6 +6273,12 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                         </select>
                     </>
                 ) : null}
+                {tabKey === 'exports' ? (
+                    <select value={filters.export_kind} onChange={(event) => setSimpleFilters((prev) => ({ ...prev, exports: { ...prev.exports, export_kind: event.target.value } }))} className={`w-[190px] ${selectClass}`}>
+                        <option value="">Tất cả nguồn xuất</option>
+                        {exportKindFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                ) : null}
             </FilterPanel>
         ) : null;
 
@@ -6096,7 +6355,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             ) : null}
             {openPanels.products.stats ? <SummaryPanel items={productSummaryItems} /> : null}
             <InventoryTable
-                storageKey={`inventory_products_table_${inventoryTableStorageVersion}`}
+                storageKey={`inventory_products_table_stock_v2_${inventoryTableStorageVersion}`}
                 columns={productColumns}
                 rows={products}
                 renderCell={productCell}
@@ -7083,6 +7342,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     <ImportItemsEditorTable
                         items={importModal.form.items}
                         inventoryUnits={inventoryUnits}
+                        supplierId={importModal.form.supplier_id ? Number(importModal.form.supplier_id) : null}
                         settingsOpen={importTableSettingsOpen}
                         onToggleSettings={() => setImportTableSettingsOpen((prev) => !prev)}
                         onCloseSettings={() => setImportTableSettingsOpen(false)}
@@ -7090,6 +7350,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                         onToggleExpanded={() => setImportTableExpanded(true)}
                         onOpenPrint={openImportPrintModal}
                         onUpdateLine={updateImportLine}
+                        onSelectProduct={attachImportProductToLine}
                         onRemoveLine={removeImportLine}
                         onMoveLine={moveImportLine}
                         onToggleProductStar={toggleImportProductStar}
@@ -7116,6 +7377,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 <ImportItemsEditorTable
                     items={importModal.form.items}
                     inventoryUnits={inventoryUnits}
+                    supplierId={importModal.form.supplier_id ? Number(importModal.form.supplier_id) : null}
                     settingsOpen={importTableSettingsOpen}
                     onToggleSettings={() => setImportTableSettingsOpen((prev) => !prev)}
                     onCloseSettings={() => setImportTableSettingsOpen(false)}
@@ -7123,6 +7385,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     onToggleExpanded={() => setImportTableExpanded(false)}
                     onOpenPrint={openImportPrintModal}
                     onUpdateLine={updateImportLine}
+                    onSelectProduct={attachImportProductToLine}
                     onRemoveLine={removeImportLine}
                     onMoveLine={moveImportLine}
                     onToggleProductStar={toggleImportProductStar}

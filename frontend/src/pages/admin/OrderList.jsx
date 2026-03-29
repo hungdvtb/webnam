@@ -56,15 +56,9 @@ const RETURN_SLIP_FILTER_OPTIONS = [
     { value: 'missing', label: 'Chưa tạo phiếu hoàn' },
 ];
 
-const DAMAGED_SLIP_FILTER_OPTIONS = [
-    { value: 'created', label: 'Đã tạo phiếu hỏng' },
-    { value: 'missing', label: 'Chưa tạo phiếu hỏng' },
-];
-
 const INVENTORY_SLIP_FILTERS = [
     { key: 'export_slip_state', label: 'Phiếu xuất', options: EXPORT_SLIP_FILTER_OPTIONS },
     { key: 'return_slip_state', label: 'Phiếu hoàn', options: RETURN_SLIP_FILTER_OPTIONS },
-    { key: 'damaged_slip_state', label: 'Phiếu hỏng', options: DAMAGED_SLIP_FILTER_OPTIONS },
 ];
 
 const ORDER_TYPE_BADGE_CLASSNAMES = {
@@ -401,7 +395,6 @@ const createDefaultOrderFilters = (search = '', orderIds = []) => ({
     shipping_carrier_code: '',
     export_slip_state: '',
     return_slip_state: '',
-    damaged_slip_state: '',
     shipping_dispatched_from: '',
     shipping_dispatched_to: '',
     attributes: {},
@@ -448,7 +441,6 @@ const buildOrderListRequestParams = ({
     if (filters.shipping_carrier_code) params.shipping_carrier_code = filters.shipping_carrier_code;
     if (filters.export_slip_state) params.export_slip_state = filters.export_slip_state;
     if (filters.return_slip_state) params.return_slip_state = filters.return_slip_state;
-    if (filters.damaged_slip_state) params.damaged_slip_state = filters.damaged_slip_state;
     if (filters.shipping_dispatched_from) params.shipping_dispatched_from = filters.shipping_dispatched_from;
     if (filters.shipping_dispatched_to) params.shipping_dispatched_to = filters.shipping_dispatched_to;
 
@@ -1626,7 +1618,7 @@ const OrderList = () => {
                 && !prev.customer_name && !prev.order_number && !prev.created_at_from && !prev.created_at_to
                 && !prev.customer_phone && !prev.order_type && !prev.shipping_address
                 && !prev.shipping_carrier_code && !prev.export_slip_state && !prev.return_slip_state
-                && !prev.damaged_slip_state && !prev.shipping_dispatched_from && !prev.shipping_dispatched_to
+                && !prev.shipping_dispatched_from && !prev.shipping_dispatched_to
                 && Object.keys(prev.attributes || {}).length === 0
                 ? prev
                 : nextFilters
@@ -2554,7 +2546,7 @@ const OrderList = () => {
 
                     <div className="flex-1 relative" ref={searchContainerRef}>
                         <span className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-primary/40 text-[16px] pointer-events-none z-10">search</span>
-                        <input type="text" autoComplete="off" placeholder="Tìm chứa trong mã đơn, tên, SĐT, mã vận đơn..." className="w-full bg-primary/5 border border-primary/10 px-8 py-1.5 rounded-sm text-[14px] focus:outline-none focus:border-primary/30 transition-all relative z-0" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} onFocus={() => setShowSearchHistory(true)} onKeyDown={(e) => { if (e.key === 'Enter') { setShowSearchHistory(false); addToSearchHistory(filters.search); } }} />
+                        <input type="text" autoComplete="off" placeholder="Tìm chứa trong mã đơn, mã đơn hoàn, tên, SĐT, mã vận đơn..." className="w-full bg-primary/5 border border-primary/10 px-8 py-1.5 rounded-sm text-[14px] focus:outline-none focus:border-primary/30 transition-all relative z-0" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} onFocus={() => setShowSearchHistory(true)} onKeyDown={(e) => { if (e.key === 'Enter') { setShowSearchHistory(false); addToSearchHistory(filters.search); } }} />
                         {filters.search && <button onClick={() => { setFilters(prev => ({ ...prev, search: '' })); setShowSearchHistory(false); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-primary/40 hover:text-brick transition-colors"><span className="material-symbols-outlined text-[16px]">cancel</span></button>}
                         {showSearchHistory && searchHistory.length > 0 && (
                             <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[60] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">

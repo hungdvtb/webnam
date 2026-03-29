@@ -50,6 +50,8 @@ const slipTypeMeta = {
     },
 };
 
+const orderSlipTypes = ['export', 'return'];
+
 const emptyDetail = {
     order: null,
     summary: {
@@ -368,7 +370,8 @@ const OrderInventorySlipDrawer = ({ open, orderId, refreshKey = 0, onClose, onUp
                         </div>
 
                         <div className="mt-4 flex flex-wrap items-center gap-2">
-                            {Object.entries(slipTypeMeta).map(([type, meta]) => {
+                            {orderSlipTypes.map((type) => {
+                                const meta = slipTypeMeta[type];
                                 const disabled = type === 'export' ? exportableTotal <= 0 : reversibleTotal <= 0;
                                 return (
                                     <button
@@ -574,7 +577,8 @@ const OrderInventorySlipDrawer = ({ open, orderId, refreshKey = 0, onClose, onUp
                                     </div>
                                 ) : null}
 
-                                {Object.entries(slipTypeMeta).map(([type, meta]) => {
+                                {orderSlipTypes.map((type) => {
+                                    const meta = slipTypeMeta[type];
                                     const rows = documents[type] || [];
 
                                     return (

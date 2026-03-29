@@ -225,6 +225,7 @@ class InventoryController extends Controller
             'total_exported',
             'total_returned',
             'total_damaged',
+            'total_adjusted',
         ];
         if ($searchTerm !== '') {
             // Keep alias sorting raw so PostgreSQL does not wrap it into an expression and lose alias resolution.
@@ -2202,6 +2203,19 @@ class InventoryController extends Controller
             })->values();
         }
 
+        if ($request->filled('export_kind')) {
+            $exportKind = trim((string) $request->input('export_kind'));
+
+            $rows = $rows->filter(function (array $row) use ($exportKind) {
+                $rowKind = (string) ($row['export_kind'] ?? '');
+
+                return match ($exportKind) {
+                    'automatic', 'auto' => in_array($rowKind, ['dispatch_auto', 'document'], true),
+                    default => $rowKind === $exportKind,
+                };
+            })->values();
+        }
+
         return $rows->map(function (array $row) {
             unset($row['_search']);
 
@@ -2668,18 +2682,24 @@ class InventoryController extends Controller
         });
         $this->applyDateRange($importQtySub, 'imports.import_date', $request);
 
-        $exportQtySub = OrderItem::query()
-            ->join('orders', 'orders.id', '=', 'order_items.order_id')
-            ->selectRaw('COALESCE(SUM(order_items.quantity), 0)')
-            ->whereColumn('order_items.product_id', 'products.id')
-            ->whereNull('orders.deleted_at');
-        $this->applyDateRange($exportQtySub, 'orders.created_at', $request);
+        $exportQtySub = \App\Models\InventoryDocumentItem::query()
+            ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
+            ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0)')
+            ->whereColumn('inventory_document_items.product_id', 'products.id')
+            ->where('inventory_documents.type', 'export');
+        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+            $exportQtySub->whereNull('inventory_documents.deleted_at');
+        }
+        $this->applyDateRange($exportQtySub, 'inventory_documents.document_date', $request);
 
         $returnQtySub = \App\Models\InventoryDocumentItem::query()
             ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
             ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0)')
             ->whereColumn('inventory_document_items.product_id', 'products.id')
             ->where('inventory_documents.type', 'return');
+        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+            $returnQtySub->whereNull('inventory_documents.deleted_at');
+        }
         $this->applyDateRange($returnQtySub, 'inventory_documents.document_date', $request);
 
         $damagedQtySub = \App\Models\InventoryDocumentItem::query()
@@ -2687,7 +2707,32 @@ class InventoryController extends Controller
             ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0)')
             ->whereColumn('inventory_document_items.product_id', 'products.id')
             ->where('inventory_documents.type', 'damaged');
+        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+            $damagedQtySub->whereNull('inventory_documents.deleted_at');
+        }
         $this->applyDateRange($damagedQtySub, 'inventory_documents.document_date', $request);
+
+        $adjustmentQtySub = \App\Models\InventoryDocumentItem::query()
+            ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
+            ->selectRaw("
+                COALESCE(SUM(
+                    CASE
+                        WHEN inventory_document_items.stock_bucket = 'sellable'
+                            AND inventory_document_items.direction = 'in'
+                            THEN inventory_document_items.quantity
+                        WHEN inventory_document_items.stock_bucket = 'sellable'
+                            AND inventory_document_items.direction = 'out'
+                            THEN -inventory_document_items.quantity
+                        ELSE 0
+                    END
+                ), 0)
+            ")
+            ->whereColumn('inventory_document_items.product_id', 'products.id')
+            ->where('inventory_documents.type', 'adjustment');
+        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+            $adjustmentQtySub->whereNull('inventory_documents.deleted_at');
+        }
+        $this->applyDateRange($adjustmentQtySub, 'inventory_documents.document_date', $request);
 
         $variantCountSub = DB::table('product_links')
             ->selectRaw('COUNT(*)')
@@ -2713,6 +2758,7 @@ class InventoryController extends Controller
             ->selectSub($exportQtySub, 'total_exported')
             ->selectSub($returnQtySub, 'total_returned')
             ->selectSub($damagedQtySub, 'total_damaged')
+            ->selectSub($adjustmentQtySub, 'total_adjusted')
             ->selectSub($variantCountSub, 'variant_count')
             ->selectSub($parentIdSub, 'parent_product_id')
             ->selectRaw('COALESCE(products.cost_price, products.expected_cost, 0) as display_cost')
@@ -2897,7 +2943,8 @@ class InventoryController extends Controller
             ->selectRaw('COALESCE(SUM(total_exported), 0) as total_exported')
             ->selectRaw('COALESCE(SUM(total_returned), 0) as total_returned')
             ->selectRaw('COALESCE(SUM(total_damaged), 0) as total_damaged')
-            ->selectRaw('COALESCE(SUM(stock_quantity), 0) as total_sellable_stock')
+            ->selectRaw('COALESCE(SUM(total_adjusted), 0) as total_adjusted')
+            ->selectRaw('COALESCE(SUM(total_imported - total_exported + total_returned - total_damaged + total_adjusted), 0) as total_stock')
             ->selectRaw('COALESCE(SUM(damaged_quantity), 0) as total_damaged_stock')
             ->selectRaw('COALESCE(SUM(inventory_value), 0) as total_inventory_value')
             ->first();
@@ -2908,7 +2955,9 @@ class InventoryController extends Controller
             'total_exported' => (int) round((float) ($summary->total_exported ?? 0)),
             'total_returned' => (int) round((float) ($summary->total_returned ?? 0)),
             'total_damaged' => (int) round((float) ($summary->total_damaged ?? 0)),
-            'total_sellable_stock' => (int) round((float) ($summary->total_sellable_stock ?? 0)),
+            'total_adjusted' => (int) round((float) ($summary->total_adjusted ?? 0)),
+            'total_stock' => (int) round((float) ($summary->total_stock ?? 0)),
+            'total_sellable_stock' => (int) round((float) ($summary->total_stock ?? 0)),
             'total_damaged_stock' => (int) round((float) ($summary->total_damaged_stock ?? 0)),
             'total_inventory_value' => round((float) ($summary->total_inventory_value ?? 0), 2),
         ];
@@ -3166,6 +3215,12 @@ class InventoryController extends Controller
         $supplierComparisons = $compact ? [] : $this->productSupplierComparisons($product);
         $supplierPayload = $compact ? [] : $this->productSupplierPayload($product);
         $supplierIds = $compact ? [] : $this->productSupplierIds($product);
+        $totalImported = (int) round((float) ($product->total_imported ?? 0));
+        $totalExported = (int) round((float) ($product->total_exported ?? 0));
+        $totalReturned = (int) round((float) ($product->total_returned ?? 0));
+        $totalDamaged = (int) round((float) ($product->total_damaged ?? 0));
+        $totalAdjusted = (int) round((float) ($product->total_adjusted ?? 0));
+        $computedStock = $totalImported - $totalExported + $totalReturned - $totalDamaged + $totalAdjusted;
 
         $payload = [
             'id' => $product->id,
@@ -3199,10 +3254,12 @@ class InventoryController extends Controller
                 'expected_cost' => 'Đang dùng giá dự kiến',
                 default => 'Chưa có giá',
             },
-            'total_imported' => (int) round((float) ($product->total_imported ?? 0)),
-            'total_exported' => (int) round((float) ($product->total_exported ?? 0)),
-            'total_returned' => (int) round((float) ($product->total_returned ?? 0)),
-            'total_damaged' => (int) round((float) ($product->total_damaged ?? 0)),
+            'total_imported' => $totalImported,
+            'total_exported' => $totalExported,
+            'total_returned' => $totalReturned,
+            'total_damaged' => $totalDamaged,
+            'total_adjusted' => $totalAdjusted,
+            'computed_stock' => $computedStock,
             'inventory_value' => round((float) ($product->inventory_value ?? 0), 2),
             'has_variants' => $variantCount > 0,
             'variant_count' => $variantCount,

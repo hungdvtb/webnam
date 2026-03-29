@@ -1186,6 +1186,7 @@ class OrderController extends Controller
                     $this->applyInsensitiveLike($sub, 'shipping_address', $searchContainsLike, true);
                     $this->applyInsensitiveLike($sub, 'notes', $searchContainsLike, true);
                     $this->applyInsensitiveLike($sub, 'shipping_tracking_code', $searchContainsLike, true);
+                    $this->applyInsensitiveLike($sub, 'return_tracking_code', $searchContainsLike, true);
 
                     $sub->orWhereHas('items', function ($itemQuery) use ($searchContainsLike) {
                         $this->applyInsensitiveLike($itemQuery, 'product_sku_snapshot', $searchContainsLike);
@@ -1208,6 +1209,9 @@ class OrderController extends Controller
             })
             ->when($request->filled('shipping_address'), function ($q) use ($request) {
                 $this->applyInsensitiveLike($q, 'shipping_address', $this->containsLike((string) $request->input('shipping_address')));
+            })
+            ->when($request->filled('return_tracking_code'), function ($q) use ($request) {
+                $this->applyInsensitiveLike($q, 'return_tracking_code', $this->containsLike((string) $request->input('return_tracking_code')));
             })
             ->when($request->filled('status'), function ($q) use ($request) {
                 $statuses = is_array($request->input('status'))

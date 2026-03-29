@@ -267,7 +267,7 @@ const isSlipTab = (tabKey) => isDocumentTab(tabKey) || tabKey === 'trash';
 const documentTypeMap = { returns: 'return', damaged: 'damaged', adjustments: 'adjustment' };
 const documentTitleMap = { returns: 'Phiếu hàng hoàn', damaged: 'Phiếu hàng hỏng', adjustments: 'Phiếu điều chỉnh' };
 const pageSizeOptions = [20, 50, 100, 500];
-const inventoryTableStorageVersion = 'v6';
+const inventoryTableStorageVersion = 'v8';
 const emptySortConfig = { key: null, direction: 'none' };
 const getStoredPageSize = (key) => {
     if (typeof window === 'undefined') return 20;
@@ -341,6 +341,12 @@ const getActualStockCellMeta = (row) => {
         textClass: 'text-rose-700',
     };
 };
+const renderTwoLineHeader = (topLine, bottomLine) => (
+    <span className="inline-flex flex-col items-center whitespace-normal text-center text-[11px] font-bold leading-[1.15]">
+        <span>{topLine}</span>
+        <span>{bottomLine}</span>
+    </span>
+);
 const supplierPasteModeConfigs = {
     sku_price: {
         label: 'SKU + Giá',
@@ -1658,19 +1664,19 @@ const isCompletedImportStatus = (status) => {
 };
 
 const productColumns = [
-    { id: 'product', label: 'Sản phẩm', minWidth: 290 },
-    { id: 'total_imported', label: 'Tổng nhập', minWidth: 110, align: 'right' },
-    { id: 'total_exported', label: 'Tổng xuất', minWidth: 110, align: 'right' },
-    { id: 'total_returned', label: 'Tổng hoàn', minWidth: 110, align: 'right' },
-    { id: 'total_damaged', label: 'Tổng hỏng', minWidth: 110, align: 'right' },
-    { id: 'total_adjusted', label: 'Tổng điều chỉnh', minWidth: 130, align: 'right' },
-    { id: 'computed_stock', label: 'Tồn kho', minWidth: 110, align: 'right' },
-    { id: 'pending_export_quantity', label: 'SL chờ xuất', minWidth: 118, align: 'right', headerTooltip: 'Đã bán nhưng chưa xuất kho' },
-    { id: 'actual_stock', label: 'Tồn thực tế', minWidth: 118, align: 'right', headerTooltip: 'Tồn sau khi trừ đơn chưa xuất' },
-    { id: 'expected_cost', label: 'Giá nhập dự kiến', minWidth: 145, align: 'right' },
-    { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 145, align: 'right' },
-    { id: 'inventory_value', label: 'Thành tiền', minWidth: 145, align: 'right' },
-    { id: 'actions', label: 'Thao tác', minWidth: 145, align: 'center' },
+    { id: 'product', label: 'Sản phẩm', minWidth: 300 },
+    { id: 'total_imported', label: 'Tổng nhập', minWidth: 72, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'nhập') },
+    { id: 'total_exported', label: 'Tổng xuất', minWidth: 72, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'xuất') },
+    { id: 'total_returned', label: 'Tổng hoàn', minWidth: 72, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'hoàn') },
+    { id: 'total_damaged', label: 'Tổng hỏng', minWidth: 72, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'hỏng') },
+    { id: 'total_adjusted', label: 'Tổng điều chỉnh', minWidth: 82, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'điều chỉnh') },
+    { id: 'computed_stock', label: 'Tồn kho', minWidth: 76, align: 'right', headerRender: () => renderTwoLineHeader('Tồn', 'kho') },
+    { id: 'pending_export_quantity', label: 'SL chờ xuất', minWidth: 82, align: 'right', headerTooltip: 'Đã bán nhưng chưa xuất kho', headerRender: () => renderTwoLineHeader('SL chờ', 'xuất') },
+    { id: 'actual_stock', label: 'Tồn thực tế', minWidth: 84, align: 'right', headerTooltip: 'Tồn sau khi trừ đơn chưa xuất', headerRender: () => renderTwoLineHeader('Tồn', 'thực tế') },
+    { id: 'expected_cost', label: 'Giá nhập dự kiến', minWidth: 108, align: 'right', headerRender: () => renderTwoLineHeader('Giá nhập', 'dự kiến') },
+    { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 108, align: 'right', headerRender: () => renderTwoLineHeader('Giá nhập', 'thực tế') },
+    { id: 'inventory_value', label: 'Thành tiền', minWidth: 104, align: 'right', headerRender: () => renderTwoLineHeader('Thành', 'tiền') },
+    { id: 'actions', label: 'Thao tác', minWidth: 88, align: 'center' },
 ];
 
 const supplierColumns = [
@@ -3108,7 +3114,7 @@ const InventoryTable = ({
     const tableColumns = useMemo(() => {
         const baseColumns = columns.filter((column) => column.id !== 'stt');
         return [
-            { id: 'stt', label: 'STT', minWidth: 72, align: 'center', draggable: false, sortable: false },
+            { id: 'stt', label: 'STT', minWidth: 56, align: 'center', draggable: false, sortable: false },
             ...baseColumns,
         ];
     }, [columns]);
@@ -3170,7 +3176,7 @@ const InventoryTable = ({
                                     style={{ width: columnWidths[column.id] || column.minWidth }}
                                 >
                                     <div className={`flex items-center gap-1 ${column.align === 'right' ? 'justify-end' : 'justify-center'}`}>
-                                        <span className="block min-w-0 truncate">{column.headerRender ? column.headerRender() : column.label}</span>
+                                        {column.headerRender ? column.headerRender() : <span className="block min-w-0 truncate">{column.label}</span>}
                                         {canSortColumn(column) ? <SortIndicator colId={column.id} sortConfig={sortConfig} showNeutral /> : null}
                                     </div>
                                     <div onMouseDown={(event) => handleColumnResize(column.id, event)} className="absolute right-0 top-0 h-full w-2 cursor-col-resize transition hover:bg-brick/20" title="Kéo để đổi độ rộng cột" />
@@ -6512,7 +6518,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                 ) : null}
                             </div>
                             <div className="mt-1 flex items-start gap-2">
-                                <div className="min-w-0 flex-1 truncate text-[13px] font-semibold text-primary" title={row.name || '-'}>
+                                <div className="min-w-0 flex-1 whitespace-normal break-words text-[13px] font-semibold leading-[1.35] text-primary" title={row.name || '-'}>
                                     {row.name || '-'}
                                 </div>
                                 {nameValue ? (
@@ -7181,13 +7187,40 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         );
     };
 
+    const productQuickSearchControl = (
+        <div className="relative w-[220px] min-w-[220px]">
+            <span className="material-symbols-outlined pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">search</span>
+            <input
+                value={productFilters.search}
+                onChange={(event) => setProductFilters((prev) => ({ ...prev, search: event.target.value }))}
+                onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        fetchProducts(1);
+                    }
+                }}
+                placeholder="Tìm nhanh mã hoặc tên"
+                className={`w-full pl-8 ${inputClass}`}
+            />
+        </div>
+    );
+
+    const refreshProductsTable = () => fetchProducts(
+        productPagination.current_page || 1,
+        pageSizes.products,
+        sortConfigs.products,
+        productFilters
+    );
+
     const productsTabContent = (
         <div className={`${panelClass} flex min-h-0 flex-1 flex-col`}>
             <PanelHeader
                 title="Tồn kho"
+                leadingActions={productQuickSearchControl}
                 activeFilterChips={productFilterChips}
                 onClearAllFilters={productFilterChips.length ? clearAllProductFilters : null}
                 toggles={[
+                    { id: 'products_refresh', icon: 'refresh', label: 'Làm mới', active: loading.products, disabled: loading.products, disabledTitle: 'Đang làm mới dữ liệu', onClick: refreshProductsTable },
                     { id: 'products_filters', icon: 'filter_alt', label: 'Bộ lọc', active: openPanels.products.filters, onClick: () => togglePanel('products', 'filters') },
                     { id: 'products_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.products.stats, onClick: () => togglePanel('products', 'stats') },
                     { id: 'products_columns', icon: 'view_column', label: 'Cài đặt cột', active: openPanels.products.columns, onClick: () => togglePanel('products', 'columns') },
@@ -7196,7 +7229,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             />
             {openPanels.products.filters ? (
                 <FilterPanel actions={<button type="button" onClick={() => fetchProducts(1)} className={primaryButton}>Lọc</button>}>
-                    <input value={productFilters.search} onChange={(event) => setProductFilters((prev) => ({ ...prev, search: event.target.value }))} placeholder="Tìm mã hoặc tên" className={`w-[220px] ${inputClass}`} />
                     <select value={productFilters.status} onChange={(event) => setProductFilters((prev) => ({ ...prev, status: event.target.value }))} className={`w-[150px] ${selectClass}`}>
                         <option value="">Tất cả trạng thái bán</option>
                         <option value="active">Đang bán</option>

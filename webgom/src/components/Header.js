@@ -1757,9 +1757,8 @@ export default function Header({
 
           .mobile-bottom-item-order-entry .mobile-bottom-item__content,
           .mobile-bottom-item-order-confirm .mobile-bottom-item__content {
-            min-height: 68px;
-            padding-top: 6px;
-            padding-bottom: 5px;
+            min-height: 74px;
+            padding: 6px 6px 7px;
           }
 
           .mobile-bottom-item-order-entry .mobile-bottom-item__content {
@@ -1821,8 +1820,8 @@ export default function Header({
 
           .mobile-bottom-item-order-entry .mobile-bottom-item__label-wrap,
           .mobile-bottom-item-order-confirm .mobile-bottom-item__label-wrap {
-            min-height: 24px;
-            flex-basis: 24px;
+            min-height: 36px;
+            flex-basis: 36px;
           }
 
           .mobile-bottom-item__label-wrap-multiline {
@@ -1830,8 +1829,8 @@ export default function Header({
           }
 
           .mobile-bottom-item__label-multiline {
-            font-size: 7.2px;
-            line-height: 1.08;
+            font-size: inherit;
+            line-height: 1.1;
             white-space: normal;
           }
 
@@ -1983,6 +1982,12 @@ export default function Header({
             padding: 6px 2px 5px;
           }
 
+          .mobile-bottom-item-order-entry .mobile-bottom-item__content,
+          .mobile-bottom-item-order-confirm .mobile-bottom-item__content {
+            min-height: 72px;
+            padding: 6px 4px 6px;
+          }
+
           .mobile-bottom-item__icon-wrap {
             width: 22px;
             height: 22px;
@@ -2003,8 +2008,25 @@ export default function Header({
             font-size: 14px;
           }
 
+          .mobile-bottom-item-order-entry .mobile-bottom-item__label-wrap,
+          .mobile-bottom-item-order-confirm .mobile-bottom-item__label-wrap {
+            min-height: 34px;
+            flex-basis: 34px;
+          }
+
           .mobile-bottom-item__label-multiline {
-            font-size: 6.45px;
+            font-size: inherit;
+          }
+        }
+
+        @media (min-width: 375px) and (max-width: 767px) {
+          .mobile-bottom-nav__inner {
+            grid-template-columns:
+              minmax(0, 0.965fr)
+              minmax(0, 0.965fr)
+              minmax(0, 0.965fr)
+              minmax(0, 0.965fr)
+              minmax(0, 1.14fr);
           }
         }
       `}</style>

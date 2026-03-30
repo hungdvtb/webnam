@@ -984,6 +984,71 @@ const normalizeAdditionalInfoRows = (rows = []) => (
         : []
 );
 
+const SKU_MAX_LENGTH = 120;
+
+const normalizeSkuSeed = (value) => (
+    String(value ?? '')
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, '-')
+        .replace(/[^A-Z0-9-]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+|-+$/g, '')
+);
+
+const truncateSkuValue = (value, maxLength = SKU_MAX_LENGTH) => (
+    value.length > maxLength ? value.slice(0, maxLength) : value
+);
+
+const buildLocalCopySku = (originalSku, fallbackSeed = null) => {
+    const base = normalizeSkuSeed(originalSku || fallbackSeed || 'PRODUCT') || 'PRODUCT';
+    return truncateSkuValue(`${base}-COPY`);
+};
+
+const buildLocalVariantSku = (parentSku, reservedSkus) => {
+    const normalizedParentSku = normalizeSkuSeed(parentSku) || 'PRODUCT';
+
+    for (let index = 1; index <= 9999; index += 1) {
+        const candidate = truncateSkuValue(`${normalizedParentSku}-V${index}`);
+        if (!reservedSkus.has(candidate)) {
+            reservedSkus.add(candidate);
+            return candidate;
+        }
+    }
+
+    const fallbackCandidate = truncateSkuValue(`${normalizedParentSku}-V`);
+    reservedSkus.add(fallbackCandidate);
+    return fallbackCandidate;
+};
+
+const buildDuplicateVariantDrafts = (variants = [], parentSku = '') => {
+    const reservedSkus = new Set([normalizeSkuSeed(parentSku)].filter(Boolean));
+
+    return variants.map((variant) => {
+        const normalizedVariantSku = normalizeSkuSeed(variant?.sku);
+        let nextSku = normalizedVariantSku;
+
+        if (!nextSku || reservedSkus.has(nextSku)) {
+            nextSku = buildLocalVariantSku(parentSku, reservedSkus);
+        } else {
+            reservedSkus.add(nextSku);
+        }
+
+        return {
+            ...variant,
+            sku: nextSku,
+            source_id: variant?.source_id ?? variant?.id ?? null,
+        };
+    });
+};
+
+const getOrderedSuperLinkVariants = (productData) => (
+    (productData?.linked_products || [])
+        .filter((item) => item?.pivot?.link_type === 'super_link')
+        .slice()
+        .sort((left, right) => (Number(left?.pivot?.position ?? 0) - Number(right?.pivot?.position ?? 0)))
+);
+
 const ProductForm = () => {
     const { id } = useParams();
     const isEdit = !!id;
@@ -1025,6 +1090,7 @@ const ProductForm = () => {
     const [isSearchingBlog, setIsSearchingBlog] = useState({}); // { index: loading }
     const [blogResults, setBlogResults] = useState({}); // { index: results }
     const [domains, setDomains] = useState([]);
+    const duplicateDraftDefaultsRef = useRef(null);
 
     const [searchHistory, setSearchHistory] = useState(() => {
         const saved = localStorage.getItem('product_search_history');
@@ -2410,6 +2476,10 @@ const ProductForm = () => {
         try {
             const response = await productApi.getOne(id);
             const data = response.data;
+            const duplicateName = isDuplicate ? `${data.name || ''} (Copy)` : (data.name || '');
+            const duplicateParentSku = isDuplicate
+                ? buildLocalCopySku(data.sku, data.name)
+                : (data.sku || '');
             const parentConfigurable = Array.isArray(data.parent_configurable)
                 ? (data.parent_configurable[0] || null)
                 : (data.parent_configurable || null);
@@ -2423,7 +2493,7 @@ const ProductForm = () => {
             }));
             setFormData({
                 type: data.type || 'simple',
-                name: data.name,
+                name: duplicateName,
                 category_id: data.category_id || '',
                 category_ids: data.categories ? data.categories.map(c => c.id) : [],
                 price: normalizeMoneyValue(data.price),
@@ -2464,10 +2534,10 @@ const ProductForm = () => {
                     }
                 })(),
                 is_featured: !!data.is_featured,
-                is_new: !!data.is_new,
-                status: data.hasOwnProperty('status') ? !!data.status : true,
-                stock_quantity: data.stock_quantity ?? 0,
-                sku: data.sku || '',
+                is_new: isDuplicate ? true : !!data.is_new,
+                status: isDuplicate ? false : (data.hasOwnProperty('status') ? !!data.status : true),
+                stock_quantity: isDuplicate ? 0 : (data.stock_quantity ?? 0),
+                sku: duplicateParentSku,
                 meta_title: data.meta_title || '',
                 meta_description: data.meta_description || '',
                 meta_keywords: data.meta_keywords || '',
@@ -2498,7 +2568,7 @@ const ProductForm = () => {
                     return acc;
                 }, {}),
                 video_url: data.video_url || '',
-                slug: data.slug || '',
+                slug: isDuplicate ? '' : (data.slug || ''),
                 additional_info: (() => {
                     if (!data.additional_info) return [];
                     try {
@@ -2518,6 +2588,9 @@ const ProductForm = () => {
                 site_domain_id: data.site_domain_id || ''
             });
             setImages(data.images || []);
+            duplicateDraftDefaultsRef.current = isDuplicate
+                ? { parentSku: duplicateParentSku, variantSkus: [] }
+                : null;
 
             // Handle Bundle Options organization
             if (data.type === 'bundle') {
@@ -2596,7 +2669,7 @@ const ProductForm = () => {
             setStagedRelatedData(initialData);
 
             if (variantsData.length > 0) {
-                const loadedVariants = variantsData.map(v => {
+                const baseLoadedVariants = variantsData.map(v => {
                     const attrs = (v.attribute_values || []).reduce((acc, av) => {
                         acc[av.attribute_id] = av.value;
                         return acc;
@@ -2617,7 +2690,21 @@ const ProductForm = () => {
                     };
                 });
 
+                const loadedVariants = isDuplicate
+                    ? buildDuplicateVariantDrafts(baseLoadedVariants, duplicateParentSku)
+                        .map((variant) => ({
+                            ...variant,
+                            current_cost: '',
+                        }))
+                    : baseLoadedVariants;
+
                 setVariants(loadedVariants);
+                if (isDuplicate) {
+                    duplicateDraftDefaultsRef.current = {
+                        parentSku: duplicateParentSku,
+                        variantSkus: loadedVariants.map((variant) => normalizeSkuSeed(variant?.sku)),
+                    };
+                }
 
                 // Reconstruct selected values from variants
                 const superAttrs = (data.super_attributes || []).map(sa => {
@@ -3665,9 +3752,23 @@ const ProductForm = () => {
             return;
         }
         setIsSaving(true);
+        let duplicateCloneId = null;
+        let duplicateCloneData = null;
         try {
+            if (isDuplicate) {
+                const duplicateResponse = await productApi.duplicate(id);
+                duplicateCloneData = duplicateResponse.data?.data || duplicateResponse.data || null;
+                duplicateCloneId = Number(duplicateCloneData?.id || 0) || null;
+
+                if (!duplicateCloneId) {
+                    throw new Error('Khong the tao ban nhan ban tam thoi.');
+                }
+            }
+
             const submitData = new FormData();
             const shouldAutoSumCompositePrice = ['grouped', 'bundle'].includes(formData.type) && formData.price_type === 'sum';
+            const duplicateDefaults = duplicateDraftDefaultsRef.current || { parentSku: '', variantSkus: [] };
+            const orderedDuplicateVariants = isDuplicate ? getOrderedSuperLinkVariants(duplicateCloneData) : [];
 
             // Build FormData from state
             Object.entries(formData).forEach(([key, val]) => {
@@ -3737,6 +3838,19 @@ const ProductForm = () => {
                         }
                     } else if (key === 'description') {
                         submitData.append(key, processVideoLinks(val));
+                    } else if (isDuplicate && key === 'sku') {
+                        const normalizedDraftSku = normalizeSkuSeed(val);
+                        const normalizedDefaultSku = normalizeSkuSeed(duplicateDefaults.parentSku);
+                        const resolvedSku = (
+                            normalizedDraftSku === ''
+                            || normalizedDraftSku === normalizedDefaultSku
+                        )
+                            ? (duplicateCloneData?.sku || normalizeSkuDraft(val))
+                            : normalizeSkuDraft(val);
+
+                        if (resolvedSku) {
+                            submitData.append(key, resolvedSku);
+                        }
                     } else {
                         submitData.append(key, val);
                     }
@@ -3750,11 +3864,27 @@ const ProductForm = () => {
             // Add variants if configurable
             if (formData.type === 'configurable') {
                 variants.forEach((v, idx) => {
-                    // If variant already has an ID, send it for update
-                    if (v.id && !v.id.toString().startsWith('new_') && !v.id.toString().startsWith('manual_')) {
+                    const duplicateVariant = orderedDuplicateVariants[idx] || null;
+
+                    if (isDuplicate) {
+                        if (duplicateVariant?.id) {
+                            submitData.append(`variants[${idx}][id]`, duplicateVariant.id);
+                        }
+                    } else if (v.id && !v.id.toString().startsWith('new_') && !v.id.toString().startsWith('manual_')) {
+                        // If variant already has an ID, send it for update
                         submitData.append(`variants[${idx}][id]`, v.id);
                     }
-                    submitData.append(`variants[${idx}][sku]`, normalizeSkuDraft(v.sku));
+
+                    const normalizedVariantDraftSku = normalizeSkuSeed(v?.sku);
+                    const normalizedVariantDefaultSku = normalizeSkuSeed(duplicateDefaults.variantSkus[idx] || '');
+                    const resolvedVariantSku = (
+                        isDuplicate
+                        && (normalizedVariantDraftSku === '' || normalizedVariantDraftSku === normalizedVariantDefaultSku)
+                    )
+                        ? (duplicateVariant?.sku || normalizeSkuDraft(v.sku))
+                        : normalizeSkuDraft(v.sku);
+
+                    submitData.append(`variants[${idx}][sku]`, resolvedVariantSku);
                     submitData.append(`variants[${idx}][name]`, v.label); // Send label as name
                     submitData.append(`variants[${idx}][price]`, v.price);
                     const normalizedVariantExpectedCost = normalizeRoundedImportCostNumber(v.expected_cost);
@@ -3786,7 +3916,9 @@ const ProductForm = () => {
             });
 
             let response;
-            if (isEdit) {
+            if (isDuplicate) {
+                response = await productApi.update(duplicateCloneId, submitData);
+            } else if (isEdit) {
                 // For updates, we use POST but can add method override if needed
                 // productApi.update is already POST /api/products/:id
                 response = await productApi.update(id, submitData);
@@ -3798,7 +3930,7 @@ const ProductForm = () => {
 
             // Sync image order if edited or newly created with multiple images
             const realImageIds = images.filter(img => !img.id.toString().startsWith('temp_')).map(img => img.id);
-            if (realImageIds.length > 1) {
+            if (!isDuplicate && realImageIds.length > 1) {
                 await productImageApi.reorder(realImageIds);
             }
 
@@ -3806,6 +3938,13 @@ const ProductForm = () => {
             navigateBackToOrigin();
         } catch (error) {
             console.error("Save error:", error.response?.data);
+            if (isDuplicate && duplicateCloneId) {
+                try {
+                    await productApi.forceDelete(duplicateCloneId);
+                } catch (cleanupError) {
+                    console.error('Duplicate cleanup error:', cleanupError);
+                }
+            }
             const data = error.response?.data;
             setServerValidationErrors(data?.errors || {});
             let message = data?.message || 'Vui lòng kiểm tra lại thông tin.';

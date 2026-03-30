@@ -11,8 +11,14 @@ const EMPTY_DESCRIPTION =
 const asText = (value) => String(value || '').trim();
 
 const buildPhoneLink = (value) => `tel:${asText(value).replace(/[^\d+]/g, '')}`;
+const buildMailLink = (value) => `mailto:${asText(value)}`;
 
 const buildMapQuery = (store) => [store.name, store.address, store.city].filter(Boolean).join(', ');
+
+const buildMapEmbedUrl = (store) => {
+  const query = buildMapQuery(store);
+  return query ? `https://www.google.com/maps?q=${encodeURIComponent(query)}&output=embed` : '';
+};
 
 const buildMapExternalUrl = (store) => {
   if (store.googleMapsLink) {
@@ -22,6 +28,8 @@ const buildMapExternalUrl = (store) => {
   const query = buildMapQuery(store);
   return query ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}` : '';
 };
+
+const buildRegionLabel = (store) => [store.city, store.tag].filter(Boolean).join(' - ');
 
 const getPrimaryPhone = (store) => asText(store.phone || store.hotline);
 
@@ -52,12 +60,25 @@ const normalizeStores = (stores) => {
 
       return {
         ...normalized,
+        mapEmbedUrl: buildMapEmbedUrl(normalized),
         mapExternalUrl: buildMapExternalUrl(normalized),
       };
     })
     .filter((store) => store.isActive && (store.name || store.address))
     .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, 'vi'));
 };
+
+function InfoRow({ icon, label, children }) {
+  return (
+    <div className="stores-info-row">
+      <span className="material-symbols-outlined stores-info-row-icon">{icon}</span>
+      <div className="stores-info-row-body">
+        <span className="stores-info-row-label">{label}</span>
+        <div className="stores-info-row-content">{children}</div>
+      </div>
+    </div>
+  );
+}
 
 export default function StoresClient({ stores = [] }) {
   const normalizedStores = useMemo(() => normalizeStores(stores), [stores]);
@@ -78,6 +99,8 @@ export default function StoresClient({ stores = [] }) {
   );
 
   const hasConfiguredStores = normalizedStores.length > 0;
+  const activeRegionLabel = activeStore ? buildRegionLabel(activeStore) : '';
+  const activePhone = activeStore ? getPrimaryPhone(activeStore) : '';
 
   useEffect(() => {
     if (!previewImage) {
@@ -108,8 +131,107 @@ export default function StoresClient({ stores = [] }) {
           <h1 className="stores-hero-title">Hệ thống cửa hàng</h1>
         </section>
 
-        <section className="stores-list-panel">
-          <div className="stores-list">
+        <div className="stores-content">
+          <section className="stores-spotlight" aria-label="Chi tiết cửa hàng đang chọn">
+            {activeStore ? (
+              <div className="stores-spotlight-card">
+                <div className="stores-spotlight-head">
+                  <div className="stores-spotlight-icon">
+                    <span className="material-symbols-outlined">location_on</span>
+                  </div>
+                  <div className="stores-spotlight-copy">
+                    <p className="stores-spotlight-kicker">Địa điểm đang chọn</p>
+                    <h2 className="stores-spotlight-title">{activeStore.name}</h2>
+                    <p className="stores-spotlight-subtitle">
+                      {activeRegionLabel || 'Thông tin khu vực đang cập nhật'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="stores-spotlight-info">
+                  {activeStore.address ? (
+                    <InfoRow icon="location_on" label="Địa chỉ">
+                      <p>{activeStore.address}</p>
+                    </InfoRow>
+                  ) : null}
+
+                  {activePhone ? (
+                    <InfoRow icon="call" label="Số điện thoại">
+                      <a href={buildPhoneLink(activePhone)}>{activePhone}</a>
+                    </InfoRow>
+                  ) : null}
+
+                  {activeStore.openingHours ? (
+                    <InfoRow icon="schedule" label="Giờ mở cửa">
+                      <p>{activeStore.openingHours}</p>
+                    </InfoRow>
+                  ) : null}
+
+                  {activeStore.email ? (
+                    <InfoRow icon="mail" label="Email">
+                      <a href={buildMailLink(activeStore.email)}>{activeStore.email}</a>
+                    </InfoRow>
+                  ) : null}
+
+                  {activeStore.note ? (
+                    <InfoRow icon="info" label="Ghi chú">
+                      <p>{activeStore.note}</p>
+                    </InfoRow>
+                  ) : null}
+                </div>
+
+                <div className="stores-spotlight-actions">
+                  {activePhone ? (
+                    <a href={buildPhoneLink(activePhone)} className="stores-action-btn stores-action-btn--ghost">
+                      <span className="material-symbols-outlined">call</span>
+                      Gọi cửa hàng
+                    </a>
+                  ) : null}
+
+                  {activeStore.mapExternalUrl ? (
+                    <a
+                      href={activeStore.mapExternalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="stores-action-btn"
+                    >
+                      <span className="material-symbols-outlined">directions</span>
+                      Chỉ đường
+                    </a>
+                  ) : null}
+                </div>
+
+                <div className="stores-map-card">
+                  {activeStore.mapEmbedUrl ? (
+                    <iframe
+                      key={activeStore.id}
+                      className="stores-map-iframe"
+                      src={activeStore.mapEmbedUrl}
+                      allowFullScreen=""
+                      loading="lazy"
+                      referrerPolicy="no-referrer-when-downgrade"
+                      title={`Bản đồ ${activeStore.name}`}
+                    />
+                  ) : (
+                    <div className="stores-map-empty">
+                      <span className="material-symbols-outlined">map</span>
+                      <h3>Chưa có bản đồ nhúng</h3>
+                      <p>Vẫn có thể dùng nút chỉ đường phía trên để mở Google Maps.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="stores-spotlight-empty">
+                <span className="material-symbols-outlined">location_off</span>
+                <h2>{EMPTY_TITLE}</h2>
+                <p>{EMPTY_DESCRIPTION}</p>
+              </div>
+            )}
+          </section>
+
+          <section className="stores-list-panel">
+            <div className="stores-list">
               {!hasConfiguredStores ? (
                 <div className="stores-empty">
                   <span className="material-symbols-outlined">storefront</span>
@@ -241,8 +363,9 @@ export default function StoresClient({ stores = [] }) {
                   );
                 })
               )}
-          </div>
-        </section>
+            </div>
+          </section>
+        </div>
       </div>
 
       {previewImage ? (
@@ -967,6 +1090,7 @@ export default function StoresClient({ stores = [] }) {
         }
 
         .stores-spotlight {
+          display: none;
           order: 1;
         }
 
@@ -1131,6 +1255,7 @@ export default function StoresClient({ stores = [] }) {
           }
 
           .stores-spotlight {
+            display: block;
             order: 2;
             position: sticky;
             top: 1.5rem;

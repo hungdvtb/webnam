@@ -1157,7 +1157,7 @@ class InventoryController extends Controller
                 ->whereIn('id', $visibleIds->all())
                 ->update(['is_default' => false]);
 
-            $requestedIds->values()->each(function (int $unitId, int $index) {
+            $requestedIds->values()->each(function (int $unitId, int $index) use ($defaultId) {
                 InventoryUnit::query()
                     ->whereKey($unitId)
                     ->update([

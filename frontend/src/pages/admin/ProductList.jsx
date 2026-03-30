@@ -310,6 +310,8 @@ const ProductList = () => {
         additional_info: true,
     });
     const [submittingBulkCopy, setSubmittingBulkCopy] = useState(false);
+    const [duplicateConfirm, setDuplicateConfirm] = useState(null);
+    const [submittingDuplicate, setSubmittingDuplicate] = useState(false);
 
     const [editingProductId, setEditingProductId] = useState(null);
     const [editForm, setEditForm] = useState({ price: '', expected_cost: '' });
@@ -362,6 +364,32 @@ const ProductList = () => {
     };
 
     const [notification, setNotification] = useState(null);
+
+    const openDuplicateConfirm = (ids) => {
+        const normalizedIds = (Array.isArray(ids) ? ids : [ids])
+            .map((value) => Number(value))
+            .filter((value) => Number.isFinite(value));
+
+        if (normalizedIds.length === 0) {
+            return;
+        }
+
+        const firstProduct = products.find((item) => String(item.id) === String(normalizedIds[0]));
+
+        setDuplicateConfirm({
+            ids: normalizedIds,
+            count: normalizedIds.length,
+            sourceName: firstProduct?.name || `Sản phẩm #${normalizedIds[0]}`,
+        });
+    };
+
+    const closeDuplicateConfirm = () => {
+        if (submittingDuplicate) {
+            return;
+        }
+
+        setDuplicateConfirm(null);
+    };
 
     // PERSISTENCE LOGIC: Load state from localStorage on init
     const getSavedState = () => {
@@ -896,6 +924,59 @@ const ProductList = () => {
         } finally { setLoading(false); }
     };
 
+    const requestDuplicate = (id) => {
+        navigate(`/admin/products/edit/${id}?mode=duplicate`);
+    };
+
+    const requestBulkDuplicate = () => {
+        if (selectedIds.length === 0) {
+            return;
+        }
+
+        if (selectedIds.length === 1) {
+            navigate(`/admin/products/edit/${selectedIds[0]}?mode=duplicate`);
+            return;
+        }
+
+        openDuplicateConfirm(selectedIds);
+    };
+
+    const handleConfirmDuplicate = async () => {
+        const duplicateIds = duplicateConfirm?.ids || [];
+
+        if (duplicateIds.length === 0) {
+            return;
+        }
+
+        setSubmittingDuplicate(true);
+        setLoading(true);
+        try {
+            if (duplicateIds.length === 1) {
+                const response = await productApi.duplicate(duplicateIds[0]);
+                const newProduct = response.data?.data || response.data;
+
+                setDuplicateConfirm(null);
+                navigate(`/admin/products/edit/${newProduct.id}?mode=duplicate`);
+            } else {
+                const results = await Promise.all(duplicateIds.map((id) => productApi.duplicate(id)));
+                const count = results.length;
+
+                setDuplicateConfirm(null);
+                setSelectedIds([]);
+                fetchProducts(1);
+                setNotification({ type: 'success', message: `Đã nhân bản thành công ${count} sản phẩm.` });
+                setTimeout(() => setNotification(null), 5000);
+            }
+        } catch (error) {
+            console.error("Duplicate error:", error);
+            const msg = error.response?.data?.message || "Lỗi khi nhân bản sản phẩm!";
+            setNotification({ type: 'error', message: msg });
+        } finally {
+            setSubmittingDuplicate(false);
+            setLoading(false);
+        }
+    };
+
     const toggleBulkSupplierSelection = (supplierId) => {
         setBulkUpdateData((prev) => {
             const currentSupplierIds = Array.isArray(prev.supplier_ids) ? prev.supplier_ids : [];
@@ -1418,7 +1499,7 @@ const ProductList = () => {
                         <div className="flex gap-1 items-center border-primary/10 pr-1">
                             <button 
                                 disabled={selectedIds.length === 0} 
-                                onClick={handleBulkDuplicate} 
+                                onClick={requestBulkDuplicate}
                                 className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary hover:bg-primary hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
                                 title="Nhân bản các mục đã chọn"
                             >
@@ -2318,7 +2399,7 @@ const ProductList = () => {
                                                                 </React.Fragment>
                                                             ) : (
                                                                 <React.Fragment>
-                                                                    <button onClick={(e) => { e.stopPropagation(); handleDuplicate(p.id); }} className="p-1 hover:text-gold" title="Nhân bản"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
+                                                                    <button onClick={(e) => { e.stopPropagation(); requestDuplicate(p.id); }} className="p-1 hover:text-gold" title="Nhân bản"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                                                     <button onClick={(e) => { e.stopPropagation(); navigate(`/admin/products/edit/${p.id}`); }} className="p-1 hover:text-primary" title="Sửa"><span className="material-symbols-outlined text-[18px]">edit</span></button>
                                                                     <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }} className="p-1 hover:text-brick" title="Xóa"><span className="material-symbols-outlined text-[18px]">delete</span></button>
                                                                 </React.Fragment>
@@ -2861,6 +2942,72 @@ const ProductList = () => {
                                     Sao chép cho {bulkCopyTargetCount} SP
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {duplicateConfirm && (
+                <div
+                    className="fixed inset-0 z-[120] bg-black/60 flex items-center justify-center p-4"
+                    onClick={closeDuplicateConfirm}
+                >
+                    <div
+                        className="bg-white rounded p-6 w-full max-w-lg shadow-2xl animate-in fade-in zoom-in-95 duration-200"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between gap-4 border-b border-primary/10 pb-4">
+                            <div>
+                                <h2 className="text-lg font-bold text-primary flex items-center gap-2">
+                                    <span className="material-symbols-outlined text-amber-600">content_copy</span>
+                                    Xác nhận sao chép sản phẩm
+                                </h2>
+                                <p className="mt-2 text-[13px] text-primary/70">
+                                    Chỉ khi bấm <strong>Xác nhận sao chép</strong> thì hệ thống mới tạo bản nháp mới. Bấm <strong>Hủy</strong> sẽ bỏ lệnh sao chép.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closeDuplicateConfirm}
+                                disabled={submittingDuplicate}
+                                className="text-gray-500 hover:text-brick disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                <span className="material-symbols-outlined">close</span>
+                            </button>
+                        </div>
+
+                        <div className="mt-4 rounded-sm border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-amber-900">
+                            {duplicateConfirm.count === 1 ? (
+                                <React.Fragment>
+                                    Sản phẩm nguồn: <strong>{duplicateConfirm.sourceName}</strong>.
+                                    <div className="mt-1">Sau khi xác nhận, hệ thống sẽ tạo 1 bản nháp sao chép từ sản phẩm này.</div>
+                                </React.Fragment>
+                            ) : (
+                                <React.Fragment>
+                                    Đang chọn <strong>{duplicateConfirm.count}</strong> sản phẩm.
+                                    <div className="mt-1">Sau khi xác nhận, hệ thống sẽ tạo {duplicateConfirm.count} bản nháp mới cho các sản phẩm đã chọn.</div>
+                                </React.Fragment>
+                            )}
+                        </div>
+
+                        <div className="mt-6 flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={closeDuplicateConfirm}
+                                disabled={submittingDuplicate}
+                                className="px-4 py-2 border border-primary/20 text-primary rounded-sm font-bold text-[13px] hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                Hủy
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleConfirmDuplicate}
+                                disabled={submittingDuplicate}
+                                className="px-6 py-2 bg-amber-600 text-white rounded-sm font-bold text-[13px] hover:bg-amber-700 flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {submittingDuplicate ? <span className="material-symbols-outlined animate-spin text-[16px]">sync</span> : <span className="material-symbols-outlined text-[16px]">content_copy</span>}
+                                {duplicateConfirm.count === 1 ? 'Xác nhận sao chép' : `Sao chép ${duplicateConfirm.count} sản phẩm`}
+                            </button>
                         </div>
                     </div>
                 </div>

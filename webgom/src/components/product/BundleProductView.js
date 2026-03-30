@@ -263,6 +263,26 @@ export default function BundleProductView({
   const mobileStickyClusterShellRef = useRef(null);
   const mobileStickyClusterRef = useRef(null);
 
+  const getBundleSlotPosition = (item, fallbackIndex = 0) => {
+    const rawPosition = item?.source_position ?? item?.pivot?.position ?? fallbackIndex;
+    const normalizedPosition = Number(rawPosition);
+    return Number.isFinite(normalizedPosition) ? normalizedPosition : fallbackIndex;
+  };
+
+  const getBundleSlotBaseId = (item) => Number(item?.base_product_id ?? item?.id ?? 0);
+
+  const getBundleSlotKey = (item, fallbackIndex = 0) => {
+    const optionTitle = item?.option_title || item?.pivot?.option_title || '';
+    return `${optionTitle}::${getBundleSlotBaseId(item)}::${getBundleSlotPosition(item, fallbackIndex)}`;
+  };
+
+  const findOriginalBundleItem = (slotItem, sourceItems = []) => {
+    const targetKey = slotItem?.bundle_item_uid || getBundleSlotKey(slotItem);
+    return sourceItems.find((candidate, candidateIndex) => (
+      getBundleSlotKey(candidate, candidateIndex) === targetKey
+    )) || null;
+  };
+
   const getBundleImageSrc = (item) => {
     const candidates = [
       item?.selected_variant?.primary_image,
@@ -444,7 +464,7 @@ export default function BundleProductView({
     if (tabItems.length === 0) return false;
     return tabItems.every(item => {
       if (item.removed) return false;
-      const origItem = originalTabItems.find(o => o.id === item.id);
+      const origItem = findOriginalBundleItem(item, originalTabItems);
       const defaultQty = origItem?.pivot?.quantity || 1;
       return (item.qty || 1) >= defaultQty;
     });
@@ -566,7 +586,7 @@ export default function BundleProductView({
   // Full combo subtotal (sum of all tab items at their default qty × price)
   const fullComboSubtotal = useMemo(() =>
     tabItems.reduce((acc, i) => {
-      const origItem = originalTabItems.find(o => o.id === i.id);
+      const origItem = findOriginalBundleItem(i, originalTabItems);
       const defaultQty = origItem?.pivot?.quantity || 1;
       return acc + parseFloat(i.price || 0) * defaultQty;
     }, 0),
@@ -669,7 +689,7 @@ export default function BundleProductView({
 
     return cfgItems.length > 0 && cfgItems.every((item) => {
       if (item.removed) return false;
-      const originalItem = origCfg.find((candidate) => candidate.id === item.id);
+      const originalItem = findOriginalBundleItem(item, origCfg);
       return (item.qty || 1) >= (originalItem?.pivot?.quantity || 1);
     });
   };
@@ -681,7 +701,7 @@ export default function BundleProductView({
 
   const handleSelectComponent = (newProduct) => {
     if (activeSlot) {
-      updateBundleItemProduct(activeSlot.id, newProduct);
+      updateBundleItemProduct(activeSlot.bundle_item_uid || activeSlot.id, newProduct);
     }
     setIsModalOpen(false);
   };
@@ -1109,11 +1129,11 @@ export default function BundleProductView({
                 const cfgItems = bundleItems.filter(i => (i.option_title || i.pivot?.option_title) === config);
                 const origSrc = product.bundle_items || product.grouped_items || [];
                 const origCfg = origSrc.filter(i => (i.option_title || i.pivot?.option_title) === config);
-                const full = cfgItems.every(item => {
-                  if (item.removed) return false;
-                  const o = origCfg.find(x => x.id === item.id);
-                  return (item.qty || 1) >= (o?.pivot?.quantity || 1);
-                });
+                  const full = cfgItems.every(item => {
+                    if (item.removed) return false;
+                    const o = findOriginalBundleItem(item, origCfg);
+                    return (item.qty || 1) >= (o?.pivot?.quantity || 1);
+                  });
 
                 return cfgItems.length > 0 && full
                   ? <span className={builderStyles.tabFullDot} title="Äá»§ Ä‘iá»u kiá»‡n giáº£m giÃ¡"></span>
@@ -1409,7 +1429,7 @@ export default function BundleProductView({
                       const origCfg = origSrc.filter(i => (i.option_title || i.pivot?.option_title) === config);
                       const full = cfgItems.every(item => {
                         if (item.removed) return false;
-                        const o = origCfg.find(x => x.id === item.id);
+                        const o = findOriginalBundleItem(item, origCfg);
                         return (item.qty || 1) >= (o?.pivot?.quantity || 1);
                       });
                       return cfgItems.length > 0 && full
@@ -1497,7 +1517,7 @@ export default function BundleProductView({
                     if (item.removed) {
                       // Placeholder row
                       return (
-                        <div key={item.id} className={`${builderStyles.tableRow} ${builderStyles.tableRowRemoved}`}>
+                        <div key={item.bundle_item_uid || item.id} className={`${builderStyles.tableRow} ${builderStyles.tableRowRemoved}`}>
                           <div className={builderStyles.colStt}>
                             <span className={builderStyles.sttBadge} style={{ opacity: 0.3 }}>{idx + 1}</span>
                           </div>
@@ -1516,7 +1536,7 @@ export default function BundleProductView({
                           <div className={builderStyles.colActions}>
                             <button
                               className={builderStyles.restoreBtn}
-                              onClick={() => restoreBundleItem ? restoreBundleItem(item.id) : null}
+                              onClick={() => restoreBundleItem ? restoreBundleItem(item.bundle_item_uid || item.id) : null}
                               title="Khôi phục sản phẩm"
                             >
                               <span className="material-symbols-outlined" style={{ fontSize: 14 }}>restart_alt</span>
@@ -1538,7 +1558,7 @@ export default function BundleProductView({
                     const lineTotal = parseFloat(item.price || 0) * (item.qty || 1);
                     if (isMobileBundleViewport) {
                       return (
-                        <div key={item.id} className={`${builderStyles.tableRow} ${builderStyles.tableRowMobileCompact}`}>
+                        <div key={item.bundle_item_uid || item.id} className={`${builderStyles.tableRow} ${builderStyles.tableRowMobileCompact}`}>
                           <div className={builderStyles.colStt}>
                             <span className={builderStyles.sttBadge}>{idx + 1}</span>
                           </div>
@@ -1588,7 +1608,7 @@ export default function BundleProductView({
                                   <div className={builderStyles.qtyControl}>
                                     <button
                                       className={builderStyles.qtyBtn}
-                                      onClick={() => updateBundleItemQuantity(item.id, (item.qty || 1) - 1)}
+                                      onClick={() => updateBundleItemQuantity(item.bundle_item_uid || item.id, (item.qty || 1) - 1)}
                                       disabled={(item.qty || 1) <= 1}
                                     >
                                       <span className="material-symbols-outlined" style={{ fontSize: 16 }}>remove</span>
@@ -1596,7 +1616,7 @@ export default function BundleProductView({
                                     <span className={builderStyles.qtyDisplay}>{item.qty || 1}</span>
                                     <button
                                       className={builderStyles.qtyBtn}
-                                      onClick={() => updateBundleItemQuantity(item.id, (item.qty || 1) + 1)}
+                                      onClick={() => updateBundleItemQuantity(item.bundle_item_uid || item.id, (item.qty || 1) + 1)}
                                     >
                                       <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span>
                                     </button>
@@ -1606,7 +1626,7 @@ export default function BundleProductView({
                                 <div className={builderStyles.colActions}>
                                   <button
                                     className={builderStyles.deleteBtn}
-                                    onClick={() => removeBundleItem(item.id)}
+                                    onClick={() => removeBundleItem(item.bundle_item_uid || item.id)}
                                     title={'X\u00F3a kh\u1ECFi combo'}
                                   >
                                     <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>
@@ -1620,7 +1640,7 @@ export default function BundleProductView({
                     }
 
                     return (
-                      <div key={item.id} className={builderStyles.tableRow}>
+                      <div key={item.bundle_item_uid || item.id} className={builderStyles.tableRow}>
                         {/* STT */}
                         <div className={builderStyles.colStt}>
                           <span className={builderStyles.sttBadge}>{idx + 1}</span>
@@ -1664,14 +1684,14 @@ export default function BundleProductView({
                         <div className={builderStyles.colQty}>
                           <div className={builderStyles.qtyControl}>
                             <button className={builderStyles.qtyBtn}
-                              onClick={() => updateBundleItemQuantity(item.id, (item.qty || 1) - 1)}
+                              onClick={() => updateBundleItemQuantity(item.bundle_item_uid || item.id, (item.qty || 1) - 1)}
                               disabled={(item.qty || 1) <= 1}
                             >
                               <span className="material-symbols-outlined" style={{ fontSize: 16 }}>remove</span>
                             </button>
                             <span className={builderStyles.qtyDisplay}>{item.qty || 1}</span>
                             <button className={builderStyles.qtyBtn}
-                              onClick={() => updateBundleItemQuantity(item.id, (item.qty || 1) + 1)}
+                              onClick={() => updateBundleItemQuantity(item.bundle_item_uid || item.id, (item.qty || 1) + 1)}
                             >
                               <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span>
                             </button>
@@ -1686,7 +1706,7 @@ export default function BundleProductView({
                         {/* Delete */}
                         <div className={builderStyles.colActions}>
                           <button className={builderStyles.deleteBtn}
-                            onClick={() => removeBundleItem(item.id)}
+                            onClick={() => removeBundleItem(item.bundle_item_uid || item.id)}
                             title="Xóa khỏi combo"
                           >
                             <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>

@@ -264,6 +264,9 @@ class BlogBundleService
                     }
 
                     $post->timestamps = false;
+                    if ($isExisting && method_exists($post, 'trashed') && $post->trashed()) {
+                        $post->deleted_at = null;
+                    }
                     $post->title = $row['title'];
                     $post->slug = $row['slug'];
                     $post->excerpt = $row['excerpt'];
@@ -497,15 +500,21 @@ class BlogBundleService
 
         $slugs = array_values(array_filter(array_map(fn (array $row) => $row['slug'], $preparedRows)));
         if (!empty($slugs)) {
-            $existingPosts = Post::where('account_id', $accountId)
+            $existingPosts = Post::withTrashed()
+                ->where('account_id', $accountId)
                 ->whereIn('slug', $slugs)
-                ->get(['id', 'slug', 'is_system'])
+                ->get(['id', 'slug', 'is_system', 'deleted_at'])
                 ->keyBy('slug');
 
             foreach ($preparedRows as &$preparedRow) {
                 $existingPost = $existingPosts->get($preparedRow['slug']);
 
                 if (!$existingPost) {
+                    continue;
+                }
+
+                if ($existingPost->trashed()) {
+                    $preparedRow['existing_post'] = $existingPost;
                     continue;
                 }
 

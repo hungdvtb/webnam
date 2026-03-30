@@ -5,15 +5,19 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Category;
 use App\Models\InventoryUnit;
+use App\Models\Order;
+use App\Models\OrderItem;
 use App\Models\Post;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\BulkUpdateLog;
 use App\Services\Inventory\ProductPricingService;
+use App\Services\OrderInventorySlipService;
 use App\Services\ProductSkuService;
 use Illuminate\Http\Request;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -23,9 +27,12 @@ use Illuminate\Database\Eloquent\Builder;
 
 class ProductController extends Controller
 {
+    private const OVERSOLD_RESERVE_SOURCE = 'oversold_reserve';
+
     public function __construct(
         protected ProductSkuService $productSkuService,
-        protected ProductPricingService $productPricingService
+        protected ProductPricingService $productPricingService,
+        protected OrderInventorySlipService $orderInventorySlipService
     )
     {
     }
@@ -55,6 +62,60 @@ class ProductController extends Controller
         }
 
         $product->categories()->syncWithoutDetaching($syncPayload);
+    }
+
+    protected function shouldAutoCalculateCompositePrice(Request $request, ?Product $product = null): bool
+    {
+        $resolvedType = (string) $request->input('type', $product?->type ?? '');
+        $resolvedPriceType = (string) $request->input('price_type', $product?->price_type ?? 'fixed');
+
+        return in_array($resolvedType, ['grouped', 'bundle'], true) && $resolvedPriceType === 'sum';
+    }
+
+    protected function calculateCompositeRequestPrice(array $groupedItems): float
+    {
+        $total = 0.0;
+
+        foreach ($groupedItems as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $quantity = max(0, (int) ($item['quantity'] ?? 0));
+            $unitPrice = is_numeric($item['price'] ?? null) ? (float) $item['price'] : 0.0;
+            $total += $unitPrice * $quantity;
+        }
+
+        return $total;
+    }
+
+    protected function applyCompositeAutoPrice(Request $request, array &$validated, ?Product $product = null): void
+    {
+        if (!$this->shouldAutoCalculateCompositePrice($request, $product)) {
+            return;
+        }
+
+        if ($request->has('grouped_items')) {
+            $validated['price'] = $this->calculateCompositeRequestPrice((array) $request->input('grouped_items', []));
+            return;
+        }
+
+        $validated['price'] = $product?->calculateCompositePrice() ?? 0;
+    }
+
+    protected function syncCompositeAutoPrice(Product $product): void
+    {
+        if (!in_array($product->type, ['grouped', 'bundle'], true) || $product->price_type !== 'sum') {
+            return;
+        }
+
+        $relationName = $product->type === 'bundle' ? 'bundleItems' : 'groupedItems';
+        $product->unsetRelation('groupedItems');
+        $product->unsetRelation('bundleItems');
+        $product->load($relationName);
+        $product->forceFill([
+            'price' => $product->calculateCompositePrice(),
+        ])->save();
     }
 
     protected function productResourceRelations(): array
@@ -159,6 +220,75 @@ class ProductController extends Controller
         });
 
         return $product;
+    }
+
+    protected function validateGroupedOrBundleItemVariants(array $items): void
+    {
+        $indexedItems = collect($items)
+            ->map(function ($item, $index) {
+                $productId = isset($item['id']) && is_numeric($item['id'])
+                    ? (int) $item['id']
+                    : 0;
+                $variantId = isset($item['variant_id']) && is_numeric($item['variant_id'])
+                    ? (int) $item['variant_id']
+                    : null;
+
+                return [
+                    'index' => $index,
+                    'product_id' => $productId,
+                    'variant_id' => $variantId,
+                ];
+            })
+            ->filter(fn (array $item) => $item['product_id'] > 0 && $item['variant_id'] !== null)
+            ->values();
+
+        if ($indexedItems->isEmpty()) {
+            return;
+        }
+
+        $products = Product::query()
+            ->whereIn('id', $indexedItems->pluck('product_id')->unique()->all())
+            ->get(['id', 'type'])
+            ->keyBy(fn (Product $product) => (int) $product->id);
+
+        $configurableIds = $products
+            ->filter(fn (Product $product) => $product->type === 'configurable')
+            ->keys()
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+
+        $allowedVariantPairs = [];
+        if (!empty($configurableIds)) {
+            $allowedVariantPairs = DB::table('product_links')
+                ->where('link_type', 'super_link')
+                ->whereIn('product_id', $configurableIds)
+                ->whereIn('linked_product_id', $indexedItems->pluck('variant_id')->unique()->all())
+                ->get(['product_id', 'linked_product_id'])
+                ->mapWithKeys(fn ($link) => [
+                    ((int) $link->product_id) . ':' . ((int) $link->linked_product_id) => true,
+                ])
+                ->all();
+        }
+
+        $messages = [];
+
+        foreach ($indexedItems as $item) {
+            $product = $products->get($item['product_id']);
+            if (!$product || $product->type !== 'configurable') {
+                $messages["grouped_items.{$item['index']}.variant_id"][] = 'Biến thể chỉ được gắn với sản phẩm cha dạng configurable.';
+                continue;
+            }
+
+            $pairKey = $item['product_id'] . ':' . $item['variant_id'];
+            if (!isset($allowedVariantPairs[$pairKey])) {
+                $messages["grouped_items.{$item['index']}.variant_id"][] = 'Biến thể đã chọn không thuộc sản phẩm cha này.';
+            }
+        }
+
+        if (!empty($messages)) {
+            throw ValidationException::withMessages($messages);
+        }
     }
 
     protected function loadProductResource(Product $product): Product
@@ -490,6 +620,309 @@ class ProductController extends Controller
     protected function compactSearchText(string $value): string
     {
         return preg_replace('/[^a-z0-9]+/', '', $this->normalizeNameSearchText($value)) ?? '';
+    }
+
+    protected function attachActualStockSubqueries(Builder $query, Request $request): array
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+
+        $liveBatchStockSub = DB::table('inventory_batches')
+            ->selectRaw('inventory_batches.product_id')
+            ->selectRaw('COALESCE(SUM(inventory_batches.remaining_quantity), 0) AS available_stock')
+            ->where('inventory_batches.remaining_quantity', '>', 0)
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('inventory_batches.source_type')
+                    ->orWhere('inventory_batches.source_type', '!=', self::OVERSOLD_RESERVE_SOURCE);
+            })
+            ->groupBy('inventory_batches.product_id');
+
+        if ($accountId > 0) {
+            $liveBatchStockSub->where('inventory_batches.account_id', $accountId);
+        }
+
+        $oversoldReservedSub = DB::table('inventory_batch_allocations')
+            ->join('inventory_batches', 'inventory_batches.id', '=', 'inventory_batch_allocations.inventory_batch_id')
+            ->selectRaw('inventory_batch_allocations.product_id')
+            ->selectRaw('COALESCE(SUM(inventory_batch_allocations.quantity), 0) AS total_reserved')
+            ->where('inventory_batches.source_type', self::OVERSOLD_RESERVE_SOURCE)
+            ->groupBy('inventory_batch_allocations.product_id');
+
+        if ($accountId > 0) {
+            $oversoldReservedSub->where('inventory_batches.account_id', $accountId);
+        }
+
+        $pendingOutboundQtySub = $this->buildPendingOutboundQuantitySubquery($request);
+        $pendingReturnQtySub = $this->buildPendingReturnQuantitySubquery($request);
+
+        $query->leftJoinSub($liveBatchStockSub, 'live_batch_stock', function ($join) {
+            $join->on('live_batch_stock.product_id', '=', 'products.id');
+        });
+
+        $query->leftJoinSub($oversoldReservedSub, 'oversold_reserved', function ($join) {
+            $join->on('oversold_reserved.product_id', '=', 'products.id');
+        });
+
+        $query->leftJoinSub($pendingOutboundQtySub, 'pending_outbound', function ($join) {
+            $join->on('pending_outbound.product_id', '=', 'products.id');
+        });
+
+        $query->leftJoinSub($pendingReturnQtySub, 'pending_returns', function ($join) {
+            $join->on('pending_returns.product_id', '=', 'products.id');
+        });
+
+        $baseStockSql = "
+            CASE
+                WHEN live_batch_stock.product_id IS NOT NULL OR oversold_reserved.product_id IS NOT NULL
+                    THEN COALESCE(live_batch_stock.available_stock, 0) - COALESCE(oversold_reserved.total_reserved, 0)
+                ELSE COALESCE(products.stock_quantity, 0)
+            END
+        ";
+        $pendingExportQtySql = 'COALESCE(pending_outbound.pending_export_quantity, 0)';
+        $pendingReturnQtySql = 'COALESCE(pending_returns.pending_return_quantity, 0)';
+        $actualStockSql = '(' . $baseStockSql . ' - ' . $pendingExportQtySql . ' + ' . $pendingReturnQtySql . ')';
+
+        return [
+            'base_stock_sql' => $baseStockSql,
+            'pending_export_sql' => $pendingExportQtySql,
+            'pending_return_sql' => $pendingReturnQtySql,
+            'actual_stock_sql' => $actualStockSql,
+        ];
+    }
+
+    protected function buildPendingOutboundQuantitySubquery(Request $request)
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+        $manualExportScopeSql = "
+            CASE
+                WHEN inventory_documents.reference_type = 'order'
+                    AND inventory_documents.reference_id IS NOT NULL
+                    THEN inventory_documents.reference_id
+                ELSE -inventory_documents.id
+            END
+        ";
+
+        $manualExportQtySub = DB::table('inventory_document_items')
+            ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
+            ->selectRaw($manualExportScopeSql . ' AS order_id')
+            ->selectRaw('inventory_document_items.product_id')
+            ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0) AS exported_quantity')
+            ->where('inventory_documents.type', 'export')
+            ->where('inventory_documents.status', 'completed')
+            ->groupByRaw($manualExportScopeSql . ', inventory_document_items.product_id');
+
+        if ($accountId > 0) {
+            $manualExportQtySub->where('inventory_documents.account_id', $accountId);
+        }
+
+        if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
+            $manualExportQtySub->whereNull('inventory_documents.deleted_at');
+        }
+
+        $pendingOrderItemsSub = OrderItem::query()
+            ->join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->selectRaw('order_items.order_id')
+            ->selectRaw('order_items.product_id')
+            ->selectRaw('COALESCE(SUM(order_items.quantity), 0) AS ordered_quantity')
+            ->whereNotNull('order_items.product_id')
+            ->groupBy('order_items.order_id', 'order_items.product_id');
+
+        $this->applyPendingOutboundEligibleOrderScope($pendingOrderItemsSub, $request);
+
+        return DB::query()
+            ->fromSub($pendingOrderItemsSub, 'pending_order_items')
+            ->leftJoinSub($manualExportQtySub, 'manual_exports', function ($join) {
+                $join
+                    ->on('manual_exports.order_id', '=', 'pending_order_items.order_id')
+                    ->on('manual_exports.product_id', '=', 'pending_order_items.product_id');
+            })
+            ->selectRaw('pending_order_items.product_id')
+            ->selectRaw('COALESCE(SUM(GREATEST(pending_order_items.ordered_quantity - COALESCE(manual_exports.exported_quantity, 0), 0)), 0) AS pending_export_quantity')
+            ->groupBy('pending_order_items.product_id');
+    }
+
+    protected function buildPendingReturnQuantitySubquery(Request $request)
+    {
+        $pendingReturnItemsSub = OrderItem::query()
+            ->join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->selectRaw('order_items.order_id')
+            ->selectRaw('order_items.product_id')
+            ->selectRaw('COALESCE(SUM(order_items.quantity), 0) AS pending_return_quantity')
+            ->whereNotNull('order_items.product_id')
+            ->groupBy('order_items.order_id', 'order_items.product_id');
+
+        $this->applyPendingReturnEligibleOrderScope($pendingReturnItemsSub, $request);
+
+        return DB::query()
+            ->fromSub($pendingReturnItemsSub, 'pending_return_items')
+            ->selectRaw('pending_return_items.product_id')
+            ->selectRaw('COALESCE(SUM(pending_return_items.pending_return_quantity), 0) AS pending_return_quantity')
+            ->groupBy('pending_return_items.product_id');
+    }
+
+    protected function applyPendingOutboundEligibleOrderScope($query, Request $request): void
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+
+        if ($accountId > 0) {
+            $query->where('orders.account_id', $accountId);
+        }
+
+        if (Schema::hasColumn('orders', 'deleted_at')) {
+            $query->whereNull('orders.deleted_at');
+        }
+
+        $query->where(function ($builder) {
+            $builder
+                ->where('orders.order_kind', Order::KIND_OFFICIAL)
+                ->orWhereNull('orders.order_kind')
+                ->orWhere('orders.order_kind', '');
+        });
+
+        $this->applyPendingOutboundInvalidStatusFilter($query, 'orders.status');
+
+        $query
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('orders.type')
+                    ->orWhere('orders.type', '!=', 'inventory_export');
+            })
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('orders.shipping_tracking_code')
+                    ->orWhere('orders.shipping_tracking_code', '');
+            })
+            ->whereNotExists(function ($shipmentQuery) {
+                $shipmentQuery
+                    ->select(DB::raw(1))
+                    ->from('shipments')
+                    ->whereColumn('shipments.order_id', 'orders.id');
+
+                $this->applyActiveShipmentFilters($shipmentQuery, 'shipments');
+            });
+    }
+
+    protected function applyPendingReturnEligibleOrderScope($query, Request $request): void
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+
+        if ($accountId > 0) {
+            $query->where('orders.account_id', $accountId);
+        }
+
+        if (Schema::hasColumn('orders', 'deleted_at')) {
+            $query->whereNull('orders.deleted_at');
+        }
+
+        $query->where(function ($builder) {
+            $builder
+                ->where('orders.order_kind', Order::KIND_OFFICIAL)
+                ->orWhereNull('orders.order_kind')
+                ->orWhere('orders.order_kind', '');
+        });
+
+        $query
+            ->where(function ($builder) {
+                $builder
+                    ->whereNull('orders.type')
+                    ->orWhere('orders.type', '!=', 'inventory_export');
+            })
+            ->whereIn('orders.status', ['pending_return', 'returned']);
+
+        $this->orderInventorySlipService->applyReturnSlipStateFilter($query, 'missing');
+    }
+
+    protected function applyActiveShipmentFilters($query, string $shipmentTable = 'shipments'): void
+    {
+        if (Schema::hasColumn('shipments', 'deleted_at')) {
+            $query->whereNull("{$shipmentTable}.deleted_at");
+        }
+
+        $query->whereNotIn("{$shipmentTable}.shipment_status", ['canceled']);
+    }
+
+    protected function applyPendingOutboundInvalidStatusFilter($query, string $column): void
+    {
+        $statusExpression = "LOWER(COALESCE({$column}, ''))";
+
+        foreach ([
+            'cancel',
+            'canceled',
+            'cancelled',
+            'return',
+            'returned',
+            'returning',
+            'pending return',
+            'pending_return',
+            'draft',
+            'nhap',
+            'huy',
+            'hoan',
+            'void',
+        ] as $keyword) {
+            $query->whereRaw($statusExpression . ' NOT LIKE ?', ['%' . $keyword . '%']);
+        }
+    }
+
+    protected function buildActualStockMap(Request $request, array $productIds): array
+    {
+        $normalizedIds = collect($productIds)
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($normalizedIds->isEmpty()) {
+            return [];
+        }
+
+        $stockQuery = Product::withTrashed()
+            ->select(['products.id', 'products.stock_quantity'])
+            ->whereIn('products.id', $normalizedIds->all());
+
+        $stockContext = $this->attachActualStockSubqueries($stockQuery, $request);
+
+        return $stockQuery
+            ->selectRaw($stockContext['actual_stock_sql'] . ' AS actual_stock')
+            ->get()
+            ->mapWithKeys(function (Product $product) {
+                $actualStock = (int) round((float) ($product->actual_stock ?? $product->stock_quantity ?? 0));
+
+                return [(int) $product->id => $actualStock];
+            })
+            ->all();
+    }
+
+    protected function syncProductStocksFromInventory(Product $product, array $stockMap): Product
+    {
+        $applyStock = function (Product $item) use ($stockMap): void {
+            $productId = (int) ($item->id ?? 0);
+            if ($productId <= 0) {
+                return;
+            }
+
+            $actualStock = array_key_exists($productId, $stockMap)
+                ? (int) $stockMap[$productId]
+                : (int) round((float) ($item->actual_stock ?? $item->stock_quantity ?? 0));
+            $item->setAttribute('actual_stock', $actualStock);
+            $item->setAttribute('stock_quantity', $actualStock);
+        };
+
+        $applyStock($product);
+
+        foreach (['variations', 'groupedItems', 'bundleItems', 'linkedProducts'] as $relation) {
+            if (!$product->relationLoaded($relation)) {
+                continue;
+            }
+
+            $product->{$relation}->each(function ($relatedProduct) use ($applyStock) {
+                if ($relatedProduct instanceof Product) {
+                    $applyStock($relatedProduct);
+                }
+            });
+        }
+
+        return $product;
     }
 
     protected function looksLikeProductCodeSearch(string $rawSearch): bool
@@ -985,6 +1418,10 @@ class ProductController extends Controller
             'groupedItems.images:id,product_id,image_url,is_primary'
         ]);
 
+        $stockContext = $this->attachActualStockSubqueries($query, $request);
+        $actualStockSql = $stockContext['actual_stock_sql'];
+        $query->selectRaw($actualStockSql . ' AS actual_stock');
+
         // Handle Trash View
         if ($request->boolean('is_trash')) {
             $query->onlyTrashed();
@@ -1214,9 +1651,9 @@ class ProductController extends Controller
         if ($request->filled('max_price'))
             $query->where('price', '<=', $request->max_price);
         if ($request->filled('min_stock'))
-            $query->where('stock_quantity', '>=', $request->min_stock);
+            $query->whereRaw($actualStockSql . ' >= ?', [(int) $request->min_stock]);
         if ($request->filled('max_stock'))
-            $query->where('stock_quantity', '<=', $request->max_stock);
+            $query->whereRaw($actualStockSql . ' <= ?', [(int) $request->max_stock]);
 
         // Filter by date range
         if ($request->filled('start_date'))
@@ -1273,8 +1710,8 @@ class ProductController extends Controller
         if ($sortBy === 'random') {
             $query->inRandomOrder();
         } else {
-            $sortMapping = ['stock' => 'stock_quantity', 'category' => 'category_id'];
-            $validSortFields = ['id', 'sku', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity', 'created_at', 'type', 'category_id'];
+            $sortMapping = ['stock' => 'actual_stock', 'stock_quantity' => 'actual_stock', 'category' => 'category_id'];
+            $validSortFields = ['id', 'sku', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity', 'actual_stock', 'created_at', 'type', 'category_id'];
 
             $field = $sortMapping[$sortBy] ?? $sortBy;
             if (!in_array($field, $validSortFields))
@@ -1284,12 +1721,20 @@ class ProductController extends Controller
 
             // Tôn trọng tiêu chí sắp xếp từ bảng quản lý sản phẩm; mặc định là mới nhất lên đầu.
             if ($searchRankingSql !== null) {
-                $query->orderByRaw("{$searchRankingSql} DESC", $searchRankingBindings)
-                    ->orderBy($field, $order)
-                    ->orderByDesc('id');
+                $query->orderByRaw("{$searchRankingSql} DESC", $searchRankingBindings);
+                if ($field === 'actual_stock') {
+                    $query->orderByRaw($actualStockSql . ' ' . $order);
+                } else {
+                    $query->orderBy($field, $order);
+                }
+                $query->orderByDesc('id');
             } else {
-                $query->orderBy($field, $order)
-                    ->orderByDesc('id');
+                if ($field === 'actual_stock') {
+                    $query->orderByRaw($actualStockSql . ' ' . $order);
+                } else {
+                    $query->orderBy($field, $order);
+                }
+                $query->orderByDesc('id');
             }
         }
 
@@ -1298,9 +1743,30 @@ class ProductController extends Controller
         $perPage = min(max($perPage, 1), 100);
 
         $paginated = $query->paginate($perPage);
+        $stockMap = $this->buildActualStockMap(
+            $request,
+            $paginated->getCollection()
+                ->flatMap(function (Product $product) {
+                    $ids = [$product->id];
+
+                    if ($product->relationLoaded('variations')) {
+                        $ids = array_merge($ids, $product->variations->pluck('id')->all());
+                    }
+
+                    if ($product->relationLoaded('groupedItems')) {
+                        $ids = array_merge($ids, $product->groupedItems->pluck('id')->all());
+                    }
+
+                    return $ids;
+                })
+                ->all()
+        );
         $paginated->setCollection(
-            $paginated->getCollection()->map(function (Product $product) {
-                return $this->appendSupplierMeta($product);
+            $paginated->getCollection()->map(function (Product $product) use ($stockMap) {
+                return $this->syncProductStocksFromInventory(
+                    $this->appendSupplierMeta($product),
+                    $stockMap
+                );
             })
         );
 
@@ -1406,7 +1872,9 @@ class ProductController extends Controller
             'category_id' => 'nullable|exists:categories,id',
             'category_ids' => 'nullable|array',
             'category_ids.*' => 'exists:categories,id',
-            'price' => 'required|numeric|min:0',
+            'price' => $this->shouldAutoCalculateCompositePrice($request)
+                ? 'nullable|numeric|min:0'
+                : 'required|numeric|min:0',
             'price_type' => 'nullable|string|in:fixed,sum',
             'expected_cost' => 'nullable|numeric|min:0',
             'cost_price' => 'nullable|numeric|min:0',
@@ -1468,6 +1936,7 @@ class ProductController extends Controller
             'slug.unique' => 'Đường dẫn (slug) này đã tồn tại, vui lòng chọn tên khác.',
         ]);
         $this->applyLegacyExpectedCostAlias($request, $validated);
+        $this->applyCompositeAutoPrice($request, $validated);
 
         $validated['slug'] = $this->productSkuService->generateUniqueSlug(
             !empty($validated['slug']) ? $validated['slug'] : $validated['name']
@@ -1477,6 +1946,10 @@ class ProductController extends Controller
         $supplierIds = $this->normalizeSupplierIds($request, $validated);
         $validated['supplier_id'] = $supplierIds[0] ?? null;
         unset($validated['supplier_ids']);
+
+        if (!empty($validated['grouped_items']) && in_array($validated['type'] ?? null, ['grouped', 'bundle'], true)) {
+            $this->validateGroupedOrBundleItemVariants($validated['grouped_items']);
+        }
 
         try {
             $product = DB::transaction(function () use ($request, $validated, $supplierIds) {
@@ -1603,6 +2076,8 @@ class ProductController extends Controller
                         }
                     }
                 }
+
+                $this->syncCompositeAutoPrice($product);
 
                 if ($request->has('super_attribute_ids') && $product->type === 'configurable') {
                     $attrs = [];
@@ -1828,7 +2303,9 @@ class ProductController extends Controller
             'category_id' => 'nullable|exists:categories,id',
             'category_ids' => 'nullable|array',
             'category_ids.*' => 'exists:categories,id',
-            'price' => 'sometimes|required|numeric|min:0',
+            'price' => $this->shouldAutoCalculateCompositePrice($request, $product)
+                ? 'nullable|numeric|min:0'
+                : 'sometimes|required|numeric|min:0',
             'price_type' => 'nullable|string|in:fixed,sum',
             'expected_cost' => 'nullable|numeric|min:0',
             'cost_price' => 'nullable|numeric|min:0',
@@ -1889,6 +2366,7 @@ class ProductController extends Controller
             'slug.regex' => 'Đường dẫn chỉ được chứa chữ cái thường, số và dấu gạch ngang (VD: san-pham-1).',
         ]);
         $this->applyLegacyExpectedCostAlias($request, $validated);
+        $this->applyCompositeAutoPrice($request, $validated, $product);
 
         $incomingSupplierIds = $request->has('supplier_ids') || $request->has('supplier_id') || $request->boolean('clear_supplier_ids');
         $supplierIds = $incomingSupplierIds
@@ -1912,6 +2390,11 @@ class ProductController extends Controller
 
         if ($request->has('video_url') || array_key_exists('video_url', $validated)) {
             $validated['video_url'] = $this->normalizeVideoUrl($validated['video_url'] ?? null);
+        }
+
+        $resolvedType = $validated['type'] ?? $product->type;
+        if (!empty($validated['grouped_items']) && in_array($resolvedType, ['grouped', 'bundle'], true)) {
+            $this->validateGroupedOrBundleItemVariants($validated['grouped_items']);
         }
 
         try {
@@ -2038,6 +2521,8 @@ class ProductController extends Controller
                 }
             }
         }
+
+        $this->syncCompositeAutoPrice($product);
 
         if ($request->has('super_attribute_ids') && $product->type === 'configurable') {
             $attrs = [];
@@ -2525,12 +3010,16 @@ class ProductController extends Controller
      */
     public function bulkUpdateAttributes(Request $request)
     {
+        $basicUpdateFields = ['category_id', 'price', 'expected_cost', 'stock_quantity', 'supplier_id', 'is_featured', 'is_new', 'status', 'type', 'specifications', 'additional_info'];
+
         $request->validate([
             'ids' => 'required|array',
             'ids.*' => 'exists:products,id',
             'basic_info' => 'nullable|array',
             'basic_info.cost_price' => 'nullable|numeric|min:0',
             'basic_info.expected_cost' => 'nullable|numeric|min:0',
+            'basic_info.specifications' => 'nullable|string',
+            'basic_info.additional_info' => 'nullable|string',
             'basic_info.supplier_id' => ['nullable', $this->supplierExistsRule($request)],
             'basic_info.supplier_ids' => 'nullable|array',
             'basic_info.supplier_ids.*' => ['nullable', $this->supplierExistsRule($request)],
@@ -2562,8 +3051,8 @@ class ProductController extends Controller
             ];
 
             // Store original basic fields that ARE being updated
-            foreach (['category_id', 'price', 'expected_cost', 'stock_quantity', 'supplier_id', 'is_featured', 'is_new', 'status', 'type'] as $field) {
-                if (isset($basicInfo[$field]) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
+            foreach ($basicUpdateFields as $field) {
+                if (array_key_exists($field, $basicInfo) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
                     $pData['basic'][$field] = $product->{ $field};
                 }
             }
@@ -2598,8 +3087,8 @@ class ProductController extends Controller
             // 1. Update basic info (direct columns)
             if (!empty($basicInfo)) {
                 $toUpdate = [];
-                foreach (['category_id', 'price', 'expected_cost', 'stock_quantity', 'supplier_id', 'is_featured', 'is_new', 'status', 'type'] as $field) {
-                    if (isset($basicInfo[$field]) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
+                foreach ($basicUpdateFields as $field) {
+                    if (array_key_exists($field, $basicInfo) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
                         $toUpdate[$field] = $basicInfo[$field];
                     }
                 }

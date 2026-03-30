@@ -1205,6 +1205,15 @@
   text-align: left;
 }
 
+.variantActionSummaryDesktop {
+  cursor: default;
+}
+
+.variantActionSummaryDesktop:hover {
+  border-color: #C5A065;
+  background-color: #C5A065;
+}
+
 .variantActionCopy {
   display: flex;
   flex: 1;

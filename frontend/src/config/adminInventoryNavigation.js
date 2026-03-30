@@ -1,7 +1,6 @@
-export const DEFAULT_INVENTORY_SECTION_KEY = 'overview';
+export const DEFAULT_INVENTORY_SECTION_KEY = 'products';
 
 export const INVENTORY_NAV_ITEMS = [
-    { key: 'overview', slug: 'tong-quan', label: 'Tổng quan', icon: 'dashboard' },
     { key: 'products', slug: 'ton-kho', label: 'Tồn kho', icon: 'inventory_2' },
     { key: 'suppliers', slug: 'nha-cung-cap', label: 'Nhà cung cấp', icon: 'storefront' },
     { key: 'supplierPrices', slug: 'gia-nhap-tung-nha', label: 'Giá nhập từng nhà', icon: 'request_quote' },

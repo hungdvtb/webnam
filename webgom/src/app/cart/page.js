@@ -438,6 +438,8 @@ export default function CartPage() {
             return {
               id: groupedItem.id,
               product_id: groupedItem.id,
+              base_product_id: groupedItem.base_product_id || groupedItem.id,
+              variant_id: groupedItem.variant_id || null,
               qty: childQuantity,
               quantity: childQuantity,
               name: groupedItem.name,

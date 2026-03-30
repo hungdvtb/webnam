@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Throwable;
 
 class CategoryController extends Controller
@@ -29,11 +30,13 @@ class CategoryController extends Controller
         $request->validate([
             'name' => 'required|string|max:255',
             'code' => 'nullable|string|max:120',
-            'parent_id' => 'nullable|exists:categories,id',
+            'parent_id' => 'nullable|integer',
             'description' => 'nullable|string',
             'banner' => 'nullable|image|max:5120',
             'filterable_attribute_ids' => 'nullable|array',
         ]);
+
+        $parentId = $this->resolveValidatedParentId($request->input('parent_id'));
 
         $bannerPath = null;
         if ($request->hasFile('banner')) {
@@ -47,11 +50,11 @@ class CategoryController extends Controller
                 'name' => $request->name,
                 'code' => $normalizedCode ? Category::buildUniqueCode($normalizedCode) : Category::buildUniqueCode($request->name),
                 'slug' => Category::buildUniqueSlug($request->name),
-                'parent_id' => $request->filled('parent_id') ? $request->parent_id : null,
+                'parent_id' => $parentId,
                 'description' => $request->description,
                 'banner_path' => $bannerPath,
                 'status' => $request->status ?? 1,
-                'order' => Category::where('parent_id', $request->parent_id)->max('order') + 1,
+                'order' => Category::where('parent_id', $parentId)->max('order') + 1,
                 'display_layout' => $request->display_layout ?? 'layout_1',
                 'filterable_attribute_ids' => $this->normalizeFilterableAttributeIds(
                     $request->input('filterable_attribute_ids')
@@ -84,7 +87,7 @@ class CategoryController extends Controller
         $validator = \Validator::make($request->all(), [
             'name' => 'sometimes|required|string|max:255',
             'code' => 'nullable|string|max:120',
-            'parent_id' => 'sometimes|nullable|exists:categories,id',
+            'parent_id' => 'sometimes|nullable|integer',
             'banner' => 'nullable|image|max:5120',
             'filterable_attribute_ids' => 'nullable|array',
         ]);
@@ -109,7 +112,12 @@ class CategoryController extends Controller
             $category->banner_path = null;
         }
 
-        $category->parent_id = $request->filled('parent_id') ? $request->parent_id : null;
+        if ($request->has('parent_id')) {
+            $category->parent_id = $this->resolveValidatedParentId(
+                $request->input('parent_id'),
+                (int) $category->id
+            );
+        }
         $category->description = $request->input('description', $category->description);
         $category->status = $request->input('status', $category->status);
         $category->display_layout = $request->input('display_layout', $category->display_layout);
@@ -142,11 +150,30 @@ class CategoryController extends Controller
 
     public function reorder(Request $request)
     {
-        $items = $request->input('items', []);
+        $request->validate([
+            'items' => 'nullable|array',
+            'items.*.id' => 'required|integer|min:1',
+            'items.*.parent_id' => 'nullable|integer|min:1',
+            'items.*.order' => 'nullable|integer|min:0',
+        ]);
+
+        $items = collect($request->input('items', []))
+            ->map(fn (array $item) => [
+                'id' => (int) $item['id'],
+                'parent_id' => $this->normalizeParentIdInput($item['parent_id'] ?? null),
+                'order' => isset($item['order']) ? (int) $item['order'] : 0,
+            ])
+            ->values();
+
+        if ($items->isEmpty()) {
+            return response()->json(['message' => 'Tree reordered successfully']);
+        }
+
+        $this->validateReorderPayload($items);
 
         foreach ($items as $item) {
             Category::where('id', $item['id'])->update([
-                'parent_id' => $item['parent_id'] ?: null,
+                'parent_id' => $item['parent_id'],
                 'order' => $item['order'] ?? 0,
             ]);
         }
@@ -1307,6 +1334,113 @@ class CategoryController extends Controller
         return trim((string) Str::of(Str::ascii($value))
             ->lower()
             ->replaceMatches('/[^a-z0-9]+/', '_'), '_');
+    }
+
+    private function normalizeParentIdInput($value): ?int
+    {
+        if ($value === null || $value === '' || $value === 0 || $value === '0') {
+            return null;
+        }
+
+        if (!is_numeric($value) || (int) $value <= 0) {
+            throw ValidationException::withMessages([
+                'parent_id' => ['Danh muc cha khong hop le.'],
+            ]);
+        }
+
+        return (int) $value;
+    }
+
+    private function resolveValidatedParentId($value, ?int $categoryId = null): ?int
+    {
+        $parentId = $this->normalizeParentIdInput($value);
+
+        if ($parentId === null) {
+            return null;
+        }
+
+        if (!Category::query()->whereKey($parentId)->exists()) {
+            throw ValidationException::withMessages([
+                'parent_id' => ['Danh muc cha khong ton tai.'],
+            ]);
+        }
+
+        if ($categoryId !== null) {
+            $parentMap = $this->buildCategoryParentMap();
+            $parentMap[$categoryId] = $parentId;
+            $this->assertCategoryParentMapHasNoCycles($parentMap, 'parent_id');
+        }
+
+        return $parentId;
+    }
+
+    private function validateReorderPayload(Collection $items): void
+    {
+        $requestedIds = $items->pluck('id')->map(fn ($id) => (int) $id)->values();
+
+        if ($requestedIds->duplicates()->isNotEmpty()) {
+            throw ValidationException::withMessages([
+                'items' => ['Danh sach danh muc sap xep dang bi trung ID.'],
+            ]);
+        }
+
+        $parentMap = $this->buildCategoryParentMap();
+
+        foreach ($requestedIds as $categoryId) {
+            if (!array_key_exists($categoryId, $parentMap)) {
+                throw ValidationException::withMessages([
+                    'items' => ['Co danh muc khong ton tai trong yeu cau sap xep.'],
+                ]);
+            }
+        }
+
+        foreach ($items as $item) {
+            $parentId = $item['parent_id'];
+
+            if ($parentId !== null && !array_key_exists($parentId, $parentMap)) {
+                throw ValidationException::withMessages([
+                    'items' => ['Danh muc cha khong ton tai trong pham vi hien tai.'],
+                ]);
+            }
+
+            $parentMap[$item['id']] = $parentId;
+        }
+
+        $this->assertCategoryParentMapHasNoCycles($parentMap, 'items');
+    }
+
+    private function buildCategoryParentMap(): array
+    {
+        return Category::query()
+            ->get(['id', 'parent_id'])
+            ->mapWithKeys(fn ($category) => [
+                (int) $category->id => $category->parent_id ? (int) $category->parent_id : null,
+            ])
+            ->all();
+    }
+
+    private function assertCategoryParentMapHasNoCycles(array $parentMap, string $attribute): void
+    {
+        foreach ($parentMap as $categoryId => $parentId) {
+            $visited = [(int) $categoryId => true];
+            $cursor = $parentId === null ? null : (int) $parentId;
+
+            while ($cursor !== null) {
+                if (isset($visited[$cursor])) {
+                    throw ValidationException::withMessages([
+                        $attribute => ['Khong the tao vong lap danh muc cha.'],
+                    ]);
+                }
+
+                if (!array_key_exists($cursor, $parentMap)) {
+                    break;
+                }
+
+                $visited[$cursor] = true;
+                $nextParentId = $parentMap[$cursor];
+                $cursor = $nextParentId === null ? null : (int) $nextParentId;
+            }
+        }
     }
 
     private function parentGroupKey($parentId): string

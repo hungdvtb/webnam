@@ -11,9 +11,7 @@ import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel'
 import SortIndicator from '../../components/SortIndicator';
 import { ACTIVE_PRODUCT_TYPE_KEYS, ACTIVE_PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_META, sanitizeActiveProductTypeValues } from '../../config/productTypes';
 import {
-    formatRoundedImportCost,
     formatWholeMoneyInput,
-    normalizeRoundedImportCostDraft,
     normalizeRoundedImportCostNumber,
     normalizeWholeMoneyDraft,
     normalizeWholeMoneyNumber,
@@ -46,6 +44,13 @@ function getPrimaryImage(product) {
         url = `${STORAGE_BASE_URL}/storage/${url.replace(/^\/storage\//, '').replace(/^\//, '')}`;
     }
     return url || null;
+}
+
+function getDisplayStock(product) {
+    const rawStock = product?.actual_stock ?? product?.stock_quantity ?? 0;
+    const numericStock = Number(rawStock);
+
+    return Number.isFinite(numericStock) ? numericStock : 0;
 }
 
 function getSupplierFilterLabel(suppliers, supplierId) {
@@ -92,6 +97,77 @@ function sanitizeProductFilters(rawFilters) {
     };
 }
 
+function normalizeProductSortConfig(rawSortConfig) {
+    if (!rawSortConfig) {
+        return { key: 'created_at', direction: 'desc', phase: 1 };
+    }
+
+    if (rawSortConfig.key === 'stock_quantity') {
+        return {
+            ...rawSortConfig,
+            key: 'actual_stock',
+        };
+    }
+
+    return rawSortConfig;
+}
+
+function normalizeCopiedSpecifications(rawValue) {
+    if (Array.isArray(rawValue)) {
+        return rawValue
+            .map((item) => ({
+                label: String(item?.label ?? '').trim(),
+                value: String(item?.value ?? '').trim(),
+            }))
+            .filter((item) => item.label || item.value);
+    }
+
+    if (typeof rawValue === 'string' && rawValue.trim() !== '') {
+        try {
+            const parsed = JSON.parse(rawValue);
+            return normalizeCopiedSpecifications(parsed);
+        } catch (error) {
+            return rawValue
+                .split('\n')
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .map((line) => {
+                    const [labelPart, ...valueParts] = line.split(':');
+                    return {
+                        label: (labelPart || '').trim(),
+                        value: valueParts.join(':').trim(),
+                    };
+                })
+                .filter((item) => item.label || item.value);
+        }
+    }
+
+    return [];
+}
+
+function normalizeCopiedAdditionalInfo(rawValue) {
+    if (Array.isArray(rawValue)) {
+        return rawValue
+            .map((item) => ({
+                title: String(item?.title ?? '').trim(),
+                post_id: item?.post_id ? String(item.post_id).trim() : '',
+                post_title: String(item?.post_title ?? '').trim(),
+            }))
+            .filter((item) => item.title && item.post_id);
+    }
+
+    if (typeof rawValue === 'string' && rawValue.trim() !== '') {
+        try {
+            const parsed = JSON.parse(rawValue);
+            return normalizeCopiedAdditionalInfo(parsed);
+        } catch (error) {
+            return [];
+        }
+    }
+
+    return [];
+}
+
 const ProductList = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
@@ -123,6 +199,16 @@ const ProductList = () => {
     const [bulkUpdateData, setBulkUpdateData] = useState({});
     const [lastBulkUpdateLogId, setLastBulkUpdateLogId] = useState(null);
     const [openAttrId, setOpenAttrId] = useState(null);
+    const [showBulkCopyModal, setShowBulkCopyModal] = useState(false);
+    const [bulkCopySourceQuery, setBulkCopySourceQuery] = useState('');
+    const [bulkCopySourceResults, setBulkCopySourceResults] = useState([]);
+    const [bulkCopySourceProduct, setBulkCopySourceProduct] = useState(null);
+    const [bulkCopyFields, setBulkCopyFields] = useState({
+        specifications: true,
+        additional_info: true,
+    });
+    const [searchingBulkCopySources, setSearchingBulkCopySources] = useState(false);
+    const [submittingBulkCopy, setSubmittingBulkCopy] = useState(false);
 
     const [editingProductId, setEditingProductId] = useState(null);
     const [editForm, setEditForm] = useState({ price: '', expected_cost: '' });
@@ -133,7 +219,7 @@ const ProductList = () => {
         setEditingProductId(p.id);
         setEditForm({
             price: normalizeWholeMoneyDraft(p.price),
-            expected_cost: normalizeRoundedImportCostDraft(p.expected_cost ?? p.cost_price)
+            expected_cost: normalizeWholeMoneyDraft(p.expected_cost ?? p.cost_price)
         });
     };
 
@@ -251,11 +337,9 @@ const ProductList = () => {
 
     const [filters, setFilters] = useState(getInitialFilters());
 
-    const [sortConfig, setSortConfig] = useState(savedState?.sortConfig || { 
-        key: 'created_at', 
-        direction: 'desc', 
-        phase: 1 
-    });
+    const [sortConfig, setSortConfig] = useState(
+        normalizeProductSortConfig(savedState?.sortConfig)
+    );
 
     // PERSISTENCE LOGIC: Save state whenever it changes
     useEffect(() => {
@@ -566,6 +650,17 @@ const ProductList = () => {
         setSelectedIds(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
     };
 
+    const handleRowSelectionClick = (id, event) => {
+        if (event?.defaultPrevented) return;
+
+        const interactiveTarget = event?.target?.closest?.(
+            'button, a, input, textarea, select, option, [data-no-row-select="true"]'
+        );
+
+        if (interactiveTarget) return;
+        toggleSelectProduct(id);
+    };
+
     const addToSearchHistory = (term) => {
         if (!term || term.trim() === '' || term.length < 2) return;
         setSearchHistory(prev => {
@@ -693,6 +788,131 @@ const ProductList = () => {
         });
     };
 
+    const closeBulkCopyModal = () => {
+        setShowBulkCopyModal(false);
+        setBulkCopySourceQuery('');
+        setBulkCopySourceResults([]);
+        setBulkCopySourceProduct(null);
+        setBulkCopyFields({
+            specifications: true,
+            additional_info: true,
+        });
+        setSubmittingBulkCopy(false);
+    };
+
+    const toggleBulkCopyField = (field) => {
+        setBulkCopyFields((prev) => ({
+            ...prev,
+            [field]: !prev[field],
+        }));
+    };
+
+    const fetchBulkCopySourceProducts = async (query = bulkCopySourceQuery) => {
+        if (!showBulkCopyModal) return;
+
+        setSearchingBulkCopySources(true);
+
+        try {
+            const params = {
+                per_page: 50,
+            };
+            const trimmedQuery = query.trim();
+
+            if (trimmedQuery) {
+                params.search = trimmedQuery;
+            }
+
+            const response = await productApi.getAll(params);
+            const rawData = response.data?.data || response.data || [];
+            setBulkCopySourceResults(Array.isArray(rawData) ? rawData : []);
+        } catch (error) {
+            console.error('Bulk copy source search error:', error);
+            setNotification({ type: 'error', message: 'Không thể tải danh sách sản phẩm nguồn.' });
+            setTimeout(() => setNotification(null), 4000);
+        } finally {
+            setSearchingBulkCopySources(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!showBulkCopyModal) return undefined;
+
+        const timer = setTimeout(() => {
+            fetchBulkCopySourceProducts();
+        }, 300);
+
+        return () => clearTimeout(timer);
+    }, [bulkCopySourceQuery, showBulkCopyModal]);
+
+    const handleBulkCopySubmit = async () => {
+        if (!bulkCopySourceProduct?.id) {
+            setNotification({ type: 'error', message: 'Hãy chọn sản phẩm nguồn để sao chép.' });
+            setTimeout(() => setNotification(null), 4000);
+            return;
+        }
+
+        const fieldsToCopy = Object.entries(bulkCopyFields)
+            .filter(([, enabled]) => enabled)
+            .map(([field]) => field);
+
+        if (fieldsToCopy.length === 0) {
+            setNotification({ type: 'error', message: 'Hãy chọn ít nhất 1 mục cần sao chép.' });
+            setTimeout(() => setNotification(null), 4000);
+            return;
+        }
+
+        const targetIds = selectedIds.filter((id) => String(id) !== String(bulkCopySourceProduct.id));
+
+        if (targetIds.length === 0) {
+            setNotification({ type: 'error', message: 'Sau khi loại sản phẩm nguồn, không còn sản phẩm đích nào để cập nhật.' });
+            setTimeout(() => setNotification(null), 4000);
+            return;
+        }
+
+        setSubmittingBulkCopy(true);
+
+        try {
+            const sourceResponse = await productApi.getOne(bulkCopySourceProduct.id);
+            const sourceProduct = sourceResponse.data || {};
+            const basic_info = {};
+
+            if (bulkCopyFields.specifications) {
+                basic_info.specifications = JSON.stringify(
+                    normalizeCopiedSpecifications(sourceProduct.specifications)
+                );
+            }
+
+            if (bulkCopyFields.additional_info) {
+                basic_info.additional_info = JSON.stringify(
+                    normalizeCopiedAdditionalInfo(sourceProduct.additional_info)
+                );
+            }
+
+            const response = await productApi.bulkUpdateAttributes({
+                ids: targetIds,
+                basic_info,
+            });
+
+            closeBulkCopyModal();
+            setSelectedIds([]);
+            setLastBulkUpdateLogId(response.data.log_id);
+            fetchProducts(pagination.current_page);
+            setNotification({
+                type: 'success',
+                message: `Đã sao chép ${fieldsToCopy.length} mục từ "${bulkCopySourceProduct.name}" cho ${targetIds.length} sản phẩm.`,
+                action: 'undo',
+            });
+            setTimeout(() => setNotification(null), 10000);
+        } catch (error) {
+            console.error('Bulk copy error:', error);
+            const msg = error.response?.data?.message || 'Không thể sao chép thuộc tính từ sản phẩm nguồn.';
+            setNotification({ type: 'error', message: msg });
+            setTimeout(() => setNotification(null), 4000);
+        } finally {
+            setSubmittingBulkCopy(false);
+        }
+    };
+
     const handleBulkUpdateAttributesSubmit = async () => {
         // Separate basic info from attributes
         const basicInfoFields = ['category_id', 'category_ids', 'price', 'expected_cost', 'stock_quantity', 'supplier_ids', 'is_featured', 'is_new', 'status', 'type'];
@@ -708,6 +928,26 @@ const ProductList = () => {
                     attributes[key] = val;
                 }
             }
+        }
+
+        if (Object.prototype.hasOwnProperty.call(basic_info, 'price')) {
+            const normalizedPrice = normalizeWholeMoneyNumber(basic_info.price);
+            if (normalizedPrice === null) {
+                setNotification({ type: 'error', message: 'Giá bán phải là số hợp lệ.' });
+                setTimeout(() => setNotification(null), 4000);
+                return;
+            }
+            basic_info.price = normalizedPrice;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(basic_info, 'expected_cost')) {
+            const normalizedExpectedCost = normalizeRoundedImportCostNumber(basic_info.expected_cost);
+            if (normalizedExpectedCost === null) {
+                setNotification({ type: 'error', message: 'Giá dự kiến phải là số hợp lệ.' });
+                setTimeout(() => setNotification(null), 4000);
+                return;
+            }
+            basic_info.expected_cost = normalizedExpectedCost;
         }
         
         if (Object.keys(basic_info).length === 0 && Object.keys(attributes).length === 0) {
@@ -778,7 +1018,7 @@ const ProductList = () => {
         const expectedCostValue = normalizeRoundedImportCostNumber(p.expected_cost ?? p.cost_price) ?? 0;
         const price = `${new Intl.NumberFormat('vi-VN').format(priceValue)}₫`;
         const costPrice = `${new Intl.NumberFormat('vi-VN').format(expectedCostValue)}₫`;
-        const stock = p.stock_quantity || 0;
+        const stock = getDisplayStock(p);
         
         let attrsStr = '';
         if (p.attribute_values && p.attribute_values.length > 0) {
@@ -826,8 +1066,8 @@ const ProductList = () => {
     };
 
     const handleSort = (columnId) => {
-        const validSortColumns = ['id', 'sku', 'supplier_product_code', 'name', 'price', 'cost_price', 'stock_quantity', 'created_at', 'type'];
-        let key = columnId === 'stock' ? 'stock_quantity' : columnId;
+        const validSortColumns = ['id', 'sku', 'supplier_product_code', 'name', 'price', 'cost_price', 'actual_stock', 'stock_quantity', 'created_at', 'type'];
+        let key = columnId === 'stock' ? 'actual_stock' : columnId;
         if (key === 'actions') return;
         if (!validSortColumns.includes(key)) return;
 
@@ -852,6 +1092,10 @@ const ProductList = () => {
             return Array.isArray(parsed) ? parsed.join(', ') : parsed;
         } catch (e) { return valObj.value; }
     };
+
+    const bulkCopyTargetCount = bulkCopySourceProduct
+        ? selectedIds.filter((id) => String(id) !== String(bulkCopySourceProduct.id)).length
+        : selectedIds.length;
 
     return (
         <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full">
@@ -1037,6 +1281,14 @@ const ProductList = () => {
                                 title="Cập nhật thuộc tính hàng loạt"
                             >
                                 <span className="material-symbols-outlined text-[18px]">tune</span>
+                            </button>
+                            <button 
+                                disabled={selectedIds.length === 0 || isTrashView}
+                                onClick={() => setShowBulkCopyModal(true)}
+                                className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 && !isTrashView ? 'bg-amber-50 text-amber-700 hover:bg-amber-600 hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
+                                title="Sao chép 2 mục từ 1 sản phẩm nguồn sang các sản phẩm đã chọn"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">content_copy</span>
                             </button>
                             <button 
                                 disabled={selectedIds.length === 0} 
@@ -1556,7 +1808,7 @@ const ProductList = () => {
                                     <div className={`flex items-center gap-1.5 ${col.align === 'center' ? 'justify-center' : col.align === 'right' ? 'justify-end' : ''}`}>
                                         {col.id !== 'actions' && <span className="material-symbols-outlined text-[14px] opacity-20 group-hover:opacity-100 text-primary">drag_indicator</span>}
                                         <span className="truncate text-primary font-black">{col.label}</span>
-                                        <SortIndicator colId={col.id === 'stock' ? 'stock_quantity' : col.id} sortConfig={sortConfig} />
+                                        <SortIndicator colId={col.id === 'stock' ? 'actual_stock' : col.id} sortConfig={sortConfig} />
                                     </div>
                                     {col.id !== 'actions' && <div onMouseDown={(e) => handleColumnResize(col.id, e)} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/20 transition-colors" />}
                                 </th>
@@ -1622,7 +1874,7 @@ const ProductList = () => {
                                             initial={isSubRow ? { opacity: 0, y: -10 } : false}
                                             animate={{ opacity: 1, y: 0 }}
                                             exit={{ opacity: 0, y: -10 }}
-                                            onClick={() => toggleSelectProduct(p.id)}
+                                            onClick={(event) => handleRowSelectionClick(p.id, event)}
                                             onDoubleClick={() => navigate(`/admin/products/edit/${p.id}`)}
                                             className={`transition-all group cursor-pointer ${
                                                 selectedIds.includes(p.id) ? 'bg-gold/10' : 
@@ -1643,7 +1895,13 @@ const ProductList = () => {
                                                     ) : !isSubRow ? (
                                                         <div className="size-6" /> // Spacer for non-configurable items
                                                     ) : null}
-                                                    <input type="checkbox" checked={selectedIds.includes(p.id)} readOnly className="size-4 accent-primary" />
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={selectedIds.includes(p.id)}
+                                                        onClick={(event) => event.stopPropagation()}
+                                                        onChange={() => toggleSelectProduct(p.id)}
+                                                        className="size-4 cursor-pointer accent-primary"
+                                                    />
                                                 </div>
                                             </td>
                                             {renderedColumns.map(col => {
@@ -1667,7 +1925,7 @@ const ProductList = () => {
                                                         <div className="flex items-center gap-2 overflow-hidden">
                                                             <div className="flex flex-col gap-1 flex-1 overflow-hidden">
                                                                  <div className="flex items-center gap-2">
-                                                                    <span className={`truncate ${pIsParent ? 'text-[14px] font-black uppercase tracking-tight' : 'text-[13px] font-bold'}`}>{p.name}</span>
+                                                                    <span className={`truncate ${pIsParent ? 'text-[14px] font-black tracking-tight' : 'text-[13px] font-bold'}`}>{p.name}</span>
                                                                     {isSubRow && product.type === 'grouped' && p.pivot && (
                                                                         <div className="flex items-center gap-1 shrink-0">
                                                                             <span className="bg-primary/10 text-primary px-1.5 py-0.5 rounded-sm text-[10px] font-black">x{p.pivot.quantity}</span>
@@ -1700,7 +1958,7 @@ const ProductList = () => {
                                                             <div className="flex items-center justify-between">
                                                                 {isEditing ? (
                                                                     <div className="flex flex-col gap-1">
-                                                                        <input type="text" className="w-24 border border-primary/20 rounded px-1.5 py-0.5 text-[11px] font-bold outline-none focus:border-primary" value={formatRoundedImportCost(editForm.expected_cost)} onChange={(e) => setEditForm(prev => ({...prev, expected_cost: normalizeRoundedImportCostDraft(e.target.value)}))} onKeyDown={(e) => e.key === 'Enter' && handleSaveQuickEdit(e)} autoFocus />
+                                                                        <input type="text" className="w-24 border border-primary/20 rounded px-1.5 py-0.5 text-[11px] font-bold outline-none focus:border-primary" value={formatWholeMoneyInput(editForm.expected_cost)} onChange={(e) => setEditForm(prev => ({...prev, expected_cost: normalizeWholeMoneyDraft(e.target.value)}))} onBlur={() => setEditForm(prev => ({ ...prev, expected_cost: normalizeRoundedImportCostNumber(prev.expected_cost) ?? '' }))} onKeyDown={(e) => e.key === 'Enter' && handleSaveQuickEdit(e)} inputMode="numeric" autoFocus />
                                                                         <div className="flex gap-2">
                                                                             <button onClick={handleSaveQuickEdit} className="text-green-600 text-[10px] font-bold uppercase">Lưu</button>
                                                                             <button onClick={handleCancelQuickEdit} className="text-brick text-[10px] font-bold uppercase">Hủy</button>
@@ -1786,7 +2044,7 @@ const ProductList = () => {
                                                 if (col.id === 'stock') return (
                                                     <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 font-black text-primary group/cell">
                                                         <div className="flex items-center justify-between">
-                                                            <span>{p.stock_quantity || 0}</span>
+                                                            <span>{getDisplayStock(p)}</span>
                                                             <button onClick={(e) => handleCopy(String(p.stock_quantity || 0), 'số lượng tồn kho', e, `${p.id}-stock`)} className={`${copiedText === `${p.id}-stock` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép tồn kho">
                                                                 <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-stock` ? 'check' : 'content_copy'}</span>
                                                             </button>
@@ -2009,8 +2267,10 @@ const ProductList = () => {
                                             type="text"
                                             className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
                                             placeholder="VNĐ"
-                                            value={formatRoundedImportCost(bulkUpdateData.expected_cost)}
-                                            onChange={e => setBulkUpdateData({...bulkUpdateData, expected_cost: normalizeRoundedImportCostDraft(e.target.value)})}
+                                            value={formatWholeMoneyInput(bulkUpdateData.expected_cost)}
+                                            onChange={e => setBulkUpdateData({...bulkUpdateData, expected_cost: normalizeWholeMoneyDraft(e.target.value)})}
+                                            onBlur={() => setBulkUpdateData(prev => ({ ...prev, expected_cost: normalizeRoundedImportCostNumber(prev.expected_cost) ?? '' }))}
+                                            inputMode="numeric"
                                         />
                                     </div>
                                     <div className="space-y-1">
@@ -2187,6 +2447,159 @@ const ProductList = () => {
                                 {loading ? <span className="material-symbols-outlined animate-spin text-[16px]">sync</span> : <span className="material-symbols-outlined text-[16px]">save</span>}
                                 Áp dụng {selectedIds.length} SP
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showBulkCopyModal && (
+                <div className="fixed inset-0 z-[110] bg-black/60 flex items-center justify-center p-4">
+                    <div className="bg-white rounded p-6 w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+                        <div className="flex justify-between items-center mb-4 border-b border-primary/10 pb-4">
+                            <h2 className="text-lg font-bold text-primary flex items-center gap-2">
+                                <span className="material-symbols-outlined">content_copy</span> Sao chép từ 1 sản phẩm nguồn
+                            </h2>
+                            <button onClick={closeBulkCopyModal} className="text-gray-500 hover:text-brick">
+                                <span className="material-symbols-outlined">close</span>
+                            </button>
+                        </div>
+
+                        <div className="overflow-y-auto pr-2 custom-scrollbar flex-1 space-y-4">
+                            <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-sm text-[13px]">
+                                <strong>Lưu ý:</strong> Đang chọn <strong>{selectedIds.length}</strong> sản phẩm. Bạn chọn 1 sản phẩm nguồn, chọn 2 mục cần copy, rồi bấm cập nhật để áp sang các sản phẩm còn lại. Nếu sản phẩm nguồn cũng đang nằm trong danh sách đã tick thì hệ thống sẽ tự loại nó ra.
+                            </div>
+
+                            <section className="space-y-3">
+                                <h3 className="text-[14px] font-black text-primary uppercase tracking-widest border-l-4 border-amber-500 pl-2">Sản phẩm nguồn</h3>
+
+                                <div className="relative">
+                                    <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-primary/35 text-[18px]">search</span>
+                                    <input
+                                        type="text"
+                                        value={bulkCopySourceQuery}
+                                        onChange={(event) => setBulkCopySourceQuery(event.target.value)}
+                                        placeholder="Tìm sản phẩm nguồn theo tên hoặc SKU..."
+                                        className="w-full h-11 bg-primary/5 border border-primary/20 pl-10 pr-10 rounded-sm text-[13px] focus:outline-none focus:border-primary"
+                                    />
+                                    {searchingBulkCopySources && (
+                                        <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-gold text-[16px] animate-refresh-spin">refresh</span>
+                                    )}
+                                </div>
+
+                                {bulkCopySourceProduct ? (
+                                    <div className="rounded-sm border border-gold/20 bg-gold/5 px-4 py-3 flex items-center justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-gold">Đang chọn làm nguồn</p>
+                                            <p className="mt-1 truncate text-[13px] font-bold text-primary">{bulkCopySourceProduct.name}</p>
+                                            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-stone/55">
+                                                <span className="font-mono text-gold">{bulkCopySourceProduct.sku || 'Chưa có SKU'}</span>
+                                                <span>{TYPE_LABELS[bulkCopySourceProduct.type]?.label || bulkCopySourceProduct.type || 'Sản phẩm'}</span>
+                                            </div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setBulkCopySourceProduct(null)}
+                                            className="px-3 py-1.5 rounded-sm border border-brick/20 text-brick text-[11px] font-bold uppercase hover:bg-brick hover:text-white transition-all"
+                                        >
+                                            Bỏ chọn
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="rounded-sm border border-dashed border-primary/15 bg-primary/[0.03] px-4 py-3 text-[12px] text-primary/60">
+                                        Chưa chọn sản phẩm nguồn.
+                                    </div>
+                                )}
+
+                                <div className="max-h-[260px] overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                                    {bulkCopySourceResults.length > 0 ? bulkCopySourceResults.map((product) => {
+                                        const isActive = String(bulkCopySourceProduct?.id || '') === String(product.id);
+                                        return (
+                                            <button
+                                                key={product.id}
+                                                type="button"
+                                                onClick={() => setBulkCopySourceProduct(product)}
+                                                className={`w-full rounded-sm border px-3 py-3 text-left transition-all ${isActive ? 'border-gold bg-gold/5 shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
+                                            >
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <p className="truncate text-[13px] font-bold text-primary">{product.name}</p>
+                                                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-stone/50">
+                                                            <span className="font-mono text-gold">{product.sku || 'Chưa có SKU'}</span>
+                                                            <span>{TYPE_LABELS[product.type]?.label || product.type || 'Sản phẩm'}</span>
+                                                        </div>
+                                                    </div>
+                                                    <span className={`material-symbols-outlined text-[18px] ${isActive ? 'text-gold' : 'text-primary/20'}`}>
+                                                        {isActive ? 'check_circle' : 'radio_button_unchecked'}
+                                                    </span>
+                                                </div>
+                                            </button>
+                                        );
+                                    }) : (
+                                        <div className="rounded-sm border border-dashed border-stone/15 bg-stone/5 px-4 py-8 text-center text-[12px] text-stone/45">
+                                            {searchingBulkCopySources ? 'Đang tải sản phẩm nguồn...' : 'Không tìm thấy sản phẩm nguồn phù hợp.'}
+                                        </div>
+                                    )}
+                                </div>
+                            </section>
+
+                            <section className="space-y-3">
+                                <h3 className="text-[14px] font-black text-primary uppercase tracking-widest border-l-4 border-amber-500 pl-2">Mục cần sao chép</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleBulkCopyField('specifications')}
+                                        className={`rounded-sm border px-4 py-4 text-left transition-all ${bulkCopyFields.specifications ? 'border-gold bg-gold/5 shadow-sm' : 'border-primary/10 bg-white hover:border-primary/20'}`}
+                                    >
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div>
+                                                <div className="text-[13px] font-bold text-primary">Bảng thông số kỹ thuật</div>
+                                                <div className="mt-1 text-[11px] text-primary/55">Copy toàn bộ danh sách thông số từ sản phẩm nguồn.</div>
+                                            </div>
+                                            <span className={`material-symbols-outlined text-[20px] ${bulkCopyFields.specifications ? 'text-gold' : 'text-primary/20'}`}>
+                                                {bulkCopyFields.specifications ? 'check_circle' : 'radio_button_unchecked'}
+                                            </span>
+                                        </div>
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleBulkCopyField('additional_info')}
+                                        className={`rounded-sm border px-4 py-4 text-left transition-all ${bulkCopyFields.additional_info ? 'border-gold bg-gold/5 shadow-sm' : 'border-primary/10 bg-white hover:border-primary/20'}`}
+                                    >
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div>
+                                                <div className="text-[13px] font-bold text-primary">Thông tin bổ sung</div>
+                                                <div className="mt-1 text-[11px] text-primary/55">Copy các mục liên kết bài viết từ sản phẩm nguồn.</div>
+                                            </div>
+                                            <span className={`material-symbols-outlined text-[20px] ${bulkCopyFields.additional_info ? 'text-gold' : 'text-primary/20'}`}>
+                                                {bulkCopyFields.additional_info ? 'check_circle' : 'radio_button_unchecked'}
+                                            </span>
+                                        </div>
+                                    </button>
+                                </div>
+                            </section>
+                        </div>
+
+                        <div className="mt-6 pt-4 border-t border-primary/10 flex flex-col md:flex-row md:items-center md:justify-between gap-3 shrink-0">
+                            <p className="text-[12px] text-primary/60">
+                                Sẽ áp dụng cho <strong>{bulkCopyTargetCount}</strong> sản phẩm đích.
+                            </p>
+                            <div className="flex justify-end gap-3">
+                                <button
+                                    onClick={closeBulkCopyModal}
+                                    className="px-4 py-2 border border-primary/20 text-primary rounded-sm font-bold text-[13px] hover:bg-primary/5"
+                                >
+                                    Hủy bỏ
+                                </button>
+                                <button
+                                    onClick={handleBulkCopySubmit}
+                                    className="px-6 py-2 bg-amber-600 text-white rounded-sm font-bold text-[13px] hover:bg-amber-700 flex items-center gap-2"
+                                    disabled={submittingBulkCopy}
+                                >
+                                    {submittingBulkCopy ? <span className="material-symbols-outlined animate-spin text-[16px]">sync</span> : <span className="material-symbols-outlined text-[16px]">content_copy</span>}
+                                    Sao chép cho {bulkCopyTargetCount} SP
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

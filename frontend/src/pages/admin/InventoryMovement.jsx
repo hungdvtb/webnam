@@ -3324,7 +3324,6 @@ const InventoryMovement = () => {
     });
 
     const [activeTab, setActiveTab] = useState(() => resolvedRouteSection || DEFAULT_INVENTORY_SECTION_KEY);
-    const [dashboard, setDashboard] = useState(null);
     const [categories, setCategories] = useState([]);
     const [inventoryUnits, setInventoryUnits] = useState([]);
     const [products, setProducts] = useState([]);
@@ -3354,7 +3353,7 @@ const InventoryMovement = () => {
     const [trashPagination, setTrashPagination] = useState(emptyPagination);
 
     const [loading, setLoading] = useState({
-        overview: false, products: false, suppliers: false, supplierCatalog: false, imports: false, exports: false,
+        products: false, suppliers: false, supplierCatalog: false, imports: false, exports: false,
         returns: false, damaged: false, adjustments: false, lots: false, trash: false, saving: false,
         supplierModal: false, supplierPriceModal: false, importModal: false, documentModal: false,
         importStatuses: false, importStatusModal: false, invoiceAnalysis: false, importPriceRefresh: false,
@@ -3362,7 +3361,6 @@ const InventoryMovement = () => {
     });
 
     const [openPanels, setOpenPanels] = useState({
-        overview: { stats: true },
         products: { filters: false, stats: false, columns: false },
         suppliers: { filters: false, stats: false, columns: false },
         supplierPrices: { filters: false, stats: false, columns: false },
@@ -4493,20 +4491,6 @@ const InventoryMovement = () => {
         });
     };
 
-    const fetchOverview = async () => {
-        setFlag('overview', true);
-        try {
-            const response = await inventoryApi.getDashboard();
-            setDashboard(response.data);
-        } catch (error) {
-            fail(error, 'Không thể tải tổng quan kho.');
-            return false;
-            return false;
-        } finally {
-            setFlag('overview', false);
-        }
-    };
-
     const fetchInventoryUnits = async () => {
         try {
             const response = await inventoryApi.getUnits();
@@ -4672,7 +4656,6 @@ const InventoryMovement = () => {
         await Promise.all([
             ...requestedTabs.map((tabKey) => refreshSlipTab(tabKey)),
             fetchProducts(productPagination.current_page || 1, pageSizes.products, sortConfigs.products, productFilters),
-            fetchOverview(),
             fetchLots(lotPagination.current_page || 1, pageSizes.lots, sortConfigs.lots, simpleFilters.lots),
         ]);
     };
@@ -4832,7 +4815,6 @@ const InventoryMovement = () => {
         };
 
         loadCategories();
-        fetchOverview();
         fetchInventoryUnits();
         fetchImportStatuses();
     }, []);
@@ -5618,7 +5600,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             showToast({ type: 'success', message: 'Đã chuyển sản phẩm vào thùng rác.' });
             fetchProducts(productPagination.current_page || 1);
             fetchTrash(trashPagination.current_page || 1);
-            fetchOverview();
         } catch (error) {
             fail(error, 'Không thể xóa sản phẩm.');
         }
@@ -5630,7 +5611,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             showToast({ type: 'success', message: 'Đã khôi phục sản phẩm.' });
             fetchTrash(trashPagination.current_page || 1);
             fetchProducts(productPagination.current_page || 1);
-            fetchOverview();
         } catch (error) {
             fail(error, 'Không thể khôi phục sản phẩm.');
         }
@@ -5642,7 +5622,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             await productApi.forceDelete(id);
             showToast({ type: 'success', message: 'Đã xóa vĩnh viễn sản phẩm.' });
             fetchTrash(trashPagination.current_page || 1);
-            fetchOverview();
         } catch (error) {
             fail(error, 'Không thể xóa vĩnh viễn sản phẩm.');
         }
@@ -6124,7 +6103,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             closeImportModal();
             fetchImports(importPagination.current_page || 1);
             fetchProducts(productPagination.current_page || 1);
-            fetchOverview();
             fetchLots(lotPagination.current_page || 1);
             fetchSuppliers(supplierPagination.current_page || 1);
             if (hasSupplierCatalogSelection) fetchSupplierCatalog(supplierCatalogPagination.current_page || 1);
@@ -6205,7 +6183,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             closeExportModal();
             fetchExports(exportPagination.current_page || 1);
             fetchProducts(productPagination.current_page || 1);
-            fetchOverview();
             fetchLots(lotPagination.current_page || 1);
         } catch (error) {
             fail(error, 'Không thể tạo phiếu xuất.');
@@ -6263,7 +6240,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             if (type === 'damaged') fetchDocuments('damaged', damagedPagination.current_page || 1);
             if (type === 'adjustment') fetchDocuments('adjustment', adjustmentPagination.current_page || 1);
             fetchProducts(productPagination.current_page || 1);
-            fetchOverview();
             fetchLots(lotPagination.current_page || 1);
         } catch (error) {
             fail(error, 'Không thể lưu phiếu kho.');
@@ -6303,7 +6279,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         closeBatchReturnModal();
         fetchDocuments('return', returnPagination.current_page || 1);
         fetchProducts(productPagination.current_page || 1);
-        fetchOverview();
         fetchLots(lotPagination.current_page || 1);
     };
 
@@ -6443,22 +6418,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             fail(error, 'Không thể xóa vĩnh viễn các phiếu đã chọn.');
         }
     };
-
-    const overviewItems = useMemo(() => {
-        const summary = dashboard?.summary;
-        if (!summary) return [];
-        return [
-            { label: 'Sản phẩm đang bán', value: formatNumber(summary.active_products) },
-            { label: 'Tồn bán được', value: formatNumber(summary.total_units) },
-            { label: 'Tồn hỏng', value: formatNumber(summary.damaged_units) },
-            { label: 'Giá trị tồn', value: formatCurrency(summary.stock_value) },
-            { label: 'Nhà cung cấp', value: formatNumber(summary.supplier_count) },
-            { label: 'Nhập 30 ngày', value: formatCurrency(summary.imports_total) },
-            { label: 'Trả hàng 30 ngày', value: formatCurrency(summary.returns_total) },
-            { label: 'Hỏng 30 ngày', value: formatCurrency(summary.damaged_total) },
-            { label: 'Lãi gộp 30 ngày', value: formatCurrency(summary.exports_profit) },
-        ];
-    }, [dashboard]);
 
     const productSummaryItems = useMemo(() => !productSummary ? [] : [
         { label: 'Tổng số lượng tồn kho', value: formatNumber(productSummary.total_stock ?? productSummary.total_sellable_stock) },
@@ -7949,7 +7908,6 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
 
     return (
         <div className="flex h-full min-h-0 flex-col gap-3">
-            {activeTab === 'overview' ? <div className={panelClass}><PanelHeader title="Tổng quan kho" toggles={[{ id: 'overview_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.overview.stats, onClick: () => togglePanel('overview', 'stats') }]} />{openPanels.overview.stats ? <SummaryPanel items={overviewItems} /> : null}</div> : null}
             {activeTab === 'products' ? productsTabContent : null}
             {activeTab === 'suppliers' ? suppliersTabContent : null}
             {activeTab === 'supplierPrices' ? supplierPricesTabContent : null}

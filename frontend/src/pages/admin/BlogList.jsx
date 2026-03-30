@@ -114,6 +114,8 @@ const BlogList = () => {
     const [filters, setFilters] = useState(DEFAULT_FILTERS);
     const [tempFilters, setTempFilters] = useState(DEFAULT_FILTERS);
     const [showFilterPanel, setShowFilterPanel] = useState(false);
+    const [isTrashView, setIsTrashView] = useState(false);
+    const [trashCount, setTrashCount] = useState(0);
 
     const [keywords, setKeywords] = useState([]);
     const [managedKeywords, setManagedKeywords] = useState([]);
@@ -180,19 +182,21 @@ const BlogList = () => {
 
     const reorderLocked = useMemo(
         () => search.trim() !== ''
+            || isTrashView
             || filters.category_id !== 'all'
             || filters.uncategorized_only !== 'all'
             || filters.seo_keyword !== 'all'
             || filters.is_published !== 'all'
             || filters.is_starred !== 'all'
             || filters.is_system !== 'all',
-        [search, filters]
+        [search, isTrashView, filters]
     );
 
     const fetchPosts = useCallback(async () => {
         setLoading(true);
         try {
             const params = { per_page: 1000 };
+            if (isTrashView) params.trashed = 1;
             if (search.trim()) params.search = search.trim();
             if (filters.uncategorized_only === '1') {
                 params.category_id = 'uncategorized';
@@ -219,7 +223,11 @@ const BlogList = () => {
             setCategories(normalizeCategories(payloadCategories));
 
             setSelected((prev) => {
-                const valid = new Set(list.map((post) => post.id));
+                const valid = new Set(
+                    list
+                        .filter((post) => isTrashView || !post?.is_system)
+                        .map((post) => post.id)
+                );
                 return new Set([...prev].filter((id) => valid.has(id)));
             });
         } catch (error) {
@@ -227,7 +235,7 @@ const BlogList = () => {
         } finally {
             setLoading(false);
         }
-    }, [filters, search, showModal]);
+    }, [filters, isTrashView, search, showModal]);
 
     const loadKeywords = useCallback(async () => {
         try {
@@ -254,9 +262,22 @@ const BlogList = () => {
         }
     }, []);
 
+    const fetchTrashCount = useCallback(async () => {
+        try {
+            const response = await blogApi.getAll({ trashed: 1, per_page: 1 });
+            setTrashCount(Number(response.data?.total || 0));
+        } catch (error) {
+            // no-op
+        }
+    }, []);
+
     useEffect(() => {
         fetchPosts();
     }, [fetchPosts]);
+
+    useEffect(() => {
+        fetchTrashCount();
+    }, [fetchTrashCount, isTrashView]);
 
     useEffect(() => {
         const handleClickOutside = (event) => {
@@ -277,15 +298,22 @@ const BlogList = () => {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [showFilterPanel]);
 
-    const postIds = useMemo(() => posts.map((post) => post.id), [posts]);
+    const selectablePostIds = useMemo(
+        () => posts
+            .filter((post) => isTrashView || !post?.is_system)
+            .map((post) => post.id),
+        [isTrashView, posts]
+    );
     const selectedCount = selected.size;
-    const allChecked = postIds.length > 0 && postIds.every((id) => selected.has(id));
+    const allChecked = selectablePostIds.length > 0 && selectablePostIds.every((id) => selected.has(id));
 
-    const toggleOne = (id) => {
+    const toggleOne = (post) => {
+        if (!post || (!isTrashView && post.is_system)) return;
+
         setSelected((prev) => {
             const next = new Set(prev);
-            if (next.has(id)) next.delete(id);
-            else next.add(id);
+            if (next.has(post.id)) next.delete(post.id);
+            else next.add(post.id);
             return next;
         });
     };
@@ -294,10 +322,10 @@ const BlogList = () => {
         setSelected((prev) => {
             if (allChecked) {
                 const next = new Set(prev);
-                postIds.forEach((id) => next.delete(id));
+                selectablePostIds.forEach((id) => next.delete(id));
                 return next;
             }
-            return new Set([...prev, ...postIds]);
+            return new Set([...prev, ...selectablePostIds]);
         });
     };
 
@@ -395,7 +423,7 @@ const BlogList = () => {
         }
     };
 
-    const deletePost = (post) => {
+    const movePostToTrash = (post) => {
         if (post?.is_system) {
             showModal({
                 title: 'Không thể xóa',
@@ -407,9 +435,9 @@ const BlogList = () => {
 
         showModal({
             title: 'Xác nhận xóa',
-            content: `Bạn có chắc muốn xóa bài "${post.title}"?`,
+            content: `Bạn có chắc muốn chuyển bài "${post.title}" vào thùng rác?`,
             type: 'warning',
-            actionText: 'Xóa bài',
+            actionText: 'Đưa vào thùng rác',
             onAction: async () => {
                 try {
                     await blogApi.destroy(post.id);
@@ -419,9 +447,60 @@ const BlogList = () => {
                         next.delete(post.id);
                         return next;
                     });
-                    showToast({ message: 'Đã xóa bài viết.', type: 'success' });
+                    await fetchTrashCount();
+                    showToast({ message: 'Đã đưa bài viết vào thùng rác.', type: 'success' });
                 } catch (error) {
                     showModal({ title: 'Lỗi', content: 'Không thể xóa bài viết.', type: 'error' });
+                }
+            },
+        });
+    };
+
+    const restorePost = (post) => {
+        showModal({
+            title: 'Khôi phục bài viết',
+            content: `Khôi phục bài "${post.title}" ra khỏi thùng rác?`,
+            type: 'info',
+            actionText: 'Khôi phục',
+            onAction: async () => {
+                try {
+                    await blogApi.restore(post.id);
+                    setPosts((prev) => prev.filter((item) => item.id !== post.id));
+                    setSelected((prev) => {
+                        const next = new Set(prev);
+                        next.delete(post.id);
+                        return next;
+                    });
+                    await fetchTrashCount();
+                    showToast({ message: 'Đã khôi phục bài viết.', type: 'success' });
+                } catch (error) {
+                    const message = error?.response?.data?.error || 'Không thể khôi phục bài viết.';
+                    showModal({ title: 'Lỗi', content: message, type: 'error' });
+                }
+            },
+        });
+    };
+
+    const permanentlyDeletePost = (post) => {
+        showModal({
+            title: 'Xóa vĩnh viễn',
+            content: `Bạn có chắc muốn xóa vĩnh viễn bài "${post.title}"? Hành động này không thể hoàn tác.`,
+            type: 'warning',
+            actionText: 'Xóa vĩnh viễn',
+            onAction: async () => {
+                try {
+                    await blogApi.forceDelete(post.id);
+                    setPosts((prev) => prev.filter((item) => item.id !== post.id));
+                    setSelected((prev) => {
+                        const next = new Set(prev);
+                        next.delete(post.id);
+                        return next;
+                    });
+                    await fetchTrashCount();
+                    showToast({ message: 'Đã xóa vĩnh viễn bài viết.', type: 'success' });
+                } catch (error) {
+                    const message = error?.response?.data?.error || 'Không thể xóa vĩnh viễn bài viết.';
+                    showModal({ title: 'Lỗi', content: message, type: 'error' });
                 }
             },
         });
@@ -713,6 +792,96 @@ const BlogList = () => {
         }
     };
 
+    const bulkMoveToTrash = () => {
+        const ids = Array.from(selected);
+        if (!ids.length) {
+            showModal({ title: 'Lưu ý', content: 'Vui lòng chọn bài viết.', type: 'warning' });
+            return;
+        }
+
+        showModal({
+            title: 'Xóa bài viết đã chọn',
+            content: `Đưa ${ids.length} bài viết đã chọn vào thùng rác?`,
+            type: 'warning',
+            actionText: 'Đưa vào thùng rác',
+            onAction: async () => {
+                setBusy(true);
+                try {
+                    await blogApi.bulkDelete(ids);
+                    setSelected(new Set());
+                    await fetchPosts();
+                    await fetchTrashCount();
+                    showToast({ message: `Đã đưa ${ids.length} bài viết vào thùng rác.`, type: 'success' });
+                } catch (error) {
+                    const message = error?.response?.data?.error || 'Không thể xóa hàng loạt bài viết.';
+                    showModal({ title: 'Lỗi', content: message, type: 'error' });
+                } finally {
+                    setBusy(false);
+                }
+            },
+        });
+    };
+
+    const bulkRestorePosts = () => {
+        const ids = Array.from(selected);
+        if (!ids.length) {
+            showModal({ title: 'Lưu ý', content: 'Vui lòng chọn bài viết.', type: 'warning' });
+            return;
+        }
+
+        showModal({
+            title: 'Khôi phục bài viết',
+            content: `Khôi phục ${ids.length} bài viết đã chọn?`,
+            type: 'info',
+            actionText: 'Khôi phục',
+            onAction: async () => {
+                setBusy(true);
+                try {
+                    await blogApi.bulkRestore(ids);
+                    setSelected(new Set());
+                    await fetchPosts();
+                    await fetchTrashCount();
+                    showToast({ message: `Đã khôi phục ${ids.length} bài viết.`, type: 'success' });
+                } catch (error) {
+                    const message = error?.response?.data?.error || 'Không thể khôi phục bài viết đã chọn.';
+                    showModal({ title: 'Lỗi', content: message, type: 'error' });
+                } finally {
+                    setBusy(false);
+                }
+            },
+        });
+    };
+
+    const bulkForceDeletePosts = () => {
+        const ids = Array.from(selected);
+        if (!ids.length) {
+            showModal({ title: 'Lưu ý', content: 'Vui lòng chọn bài viết.', type: 'warning' });
+            return;
+        }
+
+        showModal({
+            title: 'Xóa vĩnh viễn',
+            content: `Xóa vĩnh viễn ${ids.length} bài viết đã chọn? Hành động này không thể hoàn tác.`,
+            type: 'warning',
+            actionText: 'Xóa vĩnh viễn',
+            onAction: async () => {
+                setBusy(true);
+                try {
+                    await blogApi.bulkForceDelete(ids);
+                    setSelected(new Set());
+                    await fetchPosts();
+                    await fetchTrashCount();
+                    showToast({ message: `Đã xóa vĩnh viễn ${ids.length} bài viết.`, type: 'success' });
+                } catch (error) {
+                    const message = error?.response?.data?.error || 'Không thể xóa vĩnh viễn bài viết đã chọn.';
+                    showModal({ title: 'Lỗi', content: message, type: 'error' });
+                } finally {
+                    setBusy(false);
+                }
+            },
+        });
+    };
+
     const onPostDragStart = (event, postId) => {
         if (reorderLocked || reorderingPosts) return;
         setDraggingPostId(postId);
@@ -866,6 +1035,7 @@ const BlogList = () => {
             setImportResult(payload);
             setSelected(new Set());
             await fetchPosts();
+            await fetchTrashCount();
             await loadCategories();
             await loadKeywords();
             showModal({
@@ -894,6 +1064,12 @@ const BlogList = () => {
         }
     };
 
+    const toggleTrashView = () => {
+        setSelected(new Set());
+        setShowFilterPanel(false);
+        setIsTrashView((prev) => !prev);
+    };
+
     return (
         <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] p-6 gap-3 overflow-hidden">
             <input
@@ -912,8 +1088,9 @@ const BlogList = () => {
                     <button
                         type="button"
                         onClick={() => handleExportBundle([], 'blog-export-all.zip')}
-                        disabled={exportingBundle || importingBundle}
+                        disabled={exportingBundle || importingBundle || isTrashView}
                         className="h-9 px-4 bg-white border border-gold/25 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center disabled:opacity-60"
+                        title={isTrashView ? 'Quay lại danh sách bài viết để xuất' : 'Xuất toàn bộ bài viết'}
                     >
                         {exportingBundle ? 'Đang xuất...' : 'Xuất tất cả'}
                     </button>
@@ -1021,6 +1198,70 @@ const BlogList = () => {
                             )}
                         </div>
 
+                        {isTrashView ? (
+                            <>
+                                <button
+                                    type="button"
+                                    onClick={bulkRestorePosts}
+                                    disabled={selectedCount === 0 || busy}
+                                    className={`h-9 px-3 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center gap-1.5 border ${
+                                        selectedCount > 0
+                                            ? 'bg-emerald-600/10 text-emerald-700 border-emerald-600/20 hover:bg-emerald-600 hover:text-white'
+                                            : 'bg-white text-stone/35 border-gold/15 cursor-not-allowed'
+                                    }`}
+                                >
+                                    <span className="material-symbols-outlined text-[16px]">restore_from_trash</span>
+                                    Khôi phục
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={bulkForceDeletePosts}
+                                    disabled={selectedCount === 0 || busy}
+                                    className={`h-9 px-3 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center gap-1.5 border ${
+                                        selectedCount > 0
+                                            ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white'
+                                            : 'bg-white text-stone/35 border-gold/15 cursor-not-allowed'
+                                    }`}
+                                >
+                                    <span className="material-symbols-outlined text-[16px]">delete_forever</span>
+                                    Xóa vĩnh viễn
+                                </button>
+                            </>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={bulkMoveToTrash}
+                                disabled={selectedCount === 0 || busy}
+                                className={`h-9 px-3 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center gap-1.5 border ${
+                                    selectedCount > 0
+                                        ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white'
+                                        : 'bg-white text-stone/35 border-gold/15 cursor-not-allowed'
+                                }`}
+                            >
+                                <span className="material-symbols-outlined text-[16px]">delete_sweep</span>
+                                Xóa bài viết
+                            </button>
+                        )}
+
+                        <button
+                            type="button"
+                            onClick={toggleTrashView}
+                            className={`h-9 px-3 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center gap-1.5 border ${
+                                isTrashView
+                                    ? 'bg-primary text-white border-primary'
+                                    : 'bg-white text-primary border-primary/25 hover:bg-primary/5'
+                            }`}
+                            title={isTrashView ? 'Quay lại danh sách bài viết' : 'Mở thùng rác bài viết'}
+                        >
+                            <span className="material-symbols-outlined text-[16px]">{isTrashView ? 'arrow_back' : 'delete'}</span>
+                            {isTrashView ? 'Danh sách bài viết' : 'Thùng rác'}
+                            {!isTrashView && trashCount > 0 && (
+                                <span className="h-5 min-w-[20px] px-1 rounded-full bg-brick text-white text-[10px] inline-flex items-center justify-center">
+                                    {trashCount}
+                                </span>
+                            )}
+                        </button>
+
                         <button type="button" onClick={async () => { setShowCategoryModal(true); await loadCategories(); }} className="h-9 px-3 bg-white border border-primary/25 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest">Quản lý danh mục</button>
                         <button type="button" onClick={async () => { setShowKeywordModal(true); await loadKeywords(); }} className="h-9 px-3 bg-white border border-primary/25 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest">Quản lý từ khóa SEO</button>
                         <button type="button" onClick={fetchPosts} disabled={loading} className="h-9 w-9 inline-flex items-center justify-center bg-white border border-gold/20 text-stone/70 hover:text-primary rounded-sm disabled:opacity-60" title="Làm mới">
@@ -1067,13 +1308,15 @@ const BlogList = () => {
                 )}
 
                 <div className="flex items-center justify-between gap-2">
-                    <div className="text-[10px] font-black uppercase tracking-widest text-stone/45">{posts.length} bài</div>
+                    <div className="text-[10px] font-black uppercase tracking-widest text-stone/45">
+                        {isTrashView ? `${posts.length} bài trong thùng rác` : `${posts.length} bài`}
+                    </div>
                     {selectedCount > 0 && (
                         <button type="button" onClick={() => setSelected(new Set())} className="h-8 px-3 bg-white border border-gold/20 text-stone/60 rounded-sm text-[10px] font-bold uppercase tracking-widest hover:text-brick">Bỏ chọn</button>
                     )}
                 </div>
 
-                {selectedCount > 0 && (
+                {selectedCount > 0 && !isTrashView && (
                     <div className="flex flex-wrap items-center gap-2 bg-primary/5 border border-primary/15 rounded-sm p-2">
                         <span className="text-[10px] font-black uppercase tracking-widest text-primary">Đã chọn {selectedCount} bài</span>
 
@@ -1101,6 +1344,14 @@ const BlogList = () => {
                     </div>
                 )}
 
+                {selectedCount > 0 && isTrashView && (
+                    <div className="flex flex-wrap items-center gap-2 bg-primary/5 border border-primary/15 rounded-sm p-2">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-primary">Đã chọn {selectedCount} bài trong thùng rác</span>
+                        <button type="button" onClick={bulkRestorePosts} disabled={busy} className="h-8 px-3 bg-white border border-emerald-600/25 text-emerald-700 rounded-sm text-[10px] font-bold uppercase tracking-widest hover:bg-emerald-600 hover:text-white disabled:opacity-60">Khôi phục đã chọn</button>
+                        <button type="button" onClick={bulkForceDeletePosts} disabled={busy} className="h-8 px-3 bg-white border border-brick/25 text-brick rounded-sm text-[10px] font-bold uppercase tracking-widest hover:bg-brick hover:text-white disabled:opacity-60">Xóa vĩnh viễn</button>
+                    </div>
+                )}
+
                 {reorderLocked && (
                     <div className="text-[10px] text-stone/55 italic">Kéo thả sắp xếp bài viết chỉ hoạt động khi không tìm kiếm/bộ lọc.</div>
                 )}
@@ -1117,7 +1368,7 @@ const BlogList = () => {
                             <th className="w-[250px] text-left text-[10px] uppercase tracking-widest text-primary">Danh mục</th>
                             <th className="w-[116px] text-[10px] uppercase tracking-widest text-primary">Trạng thái</th>
                             <th className="w-[86px] text-[10px] uppercase tracking-widest text-primary">Sao</th>
-                            <th className="w-[116px] text-[10px] uppercase tracking-widest text-primary">Ngày</th>
+                            <th className="w-[116px] text-[10px] uppercase tracking-widest text-primary">{isTrashView ? 'Đã xóa' : 'Ngày'}</th>
                             <th className="w-[220px] text-right pr-3 text-[10px] uppercase tracking-widest text-primary">Tác vụ</th>
                         </tr>
                     </thead>
@@ -1126,11 +1377,19 @@ const BlogList = () => {
                             <tr><td colSpan="9" className="py-14 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div></td></tr>
                         )}
                         {!loading && posts.length === 0 && (
-                            <tr><td colSpan="9" className="py-14 text-center text-stone/45 font-bold uppercase tracking-widest text-xs">Không có bài viết nào</td></tr>
+                            <tr><td colSpan="9" className="py-14 text-center text-stone/45 font-bold uppercase tracking-widest text-xs">{isTrashView ? 'Thùng rác đang trống' : 'Không có bài viết nào'}</td></tr>
                         )}
                         {!loading && posts.map((post) => (
                             <tr key={post.id} onDragOver={(e) => onPostDragOver(e, post.id)} onDrop={(e) => onPostDrop(e, post.id)} className={`${draggingPostId === post.id ? 'bg-primary/5' : dragOverPostId === post.id ? 'bg-gold/10' : 'hover:bg-gold/5'}`}>
-                                <td className="text-center py-2"><input type="checkbox" checked={selected.has(post.id)} onChange={() => toggleOne(post.id)} className="h-4 w-4 accent-primary cursor-pointer" /></td>
+                                <td className="text-center py-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={selected.has(post.id)}
+                                        onChange={() => toggleOne(post)}
+                                        disabled={!isTrashView && post.is_system}
+                                        className="h-4 w-4 accent-primary cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                                    />
+                                </td>
                                 <td className="text-center">
                                     <button type="button" draggable={!reorderLocked && !reorderingPosts} onDragStart={(e) => onPostDragStart(e, post.id)} onDragEnd={onPostDragEnd} className={`h-7 w-7 inline-flex items-center justify-center rounded-sm border ${reorderLocked ? 'border-stone/15 text-stone/25' : 'border-gold/20 text-stone/50 hover:text-primary'}`} title={reorderLocked ? 'Tắt bộ lọc để kéo thả' : 'Kéo thả sắp xếp'}>
                                         <span className="material-symbols-outlined text-[16px]">drag_indicator</span>
@@ -1149,7 +1408,11 @@ const BlogList = () => {
                                 </td>
                                 <td className="px-2 py-2">
                                     <div className="flex flex-wrap items-center gap-2">
-                                        <button type="button" onClick={() => navigate(`/admin/blog/edit/${post.id}`)} className="block max-w-full text-left text-[14px] font-bold text-primary hover:text-brick truncate" title={post.title}>{post.title}</button>
+                                        {isTrashView ? (
+                                            <div className="block max-w-full text-left text-[14px] font-bold text-primary truncate" title={post.title}>{post.title}</div>
+                                        ) : (
+                                            <button type="button" onClick={() => navigate(`/admin/blog/edit/${post.id}`)} className="block max-w-full text-left text-[14px] font-bold text-primary hover:text-brick truncate" title={post.title}>{post.title}</button>
+                                        )}
                                         {post.is_system && (
                                             <span className="inline-flex items-center rounded-sm border border-primary/20 bg-primary/5 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-primary">
                                                 Bài hệ thống
@@ -1161,38 +1424,63 @@ const BlogList = () => {
                                 </td>
                                 <td className="px-2 py-2">
                                     <div className="flex flex-col gap-1">
-                                        <select value={post.blog_category_id ? String(post.blog_category_id) : ''} onChange={(e) => updatePost(post.id, { blog_category_id: e.target.value ? Number(e.target.value) : null })} className="h-8 w-full bg-white border border-gold/20 px-2 text-[12px] text-primary focus:outline-none focus:border-primary rounded-sm">
-                                            <option value="">Chưa gắn danh mục</option>
-                                            {categories.map((category) => <option key={`row-cat-${category.id}`} value={String(category.id)}>{category.name}</option>)}
-                                        </select>
+                                        {isTrashView ? (
+                                            <div className="h-8 w-full inline-flex items-center border border-gold/20 bg-stone/5 px-2 text-[12px] text-stone/70 rounded-sm">
+                                                {post.category?.name || 'Không có danh mục'}
+                                            </div>
+                                        ) : (
+                                            <select value={post.blog_category_id ? String(post.blog_category_id) : ''} onChange={(e) => updatePost(post.id, { blog_category_id: e.target.value ? Number(e.target.value) : null })} className="h-8 w-full bg-white border border-gold/20 px-2 text-[12px] text-primary focus:outline-none focus:border-primary rounded-sm">
+                                                <option value="">Chưa gắn danh mục</option>
+                                                {categories.map((category) => <option key={`row-cat-${category.id}`} value={String(category.id)}>{category.name}</option>)}
+                                            </select>
+                                        )}
                                         <span className="text-[10px] text-stone/55">{post.category?.name || 'Không có danh mục'}</span>
                                     </div>
                                 </td>
                                 <td className="text-center">
-                                    <button type="button" onClick={() => updatePost(post.id, { is_published: !post.is_published })} className={`h-7 px-3 rounded-sm text-[10px] font-black uppercase tracking-widest border ${post.is_published ? 'bg-primary text-white border-primary' : 'bg-white text-stone/60 border-gold/20'}`}>{post.is_published ? 'Hiển thị' : 'Ẩn'}</button>
+                                    {isTrashView ? (
+                                        <span className={`h-7 px-3 inline-flex items-center justify-center rounded-sm text-[10px] font-black uppercase tracking-widest border ${post.is_published ? 'bg-primary text-white border-primary' : 'bg-white text-stone/60 border-gold/20'}`}>{post.is_published ? 'Hiển thị' : 'Ẩn'}</span>
+                                    ) : (
+                                        <button type="button" onClick={() => updatePost(post.id, { is_published: !post.is_published })} className={`h-7 px-3 rounded-sm text-[10px] font-black uppercase tracking-widest border ${post.is_published ? 'bg-primary text-white border-primary' : 'bg-white text-stone/60 border-gold/20'}`}>{post.is_published ? 'Hiển thị' : 'Ẩn'}</button>
+                                    )}
                                 </td>
                                 <td className="text-center">
-                                    <button type="button" onClick={() => updatePost(post.id, { is_starred: !post.is_starred })} className={`h-8 w-8 inline-flex items-center justify-center rounded-full border ${post.is_starred ? 'bg-gold/15 border-gold/40 text-gold' : 'bg-white border-gold/20 text-stone/40'}`} title={post.is_starred ? 'Bỏ sao' : 'Gắn sao'}>
-                                        <span className="material-symbols-outlined text-[18px]">{post.is_starred ? 'star' : 'star_outline'}</span>
-                                    </button>
+                                    {isTrashView ? (
+                                        <span className={`h-8 w-8 inline-flex items-center justify-center rounded-full border ${post.is_starred ? 'bg-gold/15 border-gold/40 text-gold' : 'bg-white border-gold/20 text-stone/40'}`}>
+                                            <span className="material-symbols-outlined text-[18px]">{post.is_starred ? 'star' : 'star_outline'}</span>
+                                        </span>
+                                    ) : (
+                                        <button type="button" onClick={() => updatePost(post.id, { is_starred: !post.is_starred })} className={`h-8 w-8 inline-flex items-center justify-center rounded-full border ${post.is_starred ? 'bg-gold/15 border-gold/40 text-gold' : 'bg-white border-gold/20 text-stone/40'}`} title={post.is_starred ? 'Bỏ sao' : 'Gắn sao'}>
+                                            <span className="material-symbols-outlined text-[18px]">{post.is_starred ? 'star' : 'star_outline'}</span>
+                                        </button>
+                                    )}
                                 </td>
-                                <td className="text-center text-[12px] text-stone/80">{formatDate(post.published_at || post.created_at)}</td>
+                                <td className="text-center text-[12px] text-stone/80">{formatDate(isTrashView ? post.deleted_at : (post.published_at || post.created_at))}</td>
                                 <td className="pr-3">
                                     <div className="flex items-center justify-end gap-1">
-                                        <button type="button" onClick={() => openOnWeb(post)} className="h-8 px-2.5 border border-gold/20 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest">Xem ngoài web</button>
-                                        <button
-                                            type="button"
-                                            onClick={() => handleExportBundle([post.id], `blog-export-${post.slug || post.id}.zip`)}
-                                            disabled={exportingBundle || importingBundle}
-                                            className="h-8 px-2.5 border border-gold/20 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest disabled:opacity-60"
-                                        >
-                                            Xuất
-                                        </button>
-                                        <button type="button" onClick={() => navigate(`/admin/blog/edit/${post.id}`)} className="h-8 w-8 inline-flex items-center justify-center border border-gold/20 text-stone/60 hover:text-primary rounded-sm" title="Sửa"><span className="material-symbols-outlined text-[16px]">edit_square</span></button>
-                                        {post.is_system ? (
-                                            <button type="button" disabled className="h-8 w-8 inline-flex items-center justify-center border border-gold/20 bg-stone/5 text-stone/25 rounded-sm cursor-not-allowed" title="Bài hệ thống không thể xóa"><span className="material-symbols-outlined text-[16px]">delete</span></button>
+                                        {isTrashView ? (
+                                            <>
+                                                <button type="button" onClick={() => restorePost(post)} className="h-8 px-2.5 border border-emerald-600/25 text-emerald-700 hover:bg-emerald-600 hover:text-white rounded-sm text-[10px] font-bold uppercase tracking-widest">Khôi phục</button>
+                                                <button type="button" onClick={() => permanentlyDeletePost(post)} className="h-8 w-8 inline-flex items-center justify-center border border-brick/25 text-brick hover:bg-brick hover:text-white rounded-sm" title="Xóa vĩnh viễn"><span className="material-symbols-outlined text-[16px]">delete_forever</span></button>
+                                            </>
                                         ) : (
-                                            <button type="button" onClick={() => deletePost(post)} className="h-8 w-8 inline-flex items-center justify-center border border-gold/20 text-stone/60 hover:text-brick rounded-sm" title="Xóa"><span className="material-symbols-outlined text-[16px]">delete</span></button>
+                                            <>
+                                                <button type="button" onClick={() => openOnWeb(post)} className="h-8 px-2.5 border border-gold/20 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest">Xem ngoài web</button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleExportBundle([post.id], `blog-export-${post.slug || post.id}.zip`)}
+                                                    disabled={exportingBundle || importingBundle}
+                                                    className="h-8 px-2.5 border border-gold/20 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest disabled:opacity-60"
+                                                >
+                                                    Xuất
+                                                </button>
+                                                <button type="button" onClick={() => navigate(`/admin/blog/edit/${post.id}`)} className="h-8 w-8 inline-flex items-center justify-center border border-gold/20 text-stone/60 hover:text-primary rounded-sm" title="Sửa"><span className="material-symbols-outlined text-[16px]">edit_square</span></button>
+                                                {post.is_system ? (
+                                                    <button type="button" disabled className="h-8 w-8 inline-flex items-center justify-center border border-gold/20 bg-stone/5 text-stone/25 rounded-sm cursor-not-allowed" title="Bài hệ thống không thể xóa"><span className="material-symbols-outlined text-[16px]">delete</span></button>
+                                                ) : (
+                                                    <button type="button" onClick={() => movePostToTrash(post)} className="h-8 w-8 inline-flex items-center justify-center border border-gold/20 text-stone/60 hover:text-brick rounded-sm" title="Xóa"><span className="material-symbols-outlined text-[16px]">delete</span></button>
+                                                )}
+                                            </>
                                         )}
                                     </div>
                                 </td>

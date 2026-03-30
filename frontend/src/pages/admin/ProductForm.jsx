@@ -19,7 +19,6 @@ import { compressImage, formatBytes } from '../../utils/imageUtils';
 import {
     formatRoundedImportCost,
     formatWholeMoneyInput,
-    normalizeRoundedImportCostDraft,
     normalizeRoundedImportCostNumber,
     normalizeWholeMoneyDraft,
     normalizeWholeMoneyNumber,
@@ -210,7 +209,7 @@ const DraggableBundleItem = ({
 
     const [{ isDragging }, drag] = useDrag({
         type: `bundle_item_${optionId}`,
-        item: () => ({ id: item.id, index, optionId }),
+        item: () => ({ id: item.entry_id || item.id, index, optionId }),
         canDrag: isSortingMode,
         collect: (monitor) => ({
             isDragging: monitor.isDragging(),
@@ -235,7 +234,7 @@ const DraggableBundleItem = ({
                 ) : (
                     <button
                         type="button"
-                        onClick={() => handleSetDefaultInOption(optionId, item.id)}
+                        onClick={() => handleSetDefaultInOption(optionId, item.entry_id || item.id)}
                         className={`size-6 mx-auto rounded-full flex items-center justify-center transition-all ${item.is_default ? 'bg-primary text-white shadow-sm' : 'bg-stone/10 text-black/20 hover:bg-stone/20'}`}
                         title={item.is_default ? "Sản phẩm mặc định" : "Đặt làm mặc định"}
                     >
@@ -282,11 +281,11 @@ const DraggableBundleItem = ({
                 {item.type === 'configurable' ? (
                     <select
                         value={item.variant_id || ''}
-                        onChange={(e) => handleUpdateBundleItemVariant(optionId, item.id, e.target.value)}
+                        onChange={(e) => handleUpdateBundleItemVariant(optionId, item.entry_id || item.id, e.target.value)}
                         className="w-full bg-stone/5 border border-stone/10 rounded px-2 py-1 text-[11px] font-bold text-black focus:outline-none focus:border-gold/30"
                     >
                         <option value="">Chọn phân loại...</option>
-                        {(bundleItemVariants[item.id] || []).map(v => (
+                        {(bundleItemVariants[item.product_id || item.id] || []).map(v => (
                             <option key={v.id} value={v.id}>{v.name || (v.attribute_values || []).map(av => av.value).join(' / ')}</option>
                         ))}
                     </select>
@@ -301,18 +300,18 @@ const DraggableBundleItem = ({
                 <div className="flex items-center justify-center gap-1 bg-white border border-stone/10 rounded-full px-2 py-0.5 mx-auto w-fit">
                     <button
                         type="button"
-                        onClick={() => handleUpdateBundleItemQty(optionId, item.id, Math.max(1, item.quantity - 1))}
+                        onClick={() => handleUpdateBundleItemQty(optionId, item.entry_id || item.id, Math.max(1, item.quantity - 1))}
                         className="material-symbols-outlined text-[16px] text-black/40 hover:text-brick"
                     >remove</button>
                     <input
                         type="number"
                         value={item.quantity}
-                        onChange={(e) => handleUpdateBundleItemQty(optionId, item.id, e.target.value)}
+                        onChange={(e) => handleUpdateBundleItemQty(optionId, item.entry_id || item.id, e.target.value)}
                         className="w-8 text-center bg-transparent border-none p-0 text-[12px] font-black text-black focus:ring-0"
                     />
                     <button
                         type="button"
-                        onClick={() => handleUpdateBundleItemQty(optionId, item.id, item.quantity + 1)}
+                        onClick={() => handleUpdateBundleItemQty(optionId, item.entry_id || item.id, item.quantity + 1)}
                         className="material-symbols-outlined text-[16px] text-black/40 hover:text-primary"
                     >add</button>
                 </div>
@@ -320,11 +319,119 @@ const DraggableBundleItem = ({
             <td className="px-3 py-3 text-right">
                 <button
                     type="button"
-                    onClick={() => handleRemoveItemFromOption(optionId, item.id)}
+                    onClick={() => handleRemoveItemFromOption(optionId, item.entry_id || item.id)}
                     className="size-8 rounded-full flex items-center justify-center text-black/20 hover:text-brick hover:bg-brick/5 opacity-0 group-hover/row:opacity-100 transition-all"
                 >
                     <span className="material-symbols-outlined text-[18px]">delete</span>
                 </button>
+            </td>
+        </tr>
+    );
+};
+
+const DraggableBundleOptionRow = ({
+    index,
+    option,
+    optionCount,
+    moveBundleOption,
+    onMoveUp,
+    onMoveDown,
+}) => {
+    const ref = useRef(null);
+    const productCount = Array.isArray(option?.items) ? option.items.length : 0;
+    const defaultItem = option?.items?.find((item) => item.is_default) || option?.items?.[0] || null;
+    const linkedPostTitle = option?.post_title || 'Chua lien ket bai viet';
+    const isFirst = index === 0;
+    const isLast = index === optionCount - 1;
+
+    const [, drop] = useDrop({
+        accept: 'bundle_option_group',
+        hover(draggedItem, monitor) {
+            if (!ref.current) return;
+            const dragIndex = draggedItem.index;
+            const hoverIndex = index;
+            if (dragIndex === hoverIndex) return;
+
+            const hoverBoundingRect = ref.current?.getBoundingClientRect();
+            const hoverMiddleY = (hoverBoundingRect.bottom - hoverBoundingRect.top) / 2;
+            const clientOffset = monitor.getClientOffset();
+            const hoverClientY = clientOffset.y - hoverBoundingRect.top;
+
+            if (dragIndex < hoverIndex && hoverClientY < hoverMiddleY) return;
+            if (dragIndex > hoverIndex && hoverClientY > hoverMiddleY) return;
+
+            moveBundleOption(dragIndex, hoverIndex);
+            draggedItem.index = hoverIndex;
+        },
+    });
+
+    const [{ isDragging }, drag] = useDrag({
+        type: 'bundle_option_group',
+        item: () => ({ id: option.id, index }),
+        canDrag: optionCount > 1,
+        collect: (monitor) => ({
+            isDragging: monitor.isDragging(),
+        }),
+    });
+
+    drag(drop(ref));
+
+    return (
+        <tr
+            ref={ref}
+            className={`border-b border-stone/10 transition-colors ${isDragging ? 'bg-gold/5 opacity-40' : 'hover:bg-gold/[0.03]'}`}
+        >
+            <td className="w-[88px] px-4 py-3 border-r border-stone/10">
+                <div className="flex items-center justify-center gap-2">
+                    <span className={`material-symbols-outlined text-[18px] ${optionCount > 1 ? 'cursor-move text-stone/45' : 'text-stone/20'}`}>
+                        reorder
+                    </span>
+                    <span className="flex h-7 w-7 items-center justify-center rounded-full border border-gold/15 bg-gold/5 text-[11px] font-black text-primary">
+                        {index + 1}
+                    </span>
+                </div>
+            </td>
+            <td className="px-4 py-3 border-r border-stone/10">
+                <div className="min-w-0">
+                    <p className="truncate text-[13px] font-black text-primary" title={option?.title || `Tuy chon ${index + 1}`}>
+                        {option?.title || `Tuy chon ${index + 1}`}
+                    </p>
+                    <p className="mt-1 truncate text-[11px] text-stone/55" title={defaultItem?.name || 'Chua co san pham mac dinh'}>
+                        {defaultItem?.name ? `Mac dinh: ${defaultItem.name}` : 'Chua co san pham trong tuy chon nay'}
+                    </p>
+                </div>
+            </td>
+            <td className="px-4 py-3 border-r border-stone/10">
+                <p className={`truncate text-[11px] ${option?.post_title ? 'font-semibold text-gold' : 'italic text-stone/45'}`} title={linkedPostTitle}>
+                    {linkedPostTitle}
+                </p>
+            </td>
+            <td className="w-[120px] px-4 py-3 text-center border-r border-stone/10">
+                <span className="inline-flex rounded-full bg-primary/[0.06] px-3 py-1 text-[11px] font-black text-primary">
+                    {productCount} SP
+                </span>
+            </td>
+            <td className="w-[124px] px-4 py-3">
+                <div className="flex items-center justify-center gap-2">
+                    <button
+                        type="button"
+                        onClick={onMoveUp}
+                        disabled={isFirst}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-stone/15 text-stone/45 transition-all hover:border-primary/25 hover:text-primary disabled:cursor-not-allowed disabled:opacity-30"
+                        title="Di chuyen len"
+                    >
+                        <span className="material-symbols-outlined text-[16px]">keyboard_arrow_up</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onMoveDown}
+                        disabled={isLast}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-stone/15 text-stone/45 transition-all hover:border-primary/25 hover:text-primary disabled:cursor-not-allowed disabled:opacity-30"
+                        title="Di chuyen xuong"
+                    >
+                        <span className="material-symbols-outlined text-[16px]">keyboard_arrow_down</span>
+                    </button>
+                </div>
             </td>
         </tr>
     );
@@ -413,6 +520,10 @@ const formatNumberOutput = (num) => {
 
 const formatImportCostOutput = (num) => {
     return formatRoundedImportCost(num);
+};
+
+const formatImportCostInput = (num) => {
+    return formatWholeMoneyInput(num);
 };
 
 const removeAccents = (str) => {
@@ -798,6 +909,29 @@ const quillFormats = [
     'align'
 ];
 
+const normalizeSpecificationRows = (rows = []) => (
+    Array.isArray(rows)
+        ? rows
+            .map((item) => ({
+                label: String(item?.label ?? '').trim(),
+                value: String(item?.value ?? '').trim(),
+            }))
+            .filter((item) => item.label || item.value)
+        : []
+);
+
+const normalizeAdditionalInfoRows = (rows = []) => (
+    Array.isArray(rows)
+        ? rows
+            .map((item) => ({
+                title: String(item?.title ?? '').trim(),
+                post_id: item?.post_id ? String(item.post_id).trim() : '',
+                post_title: String(item?.post_title ?? '').trim(),
+            }))
+            .filter((item) => item.title && item.post_id)
+        : []
+);
+
 const ProductForm = () => {
     const { id } = useParams();
     const isEdit = !!id;
@@ -894,6 +1028,7 @@ const ProductForm = () => {
     const [isSortingBundle, setIsSortingBundle] = useState({}); // { optionId: boolean }
     const [bundleItemVariants, setBundleItemVariants] = useState({}); // { productId: [variants] }
     const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
+    const [showBundleOptionSorter, setShowBundleOptionSorter] = useState(false);
 
     // Filters for Related Products suggestions
     const [relatedQuery, setRelatedQuery] = useState('');
@@ -947,12 +1082,167 @@ const ProductForm = () => {
         return parsedValue ?? '';
     };
 
+    const normalizeImportCostDraftValue = (value) => {
+        return normalizeWholeMoneyDraft(value);
+    };
+
+    useEffect(() => {
+        if (formData.type !== 'bundle' || bundleOptions.length === 0) {
+            setShowBundleOptionSorter(false);
+        }
+    }, [bundleOptions.length, formData.type]);
+
+    const compositeItemsForPricing = useMemo(() => {
+        if (formData.type === 'bundle' && bundleOptions.length > 0) {
+            return bundleOptions.flatMap((option) => (
+                option.items.map((item) => ({
+                    ...item,
+                    option_title: option.title,
+                    option_post_id: option.post_id || '',
+                }))
+            ));
+        }
+
+        return Array.isArray(formData.grouped_items) ? formData.grouped_items : [];
+    }, [bundleOptions, formData.grouped_items, formData.type]);
+
+    const compositeSumPrice = useMemo(
+        () => compositeItemsForPricing.reduce((total, item) => {
+            const quantity = Number(item?.quantity ?? 0);
+            const unitPrice = normalizeWholeMoneyNumber(item?.price) ?? 0;
+            return total + unitPrice * (Number.isFinite(quantity) ? quantity : 0);
+        }, 0),
+        [compositeItemsForPricing]
+    );
+
+    const handleImportCostFieldBlur = (field) => {
+        setFormData((prev) => {
+            const normalizedValue = normalizeImportCostValue(prev[field]);
+            return prev[field] === normalizedValue
+                ? prev
+                : { ...prev, [field]: normalizedValue };
+        });
+    };
+
+    const handleVariantImportCostBlur = (index) => {
+        setVariants((prev) => prev.map((variant, variantIndex) => {
+            if (variantIndex !== index) return variant;
+            const normalizedValue = normalizeImportCostValue(variant.expected_cost);
+            return variant.expected_cost === normalizedValue
+                ? variant
+                : { ...variant, expected_cost: normalizedValue };
+        }));
+    };
+
+    const handleVariantQuickUpdateImportCostBlur = () => {
+        setVariantQuickUpdateForm((prev) => {
+            const normalizedValue = normalizeImportCostValue(prev.expected_cost);
+            return prev.expected_cost === normalizedValue
+                ? prev
+                : { ...prev, expected_cost: normalizedValue };
+        });
+    };
+
     const resolveDuplicateSafeCost = (primaryValue, fallbackValue = null) => {
         if (isDuplicate) {
             return '';
         }
 
         return normalizeImportCostValue(primaryValue ?? fallbackValue);
+    };
+
+    const createBundleItemEntryId = () => `bundle-item-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+    const getBundleItemProductId = (item) => Number(item?.product_id ?? item?.id ?? 0);
+
+    const getBundleVariantLabel = (variant) => {
+        const variantName = String(variant?.name || '').trim();
+        if (variantName) {
+            return variantName;
+        }
+
+        return (variant?.attribute_values || [])
+            .map((attributeValue) => attributeValue?.value)
+            .filter(Boolean)
+            .join(' / ')
+            .trim() || String(variant?.sku || '').trim();
+    };
+
+    const resolveBundleItemImage = (product) => {
+        return (product?.images?.find((image) => image.is_primary) || product?.images?.[0])?.image_url || '';
+    };
+
+    const restoreBundleItemBaseDisplay = (item) => ({
+        ...item,
+        variant_id: null,
+        variant_label: '',
+        name: item.product_name || item.name,
+        sku: item.product_sku || item.sku,
+        price: item.product_price ?? item.price,
+        cost_price: item.product_cost_price ?? item.cost_price,
+        image_url: item.product_image_url || item.image_url,
+    });
+
+    const applyBundleItemVariantDisplay = (item, variant) => {
+        if (!variant) {
+            return restoreBundleItemBaseDisplay(item);
+        }
+
+        return {
+            ...item,
+            variant_id: variant.id,
+            variant_label: getBundleVariantLabel(variant),
+            name: variant.name || item.product_name || item.name,
+            sku: variant.sku || item.product_sku || item.sku,
+            price: normalizeMoneyValue(variant.price ?? item.price),
+            cost_price: resolveDuplicateSafeCost(variant.cost_price, item.product_cost_price),
+            image_url: resolveBundleItemImage(variant) || item.product_image_url || item.image_url,
+        };
+    };
+
+    const hydrateBundleItemsWithVariants = (productId, variants = []) => {
+        const normalizedProductId = Number(productId);
+        if (!normalizedProductId) {
+            return;
+        }
+
+        setBundleOptions((prev) => prev.map((option) => ({
+            ...option,
+            items: option.items.map((item) => {
+                if (getBundleItemProductId(item) !== normalizedProductId || !item.variant_id) {
+                    return item;
+                }
+
+                const selectedVariant = variants.find((variant) => Number(variant.id) === Number(item.variant_id));
+                return selectedVariant
+                    ? applyBundleItemVariantDisplay(item, selectedVariant)
+                    : restoreBundleItemBaseDisplay(item);
+            }),
+        })));
+    };
+
+    const loadBundleVariantsForProduct = async (productId, forceRefresh = false) => {
+        const normalizedProductId = Number(productId);
+        if (!normalizedProductId) {
+            return [];
+        }
+
+        const cachedVariants = bundleItemVariants[normalizedProductId];
+        if (!forceRefresh && cachedVariants) {
+            hydrateBundleItemsWithVariants(normalizedProductId, cachedVariants);
+            return cachedVariants;
+        }
+
+        try {
+            const response = await productApi.getOne(normalizedProductId);
+            const variants = (response.data.linked_products || []).filter((product) => product.pivot?.link_type === 'super_link');
+            setBundleItemVariants((prev) => ({ ...prev, [normalizedProductId]: variants }));
+            hydrateBundleItemsWithVariants(normalizedProductId, variants);
+            return variants;
+        } catch (error) {
+            console.error('Error fetching bundle item variants', error);
+            return [];
+        }
     };
 
     const localSkuValidation = useMemo(() => {
@@ -1749,6 +2039,7 @@ const ProductForm = () => {
                 linked_product_ids: data.linked_products ? data.linked_products.map(p => p.id) : [],
                 grouped_items: (data.bundle_items || data.grouped_items || []).map(item => ({
                     id: item.id,
+                    product_id: item.id,
                     name: item.name,
                     sku: item.sku,
                     price: normalizeMoneyValue(item.pivot?.price ?? item.price),
@@ -1757,6 +2048,7 @@ const ProductForm = () => {
                     is_required: !!(item.pivot?.is_required),
                     option_title: item.pivot?.option_title || '',
                     is_default: !!(item.pivot?.is_default),
+                    variant_id: item.pivot?.variant_id || null,
                     image_url: (item.images?.find(img => img.is_primary) || item.images?.[0])?.image_url
                 })),
                 super_attribute_ids: data.super_attributes ? data.super_attributes.map(a => a.id) : [],
@@ -1794,6 +2086,7 @@ const ProductForm = () => {
 
             // Handle Bundle Options organization
             if (data.type === 'bundle') {
+                setBundleItemVariants({});
                 const bItems = data.bundle_items || data.grouped_items || [];
                 const optionsMap = {};
                 bItems.forEach(item => {
@@ -1810,7 +2103,14 @@ const ProductForm = () => {
                     }
 
                     optionsMap[title].items.push({
+                        entry_id: createBundleItemEntryId(),
                         id: item.id,
+                        product_id: item.id,
+                        product_name: item.name,
+                        product_sku: item.sku,
+                        product_price: normalizeMoneyValue(item.price),
+                        product_cost_price: resolveDuplicateSafeCost(item.cost_price),
+                        product_image_url: (item.images?.find(img => img.is_primary) || item.images?.[0])?.image_url,
                         name: item.name,
                         sku: item.sku,
                         price: normalizeMoneyValue(item.pivot?.price ?? item.price),
@@ -1823,14 +2123,6 @@ const ProductForm = () => {
                         variant_id: item.pivot?.variant_id || null,
                         variant_label: ''
                     });
-
-                    // Fetch variants if configurable
-                    if (item.type === 'configurable') {
-                        productApi.getOne(item.id).then(res => {
-                            const vars = (res.data.linked_products || []).filter(p => p.pivot?.link_type === 'super_link');
-                            setBundleItemVariants(prev => ({ ...prev, [item.id]: vars }));
-                        }).catch(e => console.error(e));
-                    }
                 });
                 setBundleOptions(Object.entries(optionsMap).map(([title, optionData]) => ({
                     id: Math.random().toString(36).substr(2, 9),
@@ -1839,8 +2131,18 @@ const ProductForm = () => {
                     post_title: optionData.post_title || '',
                     items: optionData.items
                 })));
+
+                Array.from(new Set(
+                    bItems
+                        .filter((item) => item.type === 'configurable')
+                        .map((item) => Number(item.id))
+                        .filter(Boolean)
+                )).forEach((productId) => {
+                    void loadBundleVariantsForProduct(productId, true);
+                });
             } else {
                 setBundleOptions([]);
+                setBundleItemVariants({});
             }
 
             // Handle variants from linked_products with 'super_link' type
@@ -2354,7 +2656,7 @@ const ProductForm = () => {
 
     const handlePriceInputChange = (e, field) => {
         const raw = field === 'expected_cost' || field === 'cost_price'
-            ? normalizeRoundedImportCostDraft(e.target.value)
+            ? normalizeImportCostDraftValue(e.target.value)
             : normalizeWholeMoneyDraft(e.target.value);
         setFormData(prev => ({ ...prev, [field]: raw }));
     };
@@ -2414,7 +2716,7 @@ const ProductForm = () => {
         if (field === 'price') {
             value = normalizeWholeMoneyDraft(value);
         } else if (field === 'expected_cost') {
-            value = normalizeRoundedImportCostDraft(value);
+            value = normalizeImportCostDraftValue(value);
         } else if (field === 'weight') {
             value = value.toString().replace(/[^0-9]/g, '');
         }
@@ -2485,7 +2787,7 @@ const ProductForm = () => {
         if (field === 'price') {
             nextValue = normalizeWholeMoneyDraft(value);
         } else if (field === 'expected_cost') {
-            nextValue = normalizeRoundedImportCostDraft(value);
+            nextValue = normalizeImportCostDraftValue(value);
         } else if (field === 'weight') {
             nextValue = value.replace(/[^0-9]/g, '');
         }
@@ -2678,20 +2980,19 @@ const ProductForm = () => {
                 return o;
             }
             
-            // Fetch variants if configurable
-            if (product.type === 'configurable' && !bundleItemVariants[product.id]) {
-                productApi.getOne(product.id).then(res => {
-                    const variants = (res.data.linked_products || []).filter(p => p.pivot?.link_type === 'super_link');
-                    setBundleItemVariants(prev => ({ ...prev, [product.id]: variants }));
-                }).catch(e => console.error("Error fetching variants for bundle item", e));
-            }
-
             const primaryImage = product.images?.find(img => img.is_primary) || product.images?.[0];
             const newItem = {
+                entry_id: createBundleItemEntryId(),
                 id: product.id,
+                product_id: product.id,
+                product_name: product.name,
+                product_sku: product.sku,
+                product_price: normalizeMoneyValue(product.price),
+                product_cost_price: isDuplicate ? '' : normalizeImportCostValue(product.cost_price),
+                product_image_url: primaryImage?.image_url,
                 name: product.name,
                 sku: product.sku,
-                price: product.price,
+                price: normalizeMoneyValue(product.price),
                 cost_price: isDuplicate ? '' : normalizeImportCostValue(product.cost_price),
                 quantity: 1,
                 is_required: true,
@@ -2703,63 +3004,59 @@ const ProductForm = () => {
             };
             return { ...o, items: [...o.items, newItem] };
         }));
+
+        if (product.type === 'configurable') {
+            void loadBundleVariantsForProduct(product.id);
+        }
     };
 
-    const handleRemoveItemFromOption = (optionId, productId) => {
+    const handleRemoveItemFromOption = (optionId, entryId) => {
         setBundleOptions(prev => prev.map(o => {
             if (o.id !== optionId) return o;
-            const newItems = o.items.filter(it => it.id !== productId);
+            const newItems = o.items.filter(it => it.entry_id !== entryId);
             // Nếu xóa trúng sp đang là default, đặt sp đầu tiên còn lại làm default
-            if (o.items.find(it => it.id === productId)?.is_default && newItems.length > 0) {
-                newItems[0].is_default = true;
+            if (o.items.find(it => it.entry_id === entryId)?.is_default && newItems.length > 0) {
+                newItems[0] = { ...newItems[0], is_default: true };
             }
             return { ...o, items: newItems };
         }));
     };
 
-    const handleSetDefaultInOption = (optionId, productId) => {
+    const handleSetDefaultInOption = (optionId, entryId) => {
         setBundleOptions(prev => prev.map(o => {
             if (o.id !== optionId) return o;
             return {
                 ...o,
-                items: o.items.map(it => ({ ...it, is_default: it.id === productId }))
+                items: o.items.map(it => ({ ...it, is_default: it.entry_id === entryId }))
             };
         }));
     };
 
-    const handleUpdateBundleItemQty = (optionId, productId, quantity) => {
+    const handleUpdateBundleItemQty = (optionId, entryId, quantity) => {
         setBundleOptions(prev => prev.map(o => {
             if (o.id !== optionId) return o;
             return {
                 ...o,
-                items: o.items.map(it => it.id === productId ? { ...it, quantity: Math.max(1, parseInt(quantity) || 1) } : it)
+                items: o.items.map(it => it.entry_id === entryId ? { ...it, quantity: Math.max(1, parseInt(quantity) || 1) } : it)
             };
         }));
     };
 
-    const handleUpdateBundleItemVariant = (optionId, productId, variantId) => {
+    const handleUpdateBundleItemVariant = (optionId, entryId, variantId) => {
         setBundleOptions(prev => prev.map(o => {
             if (o.id !== optionId) return o;
             
             return {
                 ...o,
                 items: o.items.map(it => {
-                    if (it.id !== productId) return it;
-                    
-                    const variants = bundleItemVariants[productId] || [];
-                    const selectedVariant = variants.find(v => v.id === parseInt(variantId));
-                    
-                    if (!selectedVariant) return { ...it, variant_id: null, variant_label: '' };
-                    
-                    return {
-                        ...it,
-                        variant_id: selectedVariant.id,
-                        variant_label: selectedVariant.name || (selectedVariant.attribute_values || []).map(av => av.value).join(' / '),
-                        sku: selectedVariant.sku,
-                        price: selectedVariant.price,
-                        cost_price: isDuplicate ? '' : normalizeImportCostValue(selectedVariant.cost_price),
-                        image_url: (selectedVariant.images?.find(img => img.is_primary) || selectedVariant.images?.[0])?.image_url || it.image_url
-                    };
+                    if (it.entry_id !== entryId) return it;
+
+                    const variants = bundleItemVariants[getBundleItemProductId(it)] || [];
+                    const selectedVariant = variants.find(v => Number(v.id) === Number(variantId));
+
+                    return selectedVariant
+                        ? applyBundleItemVariantDisplay(it, selectedVariant)
+                        : restoreBundleItemBaseDisplay(it);
                 })
             };
         }));
@@ -2774,6 +3071,29 @@ const ProductForm = () => {
             newItems.splice(hoverIndex, 0, dragItem);
             return { ...o, items: newItems };
         }));
+    };
+
+    const moveBundleOption = (dragIndex, hoverIndex) => {
+        setBundleOptions((prev) => {
+            if (
+                dragIndex === hoverIndex
+                || dragIndex < 0
+                || hoverIndex < 0
+                || dragIndex >= prev.length
+                || hoverIndex >= prev.length
+            ) {
+                return prev;
+            }
+
+            const next = [...prev];
+            const [draggedOption] = next.splice(dragIndex, 1);
+            next.splice(hoverIndex, 0, draggedOption);
+            return next;
+        });
+    };
+
+    const moveBundleOptionByOffset = (index, offset) => {
+        moveBundleOption(index, index + offset);
     };
 
     const toggleBundleSorting = (optionId) => {
@@ -2792,31 +3112,38 @@ const ProductForm = () => {
         setIsRefreshingPrices(true);
         try {
             const allItems = bundleOptions.flatMap(opt => opt.items);
-            const updatedItemsMap = {}; // { key: {price, sku} }
+            const parentItemMap = {};
+            const variantItemMap = {};
             
             // Collect unique product IDs to fetch
-            const productIds = [...new Set(allItems.map(it => it.id))];
+            const productIds = [...new Set(allItems.map(it => getBundleItemProductId(it)).filter(Boolean))];
             
             await Promise.all(productIds.map(async (pId) => {
                 try {
                     const res = await productApi.getOne(pId);
                     const product = res.data;
+                    const primaryImage = resolveBundleItemImage(product);
                     
-                    // Root product price
-                    updatedItemsMap[pId] = {
-                        price: product.price,
-                        cost_price: isDuplicate ? '' : normalizeImportCostValue(product.cost_price),
-                        sku: product.sku
+                    parentItemMap[pId] = {
+                        product_name: product.name,
+                        product_sku: product.sku,
+                        product_price: normalizeMoneyValue(product.price),
+                        product_cost_price: isDuplicate ? '' : normalizeImportCostValue(product.cost_price),
+                        product_image_url: primaryImage,
                     };
 
                     // Variant prices
                     if (product.type === 'configurable') {
                         const variants = (product.linked_products || []).filter(p => p.pivot?.link_type === 'super_link');
                         variants.forEach(v => {
-                            updatedItemsMap[`${pId}_${v.id}`] = {
-                                price: v.price,
+                            variantItemMap[`${pId}_${v.id}`] = {
+                                variant_id: v.id,
+                                variant_label: getBundleVariantLabel(v),
+                                name: v.name || product.name,
+                                sku: v.sku || product.sku,
+                                price: normalizeMoneyValue(v.price),
                                 cost_price: isDuplicate ? '' : normalizeImportCostValue(v.cost_price),
-                                sku: v.sku
+                                image_url: resolveBundleItemImage(v) || primaryImage
                             };
                         });
                         // Update cache for variant selectors
@@ -2830,12 +3157,26 @@ const ProductForm = () => {
             setBundleOptions(prev => prev.map(opt => ({
                 ...opt,
                 items: opt.items.map(item => {
-                    const key = item.variant_id ? `${item.id}_${item.variant_id}` : item.id;
-                    const updates = updatedItemsMap[key] || updatedItemsMap[item.id];
-                    if (updates) {
-                        return { ...item, ...updates };
+                    const productId = getBundleItemProductId(item);
+                    const parentUpdates = parentItemMap[productId];
+                    const withParentData = parentUpdates
+                        ? {
+                            ...item,
+                            ...parentUpdates,
+                        }
+                        : item;
+
+                    if (item.variant_id) {
+                        const variantUpdates = variantItemMap[`${productId}_${item.variant_id}`];
+                        if (variantUpdates) {
+                            return {
+                                ...withParentData,
+                                ...variantUpdates,
+                            };
+                        }
                     }
-                    return item;
+
+                    return restoreBundleItemBaseDisplay(withParentData);
                 })
             })));
 
@@ -2884,6 +3225,7 @@ const ProductForm = () => {
         setIsSaving(true);
         try {
             const submitData = new FormData();
+            const shouldAutoSumCompositePrice = ['grouped', 'bundle'].includes(formData.type) && formData.price_type === 'sum';
 
             // Build FormData from state
             Object.entries(formData).forEach(([key, val]) => {
@@ -2910,18 +3252,9 @@ const ProductForm = () => {
                         });
                     }
                 } else if (key === 'grouped_items') {
-                    let itemsToSubmit = val;
-                    if (formData.type === 'bundle' && bundleOptions.length > 0) {
-                        itemsToSubmit = bundleOptions.flatMap(opt => 
-                            opt.items.map(it => ({
-                                ...it,
-                                option_title: opt.title,
-                                option_post_id: opt.post_id || ''
-                            }))
-                        );
-                    }
+                    const itemsToSubmit = compositeItemsForPricing;
                     itemsToSubmit.forEach((item, idx) => {
-                        submitData.append(`grouped_items[${idx}][id]`, item.id);
+                        submitData.append(`grouped_items[${idx}][id]`, item.product_id ?? item.id);
                         submitData.append(`grouped_items[${idx}][quantity]`, item.quantity);
                         submitData.append(`grouped_items[${idx}][is_required]`, item.is_required ? '1' : '0');
                         submitData.append(`grouped_items[${idx}][option_title]`, item.option_title || '');
@@ -2931,18 +3264,19 @@ const ProductForm = () => {
                         submitData.append(`grouped_items[${idx}][is_default]`, item.is_default ? '1' : '0');
                         submitData.append(`grouped_items[${idx}][price]`, item.price || 0);
                         if (item.cost_price !== undefined && item.cost_price !== null) {
-                            submitData.append(`grouped_items[${idx}][cost_price]`, item.cost_price);
+                            const normalizedGroupCost = normalizeRoundedImportCostNumber(item.cost_price);
+                            if (normalizedGroupCost !== null) {
+                                submitData.append(`grouped_items[${idx}][cost_price]`, normalizedGroupCost);
+                            }
                         }
                         if (item.variant_id) {
                             submitData.append(`grouped_items[${idx}][variant_id]`, item.variant_id);
                         }
                     });
                 } else if (key === 'specifications') {
-                    const validSpecs = val.filter(s => s.label.trim() || s.value.trim());
-                    submitData.append(key, JSON.stringify(validSpecs));
+                    submitData.append(key, JSON.stringify(normalizeSpecificationRows(val)));
                 } else if (key === 'additional_info') {
-                    const validInfo = val.filter(i => i.title.trim() && i.post_id);
-                    submitData.append(key, JSON.stringify(validInfo));
+                    submitData.append(key, JSON.stringify(normalizeAdditionalInfoRows(val)));
                 } else if (key === 'supplier_ids') {
                     if (Array.isArray(val) && val.length > 0) {
                         val.forEach((supplierId) => submitData.append('supplier_ids[]', supplierId));
@@ -2954,13 +3288,22 @@ const ProductForm = () => {
                 } else if (typeof val === 'boolean') {
                     submitData.append(key, val ? '1' : '0');
                 } else if (val !== '' && val !== null && val !== undefined) {
-                    if (key === 'description') {
+                    if (key === 'expected_cost' || key === 'cost_price') {
+                        const normalizedValue = normalizeRoundedImportCostNumber(val);
+                        if (normalizedValue !== null) {
+                            submitData.append(key, normalizedValue);
+                        }
+                    } else if (key === 'description') {
                         submitData.append(key, processVideoLinks(val));
                     } else {
                         submitData.append(key, val);
                     }
                 }
             });
+
+            if (shouldAutoSumCompositePrice) {
+                submitData.set('price', String(compositeSumPrice));
+            }
 
             // Add variants if configurable
             if (formData.type === 'configurable') {
@@ -2972,7 +3315,8 @@ const ProductForm = () => {
                     submitData.append(`variants[${idx}][sku]`, normalizeSkuDraft(v.sku));
                     submitData.append(`variants[${idx}][name]`, v.label); // Send label as name
                     submitData.append(`variants[${idx}][price]`, v.price);
-                    submitData.append(`variants[${idx}][expected_cost]`, v.expected_cost || '');
+                    const normalizedVariantExpectedCost = normalizeRoundedImportCostNumber(v.expected_cost);
+                    submitData.append(`variants[${idx}][expected_cost]`, normalizedVariantExpectedCost ?? '');
                     submitData.append(`variants[${idx}][weight]`, v.weight || '');
                     submitData.append(`variants[${idx}][inventory_unit_id]`, v.inventory_unit_id || formData.inventory_unit_id || '');
 
@@ -3397,7 +3741,7 @@ const ProductForm = () => {
                                                     type="text"
                                                     name="price"
                                                     value={formData.price_type === 'sum'
-                                                        ? formatNumberOutput(formData.grouped_items.reduce((acc, item) => acc + (item.price * item.quantity), 0))
+                                                        ? formatNumberOutput(compositeSumPrice)
                                                         : formatNumberOutput(formData.price)}
                                                     onChange={(e) => handlePriceInputChange(e, 'price')}
                                                     required={formData.price_type !== 'sum'}
@@ -3411,8 +3755,10 @@ const ProductForm = () => {
                                                 <input
                                                     type="text"
                                                     name="expected_cost"
-                                                    value={formatImportCostOutput(formData.expected_cost)}
+                                                    value={formatImportCostInput(formData.expected_cost)}
                                                     onChange={(e) => handlePriceInputChange(e, 'expected_cost')}
+                                                    onBlur={() => handleImportCostFieldBlur('expected_cost')}
+                                                    inputMode="numeric"
                                                     className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]"
                                                 />
                                                 <span className="font-bold text-primary opacity-30 ml-2">₫</span>
@@ -3731,6 +4077,17 @@ const ProductForm = () => {
                                         <h3 className="font-sans text-[15px] font-bold text-purple-900 uppercase tracking-tight">Quản lý biến thể</h3>
                                     </div>
                                     <div className="flex items-center gap-2">
+                                        {variants.length === 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={handleAddManualVariant}
+                                                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-purple-200 text-purple-600 rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-purple-50 transition-all shadow-sm"
+                                                title="Tạo một biến thể mới mà không cần chọn thuộc tính trước"
+                                            >
+                                                <span className="material-symbols-outlined text-[16px]">add_box</span>
+                                                Tạo biến thể mới
+                                            </button>
+                                        )}
                                         {variants.length > 0 && (
                                             <>
                                                 <button
@@ -3868,6 +4225,14 @@ const ProductForm = () => {
                                         </div>
 
                                         <div className="flex flex-wrap justify-end gap-3 pt-4 border-t border-purple-100">
+                                            <button
+                                                type="button"
+                                                onClick={handleAddManualVariant}
+                                                className="flex items-center gap-2 px-5 py-2 bg-white border border-purple-200 text-purple-700 rounded-sm font-bold text-[11px] uppercase tracking-widest hover:bg-purple-50 transition-all shadow-sm"
+                                            >
+                                                <span className="material-symbols-outlined text-[16px]">add_circle</span>
+                                                Tạo biến thể trống
+                                            </button>
                                             {variants.length > 0 && (
                                                 <button
                                                     type="button"
@@ -4085,8 +4450,10 @@ const ProductForm = () => {
                                                                 <div className="relative flex items-center justify-center">
                                                                     <input
                                                                         className="w-full bg-stone/5 border border-transparent focus:border-primary/50 focus:bg-white pl-2 pr-5 py-2 rounded text-[13px] font-bold text-primary text-center transition-all"
-                                                                        value={formatImportCostOutput(v.expected_cost)}
+                                                                        value={formatImportCostInput(v.expected_cost)}
                                                                         onChange={(e) => handleVariantChange(index, 'expected_cost', e.target.value)}
+                                                                        onBlur={() => handleVariantImportCostBlur(index)}
+                                                                        inputMode="numeric"
                                                                     />
                                                                     <span className="absolute right-2 text-[10px] text-primary/30 font-bold">₫</span>
                                                                 </div>
@@ -4425,6 +4792,17 @@ const ProductForm = () => {
                                         </button>
                                         <button
                                             type="button"
+                                            onClick={() => setShowBundleOptionSorter(true)}
+                                            disabled={bundleOptions.length < 2}
+                                            className="flex items-center gap-2 rounded-sm border border-primary/15 bg-primary/[0.04] px-3 py-1.5 text-[0px] font-black uppercase tracking-widest text-primary transition-all hover:bg-primary/[0.08] disabled:cursor-not-allowed disabled:border-stone/10 disabled:bg-stone/5 disabled:text-stone/35"
+                                            title="Mo bang sap xep nhanh cho toan bo tuy chon bundle"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px]">view_list</span>
+                                            <span className="text-[11px] font-black uppercase tracking-widest">Sap xep tuy chon</span>
+                                            Sáº¯p xáº¿p tÃ¹y chá»n
+                                        </button>
+                                        <button
+                                            type="button"
                                             onClick={handleAddBundleOption}
                                             className="flex items-center gap-2 bg-gold/10 hover:bg-gold/20 text-gold px-3 py-1.5 rounded-sm transition-all text-[11px] font-black uppercase tracking-widest"
                                         >
@@ -4597,7 +4975,7 @@ const ProductForm = () => {
                                                             <tbody>
                                                                 {option.items.map((item, idx) => (
                                                                     <DraggableBundleItem 
-                                                                        key={item.id}
+                                                                        key={item.entry_id || item.id}
                                                                         index={idx}
                                                                         optionId={option.id}
                                                                         item={item}
@@ -5258,6 +5636,110 @@ const ProductForm = () => {
                     </div>
                 </form>
             </div>
+            <AnimatePresence>
+                {showBundleOptionSorter && (
+                    <div className="fixed inset-0 z-[104] flex items-center justify-center p-4">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setShowBundleOptionSorter(false)}
+                            className="absolute inset-0 bg-primary/45 backdrop-blur-sm"
+                        />
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.97, y: 18 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.97, y: 18 }}
+                            className="relative w-full max-w-5xl overflow-hidden rounded-sm bg-white shadow-premium-lg"
+                        >
+                            <div className="flex items-start justify-between gap-4 border-b border-gold/10 bg-[#fcfaf7] px-6 py-5">
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-3">
+                                        <span className="material-symbols-outlined rounded-full bg-gold/10 p-2 text-gold">swap_vert</span>
+                                        <div className="text-[0px]">
+                                            <h3 className="text-[16px] font-black uppercase tracking-tight text-primary">Sáº¯p xáº¿p tÃ¹y chá»n bundle</h3>
+                                            <p className="mt-1 text-[12px] text-stone/55">
+                                                KÃ©o tháº£ hoáº·c báº¥m mÅ©i tÃªn Ä‘á»ƒ Ä‘á»•i thá»© tá»± hiá»ƒn thá»‹. Sau khi lÆ°u sáº£n pháº©m, frontend sáº½ Ä‘i theo thá»© tá»± nÃ y.
+                                            </p>
+                                            <h3 className="text-[16px] font-black uppercase tracking-tight text-primary">Sap xep tuy chon bundle</h3>
+                                            <p className="mt-1 text-[12px] text-stone/55">
+                                                Keo tha hoac bam mui ten de doi thu tu hien thi. Sau khi luu san pham, frontend se di theo thu tu nay.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowBundleOptionSorter(false)}
+                                    className="text-stone/35 transition-colors hover:text-brick"
+                                    title="Dong bang sap xep"
+                                >
+                                    <span className="material-symbols-outlined">close</span>
+                                </button>
+                            </div>
+
+                            <div className="space-y-4 px-6 py-5">
+                                <div className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-gold/15 bg-gold/[0.03] px-4 py-3">
+                                    <div>
+                                        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-gold">Bang sap xep nhanh</p>
+                                        <p className="mt-1 text-[12px] text-stone/55">Moi dong la mot tuy chon trong bundle. Thu tu tren cung se hien thi truoc.</p>
+                                    </div>
+                                    <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-black text-primary shadow-sm">
+                                        {bundleOptions.length} tuy chon
+                                    </span>
+                                </div>
+
+                                <div className="overflow-hidden rounded-sm border border-stone/10">
+                                    <div className="max-h-[420px] overflow-auto">
+                                        <div className="grid grid-cols-[88px_minmax(0,1fr)_minmax(0,1fr)_120px_124px] border-b border-stone/10 bg-[#f7f4ec] text-[10px] font-black uppercase tracking-[0.18em] text-stone/55">
+                                            <div className="border-r border-stone/10 px-4 py-3 text-center">Vi tri</div>
+                                            <div className="border-r border-stone/10 px-4 py-3">Tuy chon</div>
+                                            <div className="border-r border-stone/10 px-4 py-3">Bai viet web</div>
+                                            <div className="border-r border-stone/10 px-4 py-3 text-center">San pham</div>
+                                            <div className="px-4 py-3 text-center">Di chuyen</div>
+                                        </div>
+                                        <table className="min-w-full table-fixed">
+                                            <thead className="hidden sticky top-0 z-10 bg-[#f7f4ec] text-left">
+                                                <tr className="border-b border-stone/10 text-[10px] font-black uppercase tracking-[0.18em] text-stone/55">
+                                                    <th className="w-[88px] px-4 py-3 border-r border-stone/10 text-center">Vá»‹ trÃ­</th>
+                                                    <th className="px-4 py-3 border-r border-stone/10">TÃ¹y chá»n</th>
+                                                    <th className="px-4 py-3 border-r border-stone/10">BÃ i viáº¿t web</th>
+                                                    <th className="w-[120px] px-4 py-3 border-r border-stone/10 text-center">Sáº£n pháº©m</th>
+                                                    <th className="w-[124px] px-4 py-3 text-center">Di chuyá»ƒn</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="bg-white">
+                                                {bundleOptions.map((option, index) => (
+                                                    <DraggableBundleOptionRow
+                                                        key={option.id}
+                                                        index={index}
+                                                        option={option}
+                                                        optionCount={bundleOptions.length}
+                                                        moveBundleOption={moveBundleOption}
+                                                        onMoveUp={() => moveBundleOptionByOffset(index, -1)}
+                                                        onMoveDown={() => moveBundleOptionByOffset(index, 1)}
+                                                    />
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-end gap-3 border-t border-stone/10 bg-stone/5 px-6 py-4">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowBundleOptionSorter(false)}
+                                    className="px-6 py-2 text-[0px] font-bold uppercase tracking-widest text-stone transition-all hover:text-primary"
+                                >
+                                    <span className="text-[11px] font-bold uppercase tracking-widest">Dong</span>
+                                    ÄÃ³ng
+                                </button>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
             </DndProvider>
 
             <AnimatePresence>
@@ -5365,8 +5847,10 @@ const ProductForm = () => {
                                         </label>
                                         <div className="relative">
                                             <input
-                                                value={formatImportCostOutput(variantQuickUpdateForm.expected_cost)}
+                                                value={formatImportCostInput(variantQuickUpdateForm.expected_cost)}
                                                 onChange={(event) => handleVariantQuickUpdateFieldChange('expected_cost', event.target.value)}
+                                                onBlur={handleVariantQuickUpdateImportCostBlur}
+                                                inputMode="numeric"
                                                 className="w-full bg-transparent py-2 pr-5 text-[14px] font-bold text-primary focus:outline-none"
                                                 placeholder="Nhập giá nhập dự kiến"
                                             />

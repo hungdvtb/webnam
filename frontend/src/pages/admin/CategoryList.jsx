@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { categoryApi, attributeApi, STORAGE_BASE_URL } from '../../services/api';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
-import { Tree } from '@minoru/react-dnd-treeview';
+import { Tree, getDescendants, isAncestor } from '@minoru/react-dnd-treeview';
 import { useUI } from '../../context/UIContext';
 
 const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelected, onSelect, isCheckable, isChecked, onCheck, isDropTarget, allAttributes }) => {
@@ -74,15 +74,15 @@ const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelecte
             </div>
 
             {/* Layout & Filter Info */}
-            <div className="hidden md:flex items-center gap-6 mr-8">
+            <div className="hidden xl:flex items-center gap-4 mr-4">
                 {/* Layout Column */}
-                <div className="flex flex-col items-center justify-center gap-0.5 w-32 border-x border-gold/5 px-2">
+                <div className="flex w-20 flex-col items-center justify-center gap-0.5 border-x border-gold/5 px-2">
                     <span className="material-symbols-outlined text-[16px] text-primary/40">{layoutIcon}</span>
                     <span className="text-[10px] font-bold uppercase tracking-tight text-primary/60 whitespace-nowrap">{layoutLabel}</span>
                 </div>
 
                 {/* Filters Column */}
-                <div className="flex flex-col items-center justify-center gap-0.5 min-w-[200px] max-w-[300px] px-2">
+                <div className="flex min-w-[120px] max-w-[160px] flex-col items-center justify-center gap-0.5 px-1">
                     <span className="material-symbols-outlined text-[16px] text-primary/40">filter_alt</span>
                     <span className={`text-[10px] font-bold tracking-tight uppercase text-center leading-tight ${filterCount > 0 ? 'text-umber' : 'text-stone/20 italic'}`}>
                         {filterDisplay}
@@ -435,6 +435,17 @@ const CategoryList = () => {
         () => treeData.find((node) => node.id === selectedId) || null,
         [treeData, selectedId],
     );
+
+    const blockedParentIds = React.useMemo(() => {
+        if (!formData.id) {
+            return new Set();
+        }
+
+        return new Set([
+            formData.id,
+            ...getDescendants(treeData, formData.id).map((node) => node.id),
+        ]);
+    }, [treeData, formData.id]);
 
     const loadCategoryProducts = async (categoryId = selectedId) => {
         if (!categoryId) {
@@ -876,6 +887,22 @@ const CategoryList = () => {
                         .custom-scrollbar::-webkit-scrollbar-thumb:hover {
                             background: rgba(182, 143, 84, 0.4);
                         }
+                        .category-content-grid {
+                            height: 100%;
+                            min-height: 0;
+                            display: grid;
+                            grid-template-columns: minmax(0, 1fr);
+                            gap: 1.5rem;
+                        }
+                        .category-panel {
+                            min-width: 0;
+                            min-height: 0;
+                        }
+                        @media (min-width: 1200px) {
+                            .category-content-grid {
+                                grid-template-columns: minmax(0, 1.16fr) minmax(0, 0.92fr) minmax(0, 0.92fr);
+                            }
+                        }
                     `}
                 </style>
 
@@ -1102,9 +1129,10 @@ const CategoryList = () => {
                 </div>
 
                 {/* Content Area */}
-                <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-12 gap-6 pt-2">
-                    {/* Tree View Section */}
-                    <div className="lg:col-span-8 bg-white border border-gold/10 rounded-sm shadow-sm flex flex-col overflow-hidden relative">
+                <div className="flex-1 min-h-0 overflow-hidden pt-2">
+                    <div className="category-content-grid">
+                        {/* Tree View Section */}
+                        <div className="category-panel relative flex h-full flex-col overflow-hidden rounded-sm border border-gold/10 bg-white shadow-sm">
                         <div className="flex-none px-4 py-3 bg-gold/5 border-b border-gold/10 flex justify-between items-center">
                             <h2 className="text-[11px] font-black uppercase tracking-[0.15em] text-primary flex items-center gap-2">
                                 <span className="material-symbols-outlined text-[16px]">account_tree</span>
@@ -1125,9 +1153,9 @@ const CategoryList = () => {
                                 />
                             </div>
                             <div className="flex-1 text-[10px] font-black uppercase tracking-[0.2em] text-primary/40 pl-11">Tên Danh Mục</div>
-                            <div className="hidden md:flex items-center gap-6 mr-20">
-                                <div className="w-32 text-[10px] font-black uppercase tracking-[0.2em] text-primary/60 text-center">Giao diện</div>
-                                <div className="min-w-[200px] max-w-[300px] text-[10px] font-black uppercase tracking-[0.2em] text-primary/60 text-center">Bộ lọc thuộc tính</div>
+                            <div className="hidden xl:flex items-center gap-4 mr-6">
+                                <div className="w-20 text-[10px] font-black uppercase tracking-[0.2em] text-primary/60 text-center">Giao diện</div>
+                                <div className="min-w-[120px] max-w-[160px] text-[10px] font-black uppercase tracking-[0.2em] text-primary/60 text-center">Bộ lọc</div>
                             </div>
                         </div>
                         
@@ -1148,9 +1176,22 @@ const CategoryList = () => {
                                         tree={filteredTreeData}
                                         rootId={0}
                                         canDrag={() => !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all' && filterLayout === 'all'}
-                                        canDrop={(tree, { dragSource, dropTargetId, isDirectChild }) => {
+                                        canDrop={(tree, { dragSourceId, dropTargetId }) => {
                                             if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all' || filterLayout !== 'all') return false;
-                                            return true;
+
+                                            if (dragSourceId === undefined || dragSourceId === null) {
+                                                return undefined;
+                                            }
+
+                                            if (dragSourceId === dropTargetId) {
+                                                return false;
+                                            }
+
+                                            if (isAncestor(tree, dragSourceId, dropTargetId)) {
+                                                return false;
+                                            }
+
+                                            return undefined;
                                         }}
                                         sort={false}
                                         insertDroppableFirst={false}
@@ -1189,13 +1230,13 @@ const CategoryList = () => {
 
                         {/* Bulk Action Bar */}
                         {selectedIds.size > 0 && (
-                            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-primary dark:bg-slate-900 text-white px-6 py-4 rounded-full shadow-[0_10px_40px_rgba(0,0,0,0.3)] flex items-center gap-6 animate-in slide-in-from-bottom duration-300 z-[100] border border-white/10">
-                                <div className="flex items-center gap-3 pr-6 border-r border-white/10">
+                            <div className="absolute bottom-6 left-1/2 z-[100] flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-3 rounded-[1.5rem] border border-white/10 bg-primary px-4 py-3 text-white shadow-[0_10px_40px_rgba(0,0,0,0.3)] animate-in slide-in-from-bottom duration-300">
+                                <div className="flex items-center gap-3 border-r border-white/10 pr-4">
                                     <div className="text-xl font-bold text-gold">{selectedIds.size}</div>
                                     <div className="text-[10px] font-black uppercase tracking-[0.2em] opacity-60">đã chọn</div>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-black uppercase tracking-[0.2em] opacity-40 mr-2">Cập nhật giao diện:</span>
+                                <div className="flex flex-wrap items-center justify-center gap-2">
+                                    <span className="mr-1 text-[10px] font-black uppercase tracking-[0.2em] opacity-40">Cập nhật giao diện:</span>
                                     <button 
                                         disabled={isBulkUpdating}
                                         onClick={() => handleBulkUpdateLayout('layout_1')}
@@ -1215,7 +1256,7 @@ const CategoryList = () => {
                                 </div>
                                 <button 
                                     onClick={() => setSelectedIds(new Set())}
-                                    className="ml-4 size-8 flex items-center justify-center rounded-full hover:bg-brick/20 text-white transition-all"
+                                    className="size-8 flex items-center justify-center rounded-full hover:bg-brick/20 text-white transition-all"
                                 >
                                     <span className="material-symbols-outlined text-[20px]">close</span>
                                 </button>
@@ -1223,15 +1264,21 @@ const CategoryList = () => {
                         )}
                     </div>
 
-                    {/* Right side Form Area */}
-                    <div className="lg:col-span-4 flex flex-col gap-6 overflow-hidden">
+                    {/* Update Form Area */}
+                    <div className="category-panel min-w-0">
                         {isFormOpen ? (
-                            <div className="bg-white border border-gold/20 shadow-premium p-6 rounded-sm animate-in slide-in-from-right duration-300 flex flex-col overflow-hidden">
-                                <div className="flex-none flex justify-between items-center border-b border-gold/10 pb-4 mb-6">
-                                    <h3 className="font-display font-bold text-lg text-primary uppercase italic">
-                                        {formData.id ? 'Cập Nhật' : 'Tạo Mới'}
-                                    </h3>
-                                    <div className="flex items-center gap-2">
+                            <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-sm border border-gold/20 bg-white p-6 shadow-premium animate-in slide-in-from-right duration-300">
+                                <div className="mb-6 flex-none border-b border-gold/10 pb-4">
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
+                                        <div>
+                                            <h3 className="font-display font-bold text-lg text-primary uppercase italic">
+                                                Cập Nhật
+                                            </h3>
+                                            <p className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-stone/35">
+                                                {formData.id ? 'Chỉnh sửa danh mục đang chọn' : 'Tạo mới danh mục'}
+                                            </p>
+                                        </div>
+                                        <div className="flex shrink-0 items-center gap-2">
                                         <button 
                                             type="submit" 
                                             form="category-form"
@@ -1249,6 +1296,7 @@ const CategoryList = () => {
                                         </button>
                                     </div>
                                 </div>
+                                </div>
                                 <div className="flex-1 overflow-auto custom-scrollbar">
                                     <form id="category-form" onSubmit={handleFormSubmit} className="space-y-6">
                                         <div className="space-y-1.5">
@@ -1262,7 +1310,7 @@ const CategoryList = () => {
                                                 {(() => {
                                                     const renderOptions = (parentId = 0, prefix = '') => {
                                                         return treeData
-                                                            .filter(node => node.parent === parentId && node.id !== formData.id)
+                                                            .filter(node => node.parent === parentId && !blockedParentIds.has(node.id))
                                                             .map(node => (
                                                                 <React.Fragment key={node.id}>
                                                                     <option value={node.id}>
@@ -1433,33 +1481,41 @@ const CategoryList = () => {
                                 </div>
                             </div>
                         ) : (
-                            <div className="bg-white border border-gold/10 p-6 shadow-sm rounded-sm">
-                                <h3 className="text-[11px] font-black text-primary uppercase tracking-[0.2em] border-b border-gold/10 pb-4 mb-4 flex items-center gap-2 italic">
-                                    <span className="material-symbols-outlined text-[16px]">info</span>
-                                    Thao tác nhanh
-                                </h3>
-                                <div className="space-y-4">
-                                    <div className="flex gap-3 items-start group">
-                                        <div className="size-5 rounded flex items-center justify-center bg-gold/10 text-gold group-hover:bg-gold group-hover:text-white transition-all shrink-0">
-                                            <span className="material-symbols-outlined text-[14px]">drag_indicator</span>
+                            <div className="flex h-full min-h-0 flex-col rounded-sm border border-gold/10 bg-white p-6 shadow-sm">
+                                <div className="flex-none border-b border-gold/10 pb-4">
+                                    <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-primary italic">
+                                        <span className="material-symbols-outlined text-[16px]">edit_square</span>
+                                        Cập Nhật
+                                    </h3>
+                                    <p className="mt-2 text-[11px] leading-relaxed text-stone/55">
+                                        Chọn một danh mục từ khối bên trái hoặc bấm nút thêm mới để bắt đầu chỉnh sửa.
+                                    </p>
+                                </div>
+                                <div className="flex-1 overflow-auto custom-scrollbar">
+                                    <div className="space-y-4 pt-4 pr-1">
+                                        <div className="flex gap-3 items-start group">
+                                            <div className="size-5 rounded flex items-center justify-center bg-gold/10 text-gold group-hover:bg-gold group-hover:text-white transition-all shrink-0">
+                                                <span className="material-symbols-outlined text-[14px]">drag_indicator</span>
+                                            </div>
+                                            <p className="text-[12px] text-stone-600 font-body leading-relaxed transition-colors">Kéo và thả mục bất kỳ để thay đổi vị trí hiển thị.</p>
                                         </div>
-                                        <p className="text-[12px] text-stone-600 font-body leading-relaxed transition-colors">Kéo và thả mục bất kỳ để thay đổi vị trí hiển thị.</p>
-                                    </div>
-                                    <div className="flex gap-3 items-start group">
-                                        <div className="size-5 rounded flex items-center justify-center bg-gold/10 text-gold group-hover:bg-gold group-hover:text-white transition-all shrink-0">
-                                            <span className="material-symbols-outlined text-[14px]">folder_zip</span>
+                                        <div className="flex gap-3 items-start group">
+                                            <div className="size-5 rounded flex items-center justify-center bg-gold/10 text-gold group-hover:bg-gold group-hover:text-white transition-all shrink-0">
+                                                <span className="material-symbols-outlined text-[14px]">folder_zip</span>
+                                            </div>
+                                            <p className="text-[12px] text-stone-600 font-body leading-relaxed transition-colors">Thả một thư mục vào thư mục khác để thiết lập cha-con.</p>
                                         </div>
-                                        <p className="text-[12px] text-stone-600 font-body leading-relaxed transition-colors">Thả một thư mục vào thư mục khác để thiết lập cha-con.</p>
-                                    </div>
-                                    <div className="pt-4 border-t border-gold/5 flex gap-3 items-start opacity-60 italic">
-                                         <span className="material-symbols-outlined text-[16px] text-brick">warning</span>
-                                         <p className="text-[11px] text-brick font-body">Xóa danh mục cha sẽ xóa toàn bộ con bên trong.</p>
+                                        <div className="pt-4 border-t border-gold/5 flex gap-3 items-start opacity-60 italic">
+                                             <span className="material-symbols-outlined text-[16px] text-brick">warning</span>
+                                             <p className="text-[11px] text-brick font-body">Xóa danh mục cha sẽ xóa toàn bộ con bên trong.</p>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         )}
+                    </div>
 
-                        <div className="bg-white border border-gold/10 shadow-sm rounded-sm flex flex-col overflow-hidden min-h-[320px]">
+                        <div className="category-panel flex h-full min-h-[320px] flex-col overflow-hidden rounded-sm border border-gold/10 bg-white shadow-sm">
                             <div className="flex items-start justify-between gap-3 border-b border-gold/10 bg-gold/5 px-4 py-4">
                                 <div>
                                     <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-primary flex items-center gap-2">
@@ -1474,7 +1530,7 @@ const CategoryList = () => {
                                 </div>
 
                                 {selectedCategoryNode ? (
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex flex-wrap items-center justify-end gap-2">
                                         <button
                                             type="button"
                                             onClick={() => handleEdit(selectedCategoryNode)}

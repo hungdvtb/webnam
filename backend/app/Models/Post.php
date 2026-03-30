@@ -3,10 +3,13 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Str;
 
 class Post extends Model
 {
+    use SoftDeletes;
+
     protected $fillable = [
         'account_id',
         'blog_category_id',
@@ -34,6 +37,7 @@ class Post extends Model
         'is_starred' => 'boolean',
         'sort_order' => 'integer',
         'published_at' => 'datetime',
+        'deleted_at' => 'datetime',
     ];
 
     protected $attributes = [

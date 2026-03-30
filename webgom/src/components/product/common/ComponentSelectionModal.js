@@ -55,7 +55,7 @@ export default function ComponentSelectionModal({
 
   // Load variants of current slot's parent product
   const fetchVariants = useCallback(async () => {
-    const identifier = currentSlot?.slug || currentSlot?.id;
+    const identifier = currentSlot?.base_product_slug || currentSlot?.base_product_id || currentSlot?.slug || currentSlot?.id;
     if (!isOpen || !identifier) return;
     setLoading(true);
     setErrorMsg(null);
@@ -112,7 +112,7 @@ export default function ComponentSelectionModal({
       setSearchResults([]);
       fetchVariants();
     }
-  }, [isOpen, currentSlot?.id]);
+  }, [isOpen, currentSlot?.bundle_item_uid, currentSlot?.base_product_id, currentSlot?.base_product_slug]);
 
   useEffect(() => {
     if (!isOpen || typeof window === 'undefined') {
@@ -226,8 +226,8 @@ export default function ComponentSelectionModal({
           ) : displayItems.length > 0 ? (
             <div className={styles.productGrid}>
               {displayItems.map(item => {
-                const isCurrent = item.id === currentSlot?.id ||
-                  item.id === currentSlot?.pivot?.variant_id;
+                const currentProductId = currentSlot?.selected_product_id || currentSlot?.pivot?.variant_id || currentSlot?.id;
+                const isCurrent = Number(item.id) === Number(currentProductId);
                 return (
                   <div
                     key={item.id}

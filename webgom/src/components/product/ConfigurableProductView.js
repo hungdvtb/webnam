@@ -128,6 +128,12 @@ export default function ConfigurableProductView({
   }, []);
 
   useEffect(() => {
+    if (!isMobileViewport) {
+      setVariantActionId(null);
+    }
+  }, [isMobileViewport]);
+
+  useEffect(() => {
     if (!variantActionId) {
       return undefined;
     }
@@ -158,17 +164,19 @@ export default function ConfigurableProductView({
 
   useEffect(() => {
     if (pendingStructuredOpenRef.current) {
-      if (isConcreteVariant) {
+      if (isMobileViewport && isConcreteVariant) {
         setVariantActionId(currentProduct.id);
+      } else {
+        setVariantActionId(null);
       }
       pendingStructuredOpenRef.current = false;
       return;
     }
 
-    if (!isConcreteVariant) {
+    if (!isConcreteVariant || !isMobileViewport) {
       setVariantActionId(null);
     }
-  }, [currentProduct?.id, isConcreteVariant]);
+  }, [currentProduct?.id, isConcreteVariant, isMobileViewport]);
 
   useEffect(() => {
     if (!isMobileViewport || variantActionId !== currentProduct?.id || !variantActionPanelRef.current) {
@@ -213,11 +221,15 @@ export default function ConfigurableProductView({
   const handleFallbackVariantChoose = (variantId) => {
     pendingStructuredOpenRef.current = false;
     handleVariantSelect(variantId);
-    setVariantActionId((currentId) => (currentId === variantId ? null : variantId));
+    setVariantActionId((currentId) => (
+      isMobileViewport
+        ? (currentId === variantId ? null : variantId)
+        : null
+    ));
   };
 
   const toggleStructuredVariantActions = () => {
-    if (!isConcreteVariant) {
+    if (!isConcreteVariant || !isMobileViewport) {
       return;
     }
 
@@ -356,11 +368,8 @@ export default function ConfigurableProductView({
                     data-variant-id={currentProduct.id}
                   >
                     {!isMobileViewport ? (
-                      <button
-                        type="button"
-                        onClick={toggleStructuredVariantActions}
-                        className={`${styles.configOptionBtn} ${styles.variantActionTrigger} ${variantActionId === currentProduct.id ? styles.configOptionBtnActive : ''}`}
-                        aria-expanded={variantActionId === currentProduct.id}
+                      <div
+                        className={`${styles.configOptionBtn} ${styles.configOptionBtnActive} ${styles.variantActionSummaryDesktop}`}
                       >
                         <span className={styles.variantActionCopy}>
                           <span className={styles.variantActionName}>{getVariantDisplayName(currentProduct)}</span>
@@ -368,15 +377,7 @@ export default function ConfigurableProductView({
                             <span className={styles.variantActionMeta}>{currentProduct.sku}</span>
                           ) : null}
                         </span>
-                      </button>
-                    ) : null}
-                    {!isMobileViewport && variantActionId === currentProduct.id ? (
-                      <VariantActionPopover
-                        className={styles.variantActionPopoverDesktop}
-                        variantLabel={getVariantDisplayName(currentProduct)}
-                        onAddToCart={handleVariantPopupAddToCart}
-                        onBuyNow={handleVariantPopupBuyNow}
-                      />
+                      </div>
                     ) : null}
                     {isMobileViewport && variantActionId === currentProduct.id ? (
                       <VariantActionPopover
@@ -418,8 +419,9 @@ export default function ConfigurableProductView({
                             </div>
                             <div className={styles.variantCardPrice}>{formatPrice(variant.current_price ?? variant.price)}</div>
                           </button>
-                          {variantActionId === variant.id ? (
+                          {isMobileViewport && variantActionId === variant.id ? (
                             <VariantActionPopover
+                              className={styles.variantActionPanelMobile}
                               variantLabel={getVariantDisplayName(variant)}
                               onAddToCart={handleVariantPopupAddToCart}
                               onBuyNow={handleVariantPopupBuyNow}

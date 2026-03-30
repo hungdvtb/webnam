@@ -128,7 +128,8 @@ HTML,
         }
 
         $definitions = $this->definitions();
-        $posts = Post::where('account_id', $accountId)
+        $posts = Post::withTrashed()
+            ->where('account_id', $accountId)
             ->whereIn('slug', array_column($definitions, 'slug'))
             ->get()
             ->keyBy('slug');
@@ -158,6 +159,10 @@ HTML,
                 'is_system' => true,
                 'sort_order' => $index + 1,
             ];
+
+            if (method_exists($post, 'trashed') && $post->trashed()) {
+                $updates['deleted_at'] = null;
+            }
 
             if (!$this->hasMeaningfulText($post->title)) {
                 $updates['title'] = $definition['title'];

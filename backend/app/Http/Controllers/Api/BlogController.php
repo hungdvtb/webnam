@@ -34,7 +34,14 @@ class BlogController extends Controller
      */
     public function index(Request $request)
     {
+        $authenticatedUser = $this->resolveAuthenticatedBlogUser($request);
         $baseQuery = Post::query();
+        $isTrashView = (bool) $authenticatedUser && $this->normalizeFlag($request->query('trashed', false));
+
+        if ($isTrashView) {
+            $baseQuery->onlyTrashed();
+        }
+
         $accountId = $this->applyAccountScope($baseQuery, $request);
 
         $query = clone $baseQuery;
@@ -44,7 +51,7 @@ class BlogController extends Controller
         }
 
         // Public visitors only see visible non-system posts.
-        if (!$request->user()) {
+        if (!$authenticatedUser) {
             $query->published();
 
             if ($this->hasSystemPostSupport()) {
@@ -106,17 +113,25 @@ class BlogController extends Controller
             }
         }
 
-        $defaultPerPage = $request->user() ? 200 : 9;
+        $defaultPerPage = $authenticatedUser ? 200 : 9;
         $perPage = min(max((int) $request->query('per_page', $defaultPerPage), 1), 1000);
 
         if ($this->hasSystemPostSupport()) {
             $query->orderByDesc('is_system');
         }
 
-        $posts = $query
-            ->orderBy('sort_order')
-            ->orderByDesc('created_at')
-            ->paginate($perPage);
+        if ($isTrashView) {
+            $posts = $query
+                ->orderByDesc('deleted_at')
+                ->orderByDesc('updated_at')
+                ->orderByDesc('created_at')
+                ->paginate($perPage);
+        } else {
+            $posts = $query
+                ->orderBy('sort_order')
+                ->orderByDesc('created_at')
+                ->paginate($perPage);
+        }
 
         $payload = $posts->toArray();
         $payload['seo_keywords'] = $this->seoKeywordCollection($accountId, $baseQuery);
@@ -624,10 +639,11 @@ class BlogController extends Controller
      */
     public function show(Request $request, $id)
     {
+        $authenticatedUser = $this->resolveAuthenticatedBlogUser($request);
         $query = Post::query()->with(['category:id,account_id,name,slug,sort_order']);
         $this->applyAccountScope($query, $request);
 
-        if (!$request->user()) {
+        if (!$authenticatedUser) {
             $query->published();
         }
 
@@ -715,7 +731,237 @@ class BlogController extends Controller
         }
         $post->delete();
 
-        return response()->json(['message' => 'Post deleted successfully']);
+        return response()->json(['message' => 'Post moved to trash successfully.']);
+    }
+
+    /**
+     * Restore a soft-deleted post from trash.
+     */
+    public function restore(Request $request, int $id)
+    {
+        $accountId = $this->resolveBlogAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        $post = Post::withTrashed()->where('account_id', $accountId)->whereKey($id)->firstOrFail();
+        if (!$post->trashed()) {
+            return response()->json(['error' => 'Post is not in trash.'], 422);
+        }
+
+        $post->restore();
+
+        return response()->json([
+            'message' => 'Post restored successfully.',
+            'data' => $post->fresh()->load('category'),
+        ]);
+    }
+
+    /**
+     * Permanently delete a post from trash.
+     */
+    public function forceDelete(Request $request, int $id)
+    {
+        $accountId = $this->resolveBlogAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        $post = Post::withTrashed()->where('account_id', $accountId)->whereKey($id)->firstOrFail();
+        if (!$post->trashed()) {
+            return response()->json(['error' => 'Only trashed posts can be permanently deleted.'], 422);
+        }
+
+        if ($post->is_system) {
+            return response()->json(['error' => 'System posts cannot be permanently deleted.'], 422);
+        }
+
+        $post->forceDelete();
+
+        return response()->json(['message' => 'Post permanently deleted.']);
+    }
+
+    /**
+     * Move selected posts to trash.
+     */
+    public function bulkDelete(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer',
+        ]);
+
+        $accountId = $this->resolveBlogAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        $ids = array_values(array_unique(array_map('intval', $validated['ids'])));
+        $posts = Post::where('account_id', $accountId)
+            ->whereIn('id', $ids)
+            ->get(['id', 'is_system']);
+
+        $existingIds = $posts
+            ->pluck('id')
+            ->map(fn ($postId) => (int) $postId)
+            ->all();
+
+        $invalidIds = array_values(array_diff($ids, $existingIds));
+        if (!empty($invalidIds)) {
+            return response()->json([
+                'error' => 'Some post IDs are invalid for this account.',
+                'invalid_ids' => $invalidIds,
+            ], 422);
+        }
+
+        $systemIds = $posts
+            ->filter(fn (Post $post) => (bool) $post->is_system)
+            ->pluck('id')
+            ->map(fn ($postId) => (int) $postId)
+            ->values()
+            ->all();
+
+        if (!empty($systemIds)) {
+            return response()->json([
+                'error' => 'System posts cannot be deleted.',
+                'system_ids' => $systemIds,
+            ], 422);
+        }
+
+        Post::where('account_id', $accountId)
+            ->whereIn('id', $ids)
+            ->delete();
+
+        return response()->json([
+            'message' => sprintf('Moved %d posts to trash.', count($ids)),
+            'count' => count($ids),
+        ]);
+    }
+
+    /**
+     * Restore selected posts from trash.
+     */
+    public function bulkRestore(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer',
+        ]);
+
+        $accountId = $this->resolveBlogAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        $ids = array_values(array_unique(array_map('intval', $validated['ids'])));
+        $posts = Post::withTrashed()
+            ->where('account_id', $accountId)
+            ->whereIn('id', $ids)
+            ->get(['id', 'deleted_at']);
+
+        $existingIds = $posts
+            ->pluck('id')
+            ->map(fn ($postId) => (int) $postId)
+            ->all();
+
+        $invalidIds = array_values(array_diff($ids, $existingIds));
+        if (!empty($invalidIds)) {
+            return response()->json([
+                'error' => 'Some post IDs are invalid for this account.',
+                'invalid_ids' => $invalidIds,
+            ], 422);
+        }
+
+        $trashedIds = $posts
+            ->filter(fn (Post $post) => $post->trashed())
+            ->pluck('id')
+            ->map(fn ($postId) => (int) $postId)
+            ->values()
+            ->all();
+
+        if (empty($trashedIds)) {
+            return response()->json(['error' => 'Selected posts are not in trash.'], 422);
+        }
+
+        Post::withTrashed()
+            ->where('account_id', $accountId)
+            ->whereIn('id', $trashedIds)
+            ->restore();
+
+        return response()->json([
+            'message' => sprintf('Restored %d posts.', count($trashedIds)),
+            'count' => count($trashedIds),
+        ]);
+    }
+
+    /**
+     * Permanently delete selected trashed posts.
+     */
+    public function bulkForceDelete(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer',
+        ]);
+
+        $accountId = $this->resolveBlogAccountId($request);
+        if (!$accountId) {
+            return response()->json(['error' => 'Account ID is required'], 400);
+        }
+
+        $ids = array_values(array_unique(array_map('intval', $validated['ids'])));
+        $posts = Post::withTrashed()
+            ->where('account_id', $accountId)
+            ->whereIn('id', $ids)
+            ->get(['id', 'is_system', 'deleted_at']);
+
+        $existingIds = $posts
+            ->pluck('id')
+            ->map(fn ($postId) => (int) $postId)
+            ->all();
+
+        $invalidIds = array_values(array_diff($ids, $existingIds));
+        if (!empty($invalidIds)) {
+            return response()->json([
+                'error' => 'Some post IDs are invalid for this account.',
+                'invalid_ids' => $invalidIds,
+            ], 422);
+        }
+
+        $systemIds = $posts
+            ->filter(fn (Post $post) => (bool) $post->is_system)
+            ->pluck('id')
+            ->map(fn ($postId) => (int) $postId)
+            ->values()
+            ->all();
+
+        if (!empty($systemIds)) {
+            return response()->json([
+                'error' => 'System posts cannot be permanently deleted.',
+                'system_ids' => $systemIds,
+            ], 422);
+        }
+
+        $trashedIds = $posts
+            ->filter(fn (Post $post) => $post->trashed())
+            ->pluck('id')
+            ->map(fn ($postId) => (int) $postId)
+            ->values()
+            ->all();
+
+        if (empty($trashedIds)) {
+            return response()->json(['error' => 'Only trashed posts can be permanently deleted.'], 422);
+        }
+
+        Post::withTrashed()
+            ->where('account_id', $accountId)
+            ->whereIn('id', $trashedIds)
+            ->forceDelete();
+
+        return response()->json([
+            'message' => sprintf('Permanently deleted %d posts.', count($trashedIds)),
+            'count' => count($trashedIds),
+        ]);
     }
 
     /**
@@ -906,6 +1152,11 @@ class BlogController extends Controller
         }
 
         return $accountId;
+    }
+
+    private function resolveAuthenticatedBlogUser(Request $request)
+    {
+        return $request->user('sanctum') ?? $request->user();
     }
 
     private function resolveAccountId(Request $request): ?int
@@ -1618,7 +1869,7 @@ class BlogController extends Controller
         $counter = 1;
 
         while (true) {
-            $query = Post::where('account_id', $accountId)->where('slug', $slug);
+            $query = Post::withTrashed()->where('account_id', $accountId)->where('slug', $slug);
 
             if ($exceptId !== null) {
                 $query->where('id', '<>', $exceptId);

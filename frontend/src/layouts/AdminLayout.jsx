@@ -1,28 +1,87 @@
 ﻿import React from 'react';
 import { Link, Outlet, useNavigate, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import AccountSelector from '../components/AccountSelector';
 import { INVENTORY_NAV_ITEMS, buildInventoryPath } from '../config/adminInventoryNavigation';
 
+
+const SidebarText = ({ isExpanded, className = '', children }) => (
+    <span className={`overflow-hidden whitespace-nowrap transition-all duration-300 ease-out ${isExpanded ? 'max-w-[16rem] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'} ${className}`}>
+        {children}
+    </span>
+);
+
+const SidebarSectionLabel = ({ isExpanded, children }) => (
+    <span className={`block overflow-hidden whitespace-nowrap text-[10px] font-bold text-stone uppercase tracking-[0.2em] transition-all duration-300 ease-out ${isExpanded ? 'max-w-[16rem] opacity-50' : 'max-w-0 opacity-0'}`}>
+        {children}
+    </span>
+);
 
 const AdminLayout = () => {
     const { user, logout, loading } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
-    const [isSettingsOpen, setIsSettingsOpen] = React.useState(location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users') || location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/shipping-settings'));
-    const [isOrdersOpen, setIsOrdersOpen] = React.useState(location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads'));
-    const [isDesignOpen, setIsDesignOpen] = React.useState(location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/blog'));
-    const [isInventoryOpen, setIsInventoryOpen] = React.useState(location.pathname.startsWith('/admin/inventory'));
-
-    const isOrderForm = location.pathname.startsWith('/admin/orders/new') || location.pathname.startsWith('/admin/orders/edit');
+    const isSettingsRoute =
+        location.pathname.startsWith('/admin/attributes') ||
+        location.pathname.startsWith('/admin/carrier-mappings') ||
+        location.pathname.startsWith('/admin/order-status-settings') ||
+        location.pathname.startsWith('/admin/users') ||
+        location.pathname.startsWith('/admin/settings') ||
+        location.pathname.startsWith('/admin/shipping-settings');
+    const isOrdersRoute =
+        location.pathname.startsWith('/admin/orders') ||
+        location.pathname.startsWith('/admin/customers') ||
+        location.pathname.startsWith('/admin/shipments') ||
+        location.pathname.startsWith('/admin/pending-orders') ||
+        location.pathname.startsWith('/admin/leads');
+    const isDesignRoute =
+        location.pathname.startsWith('/admin/categories') ||
+        location.pathname.startsWith('/admin/blog');
     const isInventoryRoute = location.pathname.startsWith('/admin/inventory');
 
+    const [isSettingsOpen, setIsSettingsOpen] = React.useState(isSettingsRoute);
+    const [isOrdersOpen, setIsOrdersOpen] = React.useState(isOrdersRoute);
+    const [isDesignOpen, setIsDesignOpen] = React.useState(isDesignRoute);
+    const [isInventoryOpen, setIsInventoryOpen] = React.useState(isInventoryRoute);
+    const [canHoverSidebar, setCanHoverSidebar] = React.useState(() => {
+        if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+            return false;
+        }
+
+        return window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+    });
+    const [isSidebarHovered, setIsSidebarHovered] = React.useState(false);
+    const [isSidebarFocused, setIsSidebarFocused] = React.useState(false);
+
+    const isOrderForm = location.pathname.startsWith('/admin/orders/new') || location.pathname.startsWith('/admin/orders/edit');
+    const isSidebarExpanded = !canHoverSidebar || isSidebarHovered || isSidebarFocused;
+
     React.useEffect(() => {
-        if (location.pathname.startsWith('/admin/attributes') || location.pathname.startsWith('/admin/carrier-mappings') || location.pathname.startsWith('/admin/users') || location.pathname.startsWith('/admin/settings') || location.pathname.startsWith('/admin/shipping-settings')) setIsSettingsOpen(true);
-        if (location.pathname.startsWith('/admin/orders') || location.pathname.startsWith('/admin/customers') || location.pathname.startsWith('/admin/shipments') || location.pathname.startsWith('/admin/pending-orders') || location.pathname.startsWith('/admin/leads')) setIsOrdersOpen(true);
-        if (location.pathname.startsWith('/admin/categories') || location.pathname.startsWith('/admin/blog')) setIsDesignOpen(true);
-        if (location.pathname.startsWith('/admin/inventory')) setIsInventoryOpen(true);
-    }, [location.pathname]);
+        if (isSettingsRoute) setIsSettingsOpen(true);
+        if (isOrdersRoute) setIsOrdersOpen(true);
+        if (isDesignRoute) setIsDesignOpen(true);
+        if (isInventoryRoute) setIsInventoryOpen(true);
+    }, [isDesignRoute, isInventoryRoute, isOrdersRoute, isSettingsRoute]);
+
+    React.useEffect(() => {
+        if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+            return undefined;
+        }
+
+        const mediaQuery = window.matchMedia('(hover: hover) and (pointer: fine)');
+        const syncHoverCapability = (event) => {
+            setCanHoverSidebar(event.matches);
+        };
+
+        syncHoverCapability(mediaQuery);
+
+        if (typeof mediaQuery.addEventListener === 'function') {
+            mediaQuery.addEventListener('change', syncHoverCapability);
+            return () => mediaQuery.removeEventListener('change', syncHoverCapability);
+        }
+
+        mediaQuery.addListener(syncHoverCapability);
+        return () => mediaQuery.removeListener(syncHoverCapability);
+    }, []);
 
 
     const handleLogout = async () => {
@@ -75,96 +134,146 @@ const AdminLayout = () => {
         return null;
     };
 
+    const topLevelLabelClass = 'font-sans text-sm font-medium tracking-[0.06em] leading-none text-left';
+    const submenuLabelClass = 'font-sans text-[11px] font-medium tracking-[0.01em] leading-5 text-left';
+    const collapsedTitle = (label) => (isSidebarExpanded ? undefined : label);
+    const navItemLayoutClass = isSidebarExpanded ? 'justify-start gap-4' : 'justify-center gap-0';
+    const navButtonLayoutClass = isSidebarExpanded ? 'justify-between' : 'justify-center';
+    const navButtonContentClass = isSidebarExpanded ? 'flex min-w-0 flex-1 items-center gap-4 text-left' : 'flex min-w-0 items-center gap-0 text-left';
+    const chevronClass = `material-symbols-outlined overflow-hidden text-xs transition-all duration-300 ease-out ${isSidebarExpanded ? 'ml-3 max-w-6 opacity-100' : 'ml-0 max-w-0 opacity-0'}`;
+    const brandTextClass = `flex flex-col overflow-hidden text-left transition-all duration-300 ease-out ${isSidebarExpanded ? 'max-w-[9rem] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`;
+    const userInfoClass = `flex flex-col overflow-hidden text-left items-start transition-all duration-300 ease-out ${isSidebarExpanded ? 'max-w-[12rem] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`;
+
     return (
-        <div className="flex h-screen bg-background-light font-sans overflow-hidden">
-            {/* Sidebar */}
+        <div className="flex h-screen overflow-hidden bg-background-light font-sans">
             {!isOrderForm && (
-                <aside className="w-64 bg-primary text-white flex flex-col shadow-2xl z-20 shrink-0">
-                <div className="p-8 border-b border-white/10 flex items-center gap-4 justify-start overflow-hidden">
-                    <div className="size-11 bg-white rounded-sm flex items-center justify-center shrink-0">
-                        <img src="/logo-brand.jpg" alt="Logo" className="w-full h-full object-contain" />
+                <aside
+                    className={`z-20 flex shrink-0 flex-col overflow-hidden bg-primary text-white shadow-2xl transition-[width] duration-300 ease-out ${isSidebarExpanded ? 'w-[19rem]' : 'w-[5.75rem]'}`}
+                    onMouseEnter={() => setIsSidebarHovered(true)}
+                    onMouseLeave={() => setIsSidebarHovered(false)}
+                    onFocusCapture={() => setIsSidebarFocused(true)}
+                    onBlurCapture={(event) => {
+                        if (!event.currentTarget.contains(event.relatedTarget)) {
+                            setIsSidebarFocused(false);
+                        }
+                    }}
+                >
+                    <div className={`flex items-center overflow-hidden border-b border-white/10 transition-all duration-300 ease-out ${isSidebarExpanded ? 'justify-start gap-4 p-8' : 'justify-center px-4 py-6'}`}>
+                        <div className="flex size-11 shrink-0 items-center justify-center rounded-sm bg-white">
+                            <img src="/logo-brand.jpg" alt="Logo" className="h-full w-full object-contain" />
+                        </div>
+                        <div className={brandTextClass}>
+                            <h1 className="font-sans text-lg font-bold leading-tight tracking-tight text-white uppercase">GỐM <br /> ĐẠI THÀNH</h1>
+                        </div>
                     </div>
-                    <div className="flex flex-col text-left">
-                        <h1 className="font-sans text-lg font-bold tracking-tight text-white leading-tight uppercase">GỐM <br/> ĐẠI THÀNH</h1>
-                    </div>
-                </div>
 
-                <nav className="flex-grow p-4 space-y-2 py-8 overflow-y-auto custom-scrollbar-thin">
-                        <Link to="/admin/accounts" className="flex items-center gap-4 p-3 hover:bg-white/10 rounded-sm transition-colors group">
-                            <span className="material-symbols-outlined w-6 text-center text-stone group-hover:text-gold transition-colors">storefront</span>
-                            <span className="font-sans text-sm font-medium tracking-wider">Danh sách cửa hàng</span>
+                    <nav className={`custom-scrollbar-thin flex-grow space-y-2 overflow-y-auto transition-all duration-300 ease-out ${isSidebarExpanded ? 'p-4 py-8' : 'px-3 py-6'}`}>
+                        <Link
+                            to="/admin/accounts"
+                            aria-label="Danh sách cửa hàng"
+                            title={collapsedTitle('Danh sách cửa hàng')}
+                            className={`group flex items-center rounded-sm p-3 transition-all duration-300 hover:bg-white/10 ${navItemLayoutClass}`}
+                        >
+                            <span className="material-symbols-outlined w-6 shrink-0 text-center text-stone transition-colors group-hover:text-gold">storefront</span>
+                            <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                Danh sách cửa hàng
+                            </SidebarText>
                         </Link>
 
-                    {canAccess('dashboard') && (
-                        <Link to="/admin" className="flex items-center gap-4 p-3 hover:bg-white/10 rounded-sm transition-colors group">
-                            <span className="material-symbols-outlined w-6 text-center text-stone group-hover:text-gold transition-colors">dashboard</span>
-                            <span className="font-sans text-sm font-medium tracking-wider">Tổng quan</span>
-                        </Link>
-                    )}
-
-                    {/* Collapsible Settings Menu */}
-                    {(canAccess('attributes') || canAccess('settings') || canAccess('users') || canAccess('orders')) && (
-                        <div className="space-y-1">
-                            <button 
-                                onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-                                className={`w-full flex items-center justify-between p-3 hover:bg-white/10 rounded-sm transition-colors group ${isSettingsOpen ? 'bg-white/5' : ''}`}
+                        {canAccess('dashboard') && (
+                            <Link
+                                to="/admin"
+                                aria-label="Tổng quan"
+                                title={collapsedTitle('Tổng quan')}
+                                className={`group flex items-center rounded-sm p-3 transition-all duration-300 hover:bg-white/10 ${navItemLayoutClass}`}
                             >
-                                <div className="flex items-center gap-4 text-left">
-                                    <span className={`material-symbols-outlined w-6 text-center ${isSettingsOpen ? 'text-gold' : 'text-stone'} group-hover:text-gold transition-colors`}>settings</span>
-                                    <span className="font-sans text-sm font-medium tracking-wider text-left">Cấu hình hệ thống</span>
-                                </div>
-                                <span className={`material-symbols-outlined text-xs transition-transform duration-300 ${isSettingsOpen ? 'rotate-180 text-gold' : 'text-stone'}`}>
-                                    expand_more
-                                </span>
-                            </button>
-                            
-                            {isSettingsOpen && (
-                                <div className="pl-4 space-y-1 animate-in slide-in-from-top-2 duration-200">
-                                    {canAccess('settings') && (
-                                        <Link 
-                                            to="/admin/settings" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/settings' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
-                                        >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/settings' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>web</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Cài đặt web</span>
-                                        </Link>
-                                    )}
-                                    {canAccess('attributes') && (
-                                        <Link 
-                                            to="/admin/attributes" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/attributes' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
-                                        >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/attributes' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>list_alt</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Thuộc tính sản phẩm</span>
-                                        </Link>
-                                    )}
-                                    {canAccess('users') && (
-                                        <Link 
-                                            to="/admin/users" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/users' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
-                                        >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/users' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>manage_accounts</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Quản lý nhân sự</span>
-                                        </Link>
-                                    )}
-                                    {canAccess('orders') && (
-                                        <Link 
-                                            to="/admin/order-status-settings" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/order-status-settings' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
-                                        >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/order-status-settings' ? 'text-gold' : 'group-hover:text-gold'}`}>label</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Trạng thái đơn hàng</span>
-                                        </Link>
-                                    )}
-                                    {canAccess('orders') && (
-                                        <Link 
-                                            to="/admin/shipping-settings" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/shipping-settings' || location.pathname === '/admin/carrier-mappings' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone/80 hover:text-white'}`}
-                                        >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/shipping-settings' || location.pathname === '/admin/carrier-mappings' ? 'text-gold' : 'group-hover:text-gold'}`}>local_shipping</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Cài đặt vận chuyển</span>
-                                        </Link>
-                                    )}
+                                <span className="material-symbols-outlined w-6 shrink-0 text-center text-stone transition-colors group-hover:text-gold">dashboard</span>
+                                <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                    Tổng quan
+                                </SidebarText>
+                            </Link>
+                        )}
+
+                        {(canAccess('attributes') || canAccess('settings') || canAccess('users') || canAccess('orders')) && (
+                            <div className="space-y-1">
+                                <button
+                                    onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+                                    className={`group flex w-full items-center rounded-sm p-3 transition-all duration-300 hover:bg-white/10 ${navButtonLayoutClass} ${isSettingsOpen ? 'bg-white/5' : ''}`}
+                                    aria-expanded={isSettingsOpen}
+                                    aria-label="Cấu hình hệ thống"
+                                    title={collapsedTitle('Cấu hình hệ thống')}
+                                >
+                                    <div className={navButtonContentClass}>
+                                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${isSettingsOpen ? 'text-gold' : 'text-stone'} group-hover:text-gold`}>settings</span>
+                                        <SidebarText isExpanded={isSidebarExpanded} className={`${topLevelLabelClass} tracking-[0.04em]`}>
+                                            Cấu hình hệ thống
+                                        </SidebarText>
+                                    </div>
+                                    <span className={`${chevronClass} ${isSettingsOpen ? 'rotate-180 text-gold' : 'text-stone'}`}>expand_more</span>
+                                </button>
+
+                                {isSettingsOpen && isSidebarExpanded && (
+                                    <div className="animate-in space-y-1 pl-4 slide-in-from-top-2 duration-200">
+                                        {canAccess('settings') && (
+                                            <Link
+                                                to="/admin/settings"
+                                                title="Cài đặt web"
+                                                className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/settings' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
+                                            >
+                                                <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/settings' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>web</span>
+                                                <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                    Cài đặt web
+                                                </SidebarText>
+                                            </Link>
+                                        )}
+                                        {canAccess('attributes') && (
+                                            <Link
+                                                to="/admin/attributes"
+                                                title="Thuộc tính sản phẩm/đơn hàng"
+                                                className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/attributes' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
+                                            >
+                                                <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/attributes' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>list_alt</span>
+                                                <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                    Thuộc tính sản phẩm/đơn hàng
+                                                </SidebarText>
+                                            </Link>
+                                        )}
+                                        {canAccess('users') && (
+                                            <Link
+                                                to="/admin/users"
+                                                title="Quản lý nhân sự"
+                                                className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/users' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
+                                            >
+                                                <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/users' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>manage_accounts</span>
+                                                <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                    Quản lý nhân sự
+                                                </SidebarText>
+                                            </Link>
+                                        )}
+                                        {canAccess('orders') && (
+                                            <Link
+                                                to="/admin/order-status-settings"
+                                                title="Trạng thái đơn hàng"
+                                                className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/order-status-settings' ? 'bg-gold/10 text-gold' : 'text-stone/80 hover:bg-white/5 hover:text-white'}`}
+                                            >
+                                                <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/order-status-settings' ? 'text-gold' : 'group-hover:text-gold'}`}>label</span>
+                                                <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                    Trạng thái đơn hàng
+                                                </SidebarText>
+                                            </Link>
+                                        )}
+                                        {canAccess('orders') && (
+                                            <Link
+                                                to="/admin/shipping-settings"
+                                                title="Cài đặt vận chuyển"
+                                                className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/shipping-settings' || location.pathname === '/admin/carrier-mappings' ? 'bg-gold/10 text-gold' : 'text-stone/80 hover:bg-white/5 hover:text-white'}`}
+                                            >
+                                                <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/shipping-settings' || location.pathname === '/admin/carrier-mappings' ? 'text-gold' : 'group-hover:text-gold'}`}>local_shipping</span>
+                                                <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                    Cài đặt vận chuyển
+                                                </SidebarText>
+                                            </Link>
+                                        )}
                                 </div>
                             )}
                         </div>
@@ -172,107 +281,134 @@ const AdminLayout = () => {
 
 
                     {canAccess('products') && (
-                        <Link to="/admin/products" className="flex items-center gap-4 p-3 hover:bg-white/10 rounded-sm transition-colors group">
-                            <span className="material-symbols-outlined w-6 text-center text-stone group-hover:text-gold transition-colors">inventory_2</span>
-                            <span className="font-sans text-sm font-medium tracking-wider">Quản lý sản phẩm</span>
+                        <Link
+                            to="/admin/products"
+                            aria-label="Quản lý sản phẩm"
+                            title={collapsedTitle('Quản lý sản phẩm')}
+                            className={`group flex items-center rounded-sm p-3 transition-all duration-300 hover:bg-white/10 ${navItemLayoutClass}`}
+                        >
+                            <span className="material-symbols-outlined w-6 shrink-0 text-center text-stone transition-colors group-hover:text-gold">inventory_2</span>
+                            <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                Quản lý sản phẩm
+                            </SidebarText>
                         </Link>
                     )}
 
-                    {/* Collapsible Orders Menu */}
                     {(canAccess('orders') || canAccess('customers') || canAccess('leads')) && (
                         <div className="space-y-1">
-                            <button 
+                            <button
                                 onClick={() => setIsOrdersOpen(!isOrdersOpen)}
-                                className={`w-full flex items-center justify-between p-3 hover:bg-white/10 rounded-sm transition-colors group ${isOrdersOpen ? 'bg-white/5' : ''}`}
+                                className={`group flex w-full items-center rounded-sm p-3 transition-all duration-300 hover:bg-white/10 ${navButtonLayoutClass} ${isOrdersOpen ? 'bg-white/5' : ''}`}
+                                aria-expanded={isOrdersOpen}
+                                aria-label="Quản lý bán hàng"
+                                title={collapsedTitle('Quản lý bán hàng')}
                             >
-                                <div className="flex items-center gap-4 text-left">
-                                    <span className={`material-symbols-outlined w-6 text-center ${isOrdersOpen ? 'text-gold' : 'text-stone'} group-hover:text-gold transition-colors`}>shopping_cart_checkout</span>
-                                    <span className="font-sans text-sm font-medium tracking-wider text-left">Quản lý bán hàng</span>
+                                <div className={navButtonContentClass}>
+                                    <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${isOrdersOpen ? 'text-gold' : 'text-stone'} group-hover:text-gold`}>shopping_cart_checkout</span>
+                                    <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                        Quản lý bán hàng
+                                    </SidebarText>
                                 </div>
-                                <span className={`material-symbols-outlined text-xs transition-transform duration-300 ${isOrdersOpen ? 'rotate-180 text-gold' : 'text-stone'}`}>
-                                    expand_more
-                                </span>
+                                <span className={`${chevronClass} ${isOrdersOpen ? 'rotate-180 text-gold' : 'text-stone'}`}>expand_more</span>
                             </button>
                             
-                            {isOrdersOpen && (
-                                <div className="pl-4 space-y-1 animate-in slide-in-from-top-2 duration-200">
+                            {isOrdersOpen && isSidebarExpanded && (
+                                <div className="animate-in space-y-1 pl-4 slide-in-from-top-2 duration-200">
                                     {canAccessLeadBoard && (
-                                        <Link 
-                                            to="/admin/leads" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${isLeadRoute ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
+                                        <Link
+                                            to="/admin/leads"
+                                            title="Xử lý lead"
+                                            className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${isLeadRoute ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
                                         >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${isLeadRoute ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>pending_actions</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Xử lý lead</span>
+                                            <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${isLeadRoute ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>pending_actions</span>
+                                            <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                Xử lý lead
+                                            </SidebarText>
                                         </Link>
                                     )}
                                     {canAccess('orders') && (
                                         <>
-                                            <Link 
-                                                to="/admin/orders" 
-                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/orders' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
+                                            <Link
+                                                to="/admin/orders"
+                                                title="Đơn hàng"
+                                                className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/orders' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
                                             >
-                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/orders' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>receipt_long</span>
-                                                <span className="font-sans text-xs font-medium tracking-wide">Đơn hàng</span>
+                                                <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/orders' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>receipt_long</span>
+                                                <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                    Đơn hàng
+                                                </SidebarText>
                                             </Link>
-                                            <Link 
-                                                to="/admin/shipments" 
-                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/shipments' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
+                                            <Link
+                                                to="/admin/shipments"
+                                                title="Vận đơn"
+                                                className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/shipments' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
                                             >
-                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/shipments' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>local_shipping</span>
-                                                <span className="font-sans text-xs font-medium tracking-wide">Vận đơn</span>
+                                                <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/shipments' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>local_shipping</span>
+                                                <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                    Vận đơn
+                                                </SidebarText>
                                             </Link>
                                         </>
                                     )}
                                     {canAccess('customers') && (
-                                        <>
-                                            <Link 
-                                                to="/admin/customers" 
-                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/customers' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
-                                            >
-                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/customers' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>group</span>
-                                                <span className="font-sans text-xs font-medium tracking-wide">Khách hàng</span>
-                                            </Link>
-                                        </>
+                                        <Link
+                                            to="/admin/customers"
+                                            title="Khách hàng"
+                                            className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/customers' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
+                                        >
+                                            <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/customers' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>group</span>
+                                            <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                Khách hàng
+                                            </SidebarText>
+                                        </Link>
                                     )}
                                 </div>
                             )}
                         </div>
                     )}
 
-                    {/* Collapsible Design & Content Menu */}
                     {(canAccess('categories') || canAccess('blog')) && (
                         <div className="space-y-1">
-                            <button 
+                            <button
                                 onClick={() => setIsDesignOpen(!isDesignOpen)}
-                                className={`w-full flex items-center justify-between p-3 hover:bg-white/10 rounded-sm transition-colors group ${isDesignOpen ? 'bg-white/5' : ''}`}
+                                className={`group flex w-full items-center rounded-sm p-3 transition-all duration-300 hover:bg-white/10 ${navButtonLayoutClass} ${isDesignOpen ? 'bg-white/5' : ''}`}
+                                aria-expanded={isDesignOpen}
+                                aria-label="Web"
+                                title={collapsedTitle('Web')}
                             >
-                                <div className="flex items-center gap-4 text-left">
-                                    <span className={`material-symbols-outlined w-6 text-center ${isDesignOpen ? 'text-gold' : 'text-stone'} group-hover:text-gold transition-colors`}>design_services</span>
-                                    <span className="font-sans text-sm font-medium tracking-wider text-left">Web</span>
+                                <div className={navButtonContentClass}>
+                                    <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${isDesignOpen ? 'text-gold' : 'text-stone'} group-hover:text-gold`}>design_services</span>
+                                    <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                        Web
+                                    </SidebarText>
                                 </div>
-                                <span className={`material-symbols-outlined text-xs transition-transform duration-300 ${isDesignOpen ? 'rotate-180 text-gold' : 'text-stone'}`}>
-                                    expand_more
-                                </span>
+                                <span className={`${chevronClass} ${isDesignOpen ? 'rotate-180 text-gold' : 'text-stone'}`}>expand_more</span>
                             </button>
-                            
-                            {isDesignOpen && (
-                                <div className="pl-4 space-y-1 animate-in slide-in-from-top-2 duration-200">
+
+                            {isDesignOpen && isSidebarExpanded && (
+                                <div className="animate-in space-y-1 pl-4 slide-in-from-top-2 duration-200">
                                     {canAccess('categories') && (
-                                        <Link 
-                                            to="/admin/categories" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/categories' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
+                                        <Link
+                                            to="/admin/categories"
+                                            title="Danh mục sản phẩm"
+                                            className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/categories' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
                                         >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/categories' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>category</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Danh mục sản phẩm</span>
+                                            <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/categories' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>category</span>
+                                            <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                Danh mục sản phẩm
+                                            </SidebarText>
                                         </Link>
                                     )}
                                     {canAccess('blog') && (
-                                        <Link 
-                                            to="/admin/blog" 
-                                            className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/blog' ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
+                                        <Link
+                                            to="/admin/blog"
+                                            title="Bài viết trên web"
+                                            className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/blog' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
                                         >
-                                            <span className={`material-symbols-outlined text-[20px] w-6 text-center ${location.pathname === '/admin/blog' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>book_2</span>
-                                            <span className="font-sans text-xs font-medium tracking-wide">Bài viết trên web</span>
+                                            <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/blog' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>book_2</span>
+                                            <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                Bài viết trên web
+                                            </SidebarText>
                                         </Link>
                                     )}
                                 </div>
@@ -280,24 +416,29 @@ const AdminLayout = () => {
                         </div>
                     )}
 
-                    <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-stone uppercase tracking-[0.2em] opacity-50">Kho & Vận chuyển</div>
+                    <div className={`px-3 transition-all duration-300 ease-out ${isSidebarExpanded ? 'pb-2 pt-4' : 'py-1'}`}>
+                        <SidebarSectionLabel isExpanded={isSidebarExpanded}>Kho & Vận chuyển</SidebarSectionLabel>
+                    </div>
                     {canAccess('inventory') && (
                         <div className="space-y-1">
                             <button
                                 onClick={() => setIsInventoryOpen(!isInventoryOpen)}
-                                className={`w-full flex items-center justify-between p-3 hover:bg-white/10 rounded-sm transition-colors group ${isInventoryOpen ? 'bg-white/5' : ''}`}
+                                className={`group flex w-full items-center rounded-sm p-3 transition-all duration-300 hover:bg-white/10 ${navButtonLayoutClass} ${isInventoryOpen ? 'bg-white/5' : ''}`}
+                                aria-expanded={isInventoryOpen}
+                                aria-label="Quản lý kho"
+                                title={collapsedTitle('Quản lý kho')}
                             >
-                                <div className="flex items-center gap-4 text-left">
-                                    <span className={`material-symbols-outlined w-6 text-center ${isInventoryOpen ? 'text-gold' : 'text-stone'} group-hover:text-gold transition-colors`}>inventory</span>
-                                    <span className="font-sans text-sm font-medium tracking-wider text-left">Quản lý kho</span>
+                                <div className={navButtonContentClass}>
+                                    <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${isInventoryOpen ? 'text-gold' : 'text-stone'} group-hover:text-gold`}>inventory</span>
+                                    <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                        Quản lý kho
+                                    </SidebarText>
                                 </div>
-                                <span className={`material-symbols-outlined text-xs transition-transform duration-300 ${isInventoryOpen ? 'rotate-180 text-gold' : 'text-stone'}`}>
-                                    expand_more
-                                </span>
+                                <span className={`${chevronClass} ${isInventoryOpen ? 'rotate-180 text-gold' : 'text-stone'}`}>expand_more</span>
                             </button>
 
-                            {isInventoryOpen && (
-                                <div className="pl-4 space-y-1 animate-in slide-in-from-top-2 duration-200">
+                            {isInventoryOpen && isSidebarExpanded && (
+                                <div className="animate-in space-y-1 pl-4 slide-in-from-top-2 duration-200">
                                     {INVENTORY_NAV_ITEMS.map((item) => {
                                         const targetPath = buildInventoryPath(item.key);
                                         const isActive = location.pathname === targetPath;
@@ -305,10 +446,13 @@ const AdminLayout = () => {
                                             <Link
                                                 key={item.key}
                                                 to={targetPath}
-                                                className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${isActive ? 'bg-gold/10 text-gold' : 'hover:bg-white/5 text-stone hover:text-white'}`}
+                                                title={item.label}
+                                                className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${isActive ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
                                             >
-                                                <span className={`material-symbols-outlined text-[20px] w-6 text-center ${isActive ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>{item.icon}</span>
-                                                <span className="font-sans text-xs font-medium tracking-wide">{item.label}</span>
+                                                <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${isActive ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>{item.icon}</span>
+                                                <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                    {item.label}
+                                                </SidebarText>
                                             </Link>
                                         );
                                     })}
@@ -319,36 +463,66 @@ const AdminLayout = () => {
 
 
 
-                    <div className="pt-4 pb-2 px-3 text-[10px] font-bold text-stone uppercase tracking-[0.2em] opacity-50">Báo cáo & Phân tích</div>
-                    <Link to="/admin/reports" className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname.startsWith('/admin/reports') ? 'bg-gold/10 text-gold' : 'hover:bg-white/10 text-white'}`}>
-                        <span className={`material-symbols-outlined w-6 text-center ${location.pathname.startsWith('/admin/reports') ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>table_chart</span>
-                        <span className="font-sans text-sm font-medium tracking-wider">Hàng đi hàng ngày</span>
+                    <div className={`px-3 transition-all duration-300 ease-out ${isSidebarExpanded ? 'pb-2 pt-4' : 'py-1'}`}>
+                        <SidebarSectionLabel isExpanded={isSidebarExpanded}>Báo cáo & Phân tích</SidebarSectionLabel>
+                    </div>
+                    <Link
+                        to="/admin/reports"
+                        aria-label="Hàng đi hàng ngày"
+                        title={collapsedTitle('Hàng đi hàng ngày')}
+                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname.startsWith('/admin/reports') ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                    >
+                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname.startsWith('/admin/reports') ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>table_chart</span>
+                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                            Hàng đi hàng ngày
+                        </SidebarText>
                     </Link>
-                    <Link to="/admin/finance" className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname === '/admin/finance' ? 'bg-gold/10 text-gold' : 'hover:bg-white/10 text-white'}`}>
-                        <span className={`material-symbols-outlined w-6 text-center ${location.pathname === '/admin/finance' ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>account_balance_wallet</span>
-                        <span className="font-sans text-sm font-medium tracking-wider">Quản lý tiền</span>
+                    <Link
+                        to="/admin/finance"
+                        aria-label="Quản lý tiền"
+                        title={collapsedTitle('Quản lý tiền')}
+                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                    >
+                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>account_balance_wallet</span>
+                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                            Quản lý tiền
+                        </SidebarText>
                     </Link>
-                    <Link to="/admin/finance/fixed-expenses" className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname.startsWith('/admin/finance/fixed-expenses') ? 'bg-gold/10 text-gold' : 'hover:bg-white/10 text-white'}`}>
-                        <span className={`material-symbols-outlined w-6 text-center ${location.pathname.startsWith('/admin/finance/fixed-expenses') ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>receipt_long</span>
-                        <span className="font-sans text-sm font-medium tracking-wider">Chi phí cố định</span>
+                    <Link
+                        to="/admin/finance/fixed-expenses"
+                        aria-label="Chi phí cố định"
+                        title={collapsedTitle('Chi phí cố định')}
+                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname.startsWith('/admin/finance/fixed-expenses') ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                    >
+                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname.startsWith('/admin/finance/fixed-expenses') ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>receipt_long</span>
+                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                            Chi phí cố định
+                        </SidebarText>
                     </Link>
-                    <Link to="/admin/finance/daily-profit" className={`flex items-center gap-4 p-3 rounded-sm transition-colors group ${location.pathname.startsWith('/admin/finance/daily-profit') ? 'bg-gold/10 text-gold' : 'hover:bg-white/10 text-white'}`}>
-                        <span className={`material-symbols-outlined w-6 text-center ${location.pathname.startsWith('/admin/finance/daily-profit') ? 'text-gold' : 'text-stone group-hover:text-gold'} transition-colors`}>monitoring</span>
-                        <span className="font-sans text-sm font-medium tracking-wider">Lãi lỗ theo ngày</span>
+                    <Link
+                        to="/admin/finance/daily-profit"
+                        aria-label="Lãi lỗ theo ngày"
+                        title={collapsedTitle('Lãi lỗ theo ngày')}
+                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname.startsWith('/admin/finance/daily-profit') ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                    >
+                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname.startsWith('/admin/finance/daily-profit') ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>monitoring</span>
+                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                            Lãi lỗ theo ngày
+                        </SidebarText>
                     </Link>
                 </nav>
 
-                <div className="p-4 border-t border-white/10 mt-auto">
-                    <div className="flex items-center gap-3 p-3 bg-white/5 rounded-sm">
-                        <div className="size-10 rounded-full bg-gold/20 flex items-center justify-center text-gold shrink-0 border border-gold/30">
+                <div className={`mt-auto border-t border-white/10 p-4 transition-all duration-300 ease-out ${isSidebarExpanded ? '' : 'px-3'}`}>
+                    <div className={`flex items-center rounded-sm bg-white/5 transition-all duration-300 ease-out ${isSidebarExpanded ? 'justify-start gap-3 p-3' : 'justify-center p-3'}`}>
+                        <div className="flex size-10 shrink-0 items-center justify-center rounded-full border border-gold/30 bg-gold/20 text-gold">
                             <span className="material-symbols-outlined text-xl">person</span>
                         </div>
-                        <div className="flex flex-col overflow-hidden text-left items-start">
-                            <span className="text-[9px] font-bold text-stone uppercase tracking-widest mb-0.5 text-left">
+                        <div className={userInfoClass}>
+                            <span className="mb-0.5 text-left text-[9px] font-bold uppercase tracking-widest text-stone">
                                 {user?.is_admin ? 'Quản trị viên' : 'Nhân viên'}
                             </span>
-                            <span className="text-sm font-sans font-bold truncate leading-none mb-1.5 text-left">{user.name}</span>
-                            <button onClick={handleLogout} className="text-[10px] text-gold/60 text-left hover:text-gold transition-colors flex items-center gap-1 uppercase tracking-tighter w-full justify-start">
+                            <span className="mb-1.5 truncate text-left text-sm font-sans font-bold leading-none">{user.name}</span>
+                            <button onClick={handleLogout} className="flex w-full items-center justify-start gap-1 whitespace-nowrap text-left text-[10px] uppercase tracking-tighter text-gold/60 transition-colors hover:text-gold">
                                 <span className="material-symbols-outlined text-xs">logout</span>
                                 Đăng xuất
                             </button>
@@ -358,9 +532,8 @@ const AdminLayout = () => {
             </aside>
             )}
 
-            {/* Main Content */}
-            <main className={`flex-grow flex flex-col overflow-hidden bg-background-light relative ${isOrderForm ? 'w-full' : ''}`}>
-                <div className={`flex-grow min-h-0 relative ${isOrderForm ? 'overflow-auto p-0' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
+            <main className={`relative flex min-w-0 flex-grow flex-col overflow-hidden bg-background-light ${isOrderForm ? 'w-full' : ''}`}>
+                <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'overflow-auto p-0' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
                     {(() => {
                         const permNeeded = getCurrentPermId();
                         if (permNeeded && !canAccess(permNeeded)) {

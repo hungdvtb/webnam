@@ -255,23 +255,71 @@ class Product extends Model
                     ->withTimestamps();
     }
 
+    protected function compositeItemsRelationName(): ?string
+    {
+        if ($this->type === 'bundle') {
+            return 'bundleItems';
+        }
+
+        if ($this->type === 'grouped') {
+            return 'groupedItems';
+        }
+
+        return null;
+    }
+
+    public function calculateCompositePrice(array $removedIds = [])
+    {
+        $relationName = $this->compositeItemsRelationName();
+        if ($relationName === null || $this->price_type !== 'sum') {
+            return $this->price;
+        }
+
+        $items = $this->{$relationName};
+        $total = 0;
+
+        foreach ($items as $item) {
+            if (in_array($item->id, $removedIds, true)) {
+                continue;
+            }
+
+            $unitPrice = $item->pivot->price ?? $item->price ?? 0;
+            $quantity = (int) ($item->pivot->quantity ?? 0);
+            $total += ((float) $unitPrice) * $quantity;
+        }
+
+        return $total;
+    }
+
+    public function calculateCompositeCostPrice()
+    {
+        $relationName = $this->compositeItemsRelationName();
+        if ($relationName === null) {
+            return $this->cost_price;
+        }
+
+        $items = $this->{$relationName};
+        $total = 0;
+
+        foreach ($items as $item) {
+            $unitCost = $item->pivot->cost_price ?? $item->cost_price ?? $item->expected_cost ?? 0;
+            $quantity = (int) ($item->pivot->quantity ?? 0);
+            $total += ((float) $unitCost) * $quantity;
+        }
+
+        return $total;
+    }
+
     /**
      * Calculate price for grouped product if type is 'sum'
      */
     public function calculateGroupPrice($removedIds = [])
     {
-        if ($this->type !== 'grouped' || $this->price_type !== 'sum') {
+        if ($this->type !== 'grouped') {
             return $this->price;
         }
 
-        $items = $this->groupedItems;
-        $total = 0;
-        foreach ($items as $item) {
-            if (!in_array($item->id, $removedIds)) {
-                $total += $item->price * $item->pivot->quantity;
-            }
-        }
-        return $total;
+        return $this->calculateCompositePrice($removedIds);
     }
 
     /**
@@ -283,12 +331,7 @@ class Product extends Model
             return $this->cost_price;
         }
 
-        $items = $this->groupedItems;
-        $total = 0;
-        foreach ($items as $item) {
-            $total += ($item->cost_price ?? $item->expected_cost ?? 0) * $item->pivot->quantity;
-        }
-        return $total;
+        return $this->calculateCompositeCostPrice();
     }
 
     public function getInventoryDisplayCostAttribute()

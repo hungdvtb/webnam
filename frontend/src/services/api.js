@@ -507,6 +507,11 @@ export const blogApi = {
     store: (data) => api.post('/blog', data),
     update: (id, data) => api.put(`/blog/${id}`, data),
     destroy: (id) => api.delete(`/blog/${id}`),
+    restore: (id) => api.post(`/blog/${id}/restore`),
+    forceDelete: (id) => api.delete(`/blog/${id}/force`),
+    bulkDelete: (ids) => api.post('/blog/bulk-delete', { ids }),
+    bulkRestore: (ids) => api.post('/blog/bulk-restore', { ids }),
+    bulkForceDelete: (ids) => api.post('/blog/bulk-force-delete', { ids }),
     reorder: (ids) => api.post('/blog/reorder', { ids }),
     exportBundle: (data = {}) => api.post('/blog/export-bundle', data, {
         responseType: 'blob',

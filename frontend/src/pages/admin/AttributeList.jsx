@@ -152,6 +152,17 @@ const AttributeList = () => {
         }
     };
 
+    const updateOption = (id, field, value) => {
+        setFormData((prev) => ({
+            ...prev,
+            options: prev.options.map((option) => (
+                option.id === id
+                    ? { ...option, [field]: value }
+                    : option
+            ))
+        }));
+    };
+
     const removeOption = (id) => {
         setFormData({ ...formData, options: formData.options.filter(o => o.id !== id) });
     };
@@ -442,20 +453,48 @@ const AttributeList = () => {
                                                         initial={{ opacity: 0, y: 10 }}
                                                         animate={{ opacity: 1, y: 0 }}
                                                         exit={{ opacity: 0, scale: 0.9 }}
-                                                        className="flex items-center gap-2 bg-white border border-stone/10 p-2 rounded-sm group hover:border-gold/30 transition-colors cursor-grab active:cursor-grabbing"
+                                                        className="flex items-start gap-2 bg-white border border-stone/10 p-2 rounded-sm group hover:border-gold/30 transition-colors cursor-grab active:cursor-grabbing"
                                                     >
-                                                        <span className="material-symbols-outlined text-[16px] text-stone/20 group-hover:text-gold transition-colors">drag_indicator</span>
+                                                        <span className="material-symbols-outlined text-[16px] text-stone/20 group-hover:text-gold transition-colors mt-2">drag_indicator</span>
                                                         {formData.swatch_type === 'color' && (
-                                                            <div className="size-6 rounded-full border border-stone/20 shadow-sm shrink-0" style={{ backgroundColor: opt.swatch_value || '#ccc' }}></div>
+                                                            <div className="size-6 rounded-full border border-stone/20 shadow-sm shrink-0 mt-2" style={{ backgroundColor: opt.swatch_value || '#ccc' }}></div>
                                                         )}
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="text-[12px] font-bold text-stone-700 truncate">{opt.value}</div>
-                                                            {opt.swatch_value && <div className="text-[9px] text-stone/40 font-mono uppercase truncate">{opt.swatch_value}</div>}
+                                                        <div className="flex-1 min-w-0 space-y-2">
+                                                            <input
+                                                                type="text"
+                                                                value={opt.value}
+                                                                onChange={(e) => updateOption(opt.id, 'value', e.target.value)}
+                                                                onKeyDown={(e) => {
+                                                                    if (e.key === 'Enter') {
+                                                                        e.preventDefault();
+                                                                    }
+                                                                }}
+                                                                onPointerDown={(e) => e.stopPropagation()}
+                                                                className="w-full bg-stone/5 border border-stone/20 px-3 py-2 text-[12px] font-body font-semibold text-stone-700 focus:outline-none focus:border-primary rounded-sm"
+                                                                placeholder="Tên giá trị tùy chọn..."
+                                                            />
+                                                            {formData.swatch_type === 'color' ? (
+                                                                <div className="flex items-center gap-2">
+                                                                    <input
+                                                                        type="color"
+                                                                        value={opt.swatch_value || '#cccccc'}
+                                                                        onChange={(e) => updateOption(opt.id, 'swatch_value', e.target.value)}
+                                                                        onPointerDown={(e) => e.stopPropagation()}
+                                                                        className="size-8 bg-transparent cursor-pointer shrink-0"
+                                                                        title="Chọn màu hiển thị"
+                                                                    />
+                                                                    <span className="text-[10px] text-stone/40 font-mono uppercase truncate">
+                                                                        {opt.swatch_value || '#cccccc'}
+                                                                    </span>
+                                                                </div>
+                                                            ) : (
+                                                                opt.swatch_value && <div className="text-[9px] text-stone/40 font-mono uppercase truncate">{opt.swatch_value}</div>
+                                                            )}
                                                         </div>
                                                         <button 
                                                             type="button" 
                                                             onClick={() => removeOption(opt.id)} 
-                                                            className="opacity-0 group-hover:opacity-100 p-1 text-stone/30 hover:text-brick transition-all"
+                                                            className="opacity-0 group-hover:opacity-100 p-1 text-stone/30 hover:text-brick transition-all mt-1"
                                                         >
                                                             <span className="material-symbols-outlined text-[16px]">delete</span>
                                                         </button>

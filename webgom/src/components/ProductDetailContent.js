@@ -12,6 +12,40 @@ import BundleProductView from './product/BundleProductView';
 
 const FALLBACK_PRODUCT_IMAGE = 'https://placehold.co/800';
 
+const getBundleOptionTitle = (item) => item?.option_title || item?.pivot?.option_title || '';
+
+const getBundleSourcePosition = (item, fallbackIndex = 0) => {
+  const rawPosition = item?.source_position ?? item?.pivot?.position ?? fallbackIndex;
+  const normalizedPosition = Number(rawPosition);
+  return Number.isFinite(normalizedPosition) ? normalizedPosition : fallbackIndex;
+};
+
+const createBundleItemUid = (item, fallbackIndex = 0) => {
+  const optionTitle = getBundleOptionTitle(item);
+  const baseProductId = Number(item?.base_product_id ?? item?.id ?? 0);
+  const sourcePosition = getBundleSourcePosition(item, fallbackIndex);
+  return `${optionTitle}::${baseProductId}::${sourcePosition}`;
+};
+
+const normalizeBundleItemState = (item, fallbackIndex = 0) => {
+  const optionTitle = getBundleOptionTitle(item);
+  const sourcePosition = getBundleSourcePosition(item, fallbackIndex);
+  const baseProductId = Number(item?.base_product_id ?? item?.id ?? 0);
+  const selectedProductId = Number(item?.selected_product_id ?? item?.pivot?.variant_id ?? item?.id ?? 0) || baseProductId;
+
+  return {
+    ...item,
+    bundle_item_uid: item?.bundle_item_uid || createBundleItemUid(item, fallbackIndex),
+    option_title: optionTitle,
+    source_position: sourcePosition,
+    base_product_id: baseProductId,
+    base_product_slug: item?.base_product_slug || item?.slug || '',
+    selected_product_id: selectedProductId,
+    id: selectedProductId,
+    qty: item?.qty ?? item?.pivot?.quantity ?? 1,
+  };
+};
+
 export default function ProductDetailContent({ product }) {
   const [selectedOptions, setSelectedOptions] = useState({});
   const [selectedVariantId, setSelectedVariantId] = useState(null);
@@ -79,15 +113,14 @@ export default function ProductDetailContent({ product }) {
       const items = product.bundle_items || product.grouped_items || [];
       if (items.length > 0) {
         let firstConfigTitle = '';
-        const mappedItems = items.map(item => {
-          const groupName = item.option_title || item.pivot?.option_title || '';
+        const mappedItems = items.map((item, index) => {
+          const groupName = getBundleOptionTitle(item);
           if (!firstConfigTitle && groupName) firstConfigTitle = groupName;
-          
-          return {
+
+          return normalizeBundleItemState({
             ...item,
-            qty: item.pivot?.quantity || 1,
             option_title: groupName
-          };
+          }, index);
         });
 
         setBundleItems(mappedItems.map(item => ({
@@ -141,39 +174,51 @@ export default function ProductDetailContent({ product }) {
     );
   };
 
-  const updateBundleItemQuantity = (id, newQty) => {
+  const updateBundleItemQuantity = (bundleItemUid, newQty) => {
     setBundleItems(prev => prev.map(item => 
-      item.id === id ? { ...item, qty: Math.max(1, newQty) } : item
+      item.bundle_item_uid === bundleItemUid ? { ...item, qty: Math.max(1, newQty) } : item
     ));
   };
 
-  const removeBundleItem = (id) => {
+  const removeBundleItem = (bundleItemUid) => {
     setBundleItems(prev => prev.map(item =>
-      item.id === id ? { ...item, removed: true, selected: false } : item
+      item.bundle_item_uid === bundleItemUid ? { ...item, removed: true, selected: false } : item
     ));
   };
 
-  const restoreBundleItem = (id) => {
+  const restoreBundleItem = (bundleItemUid) => {
     setBundleItems(prev => prev.map(item =>
-      item.id === id ? { ...item, removed: false, selected: true } : item
+      item.bundle_item_uid === bundleItemUid ? { ...item, removed: false, selected: true } : item
     ));
   };
 
-  const updateBundleItemProduct = (oldItemId, newProduct) => {
+  const updateBundleItemProduct = (bundleItemUid, newProduct) => {
     setBundleItems(prev => prev.map(item => {
-      if (item.id === oldItemId) {
-        return {
+      if (item.bundle_item_uid === bundleItemUid) {
+        const isSiblingVariant = newProduct?.pivot?.link_type === 'super_link';
+        return normalizeBundleItemState({
           ...newProduct,
-          id: newProduct.id,
           qty: item.qty || 1,
           selected: true,
           removed: false,
+          bundle_item_uid: item.bundle_item_uid,
           option_title: item.option_title || item.pivot?.option_title,
+          source_position: item.source_position,
+          base_product_id: isSiblingVariant
+            ? item.base_product_id
+            : Number(newProduct?.base_product_id ?? newProduct?.id ?? item.base_product_id),
+          base_product_slug: isSiblingVariant
+            ? item.base_product_slug
+            : (newProduct?.base_product_slug || newProduct?.slug || ''),
+          selected_product_id: Number(newProduct?.id ?? item.selected_product_id ?? item.id ?? item.base_product_id),
           pivot: {
-              ...item.pivot,
-              variant_id: (newProduct.pivot?.link_type === 'super_link') ? newProduct.id : (item.pivot?.variant_id || null)
+            ...item.pivot,
+            ...newProduct?.pivot,
+            variant_id: isSiblingVariant
+              ? Number(newProduct?.id ?? item.selected_product_id ?? item.id ?? item.base_product_id)
+              : (newProduct?.pivot?.variant_id ?? null)
           }
-        };
+        }, item.source_position);
       }
       return item;
     }));
@@ -199,14 +244,13 @@ export default function ProductDetailContent({ product }) {
     const items = product.bundle_items || product.grouped_items || [];
     if (items.length === 0) return;
     let firstConfigTitle = '';
-    const mappedItems = items.map(item => {
-      const groupName = item.option_title || item.pivot?.option_title || '';
+    const mappedItems = items.map((item, index) => {
+      const groupName = getBundleOptionTitle(item);
       if (!firstConfigTitle && groupName) firstConfigTitle = groupName;
-      return {
+      return normalizeBundleItemState({
         ...item,
-        qty: item.pivot?.quantity || 1,
         option_title: groupName
-      };
+      }, index);
     });
     setBundleItems(mappedItems.map(item => ({
       ...item,
@@ -214,16 +258,16 @@ export default function ProductDetailContent({ product }) {
     })));
   };
 
-  const toggleBundleItem = (id) => {
+  const toggleBundleItem = (bundleItemUid) => {
     setBundleItems(prev => {
-      const itemToToggle = prev.find(it => it.id === id);
+      const itemToToggle = prev.find(it => it.bundle_item_uid === bundleItemUid);
       if (!itemToToggle) return prev;
 
       const getGroupName = (it) => it.option_title || it.pivot?.option_title || it.category?.name || 'Thành phần mặc định';
       const groupName = getGroupName(itemToToggle);
 
       return prev.map(item => {
-        if (item.id === id) return { ...item, selected: true };
+        if (item.bundle_item_uid === bundleItemUid) return { ...item, selected: true };
         if (getGroupName(item) === groupName) return { ...item, selected: false };
         return item;
       });
@@ -319,8 +363,11 @@ export default function ProductDetailContent({ product }) {
     });
 
     const itemsToCart = selectedItems.map((it, idx) => ({
-      uid: `${it.id}_${it.pivot?.variant_id || idx}`,
-      id: it.id,
+      uid: it.bundle_item_uid || `${it.base_product_id || it.id}_${idx}`,
+      id: it.selected_product_id || it.id,
+      product_id: it.selected_product_id || it.id,
+      base_product_id: it.base_product_id || it.id,
+      variant_id: it.pivot?.variant_id || null,
       name: it.name,
       qty: it.qty || 1,
       price: it.price,
@@ -361,8 +408,11 @@ export default function ProductDetailContent({ product }) {
       return bundleItems
         .filter(it => it.selected && !it.removed)
         .map((it, idx) => ({
-          uid: `${it.id}_${it.pivot?.variant_id || idx}`,
-          id: it.id,
+          uid: it.bundle_item_uid || `${it.base_product_id || it.id}_${idx}`,
+          id: it.selected_product_id || it.id,
+          product_id: it.selected_product_id || it.id,
+          base_product_id: it.base_product_id || it.id,
+          variant_id: it.pivot?.variant_id || null,
           name: it.name,
           qty: it.qty,
           price: it.price,

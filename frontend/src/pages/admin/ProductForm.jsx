@@ -3969,7 +3969,7 @@ const ProductForm = () => {
                                                         </option>
                                                     ))}
                                                 </select>
-                                                {canConvertSimpleProduct ? (
+                                                {false ? (
                                                     <button
                                                         type="button"
                                                         onClick={openConvertToConfigurableModal}
@@ -3982,7 +3982,7 @@ const ProductForm = () => {
                                                 ) : null}
                                             </div>
                                         </Field>
-                                        {canConvertSimpleProduct ? (
+                                        {false ? (
                                             <p className="mt-2 text-[11px] font-semibold text-emerald-700/80">
                                                 Với sản phẩm đơn đang có dữ liệu thật, hãy dùng nút chuyển đổi để giữ nguyên tồn kho, phiếu kho, bundle và đơn hàng cũ trên ID hiện tại.
                                             </p>

@@ -1036,8 +1036,8 @@ export default function CartPage() {
                 </div>
 
                 {/* Chuyển đổi địa chỉ hành chính mới */}
-                <div style={{ gridColumn: '1 / -1', padding: '0.25rem 0', display: 'flex', alignItems: 'center' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '13px', color: '#b68f54', fontWeight: 'bold', userSelect: 'none' }}>
+                <div className={styles.addressToggleRow}>
+                  <label className={styles.addressToggleLabel}>
                     <input 
                       type="checkbox" 
                       checked={useNewAddress} 
@@ -1045,13 +1045,13 @@ export default function CartPage() {
                         clearFieldErrors('province', 'district', 'ward');
                         setUseNewAddress(e.target.checked);
                       }}
-                      style={{ marginRight: '8px', cursor: 'pointer', width: '16px', height: '16px', accentColor: '#C5A059' }}
+                      className={styles.addressToggleCheckbox}
                     />
                     Sử dụng đơn vị hành chính mới (Chỉ gồm 2 cấp: Tỉnh/Thành phố và Phường/Xã)
                   </label>
                 </div>
 
-                <div className={styles.threeCol} style={useNewAddress ? { gridTemplateColumns: '1fr 1fr' } : {}}>
+                <div className={`${styles.threeCol} ${useNewAddress ? styles.compactAddressGrid : ''}`}>
                   <div
                     ref={registerFieldGroupRef('province')}
                     tabIndex={-1}
@@ -1177,17 +1177,17 @@ export default function CartPage() {
               </div>
 
               {formData.paymentMethod === 'bank' && bankSettings && (
-                <div style={{ marginTop: '1rem', padding: '1.25rem', backgroundColor: '#faf9f5', border: '1px solid #e5e7eb', borderRadius: '4px' }} className="animate-fade-in">
-                  <h4 style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '1rem', color: '#1f2937' }}>Thông tin chuyển khoản:</h4>
-                  <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
-                    <div style={{ flex: '1', minWidth: '200px' }}>
-                      <p style={{ margin: '0 0 0.5rem 0', fontSize: '13px' }}><strong>Ngân hàng:</strong> {bankSettings.bank_name}</p>
-                      <p style={{ margin: '0 0 0.5rem 0', fontSize: '13px' }}><strong>Số tài khoản:</strong> <span style={{ color: '#b68f54', fontWeight: 'bold', fontSize: '15px' }}>{bankSettings.bank_account_number}</span></p>
-                      <p style={{ margin: '0 0 0.5rem 0', fontSize: '13px' }}><strong>Chủ tài khoản:</strong> {bankSettings.bank_account_name}</p>
-                      <p style={{ margin: '0 0 0.5rem 0', fontSize: '13px' }}><strong>Nội dung:</strong> <i style={{ color: '#4b5563' }}>{bankSettings.bank_transfer_template?.replace('{order_number}', 'DHXXXXX') || 'DHXXXXX'}</i></p>
+                <div className={`${styles.bankInfoCard} animate-fade-in`}>
+                  <h4 className={styles.bankInfoTitle}>Thông tin chuyển khoản:</h4>
+                  <div className={styles.bankInfoLayout}>
+                    <div className={styles.bankInfoCopy}>
+                      <p className={styles.bankInfoLine}><strong>Ngân hàng:</strong> {bankSettings.bank_name}</p>
+                      <p className={styles.bankInfoLine}><strong>Số tài khoản:</strong> <span className={styles.bankInfoHighlight}>{bankSettings.bank_account_number}</span></p>
+                      <p className={styles.bankInfoLine}><strong>Chủ tài khoản:</strong> {bankSettings.bank_account_name}</p>
+                      <p className={styles.bankInfoLine}><strong>Nội dung:</strong> <i className={styles.bankInfoTemplate}>{bankSettings.bank_transfer_template?.replace('{order_number}', 'DHXXXXX') || 'DHXXXXX'}</i></p>
                     </div>
                     {bankSettings.bank_qr_code && (
-                      <div style={{ width: '120px', height: '120px', flexShrink: 0, backgroundColor: '#fff', padding: '4px', border: '1px solid #e5e7eb', borderRadius: '4px' }}>
+                      <div className={styles.bankInfoQr}>
                         <img src={bankSettings.bank_qr_code} alt="QR Code" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                       </div>
                     )}

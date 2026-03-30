@@ -296,7 +296,7 @@ class ProductController extends Controller
             }
 
             if ($item['variant_id'] === null) {
-                $messages["grouped_items.{$item['index']}.variant_id"][] = 'San pham configurable trong bundle hoac grouped phai chon mot bien the cu the de ghi nhan dung ton kho.';
+                $messages["grouped_items.{$item['index']}.variant_id"][] = 'Sản phẩm configurable trong bundle hoặc grouped phải chọn một biến thể cụ thể để ghi nhận đúng tồn kho.';
                 continue;
             }
 
@@ -2118,9 +2118,9 @@ class ProductController extends Controller
         // Start with optimized column selection for products list to reduce memory & payload
         $query = Product::query()
             ->select([
-            'id', 'sku', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
+            'id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
             'supplier_id', 'inventory_unit_id',
-            'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title'
+            'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title', 'site_domain_id'
         ])
             ->withCount('suppliers')
             ->with([
@@ -2133,14 +2133,14 @@ class ProductController extends Controller
             'images:id,product_id,image_url,is_primary',
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
-            'variations:id,sku,name,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id',
+            'variations:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id,site_domain_id',
             'variations.attributeValues:id,product_id,attribute_id,value',
             'variations.unit:id,name',
             'variations.images:id,product_id,image_url,is_primary',
-            'groupedItems:id,sku,name,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id',
+            'groupedItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id,site_domain_id',
             'groupedItems.unit:id,name',
             'groupedItems.images:id,product_id,image_url,is_primary',
-            'bundleItems:id,sku,name,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id',
+            'bundleItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id,site_domain_id',
             'bundleItems.unit:id,name',
             'bundleItems.images:id,product_id,image_url,is_primary'
         ]);

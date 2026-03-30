@@ -1267,11 +1267,13 @@ export default function Header({
             position: relative;
             top: auto;
             z-index: auto;
-            min-height: 72px;
+            min-height: 60px;
+            padding: 0 12px;
           }
 
           .header-content {
-            min-height: 72px;
+            min-height: 60px;
+            height: 100%;
             flex-wrap: nowrap;
           }
 
@@ -1305,12 +1307,13 @@ export default function Header({
 
         @media (max-width: 640px) {
           .site-header {
-            min-height: 68px;
-            padding: 10px 12px;
+            min-height: 60px;
+            padding: 0 12px;
           }
 
           .header-content {
-            min-height: 68px;
+            min-height: 60px;
+            height: 100%;
             flex-wrap: nowrap;
             gap: 0.625rem;
           }
@@ -1370,10 +1373,13 @@ export default function Header({
 
         @media (max-width: 420px) {
           .site-header {
-            padding: 8px 10px;
+            min-height: 60px;
+            padding: 0 10px;
           }
 
           .header-content {
+            min-height: 60px;
+            height: 100%;
             gap: 0.5rem;
           }
 

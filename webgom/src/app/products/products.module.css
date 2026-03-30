@@ -701,6 +701,11 @@
 }
 
 @media (max-width: 767px) {
+  .productsPage :global(.container) {
+    padding-left: 0.6rem;
+    padding-right: 0.6rem;
+  }
+
   .breadcrumbNav {
     display: none !important;
     margin: 0 !important;
@@ -866,6 +871,49 @@
     font-size: 0.78rem;
   }
 
+  .productGrid {
+    gap: 0.52rem;
+  }
+
+  .imageWrapper {
+    padding-top: 110%;
+  }
+
+  .productInfo {
+    padding: 0.6rem 0.6rem 0.64rem;
+  }
+
+  .productCategory {
+    margin-bottom: 0.22rem;
+    font-size: 0.52rem;
+    letter-spacing: 0.08em;
+  }
+
+  .productName {
+    min-height: 2.42em;
+    margin-bottom: 0.2rem;
+    font-size: 0.88rem;
+    line-height: 1.21;
+  }
+
+  .rating {
+    display: none;
+  }
+
+  .cardFooter {
+    gap: 0.3rem;
+  }
+
+  .price {
+    font-size: 0.92rem;
+  }
+
+  .cartBtn {
+    width: 35px;
+    height: 35px;
+    border-radius: 9px;
+  }
+
   .paginationMeta {
     text-align: center;
     font-size: 0.82rem;
@@ -873,6 +921,11 @@
 }
 
 @media (max-width: 479px) {
+  .productsPage :global(.container) {
+    padding-left: 0.45rem;
+    padding-right: 0.45rem;
+  }
+
   .filterBarControls {
     grid-template-columns: minmax(0, 1.14fr) minmax(0, 0.96fr);
     gap: 0.5rem;
@@ -908,24 +961,31 @@
   }
 
   .productGrid {
-    gap: 0.875rem;
+    gap: 0.36rem;
+  }
+
+  .imageWrapper {
+    padding-top: 116%;
   }
 
   .productInfo {
-    padding: 0.8rem;
+    padding: 0.5rem 0.5rem 0.54rem;
   }
 
   .productName {
-    font-size: 0.9rem;
+    min-height: 2.3em;
+    margin-bottom: 0.16rem;
+    font-size: 0.8rem;
+    line-height: 1.15;
   }
 
   .price {
-    font-size: 0.95rem;
+    font-size: 0.84rem;
   }
 
   .cartBtn {
-    width: 40px;
-    height: 40px;
+    width: 32px;
+    height: 32px;
   }
 
   .paginationLink {

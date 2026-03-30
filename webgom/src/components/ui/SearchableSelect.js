@@ -246,7 +246,7 @@ export default function SearchableSelect({
   );
 
   return (
-    <div ref={wrapperRef} style={{ position: 'relative', width: '100%' }}>
+    <div ref={wrapperRef} style={{ position: 'relative', width: '100%', minWidth: 0, maxWidth: '100%' }}>
       {required && (
         <input 
           type="text" 
@@ -273,13 +273,16 @@ export default function SearchableSelect({
           display: 'flex', alignItems: 'center', justifyItems: 'center', justifyContent: 'space-between',
           cursor: disabled ? 'not-allowed' : 'pointer',
           opacity: disabled ? 0.6 : 1,
-          paddingRight: '8px'
+          paddingRight: '8px',
+          width: '100%',
+          minWidth: 0,
+          maxWidth: '100%'
         }}
       >
-        <span style={{ color: selectedLabel ? 'inherit' : '#9ca3af', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+        <span style={{ color: selectedLabel ? 'inherit' : '#9ca3af', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', minWidth: 0, flex: '1 1 auto' }}>
           {selectedLabel || placeholder}
         </span>
-        <span className="material-symbols-outlined" style={{ fontSize: '20px', color: '#9ca3af', transition: 'transform 0.2s', transform: isOpen ? 'rotate(180deg)' : 'none' }}>
+        <span className="material-symbols-outlined" style={{ fontSize: '20px', color: '#9ca3af', transition: 'transform 0.2s', transform: isOpen ? 'rotate(180deg)' : 'none', flex: '0 0 auto' }}>
           expand_more
         </span>
       </div>

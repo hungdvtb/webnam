@@ -360,6 +360,7 @@ export const inventoryApi = {
     deleteSupplierPrice: (supplierId, priceId) => api.delete(`/inventory/suppliers/${supplierId}/prices/${priceId}`),
     getUnits: (params) => api.get('/inventory/units', params ? { params } : {}),
     createUnit: (data) => api.post('/inventory/units', data),
+    reorderUnits: (ids, defaultId = null) => api.post('/inventory/units/reorder', { ids, default_id: defaultId }),
     getImportStatuses: (params) => api.get('/inventory/import-statuses', params ? { params } : {}),
     createImportStatus: (data) => api.post('/inventory/import-statuses', data),
     updateImportStatus: (id, data) => api.put(`/inventory/import-statuses/${id}`, data),

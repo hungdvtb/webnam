@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import { Link, useNavigate } from 'react-router-dom';
-import { productApi, categoryApi, attributeApi, inventoryApi, STORAGE_BASE_URL } from '../../services/api';
+import { productApi, categoryApi, attributeApi, inventoryApi, cmsApi, STORAGE_BASE_URL } from '../../services/api';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
 import Pagination from '../../components/Pagination';
@@ -18,6 +18,52 @@ import {
 } from '../../utils/money';
 
 const TYPE_LABELS = PRODUCT_TYPE_META;
+const PRODUCT_DETAIL_PATH = '/san-pham';
+
+function normalizeDomainValue(value) {
+    return String(value || '')
+        .trim()
+        .replace(/^https?:\/\//i, '')
+        .replace(/\/+$/, '');
+}
+
+function buildProductPageUrl(product, domains = []) {
+    const slug = String(product?.slug || '').trim();
+    const identifier = slug || String(product?.id || '').trim();
+    if (!identifier) {
+        return '';
+    }
+
+    const path = `${PRODUCT_DETAIL_PATH}/${encodeURIComponent(identifier)}`;
+    const activeDomains = Array.isArray(domains)
+        ? domains.filter((item) => item?.is_active !== false)
+        : [];
+    const requestedDomainId = String(product?.site_domain_id || '').trim();
+    const selectedDomain = activeDomains.find((item) => String(item.id) === requestedDomainId)
+        || activeDomains.find((item) => item?.is_default)
+        || activeDomains[0];
+    const domain = normalizeDomainValue(
+        product?.siteDomain?.domain
+        || product?.site_domain?.domain
+        || selectedDomain?.domain
+    );
+
+    try {
+        if (domain) {
+            return new URL(path, `https://${domain}`).toString();
+        }
+
+        if (typeof window !== 'undefined' && window.location?.origin) {
+            return new URL(path, window.location.origin).toString();
+        }
+    } catch (error) {
+        if (typeof window !== 'undefined' && window.location?.origin) {
+            return `${window.location.origin}${path}`;
+        }
+    }
+
+    return path;
+}
 
 const DEFAULT_COLUMNS = [
     { id: 'sku', label: 'Mã SP', minWidth: '130px', fixed: true },
@@ -33,6 +79,7 @@ const DEFAULT_COLUMNS = [
     { id: 'is_new', label: 'Mới', minWidth: '80px', align: 'center' },
     { id: 'status', label: 'Bán', minWidth: '60px', align: 'center' },
     { id: 'actions', label: 'Thao tác', minWidth: '100px', align: 'right', fixed: true },
+    { id: 'product_link', label: 'Link SP', minWidth: '150px' },
 ];
 
 function getPrimaryImage(product) {
@@ -230,6 +277,7 @@ const ProductList = () => {
     const [products, setProducts] = useState([]);
     const [categories, setCategories] = useState([]);
     const [suppliers, setSuppliers] = useState([]);
+    const [domains, setDomains] = useState([]);
     const [allAttributes, setAllAttributes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedIds, setSelectedIds] = useState([]);
@@ -472,14 +520,16 @@ const ProductList = () => {
 
     const fetchInitialData = async () => {
         try {
-            const [catRes, attrRes, supplierRes] = await Promise.all([
+            const [catRes, attrRes, supplierRes, domainRes] = await Promise.all([
                 categoryApi.getAll(),
                 attributeApi.getAll({ active_only: true }),
                 inventoryApi.getSuppliers({ per_page: 500 }),
+                cmsApi.domains.getAll().catch(() => ({ data: [] })),
             ]);
             setCategories(catRes.data || []);
             setAllAttributes(attrRes.data || []);
             setSuppliers(supplierRes.data?.data || []);
+            setDomains((domainRes.data || []).filter((item) => item?.is_active));
 
             const attrColumns = (attrRes.data || []).map(attr => ({
                 id: `attr_${attr.id}`,
@@ -490,9 +540,16 @@ const ProductList = () => {
             }));
 
             const supplierCodeColumn = { id: 'supplier_product_code', label: 'Mã NCC', minWidth: '130px' };
-            const baseColumns = DEFAULT_COLUMNS.some((column) => column.id === 'supplier_product_code')
-                ? DEFAULT_COLUMNS
-                : [...DEFAULT_COLUMNS.slice(0, -1), supplierCodeColumn, DEFAULT_COLUMNS[DEFAULT_COLUMNS.length - 1]];
+            const actionColumn = DEFAULT_COLUMNS.find((column) => column.id === 'actions');
+            const productLinkColumn = DEFAULT_COLUMNS.find((column) => column.id === 'product_link');
+            const leadingColumns = DEFAULT_COLUMNS.filter((column) => !['actions', 'product_link'].includes(column.id));
+            const baseColumns = [
+                ...leadingColumns.slice(0, 2),
+                ...(productLinkColumn ? [productLinkColumn] : []),
+                ...leadingColumns.slice(2),
+                ...(DEFAULT_COLUMNS.some((column) => column.id === 'supplier_product_code') ? [] : [supplierCodeColumn]),
+                ...(actionColumn ? [actionColumn] : []),
+            ];
             const combinedColumns = [...baseColumns.slice(0, -1), ...attrColumns, baseColumns[baseColumns.length - 1]];
 
             const savedOrder = localStorage.getItem('product_list_column_order');
@@ -508,6 +565,12 @@ const ProductList = () => {
                     return indexA - indexB;
                 });
             }
+            const productLinkSortedIndex = sortedColumns.findIndex((column) => column.id === 'product_link');
+            if (productLinkSortedIndex !== -1) {
+                const [productLinkColumn] = sortedColumns.splice(productLinkSortedIndex, 1);
+                const nameSortedIndex = sortedColumns.findIndex((column) => column.id === 'name');
+                sortedColumns.splice(nameSortedIndex >= 0 ? nameSortedIndex + 1 : 0, 0, productLinkColumn);
+            }
             setAvailableColumns(sortedColumns);
 
             const savedVisible = localStorage.getItem('product_list_columns');
@@ -517,6 +580,12 @@ const ProductList = () => {
                     ...combinedColumns.map((column) => column.id).filter((id) => savedIds.includes(id)),
                     ...combinedColumns.map((column) => column.id).filter((id) => !savedIds.includes(id)),
                 ];
+                const productLinkVisibleIndex = mergedVisible.indexOf('product_link');
+                if (productLinkVisibleIndex !== -1) {
+                    mergedVisible.splice(productLinkVisibleIndex, 1);
+                    const nameVisibleIndex = mergedVisible.indexOf('name');
+                    mergedVisible.splice(nameVisibleIndex >= 0 ? nameVisibleIndex + 1 : 0, 0, 'product_link');
+                }
                 setVisibleColumns(mergedVisible);
                 localStorage.setItem('product_list_columns', JSON.stringify(mergedVisible));
             } else {
@@ -1059,6 +1128,19 @@ const ProductList = () => {
             setTimeout(() => setNotification(null), 2000);
         }
         setTimeout(() => setCopiedText(null), 2000);
+    };
+
+    const handleOpenProductLink = (product, e) => {
+        if (e) e.stopPropagation();
+
+        const productLink = buildProductPageUrl(product, domains);
+        if (!productLink) {
+            setNotification({ type: 'error', message: 'San pham nay chua co link de mo.' });
+            setTimeout(() => setNotification(null), 2000);
+            return;
+        }
+
+        window.open(productLink, '_blank', 'noopener,noreferrer');
     };
 
     const handleCopyAll = (p, e) => {
@@ -2027,6 +2109,30 @@ const ProductList = () => {
                                                         </div>
                                                     </td>
                                                 );
+
+                                                if (col.id === 'product_link') {
+                                                    const productLink = buildProductPageUrl(p, domains);
+                                                    const hasProductLink = Boolean(productLink);
+
+                                                    return (
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20">
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => handleOpenProductLink(p, e)}
+                                                                disabled={!hasProductLink}
+                                                                title={productLink || 'San pham chua co link hop le'}
+                                                                className={`inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-[11px] font-black transition-all ${
+                                                                    hasProductLink
+                                                                        ? 'border-primary/20 bg-primary/[0.04] text-primary hover:bg-primary/[0.08]'
+                                                                        : 'cursor-not-allowed border-primary/10 bg-primary/[0.02] text-primary/35'
+                                                                }`}
+                                                            >
+                                                                <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                                                                <span>{hasProductLink ? 'Mo trang' : 'Chua co link'}</span>
+                                                            </button>
+                                                        </td>
+                                                    );
+                                                }
                                                 
                                                 if (col.id === 'supplier_product_code') return (
                                                     <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[12px] font-mono font-bold text-primary/80">

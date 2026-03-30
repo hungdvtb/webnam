@@ -291,7 +291,7 @@ const DraggableBundleItem = ({
                         ))}
                     </select>
                     {!item.variant_id ? (
-                        <p className="text-[10px] font-bold text-brick">Bat buoc chon bien the con de bundle ghi nhan dung ton kho.</p>
+                        <p className="text-[10px] font-bold text-brick">Bắt buộc chọn biến thể con để bundle ghi nhận đúng tồn kho.</p>
                     ) : null}
                     {false ? (
                         <p className="text-[10px] font-bold text-brick">Báº¯t buá»™c chá»n biáº¿n thá»ƒ con Ä‘á»ƒ bundle ghi nháº­n Ä‘Ãºng tá»“n kho.</p>
@@ -599,6 +599,29 @@ const createEmptyVariantQuickUpdateForm = () => ({
 });
 
 const SIMPLE_TO_CONFIG_PRESET_ATTRIBUTES = ['Mẫu', 'Kích thước', 'Loại men'];
+const areOrderedIdsEqual = (left = [], right = []) => (
+    left.length === right.length
+    && left.every((value, index) => String(value) === String(right[index]))
+);
+
+const moveListItem = (items, fromIndex, toIndex) => {
+    if (
+        !Array.isArray(items)
+        || fromIndex === toIndex
+        || fromIndex < 0
+        || toIndex < 0
+        || fromIndex >= items.length
+        || toIndex >= items.length
+    ) {
+        return items;
+    }
+
+    const next = [...items];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    return next;
+};
+
 const createConvertVariantEntryId = () => `convert-variant-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 const createConvertVariantDraft = (overrides = {}) => ({
     entry_id: createConvertVariantEntryId(),
@@ -982,6 +1005,9 @@ const ProductForm = () => {
     const [categories, setCategories] = useState([]);
     const [suppliers, setSuppliers] = useState([]);
     const [inventoryUnits, setInventoryUnits] = useState([]);
+    const [showInventoryUnitSorter, setShowInventoryUnitSorter] = useState(false);
+    const [inventoryUnitsDraft, setInventoryUnitsDraft] = useState([]);
+    const [isSavingInventoryUnitOrder, setIsSavingInventoryUnitOrder] = useState(false);
     const [suggestedProducts, setSuggestedProducts] = useState([]);
     const [suggestedBundleProducts, setSuggestedBundleProducts] = useState([]);
     const [searchingRelated, setSearchingRelated] = useState(false);
@@ -1083,6 +1109,25 @@ const ProductForm = () => {
     const [stagedRelatedIds, setStagedRelatedIds] = useState([]);
     const [stagedRelatedData, setStagedRelatedData] = useState([]);
 
+    const currentInventoryUnitDefaultId = useMemo(() => (
+        String((inventoryUnits.find((unit) => unit.is_default) || inventoryUnits[0] || {}).id || '')
+    ), [inventoryUnits]);
+
+    const draftInventoryUnitDefaultId = useMemo(() => (
+        String((inventoryUnitsDraft.find((unit) => unit.is_default) || inventoryUnitsDraft[0] || {}).id || '')
+    ), [inventoryUnitsDraft]);
+
+    const inventoryUnitOrderChanged = useMemo(() => {
+        if (!inventoryUnitsDraft.length) return false;
+        return (
+            !areOrderedIdsEqual(
+                inventoryUnits.map((unit) => String(unit.id)),
+                inventoryUnitsDraft.map((unit) => String(unit.id))
+            )
+            || currentInventoryUnitDefaultId !== draftInventoryUnitDefaultId
+        );
+    }, [currentInventoryUnitDefaultId, draftInventoryUnitDefaultId, inventoryUnits, inventoryUnitsDraft]);
+
     const [variantTableWidths, setVariantTableWidths] = useState({
         select: 64,
         image: 80,
@@ -1164,6 +1209,36 @@ const ProductForm = () => {
         convertToConfigurableForm.preset_attribute_name,
         variantReadyAttributes,
     ]);
+
+    const convertVariantValueGuide = useMemo(() => {
+        const normalizedAttributeName = String(resolvedConvertAttributeName || '')
+            .trim()
+            .toLocaleLowerCase('vi')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '');
+
+        if (normalizedAttributeName.includes('kich thuoc')) {
+            return {
+                helper: 'Nếu thuộc tính là Kích thước thì giá trị có thể là Phi 12, Phi 14.',
+                firstPlaceholder: 'Ví dụ: Phi 12',
+                nextPlaceholder: 'Ví dụ: Phi 14',
+            };
+        }
+
+        if (normalizedAttributeName.includes('loai men') || normalizedAttributeName === 'men') {
+            return {
+                helper: 'Nếu thuộc tính là Loại men thì giá trị có thể là Men lam, Men rạn.',
+                firstPlaceholder: 'Ví dụ: Men lam',
+                nextPlaceholder: 'Ví dụ: Men rạn',
+            };
+        }
+
+        return {
+            helper: 'Nếu thuộc tính là Mẫu thì giá trị có thể là Mẫu gốc, Khắc sen.',
+            firstPlaceholder: 'Ví dụ: Mẫu gốc',
+            nextPlaceholder: 'Ví dụ: Khắc sen',
+        };
+    }, [resolvedConvertAttributeName]);
 
     const buildInitialConvertToConfigurableForm = useCallback((sourceProduct = {}) => ({
         parent_name: String(sourceProduct?.name || formData.name || '').trim(),
@@ -2010,13 +2085,17 @@ const ProductForm = () => {
     const fetchInventoryUnits = async () => {
         try {
             const response = await inventoryApi.getUnits();
-            setInventoryUnits(Array.isArray(response.data) ? response.data : []);
+            const units = Array.isArray(response.data) ? response.data : [];
+            setInventoryUnits(units);
+            return units;
         } catch (error) {
             console.error("Error fetching inventory units", error);
+            return [];
         }
     };
 
-    const handleCreateInventoryUnit = async (initialValue = '') => {
+    const handleCreateInventoryUnit = async (initialValue = '', options = {}) => {
+        const { selectUnit = true } = options;
         const nextName = window.prompt('Nhập đơn vị tính mới', initialValue)?.trim();
         if (!nextName) return null;
 
@@ -2024,20 +2103,116 @@ const ProductForm = () => {
             const response = await inventoryApi.createUnit({ name: nextName });
             const unit = response.data;
 
-            setInventoryUnits((prev) => {
-                const exists = prev.some((item) => String(item.id) === String(unit.id));
-                return exists
-                    ? prev
-                    : [...prev, unit].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'vi'));
-            });
+            const refreshedUnits = await fetchInventoryUnits();
+            const resolvedUnit = refreshedUnits.find((item) => String(item.id) === String(unit.id)) || unit;
 
-            setFormData((prev) => ({ ...prev, inventory_unit_id: String(unit.id) }));
-            showToast({ message: `Đã thêm ĐVT "${unit.name}".`, type: 'success' });
-            return unit;
+            if (!refreshedUnits.length) {
+                setInventoryUnits((prev) => (
+                    prev.some((item) => String(item.id) === String(unit.id))
+                        ? prev
+                        : [...prev, unit]
+                ));
+            }
+
+            if (selectUnit && resolvedUnit?.id) {
+                setFormData((prev) => ({ ...prev, inventory_unit_id: String(resolvedUnit.id) }));
+            }
+            showToast({
+                message: response.status === 201
+                    ? `Đã thêm ĐVT "${resolvedUnit.name}".`
+                    : `ĐVT "${resolvedUnit.name}" đã tồn tại, hệ thống đã chọn sẵn.`,
+                type: 'success',
+            });
+            return resolvedUnit;
         } catch (error) {
             console.error("Error creating inventory unit", error);
             showToast({ message: 'Không thể tạo đơn vị tính mới.', type: 'error' });
             return null;
+        }
+    };
+
+    const openInventoryUnitSorter = () => {
+        if (!inventoryUnits.length) {
+            showToast({ message: 'Chưa có ĐVT nào để sắp xếp.', type: 'info' });
+            return;
+        }
+
+        const preferredDefaultId = String((inventoryUnits.find((unit) => unit.is_default) || inventoryUnits[0] || {}).id || '');
+
+        setInventoryUnitsDraft(
+            inventoryUnits.map((unit, index) => ({
+                ...unit,
+                sort_order: Number(unit?.sort_order) || (index + 1),
+                is_default: String(unit.id) === preferredDefaultId,
+            }))
+        );
+        setShowInventoryUnitSorter(true);
+    };
+
+    const closeInventoryUnitSorter = () => {
+        if (isSavingInventoryUnitOrder) return;
+        setShowInventoryUnitSorter(false);
+        setInventoryUnitsDraft([]);
+    };
+
+    const moveInventoryUnitDraftByOffset = (index, offset) => {
+        setInventoryUnitsDraft((prev) => {
+            const next = moveListItem(prev, index, index + offset);
+            return next === prev
+                ? prev
+                : next.map((unit, itemIndex) => ({
+                    ...unit,
+                    sort_order: itemIndex + 1,
+                }));
+        });
+    };
+
+    const setInventoryUnitDraftDefault = (unitId) => {
+        setInventoryUnitsDraft((prev) => prev.map((unit) => ({
+            ...unit,
+            is_default: String(unit.id) === String(unitId),
+        })));
+    };
+
+    const handleSaveInventoryUnitOrder = async () => {
+        if (isSavingInventoryUnitOrder) return;
+        if (!inventoryUnitsDraft.length) {
+            closeInventoryUnitSorter();
+            return;
+        }
+
+        if (!inventoryUnitOrderChanged) {
+            closeInventoryUnitSorter();
+            return;
+        }
+
+        setIsSavingInventoryUnitOrder(true);
+        try {
+            const draftDefaultUnit = inventoryUnitsDraft.find((unit) => unit.is_default) || inventoryUnitsDraft[0] || null;
+            await inventoryApi.reorderUnits(
+                inventoryUnitsDraft.map((unit) => unit.id),
+                draftDefaultUnit?.id || null
+            );
+            const refreshedUnits = await fetchInventoryUnits();
+
+            if (!refreshedUnits.length) {
+                setInventoryUnits(
+                    inventoryUnitsDraft.map((unit, index) => ({
+                        ...unit,
+                        sort_order: index + 1,
+                    }))
+                );
+            }
+
+            setShowInventoryUnitSorter(false);
+            setInventoryUnitsDraft([]);
+            showToast({ message: 'Đã cập nhật thứ tự và ĐVT mặc định.', type: 'success' });
+        } catch (error) {
+            console.error("Error reordering inventory units", error);
+            showToast({ message: 'Không thể lưu cấu hình ĐVT.', type: 'error' });
+            await fetchInventoryUnits();
+        } finally {
+            setIsSavingInventoryUnitOrder(false);
         }
     };
 
@@ -3273,8 +3448,6 @@ const ProductForm = () => {
 
         if (product.type === 'configurable') {
             void loadBundleVariantsForProduct(product.id);
-            showToast({ message: 'Hay chon mot bien the cu the cho item bundle nay de he thong ghi nhan dung ton kho.', type: 'info' });
-            return;
             showToast({ message: 'Hãy chọn một biến thể cụ thể cho item bundle này để hệ thống ghi nhận đúng tồn kho.', type: 'info' });
         }
     };
@@ -3963,28 +4136,17 @@ const ProductForm = () => {
                                                         <option
                                                             key={key}
                                                             value={key}
-                                                            disabled={isEdit && productMeta.originalType === 'simple' && key === 'configurable'}
+                                                            disabled={false}
                                                         >
                                                             {info.label}
                                                         </option>
                                                     ))}
                                                 </select>
-                                                {false ? (
-                                                    <button
-                                                        type="button"
-                                                        onClick={openConvertToConfigurableModal}
-                                                        className="inline-flex shrink-0 items-center gap-1.5 rounded-sm border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100"
-                                                        title="Tạo sản phẩm cha mới và giữ nguyên sản phẩm hiện tại làm biến thể đầu tiên"
-                                                    >
-                                                        <span className="material-symbols-outlined text-[16px]">conversion_path</span>
-                                                        Chuyển thành SP có biến thể
-                                                    </button>
-                                                ) : null}
                                             </div>
                                         </Field>
-                                        {false ? (
+                                        {canConvertSimpleProduct ? (
                                             <p className="mt-2 text-[11px] font-semibold text-emerald-700/80">
-                                                Với sản phẩm đơn đang có dữ liệu thật, hãy dùng nút chuyển đổi để giữ nguyên tồn kho, phiếu kho, bundle và đơn hàng cũ trên ID hiện tại.
+                                                Chọn "Sản phẩm có biến thể" để mở bảng chuyển đổi an toàn, giữ nguyên tồn kho và đơn hàng cũ trên ID hiện tại.
                                             </p>
                                         ) : null}
                                     </div>
@@ -4028,6 +4190,15 @@ const ProductForm = () => {
                                                 </select>
                                                 <button
                                                     type="button"
+                                                    onClick={openInventoryUnitSorter}
+                                                    disabled={inventoryUnits.length === 0}
+                                                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-primary/15 bg-white text-primary/70 transition hover:border-primary/35 hover:text-primary disabled:cursor-not-allowed disabled:border-stone/10 disabled:text-stone/25"
+                                                    title="Sắp xếp đơn vị tính"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">reorder</span>
+                                                </button>
+                                                <button
+                                                    type="button"
                                                     onClick={() => handleCreateInventoryUnit()}
                                                     className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-primary/15 bg-white text-primary/70 transition hover:border-primary/35 hover:text-primary"
                                                     title="Thêm đơn vị tính"
@@ -4037,54 +4208,6 @@ const ProductForm = () => {
                                             </div>
                                         </Field>
                                     </div>
-
-                                    {canConvertSimpleProduct ? (
-                                        <div className="sm:col-span-2 lg:col-span-3 lg:col-start-3">
-                                            <div className="rounded-sm border border-emerald-200 bg-[linear-gradient(135deg,rgba(236,253,245,0.98),rgba(255,255,255,0.96))] px-4 py-4 shadow-[0_16px_30px_-24px_rgba(5,150,105,0.55)]">
-                                                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                                                    <div className="min-w-0">
-                                                        <div className="flex items-start gap-3">
-                                                            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-emerald-500 text-white shadow-[0_10px_24px_-18px_rgba(16,185,129,0.9)]">
-                                                                <span className="material-symbols-outlined text-[20px]">conversion_path</span>
-                                                            </span>
-                                                            <div>
-                                                                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-emerald-700/70">Chuyen doi bien the</p>
-                                                                <h4 className="mt-1 text-[15px] font-black text-primary">Tao mot khu vuc rieng de thao tac gon, ro va khong chen vao form</h4>
-                                                                <p className="mt-1 max-w-[620px] text-[12px] leading-6 text-primary/72">
-                                                                    He thong se tao san pham cha moi de gom nhom. San pham hien tai van giu nguyen ID, ton kho, phieu kho, bundle va don hang cu, sau do tro thanh bien the dau tien.
-                                                                </p>
-                                                            </div>
-                                                        </div>
-                                                        <div className="mt-3 flex flex-wrap gap-2">
-                                                            {['Giu nguyen ID cu', 'Khong reset ton kho', 'Khong doi lien ket don cu'].map((item) => (
-                                                                <span
-                                                                    key={item}
-                                                                    className="inline-flex items-center rounded-full border border-emerald-200 bg-white/90 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700"
-                                                                >
-                                                                    {item}
-                                                                </span>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-
-                                                    <div className="flex w-full shrink-0 flex-col gap-2 lg:w-[240px]">
-                                                        <button
-                                                            type="button"
-                                                            onClick={openConvertToConfigurableModal}
-                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-sm bg-emerald-600 px-4 py-3 text-[11px] font-black uppercase tracking-[0.16em] text-white transition hover:bg-emerald-700"
-                                                            title="Mo giao dien chuyen doi sang san pham co bien the"
-                                                        >
-                                                            <span className="material-symbols-outlined text-[18px]">account_tree</span>
-                                                            Mo trinh chuyen doi
-                                                        </button>
-                                                        <p className="text-[11px] leading-5 text-emerald-800/75">
-                                                            Dung khi san pham don da co du lieu thuc va ban muon them mau, kich thuoc, loai men hoac cac phan loai khac.
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ) : null}
 
                                 </div>
                             </div>
@@ -6124,6 +6247,9 @@ const ProductForm = () => {
                                             <p className="mt-1 text-[12px] text-primary/60">
                                                 Dòng đầu tiên luôn là sản phẩm cũ. Bạn có thể đổi tên hiển thị và đặt giá trị thuộc tính cho nó, nhưng SKU cũ sẽ được giữ nguyên.
                                             </p>
+                                            <p className="mt-1 text-[12px] text-primary/55">
+                                                {convertVariantValueGuide.helper}
+                                            </p>
                                         </div>
                                         <button
                                             type="button"
@@ -6137,7 +6263,7 @@ const ProductForm = () => {
 
                                     <div className="overflow-hidden rounded-sm border border-stone/10">
                                         <div className="grid grid-cols-[160px_minmax(0,1fr)_160px_64px] border-b border-stone/10 bg-[#f7f4ec] text-[10px] font-black uppercase tracking-[0.18em] text-stone/55">
-                                            <div className="border-r border-stone/10 px-4 py-3">Giá trị thuộc tính</div>
+                                            <div className="border-r border-stone/10 px-4 py-3">Giá trị phân loại</div>
                                             <div className="border-r border-stone/10 px-4 py-3">Tên biến thể</div>
                                             <div className="border-r border-stone/10 px-4 py-3">SKU</div>
                                             <div className="px-4 py-3 text-center">Xóa</div>
@@ -6151,7 +6277,7 @@ const ProductForm = () => {
                                                             value={variant.value}
                                                             onChange={(event) => handleConvertVariantFieldChange(variant.entry_id, 'value', event.target.value)}
                                                             className="w-full rounded-sm border border-stone/15 bg-stone/5 px-2 py-2 text-[12px] font-bold text-primary focus:border-emerald-300 focus:bg-white focus:outline-none"
-                                                            placeholder={index === 0 ? 'Ví dụ: Mẫu gốc' : 'Ví dụ: Khắc sen'}
+                                                            placeholder={index === 0 ? convertVariantValueGuide.firstPlaceholder : convertVariantValueGuide.nextPlaceholder}
                                                         />
                                                         {variant.is_existing ? (
                                                             <p className="mt-2 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700">Sản phẩm cũ giữ nguyên ID</p>
@@ -6322,6 +6448,139 @@ const ProductForm = () => {
                 )}
             </AnimatePresence>
             </DndProvider>
+
+            <AnimatePresence>
+                {showInventoryUnitSorter && (
+                    <div className="fixed inset-0 z-[106] flex items-center justify-center p-4">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={closeInventoryUnitSorter}
+                            className="absolute inset-0 bg-primary/45 backdrop-blur-sm"
+                        />
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.96, y: 24 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.96, y: 24 }}
+                            className="relative w-full max-w-2xl overflow-hidden rounded-sm bg-white shadow-premium-lg"
+                        >
+                            <div className="flex items-start justify-between gap-4 border-b border-gold/10 bg-[#fcfaf7] px-6 py-5">
+                                <div>
+                                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-gold">ĐVT sản phẩm</p>
+                                    <h3 className="mt-2 text-[20px] font-black text-primary">Sắp xếp thứ tự đơn vị tính</h3>
+                                    <p className="mt-2 max-w-xl text-[12px] leading-relaxed text-stone/60">
+                                        Thứ tự này sẽ được dùng lại cho toàn bộ danh sách ĐVT trong form tạo và sửa sản phẩm.
+                                    </p>
+                                    <p className="mt-1 max-w-xl text-[12px] leading-relaxed text-stone/50">
+                                        Bạn cũng có thể chọn ĐVT mặc định để hệ thống tự chọn sẵn khi tạo sản phẩm mới.
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={closeInventoryUnitSorter}
+                                    className="rounded-full p-2 text-stone/35 transition hover:bg-white hover:text-primary"
+                                    title="Đóng"
+                                >
+                                    <span className="material-symbols-outlined">close</span>
+                                </button>
+                            </div>
+
+                            <div className="max-h-[70vh] overflow-y-auto p-6">
+                                <div className="space-y-3">
+                                    {inventoryUnitsDraft.map((unit, index) => {
+                                        const isFirst = index === 0;
+                                        const isLast = index === inventoryUnitsDraft.length - 1;
+
+                                        return (
+                                            <div
+                                                key={unit.id}
+                                                className="flex items-center gap-4 rounded-sm border border-gold/10 bg-white px-4 py-3 shadow-sm"
+                                            >
+                                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-gold/15 bg-gold/5 text-[13px] font-black text-primary">
+                                                    {index + 1}
+                                                </div>
+
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <p className="truncate text-[14px] font-black text-primary">{unit.name}</p>
+                                                        {unit.is_default ? (
+                                                            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-700">
+                                                                Mặc định
+                                                            </span>
+                                                        ) : null}
+                                                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] ${unit.is_system ? 'bg-stone/10 text-stone/60' : 'bg-amber-50 text-amber-700'}`}>
+                                                            {unit.is_system ? 'Hệ thống' : 'Tự tạo'}
+                                                        </span>
+                                                    </div>
+                                                    <p className="mt-1 text-[11px] text-stone/55">
+                                                        Di chuyển lên hoặc xuống để thay đổi thứ tự hiển thị.
+                                                    </p>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setInventoryUnitDraftDefault(unit.id)}
+                                                        className={`mt-2 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] transition ${unit.is_default ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-stone/15 bg-white text-stone/55 hover:border-emerald-200 hover:text-emerald-700'}`}
+                                                    >
+                                                        <span className="material-symbols-outlined text-[14px]">{unit.is_default ? 'verified' : 'radio_button_unchecked'}</span>
+                                                        {unit.is_default ? 'ĐVT mặc định' : 'Đặt mặc định'}
+                                                    </button>
+                                                </div>
+
+                                                <div className="flex shrink-0 items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => moveInventoryUnitDraftByOffset(index, -1)}
+                                                        disabled={isFirst}
+                                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-stone/15 text-stone/55 transition hover:border-gold/35 hover:text-primary disabled:cursor-not-allowed disabled:border-stone/10 disabled:text-stone/20"
+                                                        title="Đẩy lên trên"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[18px]">keyboard_arrow_up</span>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => moveInventoryUnitDraftByOffset(index, 1)}
+                                                        disabled={isLast}
+                                                        className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-stone/15 text-stone/55 transition hover:border-gold/35 hover:text-primary disabled:cursor-not-allowed disabled:border-stone/10 disabled:text-stone/20"
+                                                        title="Đẩy xuống dưới"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[18px]">keyboard_arrow_down</span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stone/10 bg-stone/5 px-6 py-4">
+                                <p className="text-[11px] text-stone/55">
+                                    Danh sách ĐVT trong toàn bộ form sẽ cập nhật ngay theo thứ tự mới, và ĐVT mặc định sẽ được tự chọn sẵn khi tạo sản phẩm.
+                                </p>
+                                <div className="flex items-center gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={closeInventoryUnitSorter}
+                                        className="px-5 py-2 text-[11px] font-bold uppercase tracking-widest text-stone transition-all hover:text-primary"
+                                    >
+                                        Đóng
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleSaveInventoryUnitOrder}
+                                        disabled={!inventoryUnitOrderChanged || isSavingInventoryUnitOrder}
+                                        className="inline-flex items-center gap-2 rounded-sm bg-primary px-6 py-2 text-[11px] font-bold uppercase tracking-widest text-white shadow-sm transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">
+                                            {isSavingInventoryUnitOrder ? 'hourglass_top' : 'save'}
+                                        </span>
+                                        {isSavingInventoryUnitOrder ? 'Đang lưu' : 'Lưu thứ tự'}
+                                    </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
 
             <AnimatePresence>
                 {showVariantQuickUpdateModal && (

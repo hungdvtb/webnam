@@ -221,6 +221,19 @@ export default async function RootLayout({ children }) {
           }
 
           @media (max-width: 768px) {
+            .top-promotion-bar {
+              height: 25px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              padding: 0 12px;
+              font-size: 11px;
+              line-height: 1;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            }
+
             .mobile-sticky-header-shell {
               position: fixed;
               top: 0;
@@ -237,19 +250,19 @@ export default async function RootLayout({ children }) {
             }
 
             .site-content-shell {
-              padding-top: 112px;
+              padding-top: 85px;
             }
           }
 
           @media (max-width: 640px) {
             .site-content-shell {
-              padding-top: 126px;
+              padding-top: 85px;
             }
           }
 
           @media (max-width: 420px) {
             .site-content-shell {
-              padding-top: 120px;
+              padding-top: 85px;
             }
           }
         `,

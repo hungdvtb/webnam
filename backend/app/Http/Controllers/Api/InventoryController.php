@@ -1048,8 +1048,6 @@ class InventoryController extends Controller
                     ->whereNull('account_id')
                     ->orWhere('account_id', $accountId);
             })
-            ->orderByRaw('CASE WHEN account_id = ? THEN 0 ELSE 1 END', [$accountId])
-            ->orderByDesc('is_default')
             ->orderBy('sort_order')
             ->orderBy('name')
             ->get();
@@ -1074,6 +1072,7 @@ class InventoryController extends Controller
                     ->whereNull('account_id')
                     ->orWhere('account_id', $accountId);
             })
+            ->orderByRaw('CASE WHEN account_id = ? THEN 0 ELSE 1 END', [$accountId])
             ->where('normalized_name', $normalizedName)
             ->first();
 
@@ -1088,11 +1087,89 @@ class InventoryController extends Controller
             'code' => $code !== '' ? $code : Str::upper(Str::random(6)),
             'is_default' => false,
             'is_system' => false,
-            'sort_order' => (int) InventoryUnit::query()->where('account_id', $accountId)->max('sort_order') + 1,
+            'sort_order' => (int) InventoryUnit::query()
+                ->where(function ($builder) use ($accountId) {
+                    $builder
+                        ->whereNull('account_id')
+                        ->orWhere('account_id', $accountId);
+                })
+                ->max('sort_order') + 1,
             'created_by' => auth()->id(),
         ]);
 
         return response()->json($unit, 201);
+    }
+
+    public function reorderInventoryUnits(Request $request)
+    {
+        $accountId = (int) $request->header('X-Account-Id');
+        $validated = $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer',
+            'default_id' => 'nullable|integer',
+        ]);
+
+        $ids = collect($validated['ids'])
+            ->map(fn ($id) => (int) $id)
+            ->values();
+
+        $visibleUnits = InventoryUnit::query()
+            ->where(function ($builder) use ($accountId) {
+                $builder
+                    ->whereNull('account_id')
+                    ->orWhere('account_id', $accountId);
+            })
+            ->get(['id', 'is_default']);
+
+        $visibleIds = $visibleUnits
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values();
+
+        $requestedIds = $ids->unique()->values();
+        $defaultId = isset($validated['default_id']) ? (int) $validated['default_id'] : null;
+        $currentDefaultId = $visibleUnits
+            ->firstWhere('is_default', true)
+            ?->id;
+
+        if ($defaultId === null) {
+            $defaultId = $currentDefaultId ? (int) $currentDefaultId : (int) ($requestedIds->first() ?? 0);
+        }
+
+        if (
+            $requestedIds->count() !== $visibleIds->count()
+            || $requestedIds->diff($visibleIds)->isNotEmpty()
+            || $visibleIds->diff($requestedIds)->isNotEmpty()
+        ) {
+            throw ValidationException::withMessages([
+                'ids' => ['Danh sách đơn vị tính không hợp lệ. Vui lòng tải lại trang rồi thử lại.'],
+            ]);
+        }
+
+        if (!in_array($defaultId, $requestedIds->all(), true)) {
+            throw ValidationException::withMessages([
+                'default_id' => ['Đơn vị tính mặc định không hợp lệ. Vui lòng tải lại trang rồi thử lại.'],
+            ]);
+        }
+
+        DB::transaction(function () use ($requestedIds, $visibleIds, $defaultId) {
+            InventoryUnit::query()
+                ->whereIn('id', $visibleIds->all())
+                ->update(['is_default' => false]);
+
+            $requestedIds->values()->each(function (int $unitId, int $index) {
+                InventoryUnit::query()
+                    ->whereKey($unitId)
+                    ->update([
+                        'sort_order' => $index + 1,
+                        'is_default' => $unitId === $defaultId,
+                    ]);
+            });
+        });
+
+        return response()->json([
+            'message' => 'Đã cập nhật thứ tự và ĐVT mặc định.',
+        ]);
     }
 
     public function importStatuses(Request $request)

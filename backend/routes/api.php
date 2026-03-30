@@ -239,6 +239,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/inventory/suppliers/{id}/prices/{priceId}', [InventoryController::class, 'destroySupplierPrice'])->whereNumber('id')->whereNumber('priceId');
     Route::get('/inventory/units', [InventoryController::class, 'inventoryUnits']);
     Route::post('/inventory/units', [InventoryController::class, 'storeInventoryUnit']);
+    Route::post('/inventory/units/reorder', [InventoryController::class, 'reorderInventoryUnits']);
     Route::get('/inventory/import-statuses', [InventoryController::class, 'importStatuses']);
     Route::post('/inventory/import-statuses', [InventoryController::class, 'storeImportStatus']);
     Route::put('/inventory/import-statuses/{id}', [InventoryController::class, 'updateImportStatus'])->whereNumber('id');

@@ -111,6 +111,11 @@ const AdminLayout = () => {
 
     const canAccessLeadBoard = canAccess('orders') || canAccess('customers') || canAccess('leads');
     const isLeadRoute = location.pathname === '/admin/leads' || location.pathname === '/admin/pending-orders';
+    const sidebarCollapsedWidth = '5.75rem';
+    const sidebarExpandedWidth = '19rem';
+    const shouldShowSidebar = !isOrderForm;
+    const sidebarReservedWidth = canHoverSidebar ? sidebarCollapsedWidth : sidebarExpandedWidth;
+    const sidebarWidth = isSidebarExpanded ? sidebarExpandedWidth : sidebarCollapsedWidth;
 
     const getCurrentPermId = () => {
         const path = location.pathname;
@@ -145,10 +150,14 @@ const AdminLayout = () => {
     const userInfoClass = `flex flex-col overflow-hidden text-left items-start transition-all duration-300 ease-out ${isSidebarExpanded ? 'max-w-[12rem] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`;
 
     return (
-        <div className="flex h-screen overflow-hidden bg-background-light font-sans">
-            {!isOrderForm && (
+        <div
+            className={`${shouldShowSidebar ? 'relative grid' : 'relative'} h-screen overflow-hidden bg-background-light font-sans`}
+            style={shouldShowSidebar ? { gridTemplateColumns: `${sidebarReservedWidth} minmax(0, 1fr)` } : undefined}
+        >
+            {shouldShowSidebar && (
                 <aside
-                    className={`z-20 flex shrink-0 flex-col overflow-hidden bg-primary text-white shadow-2xl transition-[width] duration-300 ease-out ${isSidebarExpanded ? 'w-[19rem]' : 'w-[5.75rem]'}`}
+                    className="absolute inset-y-0 left-0 z-30 flex flex-col overflow-hidden bg-primary text-white shadow-2xl transition-[width] duration-300 ease-out"
+                    style={{ width: sidebarWidth, willChange: 'width' }}
                     onMouseEnter={() => setIsSidebarHovered(true)}
                     onMouseLeave={() => setIsSidebarHovered(false)}
                     onFocusCapture={() => setIsSidebarFocused(true)}
@@ -532,7 +541,7 @@ const AdminLayout = () => {
             </aside>
             )}
 
-            <main className={`relative flex min-w-0 flex-grow flex-col overflow-hidden bg-background-light ${isOrderForm ? 'w-full' : ''}`}>
+            <main className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background-light ${shouldShowSidebar ? 'col-start-2' : 'w-full'}`}>
                 <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'overflow-auto p-0' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
                     {(() => {
                         const permNeeded = getCurrentPermId();

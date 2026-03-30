@@ -3,12 +3,15 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Attribute;
+use App\Models\AttributeOption;
 use App\Models\Category;
 use App\Models\InventoryUnit;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Post;
 use App\Models\Product;
+use App\Models\ProductAttributeValue;
 use App\Models\ProductImage;
 use App\Models\BulkUpdateLog;
 use App\Services\Inventory\ProductPricingService;
@@ -125,6 +128,7 @@ class ProductController extends Controller
             'categories:id,name',
             'supplier:id,name,code',
             'suppliers:id,name,code',
+            'parentConfigurable:id,name,sku,type',
             'unit:id,name',
             'siteDomain:id,domain,is_active,is_default',
             'images:id,product_id,image_url,is_primary,sort_order,file_name,file_size',
@@ -239,7 +243,7 @@ class ProductController extends Controller
                     'variant_id' => $variantId,
                 ];
             })
-            ->filter(fn (array $item) => $item['product_id'] > 0 && $item['variant_id'] !== null)
+            ->filter(fn (array $item) => $item['product_id'] > 0)
             ->values();
 
         if ($indexedItems->isEmpty()) {
@@ -258,12 +262,16 @@ class ProductController extends Controller
             ->values()
             ->all();
 
+        $indexedVariantItems = $indexedItems
+            ->filter(fn (array $item) => $item['variant_id'] !== null)
+            ->values();
+
         $allowedVariantPairs = [];
-        if (!empty($configurableIds)) {
+        if (!empty($configurableIds) && $indexedVariantItems->isNotEmpty()) {
             $allowedVariantPairs = DB::table('product_links')
                 ->where('link_type', 'super_link')
                 ->whereIn('product_id', $configurableIds)
-                ->whereIn('linked_product_id', $indexedItems->pluck('variant_id')->unique()->all())
+                ->whereIn('linked_product_id', $indexedVariantItems->pluck('variant_id')->unique()->all())
                 ->get(['product_id', 'linked_product_id'])
                 ->mapWithKeys(fn ($link) => [
                     ((int) $link->product_id) . ':' . ((int) $link->linked_product_id) => true,
@@ -275,8 +283,25 @@ class ProductController extends Controller
 
         foreach ($indexedItems as $item) {
             $product = $products->get($item['product_id']);
-            if (!$product || $product->type !== 'configurable') {
+            if (!$product) {
+                continue;
+            }
+
+            if ($product->type !== 'configurable') {
+                if ($item['variant_id'] === null) {
+                    continue;
+                }
                 $messages["grouped_items.{$item['index']}.variant_id"][] = 'Biến thể chỉ được gắn với sản phẩm cha dạng configurable.';
+                continue;
+            }
+
+            if ($item['variant_id'] === null) {
+                $messages["grouped_items.{$item['index']}.variant_id"][] = 'San pham configurable trong bundle hoac grouped phai chon mot bien the cu the de ghi nhan dung ton kho.';
+                continue;
+            }
+
+            if ($item['variant_id'] === null) {
+                $messages["grouped_items.{$item['index']}.variant_id"][] = 'Sáº£n pháº©m configurable trong bundle hoáº·c grouped pháº£i chá»n má»™t biáº¿n thá»ƒ cá»¥ thá»ƒ Ä‘á»ƒ ghi nháº­n Ä‘Ãºng tá»“n kho.';
                 continue;
             }
 
@@ -294,6 +319,245 @@ class ProductController extends Controller
     protected function loadProductResource(Product $product): Product
     {
         return $this->appendSupplierMeta($product->load($this->productResourceRelations()));
+    }
+
+    protected function generateUniqueAttributeCode(string $seed): string
+    {
+        $base = Str::of((string) $seed)
+            ->ascii()
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', '_')
+            ->trim('_')
+            ->toString();
+
+        $base = $base !== '' ? $base : 'variant_attribute';
+        $candidate = Str::limit($base, 64, '');
+        $suffix = 1;
+
+        while (Attribute::query()->where('code', $candidate)->exists()) {
+            $candidate = Str::limit($base, max(1, 64 - strlen((string) $suffix) - 1), '') . '_' . $suffix;
+            $suffix++;
+        }
+
+        return $candidate;
+    }
+
+    protected function resolveConfigurableConversionAttribute(Product $product, ?int $attributeId, ?string $attributeName): Attribute
+    {
+        if ($attributeId) {
+            $attribute = Attribute::query()->findOrFail($attributeId);
+
+            if (!in_array($attribute->frontend_type, ['select', 'multiselect'], true)) {
+                throw ValidationException::withMessages([
+                    'attribute_id' => ['Thuộc tính biến thể phải có kiểu chọn danh sách để dùng cho sản phẩm có biến thể.'],
+                ]);
+            }
+
+            $attribute->forceFill([
+                'is_variant' => true,
+                'status' => true,
+            ])->save();
+
+            return $attribute;
+        }
+
+        $resolvedName = trim((string) $attributeName);
+        if ($resolvedName === '') {
+            $resolvedName = 'Mẫu';
+        }
+
+        $existingAttribute = Attribute::query()
+            ->where('entity_type', 'product')
+            ->where('account_id', $product->account_id)
+            ->whereRaw('LOWER(name) = ?', [Str::lower($resolvedName)])
+            ->whereIn('frontend_type', ['select', 'multiselect'])
+            ->first();
+
+        if ($existingAttribute) {
+            $existingAttribute->forceFill([
+                'is_variant' => true,
+                'status' => true,
+            ])->save();
+
+            return $existingAttribute;
+        }
+
+        return Attribute::query()->create([
+            'account_id' => $product->account_id,
+            'name' => $resolvedName,
+            'entity_type' => 'product',
+            'code' => $this->generateUniqueAttributeCode('variant_' . $resolvedName),
+            'frontend_type' => 'select',
+            'swatch_type' => null,
+            'is_filterable' => false,
+            'is_filterable_frontend' => false,
+            'is_filterable_backend' => true,
+            'is_required' => false,
+            'is_variant' => true,
+            'status' => true,
+        ]);
+    }
+
+    protected function ensureVariantAttributeOptions(Attribute $attribute, array $values): void
+    {
+        $normalizedValues = collect($values)
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->unique()
+            ->values();
+
+        foreach ($normalizedValues as $index => $value) {
+            AttributeOption::query()->firstOrCreate(
+                [
+                    'attribute_id' => $attribute->id,
+                    'value' => $value,
+                ],
+                [
+                    'order' => $index,
+                ]
+            );
+        }
+    }
+
+    protected function prepareSimpleToConfigurableVariants(Product $product, array $variants, string $parentSku): array
+    {
+        $messages = [];
+        $prepared = [];
+        $reservedSkus = array_values(array_filter([$parentSku, $product->sku]));
+        $seenValues = [];
+
+        foreach ($variants as $index => $variantData) {
+            $variantValue = trim((string) ($variantData['value'] ?? ''));
+            if ($variantValue === '') {
+                $messages["variants.{$index}.value"][] = 'Mỗi biến thể cần có giá trị thuộc tính để phân biệt.';
+                continue;
+            }
+
+            $valueKey = Str::lower(Str::squish($variantValue));
+            if (isset($seenValues[$valueKey])) {
+                $messages["variants.{$index}.value"][] = 'Giá trị thuộc tính biến thể đang bị trùng.';
+                continue;
+            }
+            $seenValues[$valueKey] = true;
+
+            $isOriginalVariant = $index === 0;
+            $resolvedSku = $isOriginalVariant
+                ? $product->sku
+                : $this->productSkuService->normalize($variantData['sku'] ?? null);
+
+            if (!$isOriginalVariant) {
+                if (
+                    $resolvedSku === null
+                    || in_array($resolvedSku, $reservedSkus, true)
+                    || $this->productSkuService->skuExists($resolvedSku)
+                ) {
+                    $resolvedSku = $this->productSkuService->generateVariantSku($parentSku, null, $reservedSkus);
+                }
+
+                $reservedSkus[] = $resolvedSku;
+            }
+
+            $prepared[] = [
+                'is_original' => $isOriginalVariant,
+                'value' => $variantValue,
+                'name' => trim((string) ($variantData['name'] ?? '')) ?: ($isOriginalVariant ? $product->name : ($product->name . ' - ' . $variantValue)),
+                'sku' => $resolvedSku,
+                'price' => is_numeric($variantData['price'] ?? null) ? (float) $variantData['price'] : null,
+                'expected_cost' => is_numeric($variantData['expected_cost'] ?? null) ? (float) $variantData['expected_cost'] : null,
+                'weight' => filled($variantData['weight'] ?? null) ? (string) $variantData['weight'] : null,
+                'inventory_unit_id' => is_numeric($variantData['inventory_unit_id'] ?? null)
+                    ? (int) $variantData['inventory_unit_id']
+                    : null,
+            ];
+        }
+
+        if (empty($prepared)) {
+            $messages['variants'][] = 'Cần ít nhất một biến thể để hoàn tất chuyển đổi.';
+        }
+
+        if (!empty($messages)) {
+            throw ValidationException::withMessages($messages);
+        }
+
+        return $prepared;
+    }
+
+    protected function cloneProductDecoratorsToParent(Product $source, Product $target, ?int $excludedAttributeId = null): void
+    {
+        foreach ($source->images as $image) {
+            ProductImage::query()->create([
+                'product_id' => $target->id,
+                'image_url' => $image->image_url,
+                'is_primary' => $image->is_primary,
+                'sort_order' => $image->sort_order,
+                'file_name' => $image->file_name,
+                'file_size' => $image->file_size,
+            ]);
+        }
+
+        foreach ($source->attributeValues as $attributeValue) {
+            if ($excludedAttributeId !== null && (int) $attributeValue->attribute_id === $excludedAttributeId) {
+                continue;
+            }
+
+            ProductAttributeValue::query()->create([
+                'product_id' => $target->id,
+                'attribute_id' => $attributeValue->attribute_id,
+                'value' => $attributeValue->value,
+            ]);
+        }
+    }
+
+    protected function copyRelatedProductsToParent(Product $source, Product $target): void
+    {
+        foreach ($source->relatedProducts as $relatedProduct) {
+            $target->relatedProducts()->syncWithoutDetaching([
+                $relatedProduct->id => [
+                    'link_type' => 'related',
+                    'position' => $relatedProduct->pivot->position ?? 0,
+                    'option_title' => $relatedProduct->pivot->option_title ?? null,
+                ],
+            ]);
+        }
+    }
+
+    protected function buildConvertedParentPayload(Product $product, string $parentName, string $parentSku): array
+    {
+        return [
+            'account_id' => $product->account_id,
+            'type' => 'configurable',
+            'name' => $parentName,
+            'slug' => $this->productSkuService->generateUniqueSlug($parentName),
+            'description' => $product->description,
+            'specifications' => $product->specifications,
+            'price' => $product->price,
+            'price_type' => 'fixed',
+            'cost_price' => null,
+            'expected_cost' => $product->expected_cost,
+            'special_price' => $product->special_price,
+            'special_price_from' => $product->special_price_from,
+            'special_price_to' => $product->special_price_to,
+            'imported_quantity_total' => 0,
+            'imported_value_total' => 0,
+            'category_id' => $product->category_id,
+            'stock_quantity' => 0,
+            'damaged_quantity' => 0,
+            'status' => $product->status,
+            'is_featured' => $product->is_featured,
+            'is_new' => $product->is_new,
+            'sku' => $parentSku,
+            'meta_title' => $product->meta_title,
+            'meta_description' => $product->meta_description,
+            'meta_keywords' => $product->meta_keywords,
+            'weight' => $product->weight,
+            'inventory_unit_id' => $product->inventory_unit_id,
+            'inventory_import_starred' => $product->inventory_import_starred,
+            'supplier_id' => $product->supplier_id,
+            'video_url' => $product->video_url,
+            'additional_info' => $product->additional_info,
+            'bundle_title' => null,
+            'site_domain_id' => $product->site_domain_id,
+        ];
     }
 
     protected function prepareProductSku(array &$validated, ?Product $product = null): void
@@ -620,6 +884,55 @@ class ProductController extends Controller
     protected function compactSearchText(string $value): string
     {
         return preg_replace('/[^a-z0-9]+/', '', $this->normalizeNameSearchText($value)) ?? '';
+    }
+
+    protected function splitCompactNameSearchTokens(string $value): array
+    {
+        if ($value === '') {
+            return [];
+        }
+
+        preg_match_all('/[a-z]+|\d+/i', $value, $matches);
+
+        return collect($matches[0] ?? [])
+            ->map(fn ($token) => trim((string) $token))
+            ->filter(fn ($token) => mb_strlen($token) >= 2)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    protected function extractNameSearchTokens(string $normalizedName, string $compactName): array
+    {
+        $normalizedTokens = collect(preg_split('/\s+/', $normalizedName, -1, PREG_SPLIT_NO_EMPTY))
+            ->map(fn ($token) => trim((string) $token))
+            ->filter(fn ($token) => mb_strlen($token) >= 2)
+            ->values();
+
+        if ($normalizedTokens->count() > 1) {
+            return $normalizedTokens
+                ->unique()
+                ->take(12)
+                ->values()
+                ->all();
+        }
+
+        $compactTokens = collect($this->splitCompactNameSearchTokens($compactName));
+
+        if ($compactTokens->count() > 1) {
+            return $compactTokens
+                ->take(12)
+                ->values()
+                ->all();
+        }
+
+        return $compactTokens
+            ->merge($normalizedTokens)
+            ->filter(fn ($token) => mb_strlen((string) $token) >= 2)
+            ->unique()
+            ->take(12)
+            ->values()
+            ->all();
     }
 
     protected function attachActualStockSubqueries(Builder $query, Request $request): array
@@ -961,7 +1274,12 @@ class ProductController extends Controller
         }
 
         if ($this->looksLikeProductCodeSearch($trimmedSearch)) {
-            return $this->applyProductCodeSearch($query, $trimmedSearch);
+            $codeProbeQuery = clone $query;
+            [$codeSearchRankingSql] = $this->applyProductCodeSearch($codeProbeQuery, $trimmedSearch);
+
+            if ($codeSearchRankingSql !== null && $codeProbeQuery->exists()) {
+                return $this->applyProductCodeSearch($query, $trimmedSearch);
+            }
         }
 
         return $this->applyProductNameSearch($query, $trimmedSearch);
@@ -988,8 +1306,8 @@ class ProductController extends Controller
                     }
                 })
                 ->orWhereHas('variations', function (Builder $variationQuery) use ($normalizedCode, $compactCode) {
-                    $variationSkuExpr = $this->loweredSearchExpression('products.sku');
-                    $variationCompactSkuExpr = $this->compactSearchExpression('products.sku');
+                    $variationSkuExpr = $this->loweredSearchExpression('sku');
+                    $variationCompactSkuExpr = $this->compactSearchExpression('sku');
 
                     $variationQuery->where(function (Builder $directVariationQuery) use ($variationSkuExpr, $variationCompactSkuExpr, $normalizedCode, $compactCode) {
                         $directVariationQuery->whereRaw("{$variationSkuExpr} = ?", [$normalizedCode]);
@@ -999,6 +1317,7 @@ class ProductController extends Controller
                         }
                     });
                 });
+
         };
 
         $hasExactCodeMatch = (clone $query)->where($exactCodeSearch)->exists();
@@ -1057,8 +1376,8 @@ class ProductController extends Controller
                     }
                 })
                 ->orWhereHas('variations', function (Builder $variationQuery) use ($codeContainsLike, $compactCodeContainsLike) {
-                    $variationSkuExpr = $this->loweredSearchExpression('products.sku');
-                    $variationCompactSkuExpr = $this->compactSearchExpression('products.sku');
+                    $variationSkuExpr = $this->loweredSearchExpression('sku');
+                    $variationCompactSkuExpr = $this->compactSearchExpression('sku');
 
                     $variationQuery->where(function (Builder $directVariationQuery) use ($variationSkuExpr, $variationCompactSkuExpr, $codeContainsLike, $compactCodeContainsLike) {
                         $directVariationQuery->whereRaw("{$variationSkuExpr} LIKE ? ESCAPE '\\'", [$codeContainsLike]);
@@ -1068,40 +1387,150 @@ class ProductController extends Controller
                         }
                     });
                 });
+
         });
 
         return [$searchRankingSql, $searchRankingBindings];
     }
 
-    protected function applyProductNamePhraseConstraint(Builder $query, string $nameContainsLike): void
+    protected function applyProductSearchAttributeValueLikeConstraint(Builder $query, string $likeValue): void
     {
-        $nameExpr = $this->normalizedWordsExpression('products.name');
+        $valueExpr = $this->normalizedWordsExpression('value');
 
-        $query
-            ->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike])
-            ->orWhereHas('variations', function (Builder $variationQuery) use ($nameContainsLike) {
-                $variationNameExpr = $this->normalizedWordsExpression('products.name');
-                $variationQuery->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
-            });
+        $query->whereRaw("{$valueExpr} LIKE ? ESCAPE '\\'", [$likeValue]);
     }
 
-    protected function applyProductNameTokenConstraint(Builder $query, array $tokenLikes): void
+    protected function applyBundleNamePhraseConstraint(Builder $query, string $nameContainsLike, ?string $compactNameContainsLike = null): void
     {
-        $nameExpr = $this->normalizedWordsExpression('products.name');
+        $query->orWhereHas('bundleItems', function (Builder $bundleQuery) use ($nameContainsLike, $compactNameContainsLike) {
+            $bundleOptionExpr = $this->normalizedWordsExpression('product_links.option_title');
+            $bundleOptionCompactExpr = $this->compactSearchExpression('product_links.option_title');
 
-        $query
-            ->where(function (Builder $directQuery) use ($nameExpr, $tokenLikes) {
-                foreach ($tokenLikes as $tokenLike) {
-                    $directQuery->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
-                }
-            })
-            ->orWhereHas('variations', function (Builder $variationQuery) use ($tokenLikes) {
-                $variationNameExpr = $this->normalizedWordsExpression('products.name');
+            $bundleQuery->where(function (Builder $directBundleQuery) use ($bundleOptionExpr, $bundleOptionCompactExpr, $nameContainsLike, $compactNameContainsLike) {
+                $directBundleQuery->whereRaw("{$bundleOptionExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
 
-                foreach ($tokenLikes as $tokenLike) {
-                    $variationQuery->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+                if ($compactNameContainsLike !== null) {
+                    $directBundleQuery->orWhereRaw("{$bundleOptionCompactExpr} LIKE ? ESCAPE '\\'", [$compactNameContainsLike]);
                 }
             });
+        });
+    }
+
+    protected function applyBundleNameTokenConstraint(Builder $query, array $tokenLikes): void
+    {
+        $query->orWhereHas('bundleItems', function (Builder $bundleQuery) use ($tokenLikes) {
+            $bundleOptionExpr = $this->normalizedWordsExpression('product_links.option_title');
+            $bundleOptionCompactExpr = $this->compactSearchExpression('product_links.option_title');
+
+            $bundleQuery->where(function (Builder $directBundleQuery) use ($bundleOptionExpr, $bundleOptionCompactExpr, $tokenLikes) {
+                foreach ($tokenLikes as $tokenLike) {
+                    $directBundleQuery->where(function (Builder $segmentQuery) use ($bundleOptionExpr, $bundleOptionCompactExpr, $tokenLike) {
+                        $segmentQuery
+                            ->whereRaw("{$bundleOptionExpr} LIKE ? ESCAPE '\\'", [$tokenLike])
+                            ->orWhereRaw("{$bundleOptionCompactExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+                    });
+                }
+            });
+        });
+    }
+
+    protected function applyBundleNameAdjacentPhraseConstraint(Builder $query, array $adjacentPhraseLikes): void
+    {
+        $query->orWhereHas('bundleItems', function (Builder $bundleQuery) use ($adjacentPhraseLikes) {
+            $bundleOptionExpr = $this->normalizedWordsExpression('product_links.option_title');
+
+            $bundleQuery->where(function (Builder $directBundleQuery) use ($bundleOptionExpr, $adjacentPhraseLikes) {
+                foreach ($adjacentPhraseLikes as $phraseLike) {
+                    $directBundleQuery->orWhereRaw("{$bundleOptionExpr} LIKE ? ESCAPE '\\'", [$phraseLike]);
+                }
+            });
+        });
+    }
+
+    protected function applyProductNamePhraseConstraint(Builder $query, string $nameContainsLike, ?string $compactNameContainsLike = null): void
+    {
+        $nameExpr = $this->normalizedWordsExpression('products.name');
+        $compactNameExpr = $this->compactSearchExpression('products.name');
+
+        $query
+            ->where(function (Builder $directQuery) use ($nameExpr, $compactNameExpr, $nameContainsLike, $compactNameContainsLike) {
+                $directQuery->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
+
+                if ($compactNameContainsLike !== null) {
+                    $directQuery->orWhereRaw("{$compactNameExpr} LIKE ? ESCAPE '\\'", [$compactNameContainsLike]);
+                }
+            })
+            ->orWhereHas('variations', function (Builder $variationQuery) use ($nameContainsLike, $compactNameContainsLike) {
+                $variationNameExpr = $this->normalizedWordsExpression('name');
+                $variationCompactNameExpr = $this->compactSearchExpression('name');
+
+                $variationQuery->where(function (Builder $directVariationQuery) use ($variationNameExpr, $variationCompactNameExpr, $nameContainsLike, $compactNameContainsLike) {
+                    $directVariationQuery->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
+
+                    if ($compactNameContainsLike !== null) {
+                        $directVariationQuery->orWhereRaw("{$variationCompactNameExpr} LIKE ? ESCAPE '\\'", [$compactNameContainsLike]);
+                    }
+                });
+            })
+            ->orWhereHas('attributeValues', function (Builder $attributeValueQuery) use ($nameContainsLike) {
+                $this->applyProductSearchAttributeValueLikeConstraint($attributeValueQuery, $nameContainsLike);
+            })
+            ->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($nameContainsLike) {
+                $this->applyProductSearchAttributeValueLikeConstraint($attributeValueQuery, $nameContainsLike);
+            });
+
+        $this->applyBundleNamePhraseConstraint($query, $nameContainsLike, $compactNameContainsLike);
+    }
+
+    protected function applyProductNameTokenConstraint(Builder $query, array $tokenLikes, bool $includeSku = false): void
+    {
+        $nameExpr = $this->normalizedWordsExpression('products.name');
+        $compactNameExpr = $this->compactSearchExpression('products.name');
+        $compactSkuExpr = $includeSku ? $this->compactSearchExpression('products.sku') : null;
+
+        $query
+            ->where(function (Builder $directQuery) use ($nameExpr, $compactNameExpr, $compactSkuExpr, $tokenLikes) {
+                foreach ($tokenLikes as $tokenLike) {
+                    $directQuery->where(function (Builder $segmentQuery) use ($nameExpr, $compactNameExpr, $compactSkuExpr, $tokenLike) {
+                        $segmentQuery
+                            ->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$tokenLike])
+                            ->orWhereRaw("{$compactNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+
+                        if ($compactSkuExpr !== null) {
+                            $segmentQuery->orWhereRaw("{$compactSkuExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+                        }
+                    });
+                }
+            })
+            ->orWhereHas('variations', function (Builder $variationQuery) use ($tokenLikes, $includeSku) {
+                $variationNameExpr = $this->normalizedWordsExpression('name');
+                $variationCompactNameExpr = $this->compactSearchExpression('name');
+                $variationCompactSkuExpr = $includeSku ? $this->compactSearchExpression('sku') : null;
+
+                foreach ($tokenLikes as $tokenLike) {
+                    $variationQuery->where(function (Builder $segmentQuery) use ($variationNameExpr, $variationCompactNameExpr, $variationCompactSkuExpr, $tokenLike) {
+                        $segmentQuery
+                            ->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike])
+                            ->orWhereRaw("{$variationCompactNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+
+                        if ($variationCompactSkuExpr !== null) {
+                            $segmentQuery->orWhereRaw("{$variationCompactSkuExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+                        }
+                    });
+                }
+            })
+            ->orWhereHas('attributeValues', function (Builder $attributeValueQuery) use ($tokenLikes) {
+                foreach ($tokenLikes as $tokenLike) {
+                    $this->applyProductSearchAttributeValueLikeConstraint($attributeValueQuery, $tokenLike);
+                }
+            })
+            ->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($tokenLikes) {
+                foreach ($tokenLikes as $tokenLike) {
+                    $this->applyProductSearchAttributeValueLikeConstraint($attributeValueQuery, $tokenLike);
+                }
+            });
+
+        $this->applyBundleNameTokenConstraint($query, $tokenLikes);
     }
 
     protected function applyProductNameAdjacentPhraseConstraint(Builder $query, array $adjacentPhraseLikes): void
@@ -1115,7 +1544,7 @@ class ProductController extends Controller
                 }
             })
             ->orWhereHas('variations', function (Builder $variationQuery) use ($adjacentPhraseLikes) {
-                $variationNameExpr = $this->normalizedWordsExpression('products.name');
+                $variationNameExpr = $this->normalizedWordsExpression('name');
 
                 $variationQuery->where(function (Builder $directVariationQuery) use ($variationNameExpr, $adjacentPhraseLikes) {
                     foreach ($adjacentPhraseLikes as $phraseLike) {
@@ -1123,6 +1552,8 @@ class ProductController extends Controller
                     }
                 });
             });
+
+        $this->applyBundleNameAdjacentPhraseConstraint($query, $adjacentPhraseLikes);
     }
 
     protected function applyProductNameSearch(Builder $query, string $rawSearch): array
@@ -1133,15 +1564,16 @@ class ProductController extends Controller
         }
 
         $nameExpr = $this->normalizedWordsExpression('products.name');
+        $compactNameExpr = $this->compactSearchExpression('products.name');
         $nameExact = $normalizedName;
         $namePrefixLike = $this->escapeLike($normalizedName) . '%';
         $nameContainsLike = '%' . $this->escapeLike($normalizedName) . '%';
-        $nameTokens = collect(preg_split('/\s+/', $normalizedName, -1, PREG_SPLIT_NO_EMPTY))
-            ->filter(fn ($token) => mb_strlen($token) >= 2)
-            ->unique()
-            ->take(12)
-            ->values()
-            ->all();
+        $compactName = $this->compactSearchText($rawSearch);
+        $compactNameExact = $compactName !== '' ? $compactName : null;
+        $compactNamePrefixLike = $compactName !== '' ? $this->escapeLike($compactName) . '%' : null;
+        $compactNameContainsLike = $compactName !== '' ? '%' . $this->escapeLike($compactName) . '%' : null;
+        $nameTokens = $this->extractNameSearchTokens($normalizedName, $compactName);
+        $isCompactCompositeSearch = !preg_match('/\s/u', trim($rawSearch)) && count($nameTokens) > 1;
         $tokenLikes = array_map(
             fn ($token) => '%' . $this->escapeLike($token) . '%',
             $nameTokens
@@ -1167,18 +1599,34 @@ class ProductController extends Controller
             $namePrefixLike,
             $nameContainsLike,
         ];
+
+        if ($compactNameExact !== null) {
+            $phraseRankingParts[] = "CASE WHEN {$compactNameExpr} = ? THEN 2200 ELSE 0 END";
+            $phraseRankingBindings[] = $compactNameExact;
+        }
+
+        if ($compactNamePrefixLike !== null) {
+            $phraseRankingParts[] = "CASE WHEN {$compactNameExpr} LIKE ? ESCAPE '\\' THEN 1850 ELSE 0 END";
+            $phraseRankingBindings[] = $compactNamePrefixLike;
+        }
+
+        if ($compactNameContainsLike !== null) {
+            $phraseRankingParts[] = "CASE WHEN {$compactNameExpr} LIKE ? ESCAPE '\\' THEN 1550 ELSE 0 END";
+            $phraseRankingBindings[] = $compactNameContainsLike;
+        }
+
         $phraseRankingSql = '(' . implode(' + ', $phraseRankingParts) . ')';
 
         $hasPhraseMatch = (clone $query)
-            ->where(function (Builder $searchQuery) use ($nameContainsLike) {
-                $this->applyProductNamePhraseConstraint($searchQuery, $nameContainsLike);
+            ->where(function (Builder $searchQuery) use ($nameContainsLike, $compactNameContainsLike) {
+                $this->applyProductNamePhraseConstraint($searchQuery, $nameContainsLike, $compactNameContainsLike);
             })
             ->exists();
 
         if ($hasPhraseMatch || empty($tokenLikes)) {
             $query->selectRaw("{$phraseRankingSql} AS search_score", $phraseRankingBindings);
-            $query->where(function (Builder $searchQuery) use ($nameContainsLike) {
-                $this->applyProductNamePhraseConstraint($searchQuery, $nameContainsLike);
+            $query->where(function (Builder $searchQuery) use ($nameContainsLike, $compactNameContainsLike) {
+                $this->applyProductNamePhraseConstraint($searchQuery, $nameContainsLike, $compactNameContainsLike);
             });
 
             return [$phraseRankingSql, $phraseRankingBindings];
@@ -1201,10 +1649,16 @@ class ProductController extends Controller
             $namePrefixLike,
             $nameContainsLike,
         ];
+        $compactSkuExpr = $isCompactCompositeSearch ? $this->compactSearchExpression('products.sku') : null;
 
         foreach ($tokenLikes as $tokenLike) {
             $searchRankingParts[] = "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 120 ELSE 0 END";
             $searchRankingBindings[] = $tokenLike;
+
+            if ($compactSkuExpr !== null) {
+                $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} LIKE ? ESCAPE '\\' THEN 90 ELSE 0 END";
+                $searchRankingBindings[] = $tokenLike;
+            }
         }
 
         if ($hasAdjacentPhraseMatch) {
@@ -1216,8 +1670,8 @@ class ProductController extends Controller
 
         $searchRankingSql = '(' . implode(' + ', $searchRankingParts) . ')';
         $query->selectRaw("{$searchRankingSql} AS search_score", $searchRankingBindings);
-        $query->where(function (Builder $searchQuery) use ($tokenLikes) {
-            $this->applyProductNameTokenConstraint($searchQuery, $tokenLikes);
+        $query->where(function (Builder $searchQuery) use ($tokenLikes, $isCompactCompositeSearch) {
+            $this->applyProductNameTokenConstraint($searchQuery, $tokenLikes, $isCompactCompositeSearch);
         });
 
         if ($hasAdjacentPhraseMatch) {
@@ -1286,6 +1740,279 @@ class ProductController extends Controller
         }
     }
 
+    protected function normalizedSortExpression(string $expression): string
+    {
+        $expression = "COALESCE({$expression}, '')";
+
+        if ($this->usesPostgresSearchDriver()) {
+            return "LOWER(immutable_unaccent({$expression}))";
+        }
+
+        return "LOWER({$expression})";
+    }
+
+    protected function normalizedAttributeSortExpression(string $expression): string
+    {
+        $expression = "TRIM(COALESCE({$expression}, ''))";
+        $expression = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE({$expression}, '[', ''), ']', ''), '{', ''), '}', ''), '\"', '')";
+
+        if ($this->usesPostgresSearchDriver()) {
+            return "LOWER(immutable_unaccent({$expression}))";
+        }
+
+        return "LOWER({$expression})";
+    }
+
+    protected function applyTextSort(Builder $query, string $expression, string $direction): void
+    {
+        $query->orderByRaw("CASE WHEN TRIM(COALESCE({$expression}, '')) = '' THEN 1 ELSE 0 END ASC");
+        $query->orderByRaw($this->normalizedSortExpression($expression) . ' ' . $direction);
+    }
+
+    protected function resolveProductCategorySortExpression(): string
+    {
+        return "COALESCE(
+            (SELECT categories.name
+                FROM categories
+                WHERE categories.id = products.category_id
+                LIMIT 1),
+            (SELECT categories.name
+                FROM categories
+                INNER JOIN category_product ON category_product.category_id = categories.id
+                WHERE category_product.product_id = products.id
+                ORDER BY category_product.sort_order ASC, categories.id ASC
+                LIMIT 1),
+            ''
+        )";
+    }
+
+    protected function resolveProductSupplierCodeSortExpression(): ?string
+    {
+        if (Schema::hasTable('supplier_product_prices') && Schema::hasColumn('supplier_product_prices', 'supplier_product_code')) {
+            return "(SELECT supplier_product_prices.supplier_product_code
+                FROM supplier_product_prices
+                WHERE supplier_product_prices.product_id = products.id
+                    AND supplier_product_prices.supplier_product_code IS NOT NULL
+                    AND supplier_product_prices.supplier_product_code <> ''
+                ORDER BY CASE WHEN supplier_product_prices.supplier_id = products.supplier_id THEN 0 ELSE 1 END ASC,
+                    supplier_product_prices.id ASC
+                LIMIT 1)";
+        }
+
+        if (Schema::hasTable('products') && Schema::hasColumn('products', 'supplier_product_code')) {
+            return 'products.supplier_product_code';
+        }
+
+        return null;
+    }
+
+    protected function applyRequestedProductSort(Builder $query, string $sortBy, string $direction, string $actualStockSql): bool
+    {
+        $resolvedSort = match ($sortBy) {
+            'stock', 'stock_quantity' => 'actual_stock',
+            default => $sortBy,
+        };
+
+        if (preg_match('/^attr_(\d+)$/', $resolvedSort, $matches) === 1) {
+            $attributeId = (int) $matches[1];
+            $attributeValueExpression = "(SELECT product_attribute_values.value
+                FROM product_attribute_values
+                WHERE product_attribute_values.product_id = products.id
+                    AND product_attribute_values.attribute_id = {$attributeId}
+                ORDER BY product_attribute_values.id ASC
+                LIMIT 1)";
+
+            $query->orderByRaw("CASE WHEN TRIM(COALESCE({$attributeValueExpression}, '')) = '' THEN 1 ELSE 0 END ASC");
+            $query->orderByRaw($this->normalizedAttributeSortExpression($attributeValueExpression) . ' ' . $direction);
+
+            return true;
+        }
+
+        if ($resolvedSort === 'actual_stock') {
+            $query->orderByRaw($actualStockSql . ' ' . $direction);
+            return true;
+        }
+
+        if ($resolvedSort === 'category') {
+            $this->applyTextSort($query, $this->resolveProductCategorySortExpression(), $direction);
+            return true;
+        }
+
+        if ($resolvedSort === 'supplier_product_code') {
+            $supplierCodeExpression = $this->resolveProductSupplierCodeSortExpression();
+
+            if ($supplierCodeExpression !== null) {
+                $this->applyTextSort($query, $supplierCodeExpression, $direction);
+                return true;
+            }
+
+            return false;
+        }
+
+        $textSortColumns = [
+            'sku' => 'products.sku',
+            'name' => 'products.name',
+            'type' => 'products.type',
+            'specifications' => 'products.specifications',
+        ];
+
+        if (isset($textSortColumns[$resolvedSort])) {
+            $this->applyTextSort($query, $textSortColumns[$resolvedSort], $direction);
+            return true;
+        }
+
+        $directSortColumns = [
+            'id' => 'products.id',
+            'price' => 'products.price',
+            'expected_cost' => 'products.expected_cost',
+            'cost_price' => 'products.cost_price',
+            'created_at' => 'products.created_at',
+            'status' => 'products.status',
+            'is_featured' => 'products.is_featured',
+            'is_new' => 'products.is_new',
+            'category_id' => 'products.category_id',
+            'stock_quantity' => 'products.stock_quantity',
+        ];
+
+        if (isset($directSortColumns[$resolvedSort])) {
+            $query->orderBy($directSortColumns[$resolvedSort], $direction);
+            return true;
+        }
+
+        return false;
+    }
+
+    protected function pickerPrimaryImage(?Product $product): ?string
+    {
+        if (!$product) {
+            return null;
+        }
+
+        $primaryImage = $product->images->firstWhere('is_primary', true)
+            ?: $product->images->sortBy('sort_order')->first();
+
+        return $primaryImage?->image_url;
+    }
+
+    protected function pickerAttributePayload(Product $product): array
+    {
+        return $product->attributeValues
+            ->map(fn ($attributeValue) => [
+                'attribute_id' => (int) $attributeValue->attribute_id,
+                'value' => $attributeValue->value,
+            ])
+            ->values()
+            ->all();
+    }
+
+    protected function pickerAttributeSummary(Product $product): string
+    {
+        return collect($this->pickerAttributePayload($product))
+            ->flatMap(function (array $attributeValue) {
+                $rawValue = $attributeValue['value'] ?? null;
+
+                if (is_string($rawValue)) {
+                    $trimmed = trim($rawValue);
+                    if ($trimmed !== '' && (
+                        (str_starts_with($trimmed, '[') && str_ends_with($trimmed, ']'))
+                        || (str_starts_with($trimmed, '{') && str_ends_with($trimmed, '}'))
+                    )) {
+                        $decoded = json_decode($trimmed, true);
+                        if (is_array($decoded)) {
+                            return collect($decoded)->flatten(1)->map(fn ($value) => trim((string) $value))->filter();
+                        }
+                    }
+                }
+
+                return [trim((string) $rawValue)];
+            })
+            ->filter()
+            ->unique()
+            ->implode(' / ');
+    }
+
+    protected function pickerBundleOptions(Product $product): array
+    {
+        if ($product->type !== 'bundle' || !$product->relationLoaded('bundleItems')) {
+            return [];
+        }
+
+        return $product->bundleItems
+            ->groupBy(function (Product $bundleItem) {
+                $optionPostId = filled($bundleItem->pivot?->option_post_id ?? null)
+                    ? (int) $bundleItem->pivot->option_post_id
+                    : null;
+                $optionTitle = trim((string) ($bundleItem->pivot?->option_post_title
+                    ?? $bundleItem->pivot?->option_title
+                    ?? 'Mặc định'));
+
+                return $optionPostId
+                    ? 'post:' . $optionPostId
+                    : 'title:' . Str::lower($optionTitle);
+            })
+            ->map(function ($items, string $groupKey) {
+                /** @var Product|null $firstItem */
+                $firstItem = $items->first();
+                if (!$firstItem) {
+                    return null;
+                }
+
+                $optionPostId = filled($firstItem->pivot?->option_post_id ?? null)
+                    ? (int) $firstItem->pivot->option_post_id
+                    : null;
+                $optionTitle = trim((string) ($firstItem->pivot?->option_post_title
+                    ?? $firstItem->pivot?->option_title
+                    ?? 'Mặc định'));
+
+                $resolvedItems = $items->map(function (Product $bundleItem) {
+                    $selectedVariantId = filled($bundleItem->pivot?->variant_id ?? null)
+                        ? (int) $bundleItem->pivot->variant_id
+                        : null;
+                    $selectedVariant = $selectedVariantId
+                        ? $bundleItem->variations->firstWhere('id', $selectedVariantId)
+                        : null;
+                    $resolvedProduct = $selectedVariant ?: $bundleItem;
+
+                    return [
+                        'base_product_id' => (int) $bundleItem->id,
+                        'product_id' => (int) $resolvedProduct->id,
+                        'variant_id' => $selectedVariant?->id ? (int) $selectedVariant->id : null,
+                        'name' => $resolvedProduct->name,
+                        'sku' => $resolvedProduct->sku,
+                        'display_name' => $resolvedProduct->name,
+                        'display_sku' => $resolvedProduct->sku,
+                        'quantity' => max(1, (int) ($bundleItem->pivot->quantity ?? 1)),
+                        'price' => (float) ($bundleItem->pivot->price
+                            ?? $resolvedProduct->price
+                            ?? 0),
+                        'expected_cost' => $resolvedProduct->expected_cost !== null ? (float) $resolvedProduct->expected_cost : null,
+                        'cost_price' => (float) ($bundleItem->pivot->cost_price
+                            ?? $resolvedProduct->cost_price
+                            ?? $resolvedProduct->expected_cost
+                            ?? 0),
+                        'main_image' => $this->pickerPrimaryImage($selectedVariant ?: $bundleItem),
+                        'attribute_values' => $this->pickerAttributePayload($resolvedProduct),
+                        'option_label' => $this->pickerAttributeSummary($resolvedProduct),
+                        'variant_name' => $selectedVariant?->name,
+                    ];
+                })->values();
+
+                return [
+                    'key' => $groupKey,
+                    'option_title' => $optionTitle,
+                    'option_post_id' => $optionPostId,
+                    'option_post_title' => filled($firstItem->pivot?->option_post_title ?? null)
+                        ? (string) $firstItem->pivot->option_post_title
+                        : null,
+                    'subtotal' => (float) $resolvedItems->sum(fn (array $item) => ((float) $item['price']) * ((int) $item['quantity'])),
+                    'items' => $resolvedItems->all(),
+                ];
+            })
+            ->filter()
+            ->values()
+            ->all();
+    }
+
     protected function pickerIndex(Request $request)
     {
         $query = Product::query()->select([
@@ -1320,6 +2047,13 @@ class ProductController extends Controller
             'attributeValues:id,product_id,attribute_id,value',
             'variations:id,sku,name,price,cost_price,expected_cost,type',
             'variations.attributeValues:id,product_id,attribute_id,value',
+            'variations.images:id,product_id,image_url,is_primary,sort_order',
+            'bundleItems:id,sku,name,price,cost_price,expected_cost,type',
+            'bundleItems.attributeValues:id,product_id,attribute_id,value',
+            'bundleItems.images:id,product_id,image_url,is_primary,sort_order',
+            'bundleItems.variations:id,sku,name,price,cost_price,expected_cost,type',
+            'bundleItems.variations.attributeValues:id,product_id,attribute_id,value',
+            'bundleItems.variations.images:id,product_id,image_url,is_primary,sort_order',
         ]);
 
         if ($searchRankingSql !== null) {
@@ -1331,13 +2065,13 @@ class ProductController extends Controller
                 ->orderBy('name', 'asc');
         }
 
-        $perPage = min(max((int) $request->get('per_page', 50), 1), 100);
+        $maxPerPage = $request->boolean('picker') ? 200 : 100;
+        $perPage = min(max((int) $request->get('per_page', 50), 1), $maxPerPage);
         $paginated = $query->paginate($perPage);
 
         $paginated->setCollection(
             $paginated->getCollection()->map(function (Product $product) {
-                $primaryImage = $product->images->firstWhere('is_primary', true)
-                    ?: $product->images->sortBy('sort_order')->first();
+                $product = $this->appendBundleOptionPostMeta($product);
 
                 return [
                     'id' => (int) $product->id,
@@ -1348,14 +2082,8 @@ class ProductController extends Controller
                     'cost_price' => (float) ($product->cost_price ?? $product->expected_cost ?? 0),
                     'stock_quantity' => (float) ($product->stock_quantity ?? 0),
                     'type' => $product->type,
-                    'main_image' => $primaryImage?->image_url,
-                    'attribute_values' => $product->attributeValues
-                        ->map(fn ($attributeValue) => [
-                            'attribute_id' => (int) $attributeValue->attribute_id,
-                            'value' => $attributeValue->value,
-                        ])
-                        ->values()
-                        ->all(),
+                    'main_image' => $this->pickerPrimaryImage($product),
+                    'attribute_values' => $this->pickerAttributePayload($product),
                     'variations' => $product->variations
                         ->map(fn (Product $variation) => [
                             'id' => (int) $variation->id,
@@ -1365,16 +2093,12 @@ class ProductController extends Controller
                             'expected_cost' => $variation->expected_cost !== null ? (float) $variation->expected_cost : null,
                             'cost_price' => (float) ($variation->cost_price ?? $variation->expected_cost ?? 0),
                             'type' => $variation->type,
-                            'attribute_values' => $variation->attributeValues
-                                ->map(fn ($attributeValue) => [
-                                    'attribute_id' => (int) $attributeValue->attribute_id,
-                                    'value' => $attributeValue->value,
-                                ])
-                                ->values()
-                                ->all(),
+                            'main_image' => $this->pickerPrimaryImage($variation),
+                            'attribute_values' => $this->pickerAttributePayload($variation),
                         ])
                         ->values()
                         ->all(),
+                    'bundle_options' => $this->pickerBundleOptions($product),
                 ];
             })
         );
@@ -1415,7 +2139,10 @@ class ProductController extends Controller
             'variations.images:id,product_id,image_url,is_primary',
             'groupedItems:id,sku,name,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id',
             'groupedItems.unit:id,name',
-            'groupedItems.images:id,product_id,image_url,is_primary'
+            'groupedItems.images:id,product_id,image_url,is_primary',
+            'bundleItems:id,sku,name,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id',
+            'bundleItems.unit:id,name',
+            'bundleItems.images:id,product_id,image_url,is_primary'
         ]);
 
         $stockContext = $this->attachActualStockSubqueries($query, $request);
@@ -1710,32 +2437,19 @@ class ProductController extends Controller
         if ($sortBy === 'random') {
             $query->inRandomOrder();
         } else {
-            $sortMapping = ['stock' => 'actual_stock', 'stock_quantity' => 'actual_stock', 'category' => 'category_id'];
-            $validSortFields = ['id', 'sku', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity', 'actual_stock', 'created_at', 'type', 'category_id'];
-
-            $field = $sortMapping[$sortBy] ?? $sortBy;
-            if (!in_array($field, $validSortFields))
-                $field = 'created_at';
-
-            $order = (strtolower($sortOrder) === 'asc') ? 'asc' : 'desc';
+            $requestedSort = is_string($sortBy) && trim($sortBy) !== '' ? trim($sortBy) : 'created_at';
+            $order = strtolower((string) $sortOrder) === 'asc' ? 'asc' : 'desc';
 
             // Tôn trọng tiêu chí sắp xếp từ bảng quản lý sản phẩm; mặc định là mới nhất lên đầu.
             if ($searchRankingSql !== null) {
                 $query->orderByRaw("{$searchRankingSql} DESC", $searchRankingBindings);
-                if ($field === 'actual_stock') {
-                    $query->orderByRaw($actualStockSql . ' ' . $order);
-                } else {
-                    $query->orderBy($field, $order);
-                }
-                $query->orderByDesc('id');
-            } else {
-                if ($field === 'actual_stock') {
-                    $query->orderByRaw($actualStockSql . ' ' . $order);
-                } else {
-                    $query->orderBy($field, $order);
-                }
-                $query->orderByDesc('id');
             }
+
+            if (!$this->applyRequestedProductSort($query, $requestedSort, $order, $actualStockSql)) {
+                $query->orderByDesc('products.created_at');
+            }
+
+            $query->orderByDesc('products.id');
         }
 
         $perPage = (int)$request->get('per_page', 20);
@@ -2290,6 +3004,213 @@ class ProductController extends Controller
         ]);
     }
 
+    public function convertToConfigurable(Request $request, $id)
+    {
+        $validated = $request->validate([
+            'attribute_id' => 'nullable|exists:attributes,id',
+            'attribute_name' => 'nullable|string|max:255',
+            'parent_name' => 'nullable|string|max:255',
+            'parent_sku' => 'nullable|string|max:120',
+            'variants' => 'required|array|min:1',
+            'variants.*.value' => 'required|string|max:255',
+            'variants.*.name' => 'nullable|string|max:255',
+            'variants.*.sku' => 'nullable|string|max:120',
+            'variants.*.price' => 'nullable|numeric|min:0',
+            'variants.*.expected_cost' => 'nullable|numeric|min:0',
+            'variants.*.weight' => 'nullable|string|max:255',
+            'variants.*.inventory_unit_id' => 'nullable|exists:inventory_units,id',
+        ], [
+            'variants.required' => 'Cần ít nhất một biến thể để chuyển đổi sản phẩm.',
+            'variants.min' => 'Cần ít nhất một biến thể để chuyển đổi sản phẩm.',
+        ]);
+
+        $parent = DB::transaction(function () use ($request, $validated, $id) {
+            $product = Product::query()
+                ->with([
+                    'images',
+                    'attributeValues',
+                    'categories:id',
+                    'relatedProducts:id',
+                    'suppliers:id',
+                ])
+                ->lockForUpdate()
+                ->findOrFail($id);
+
+            if ($product->type !== 'simple') {
+                throw ValidationException::withMessages([
+                    'product' => ['Chỉ có thể chuyển sản phẩm đơn thành sản phẩm có biến thể từ màn hình này.'],
+                ]);
+            }
+
+            if ($product->parentConfigurable()->exists()) {
+                throw ValidationException::withMessages([
+                    'product' => ['Sản phẩm này đã là biến thể con của một sản phẩm cha khác.'],
+                ]);
+            }
+
+            $parentName = trim((string) ($validated['parent_name'] ?? '')) ?: $product->name;
+            $parentSkuSeed = $validated['parent_sku'] ?? ($product->sku ? ($product->sku . '-CFG') : null);
+            $parentSku = $this->productSkuService->ensureUniqueSku(
+                $parentSkuSeed,
+                $parentName,
+                null,
+                array_values(array_filter([$product->sku]))
+            );
+            $preparedVariants = $this->prepareSimpleToConfigurableVariants(
+                $product,
+                (array) $request->input('variants', []),
+                $parentSku
+            );
+            $attribute = $this->resolveConfigurableConversionAttribute(
+                $product,
+                isset($validated['attribute_id']) ? (int) $validated['attribute_id'] : null,
+                $validated['attribute_name'] ?? null
+            );
+            $this->ensureVariantAttributeOptions($attribute, array_column($preparedVariants, 'value'));
+
+            $supplierIds = $product->suppliers
+                ->pluck('id')
+                ->map(fn ($supplierId) => (int) $supplierId)
+                ->filter()
+                ->values()
+                ->all();
+            $categoryIds = $product->categories
+                ->pluck('id')
+                ->map(fn ($categoryId) => (int) $categoryId)
+                ->filter()
+                ->values()
+                ->all();
+
+            $parent = Product::query()->create(
+                $this->buildConvertedParentPayload($product, $parentName, $parentSku)
+            );
+
+            if (!empty($supplierIds)) {
+                $this->syncProductSuppliers($parent, $supplierIds);
+            }
+
+            if (!empty($categoryIds)) {
+                $this->syncProductCategories($parent, $categoryIds);
+            } elseif ($product->category_id) {
+                $this->syncProductCategories($parent, [(int) $product->category_id]);
+            }
+
+            $this->cloneProductDecoratorsToParent($product, $parent, $attribute->id);
+            $this->copyRelatedProductsToParent($product, $parent);
+            $parent->superAttributes()->sync([
+                $attribute->id => ['position' => 0],
+            ]);
+
+            $firstVariant = $preparedVariants[0];
+            $product->forceFill([
+                'name' => $firstVariant['name'],
+                'price' => $firstVariant['price'] ?? $product->price,
+                'expected_cost' => $firstVariant['expected_cost'] ?? $product->expected_cost,
+                'weight' => $firstVariant['weight'] ?? $product->weight,
+                'inventory_unit_id' => $firstVariant['inventory_unit_id'] ?? $product->inventory_unit_id,
+            ])->save();
+
+            if (!empty($supplierIds) || $firstVariant['expected_cost'] !== null) {
+                $this->productPricingService->syncExpectedCost(
+                    $product,
+                    $firstVariant['expected_cost'] ?? $product->expected_cost,
+                    $product->supplier_id,
+                    auth()->id()
+                );
+                $product->refresh();
+            }
+
+            ProductAttributeValue::query()->updateOrCreate(
+                [
+                    'product_id' => $product->id,
+                    'attribute_id' => $attribute->id,
+                ],
+                [
+                    'value' => $firstVariant['value'],
+                ]
+            );
+
+            $parent->linkedProducts()->attach($product->id, [
+                'link_type' => 'super_link',
+                'position' => 0,
+            ]);
+
+            foreach (array_slice($preparedVariants, 1) as $index => $variantData) {
+                $variant = Product::query()->create([
+                    'account_id' => $product->account_id,
+                    'type' => 'simple',
+                    'name' => $variantData['name'],
+                    'slug' => $this->productSkuService->generateUniqueSlug($variantData['name']),
+                    'description' => $product->description,
+                    'specifications' => $product->specifications,
+                    'price' => $variantData['price'] ?? $product->price,
+                    'price_type' => 'fixed',
+                    'cost_price' => null,
+                    'expected_cost' => $variantData['expected_cost'] ?? $product->expected_cost,
+                    'special_price' => null,
+                    'special_price_from' => null,
+                    'special_price_to' => null,
+                    'imported_quantity_total' => 0,
+                    'imported_value_total' => 0,
+                    'category_id' => $product->category_id,
+                    'stock_quantity' => 0,
+                    'damaged_quantity' => 0,
+                    'status' => $product->status,
+                    'is_featured' => false,
+                    'is_new' => false,
+                    'sku' => $variantData['sku'],
+                    'meta_title' => null,
+                    'meta_description' => null,
+                    'meta_keywords' => null,
+                    'weight' => $variantData['weight'] ?? $product->weight,
+                    'inventory_unit_id' => $variantData['inventory_unit_id'] ?? $product->inventory_unit_id,
+                    'inventory_import_starred' => false,
+                    'supplier_id' => $product->supplier_id,
+                    'video_url' => null,
+                    'additional_info' => null,
+                    'bundle_title' => null,
+                    'site_domain_id' => $product->site_domain_id,
+                ]);
+
+                if (!empty($supplierIds)) {
+                    $this->syncProductSuppliers($variant, $supplierIds);
+                }
+
+                if (!empty($categoryIds)) {
+                    $this->syncProductCategories($variant, $categoryIds);
+                } elseif ($product->category_id) {
+                    $this->syncProductCategories($variant, [(int) $product->category_id]);
+                }
+
+                $this->productPricingService->syncExpectedCost(
+                    $variant,
+                    $variantData['expected_cost'] ?? $product->expected_cost,
+                    $variant->supplier_id,
+                    auth()->id()
+                );
+
+                ProductAttributeValue::query()->create([
+                    'product_id' => $variant->id,
+                    'attribute_id' => $attribute->id,
+                    'value' => $variantData['value'],
+                ]);
+
+                $parent->linkedProducts()->attach($variant->id, [
+                    'link_type' => 'super_link',
+                    'position' => $index + 1,
+                ]);
+            }
+
+            return $this->loadProductResource($parent->fresh());
+        });
+
+        return response()->json([
+            'message' => 'Sản phẩm đã được chuyển thành sản phẩm có biến thể.',
+            'data' => $parent,
+            'parent_product_id' => (int) $parent->id,
+        ]);
+    }
+
     /**
      * Update the specified resource in storage.
      */
@@ -2393,6 +3314,12 @@ class ProductController extends Controller
         }
 
         $resolvedType = $validated['type'] ?? $product->type;
+        if ($resolvedType === 'configurable' && $product->type !== 'configurable') {
+            throw ValidationException::withMessages([
+                'type' => ['Để chuyển sản phẩm hiện có thành sản phẩm có biến thể mà không làm lệch tồn kho và đơn hàng cũ, vui lòng dùng thao tác "Chuyển thành sản phẩm có biến thể".'],
+            ]);
+        }
+
         if (!empty($validated['grouped_items']) && in_array($resolvedType, ['grouped', 'bundle'], true)) {
             $this->validateGroupedOrBundleItemVariants($validated['grouped_items']);
         }

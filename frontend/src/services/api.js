@@ -117,6 +117,7 @@ export const productApi = {
     getAll: (params, signal) => api.get('/products', { params, signal }),
     getOne: (id) => api.get(`/products/${id}`),
     refreshOrderItems: (data) => api.post('/products/refresh-order-items', data),
+    convertToConfigurable: (id, data) => api.post(`/products/${id}/convert-to-configurable`, data, multipartConfig(data)),
     store: (data) => api.post('/products', data, multipartConfig(data)),
     update: (id, data) => api.post(`/products/${id}`, data, multipartConfig(data)), // POST for multipart support
     destroy: (id) => api.delete(`/products/${id}`),

@@ -83,12 +83,20 @@ const productQuickFilterAttributeStorageKey = 'order_form_product_quick_filter_a
 const productQuickSetupStorageKey = 'order_form_product_quick_setup_map_v1';
 const productQuickSetupLimit = 15;
 const supportedProductQuickFilterTypes = new Set(['select', 'multiselect']);
+const SEARCH_ENTRY_PRODUCT = 'product';
+const SEARCH_ENTRY_VARIATION = 'variation';
+const SEARCH_ENTRY_BUNDLE_OPTION = 'bundle_option';
 const autoOpenSupplementItemOrderTypes = new Set([
     ORDER_TYPE_EXCHANGE_RETURN,
     ORDER_TYPE_PARTIAL_DELIVERY,
 ]);
 const quoteCurrencyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
 const quoteCanvasFontFamily = '"Tahoma", "Arial", sans-serif';
+let orderFormLineItemSequence = 0;
+const createOrderLineId = (prefix = 'order-item') => {
+    orderFormLineItemSequence += 1;
+    return `${prefix}-${orderFormLineItemSequence}`;
+};
 const shouldAutoOpenSupplementItemsModal = (value) => autoOpenSupplementItemOrderTypes.has(normalizeOrderType(value));
 const sortQuoteTemplates = (templates = []) => [...(Array.isArray(templates) ? templates : [])].sort((a, b) => {
     const sortA = Number(a?.sort_order) || 0;
@@ -129,12 +137,38 @@ const normalizeProductSearchText = (value) => String(value ?? '')
     .trim()
     .replace(/\s+/g, ' ');
 const compactProductSearchText = (value) => normalizeProductSearchText(value).replace(/\s+/g, '');
-const tokenizeProductSearch = (value) => Array.from(new Set(
-    normalizeProductSearchText(value)
-        .split(' ')
+const splitCompactProductSearchTokens = (value) => Array.from(new Set(
+    (compactProductSearchText(value).match(/[a-z]+|\d+/g) || [])
         .map((token) => token.trim())
         .filter((token) => token.length >= 2)
-)).slice(0, 6);
+));
+const getCompactProductSearchLeadToken = (value) => {
+    const tokens = splitCompactProductSearchTokens(value).filter((token) => /[a-z]/.test(token));
+    if (tokens.length === 0) return '';
+
+    return [...tokens].sort((left, right) => right.length - left.length)[0] || '';
+};
+const isCompactCompositeProductSearch = (value) => {
+    const normalizedValue = normalizeProductSearchText(value);
+    if (!normalizedValue || normalizedValue.includes(' ')) {
+        return false;
+    }
+
+    return splitCompactProductSearchTokens(value).length > 1;
+};
+const tokenizeProductSearch = (value) => {
+    const normalizedTokens = normalizeProductSearchText(value)
+        .split(' ')
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2);
+    const compactTokens = normalizedTokens.length <= 1 ? splitCompactProductSearchTokens(value) : [];
+
+    return Array.from(new Set(
+        compactTokens.length > 1
+            ? compactTokens
+            : [...normalizedTokens, ...compactTokens]
+    )).slice(0, 6);
+};
 const getStoredProductSearchHistory = () => {
     if (typeof window === 'undefined') return [];
 
@@ -288,32 +322,60 @@ const scoreProductSearchResult = (product, rawTerm) => {
     const query = normalizeProductSearchText(rawTerm);
     if (!query) return 1;
 
-    const name = normalizeProductSearchText(product?.name);
-    const sku = normalizeProductSearchText(product?.sku);
-    const compactSku = compactProductSearchText(product?.sku);
+    const name = normalizeProductSearchText(product?.display_name || product?.name);
+    const compactName = compactProductSearchText(product?.display_name || product?.name);
+    const sku = normalizeProductSearchText(product?.display_sku || product?.sku);
+    const keywordText = normalizeProductSearchText(
+        Array.isArray(product?.search_keywords)
+            ? product.search_keywords.join(' ')
+            : ''
+    );
+    const compactSku = compactProductSearchText(product?.display_sku || product?.sku);
+    const compactKeywordText = compactProductSearchText(
+        Array.isArray(product?.search_keywords)
+            ? product.search_keywords.join(' ')
+            : ''
+    );
     const compactQuery = compactProductSearchText(rawTerm);
     const tokens = tokenizeProductSearch(rawTerm);
+    const compactLeadToken = isCompactCompositeProductSearch(rawTerm) ? getCompactProductSearchLeadToken(rawTerm) : '';
 
     const phraseInName = Boolean(query) && name.includes(query);
+    const phraseInCompactName = Boolean(compactQuery) && compactName.includes(compactQuery);
     const phraseInSku = Boolean(query) && sku.includes(query);
     const phraseInCompactSku = Boolean(compactQuery) && compactSku.includes(compactQuery);
+    const phraseInKeywords = Boolean(query) && keywordText.includes(query);
+    const phraseInCompactKeywords = Boolean(compactQuery) && compactKeywordText.includes(compactQuery);
 
-    const nameTokenMatches = tokens.reduce((count, token) => count + Number(name.includes(token)), 0);
+    const nameTokenMatches = tokens.reduce((count, token) => {
+        const compactToken = compactProductSearchText(token);
+        return count + Number(name.includes(token) || (compactToken && compactName.includes(compactToken)));
+    }, 0);
     const skuTokenMatches = tokens.reduce((count, token) => {
         const compactToken = compactProductSearchText(token);
         return count + Number(sku.includes(token) || (compactToken && compactSku.includes(compactToken)));
+    }, 0);
+    const keywordTokenMatches = tokens.reduce((count, token) => {
+        const compactToken = compactProductSearchText(token);
+        return count + Number(
+            keywordText.includes(token)
+            || (compactToken && compactKeywordText.includes(compactToken))
+        );
     }, 0);
     const combinedTokenMatches = tokens.reduce((count, token) => {
         const compactToken = compactProductSearchText(token);
         return count + Number(
             name.includes(token)
+            || (compactToken && compactName.includes(compactToken))
             || sku.includes(token)
             || (compactToken && compactSku.includes(compactToken))
+            || keywordText.includes(token)
+            || (compactToken && compactKeywordText.includes(compactToken))
         );
     }, 0);
 
     const minimumRelevantMatches = tokens.length <= 1 ? 1 : Math.max(2, tokens.length - 1);
-    if (!phraseInName && !phraseInSku && !phraseInCompactSku) {
+    if (!phraseInName && !phraseInCompactName && !phraseInSku && !phraseInCompactSku && !phraseInKeywords && !phraseInCompactKeywords) {
         if (tokens.length === 0) return 0;
         if (combinedTokenMatches < minimumRelevantMatches) return 0;
     }
@@ -322,14 +384,21 @@ const scoreProductSearchResult = (product, rawTerm) => {
 
     if (sku === query || (compactQuery && compactSku === compactQuery)) score += 1500;
     if (name === query) score += 1400;
+    if (compactQuery && compactName === compactQuery) score += 1320;
     if (phraseInSku || phraseInCompactSku) score += 880;
     if (phraseInName) score += 820;
+    if (phraseInCompactName) score += 780;
+    if (phraseInKeywords || phraseInCompactKeywords) score += 540;
     if (sku.startsWith(query) || (compactQuery && compactSku.startsWith(compactQuery))) score += 760;
     if (name.startsWith(query)) score += 700;
+    if (compactQuery && compactName.startsWith(compactQuery)) score += 640;
+    if (compactLeadToken && compactName.startsWith(compactLeadToken)) score += 520;
+    if (compactLeadToken && name.startsWith(compactLeadToken)) score += 420;
 
     score += combinedTokenMatches * 140;
     score += nameTokenMatches * 50;
     score += skuTokenMatches * 70;
+    score += keywordTokenMatches * 65;
 
     if (tokens.length > 1 && combinedTokenMatches === tokens.length) score += 260;
     if (tokens.length > 1 && nameTokenMatches === tokens.length) score += 120;
@@ -461,6 +530,395 @@ const resolveOrderItemCostPrice = (item, useCurrentProductCost = false) => {
         );
 
     return resolveRoundedImportCostValue(resolvedValue, 0);
+};
+const getPickerAttributeValues = (product) => (
+    Array.isArray(product?.attribute_values)
+        ? product.attribute_values
+        : (Array.isArray(product?.attributeValues) ? product.attributeValues : [])
+);
+const getPickerPrimaryImage = (product) => String(
+    product?.main_image
+    || product?.primary_image?.url
+    || product?.image_url
+    || ''
+).trim();
+const buildAttributeValueSummary = (product) => Array.from(new Set(
+    getPickerAttributeValues(product)
+        .flatMap((attributeValue) => parseProductAttributeValueList(attributeValue?.value))
+        .filter(Boolean)
+)).join(' / ');
+const buildVariationDisplayName = (parentName, variationName, optionLabel) => {
+    const normalizedParentName = normalizeCanvasText(parentName);
+    const normalizedVariationName = normalizeCanvasText(variationName);
+    const normalizedOptionLabel = normalizeCanvasText(optionLabel);
+
+    if (
+        normalizedVariationName
+        && normalizedParentName
+        && normalizeProductSearchText(normalizedVariationName).includes(normalizeProductSearchText(normalizedParentName))
+    ) {
+        return normalizedVariationName;
+    }
+
+    if (normalizedParentName && normalizedOptionLabel) {
+        return `${normalizedParentName} - ${normalizedOptionLabel}`;
+    }
+
+    if (normalizedParentName && normalizedVariationName) {
+        return `${normalizedParentName} - ${normalizedVariationName}`;
+    }
+
+    return normalizedVariationName || normalizedParentName || 'Biến thể sản phẩm';
+};
+const resolveBundleOptionTitle = (bundleOption) => normalizeCanvasText(
+    bundleOption?.option_post_title
+    || bundleOption?.option_title
+    || bundleOption?.title
+    || 'Mặc định'
+);
+const resolveBundleOptionKey = (bundleOption) => {
+    const explicitKey = normalizeCanvasText(bundleOption?.key);
+    if (explicitKey) {
+        return explicitKey;
+    }
+
+    const optionPostId = Number(bundleOption?.option_post_id) || 0;
+    const optionTitle = resolveBundleOptionTitle(bundleOption);
+
+    return optionPostId > 0
+        ? `post-${optionPostId}`
+        : `title-${compactProductSearchText(optionTitle) || 'default'}`;
+};
+const createOrderLineItem = ({
+    line_id,
+    product_id,
+    name,
+    sku,
+    quantity = 1,
+    price = 0,
+    cost_price = 0,
+    options = undefined,
+}) => {
+    const normalizedOptions = options && typeof options === 'object'
+        ? Object.fromEntries(
+            Object.entries(options).filter(([, value]) => value !== null && value !== undefined && value !== '')
+        )
+        : undefined;
+
+    return {
+        line_id: normalizeCanvasText(line_id) || createOrderLineId('order-item'),
+        product_id: Number(product_id) || 0,
+        name: normalizeCanvasText(name),
+        sku: normalizeCanvasText(sku) || 'N/A',
+        quantity: Math.max(1, Number(quantity) || 1),
+        price: Number(price) || 0,
+        cost_price: resolveRoundedImportCostValue(cost_price, 0),
+        options: normalizedOptions && Object.keys(normalizedOptions).length > 0 ? normalizedOptions : undefined,
+    };
+};
+const buildOrderItemMergeKey = (item) => {
+    const options = item?.options || {};
+
+    return [
+        Number(item?.product_id) || 0,
+        normalizeProductSearchText(options?.bundle_parent_id),
+        normalizeProductSearchText(options?.bundle_option_key),
+        normalizeProductSearchText(options?.bundle_option_title),
+        normalizeProductSearchText(options?.variant_parent_id),
+        normalizeProductSearchText(options?.variant_label),
+    ].join('::');
+};
+const resolveLatestOrderItemName = (item, latest = null) => {
+    const variantParentName = normalizeCanvasText(item?.options?.variant_parent_name);
+    const variantLabel = normalizeCanvasText(item?.options?.variant_label);
+    const latestName = normalizeCanvasText(latest?.name || item?.name);
+
+    if (variantParentName && variantLabel) {
+        return `${variantParentName} - ${variantLabel}`;
+    }
+
+    if (variantParentName && latestName) {
+        return `${variantParentName} - ${latestName}`;
+    }
+
+    return latestName || normalizeCanvasText(item?.name) || 'Sản phẩm';
+};
+const appendOrderItemsWithMerge = (currentItems = [], additions = [], { incrementExisting = false } = {}) => {
+    const nextItems = Array.isArray(currentItems) ? [...currentItems] : [];
+
+    (Array.isArray(additions) ? additions : []).forEach((addition) => {
+        const normalizedAddition = createOrderLineItem(addition || {});
+        if (!normalizedAddition.product_id) {
+            return;
+        }
+
+        const mergeKey = buildOrderItemMergeKey(normalizedAddition);
+        const existingIndex = nextItems.findIndex((item) => buildOrderItemMergeKey(item) === mergeKey);
+
+        if (existingIndex >= 0) {
+            if (!incrementExisting) {
+                return;
+            }
+
+            const existingItem = nextItems[existingIndex];
+            nextItems[existingIndex] = {
+                ...existingItem,
+                quantity: Math.max(1, (Number(existingItem.quantity) || 0) + (Number(normalizedAddition.quantity) || 0)),
+                price: Number(normalizedAddition.price ?? existingItem.price ?? 0) || 0,
+                cost_price: resolveRoundedImportCostValue(
+                    normalizedAddition.cost_price ?? existingItem.cost_price ?? 0,
+                    0
+                ),
+            };
+            return;
+        }
+
+        nextItems.push(normalizedAddition);
+    });
+
+    return nextItems;
+};
+const buildOrderItemsFromSearchEntry = (entry) => {
+    if (!entry || typeof entry !== 'object') {
+        return [];
+    }
+
+    const entryKind = String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT);
+
+    if (entryKind === SEARCH_ENTRY_BUNDLE_OPTION) {
+        const bundleParentId = Number(entry?.bundle_parent_id) || 0;
+        const bundleParentName = normalizeCanvasText(entry?.bundle_parent_name || entry?.parent_product_name || entry?.name);
+        const bundleOptionTitle = resolveBundleOptionTitle(entry);
+        const bundleOptionKey = normalizeCanvasText(entry?.bundle_option_key || resolveBundleOptionKey(entry));
+
+        return (Array.isArray(entry?.bundle_items) ? entry.bundle_items : [])
+            .map((bundleItem) => createOrderLineItem({
+                product_id: Number(bundleItem?.product_id ?? bundleItem?.target_product_id ?? bundleItem?.id) || 0,
+                name: normalizeCanvasText(bundleItem?.display_name || bundleItem?.name) || 'Sản phẩm bundle',
+                sku: normalizeCanvasText(bundleItem?.display_sku || bundleItem?.sku),
+                quantity: Math.max(1, Number(bundleItem?.quantity) || 1),
+                price: Number(bundleItem?.price ?? 0) || 0,
+                cost_price: resolveProductCostPrice(bundleItem),
+                options: {
+                    bundle_parent_id: bundleParentId || undefined,
+                    bundle_parent_name: bundleParentName,
+                    bundle_option_key: bundleOptionKey,
+                    bundle_option_title: bundleOptionTitle,
+                    bundle_option_post_id: Number(entry?.option_post_id) || undefined,
+                    bundle_option_post_title: normalizeCanvasText(entry?.option_post_title),
+                    bundle_item_base_product_id: Number(bundleItem?.base_product_id) || undefined,
+                    variant_label: normalizeCanvasText(bundleItem?.option_label || bundleItem?.variant_label),
+                    variant_name: normalizeCanvasText(bundleItem?.variant_name),
+                    search_entry_kind: SEARCH_ENTRY_BUNDLE_OPTION,
+                },
+            }))
+            .filter((item) => item.product_id > 0);
+    }
+
+    const targetProductId = Number(entry?.target_product_id ?? entry?.product_id ?? entry?.id) || 0;
+    if (!targetProductId) {
+        return [];
+    }
+
+    const baseOptions = entryKind === SEARCH_ENTRY_VARIATION
+        ? {
+            variant_parent_id: Number(entry?.parent_product_id) || undefined,
+            variant_parent_name: normalizeCanvasText(entry?.parent_product_name),
+            variant_label: normalizeCanvasText(entry?.option_label),
+            variant_name: normalizeCanvasText(entry?.name),
+            search_entry_kind: SEARCH_ENTRY_VARIATION,
+        }
+        : undefined;
+
+    return [createOrderLineItem({
+        product_id: targetProductId,
+        name: normalizeCanvasText(entry?.display_name || entry?.name) || `Sản phẩm #${targetProductId}`,
+        sku: normalizeCanvasText(entry?.display_sku || entry?.sku),
+        quantity: 1,
+        price: Number(entry?.price ?? 0) || 0,
+        cost_price: resolveProductCostPrice(entry),
+        options: baseOptions,
+    })];
+};
+const canAddSearchEntry = (currentItems = [], entry) => {
+    if (!entry || typeof entry !== 'object') {
+        return false;
+    }
+
+    if (
+        String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) === SEARCH_ENTRY_PRODUCT
+        && String(entry?.type || '').trim() === 'configurable'
+    ) {
+        return false;
+    }
+
+    if (String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) === SEARCH_ENTRY_BUNDLE_OPTION) {
+        return true;
+    }
+
+    const additions = buildOrderItemsFromSearchEntry(entry);
+    if (additions.length === 0) {
+        return false;
+    }
+
+    return additions.some((addition) => !currentItems.some((item) => (
+        buildOrderItemMergeKey(item) === buildOrderItemMergeKey(addition)
+    )));
+};
+const buildProductSearchEntries = (products = [], { includeNested = false } = {}) => {
+    const entries = [];
+    const seenEntryIds = new Set();
+
+    const pushEntry = (entry) => {
+        const entryId = normalizeCanvasText(entry?.entry_id);
+        if (!entryId || seenEntryIds.has(entryId)) {
+            return;
+        }
+
+        seenEntryIds.add(entryId);
+        entries.push(entry);
+    };
+
+    (Array.isArray(products) ? products : []).forEach((rawProduct) => {
+        if (!rawProduct || typeof rawProduct !== 'object') {
+            return;
+        }
+
+        const product = normalizeProductPickerEntry(rawProduct);
+        const baseEntry = {
+            entry_id: `product-${Number(product?.id ?? product?.product_id) || 0}`,
+            entry_kind: SEARCH_ENTRY_PRODUCT,
+            id: Number(product?.id ?? product?.product_id) || 0,
+            target_product_id: Number(product?.id ?? product?.product_id) || 0,
+            name: normalizeCanvasText(product?.name) || 'Sản phẩm',
+            display_name: normalizeCanvasText(product?.name) || 'Sản phẩm',
+            sku: normalizeCanvasText(product?.sku),
+            display_sku: normalizeCanvasText(product?.sku),
+            price: Number(product?.price ?? 0) || 0,
+            expected_cost: parseMoneyNumber(product?.expected_cost),
+            cost_price: resolveProductCostPrice(product),
+            type: normalizeCanvasText(product?.type),
+            main_image: getPickerPrimaryImage(product),
+            attribute_values: getPickerAttributeValues(product),
+            search_keywords: [
+                normalizeCanvasText(product?.name),
+                normalizeCanvasText(product?.sku),
+                buildAttributeValueSummary(product),
+            ].filter(Boolean),
+        };
+
+        if (
+            baseEntry.id > 0
+            && !(baseEntry.type === 'configurable' && Array.isArray(product?.variations) && product.variations.length > 0)
+        ) {
+            pushEntry(baseEntry);
+        }
+
+        if (!includeNested) {
+            return;
+        }
+
+        (Array.isArray(product?.variations) ? product.variations : []).forEach((variation) => {
+            const optionLabel = buildAttributeValueSummary(variation);
+            const variationId = Number(variation?.id) || 0;
+            if (!variationId) {
+                return;
+            }
+
+            pushEntry({
+                entry_id: `variation-${variationId}`,
+                entry_kind: SEARCH_ENTRY_VARIATION,
+                id: variationId,
+                target_product_id: variationId,
+                parent_product_id: baseEntry.id,
+                parent_product_name: baseEntry.name,
+                name: normalizeCanvasText(variation?.name) || baseEntry.name,
+                display_name: buildVariationDisplayName(baseEntry.name, variation?.name, optionLabel),
+                sku: normalizeCanvasText(variation?.sku),
+                display_sku: normalizeCanvasText(variation?.sku || product?.sku),
+                option_label: optionLabel,
+                price: Number(variation?.price ?? 0) || 0,
+                expected_cost: parseMoneyNumber(variation?.expected_cost),
+                cost_price: resolveProductCostPrice(variation),
+                type: normalizeCanvasText(variation?.type || 'simple'),
+                main_image: getPickerPrimaryImage(variation) || baseEntry.main_image,
+                attribute_values: getPickerAttributeValues(variation),
+                search_keywords: [
+                    baseEntry.name,
+                    normalizeCanvasText(variation?.name),
+                    normalizeCanvasText(variation?.sku),
+                    optionLabel,
+                    buildAttributeValueSummary(variation),
+                ].filter(Boolean),
+            });
+        });
+
+        (Array.isArray(product?.bundle_options) ? product.bundle_options : []).forEach((bundleOption) => {
+            const bundleOptionTitle = resolveBundleOptionTitle(bundleOption);
+            const bundleOptionKey = resolveBundleOptionKey(bundleOption);
+            const bundleItems = (Array.isArray(bundleOption?.items) ? bundleOption.items : [])
+                .map((bundleItem) => ({
+                    base_product_id: Number(bundleItem?.base_product_id) || undefined,
+                    product_id: Number(bundleItem?.product_id ?? bundleItem?.target_product_id ?? bundleItem?.id) || 0,
+                    name: normalizeCanvasText(bundleItem?.name) || 'Sản phẩm bundle',
+                    display_name: normalizeCanvasText(bundleItem?.display_name || bundleItem?.name) || 'Sản phẩm bundle',
+                    sku: normalizeCanvasText(bundleItem?.sku),
+                    display_sku: normalizeCanvasText(bundleItem?.display_sku || bundleItem?.sku),
+                    quantity: Math.max(1, Number(bundleItem?.quantity) || 1),
+                    price: Number(bundleItem?.price ?? 0) || 0,
+                    expected_cost: parseMoneyNumber(bundleItem?.expected_cost),
+                    cost_price: resolveProductCostPrice(bundleItem),
+                    main_image: getPickerPrimaryImage(bundleItem),
+                    attribute_values: getPickerAttributeValues(bundleItem),
+                    option_label: normalizeCanvasText(bundleItem?.option_label || bundleItem?.variant_label || buildAttributeValueSummary(bundleItem)),
+                    variant_name: normalizeCanvasText(bundleItem?.variant_name),
+                }))
+                .filter((bundleItem) => bundleItem.product_id > 0);
+
+            if (bundleItems.length === 0) {
+                return;
+            }
+
+            const firstBundleImage = bundleItems.find((bundleItem) => bundleItem.main_image)?.main_image || baseEntry.main_image;
+            const subtotal = Number(bundleOption?.subtotal ?? bundleItems.reduce((sum, bundleItem) => (
+                sum + ((Number(bundleItem.price) || 0) * (Number(bundleItem.quantity) || 0))
+            ), 0)) || 0;
+
+            pushEntry({
+                entry_id: `bundle-option-${baseEntry.id}-${bundleOptionKey}`,
+                entry_kind: SEARCH_ENTRY_BUNDLE_OPTION,
+                id: `bundle-option-${baseEntry.id}-${bundleOptionKey}`,
+                target_product_id: baseEntry.id,
+                bundle_parent_id: baseEntry.id,
+                bundle_parent_name: baseEntry.name,
+                bundle_option_key: bundleOptionKey,
+                bundle_option_title: bundleOptionTitle,
+                option_post_id: Number(bundleOption?.option_post_id) || undefined,
+                option_post_title: normalizeCanvasText(bundleOption?.option_post_title),
+                name: baseEntry.name,
+                display_name: baseEntry.name,
+                sku: baseEntry.sku,
+                display_sku: baseEntry.sku,
+                price: subtotal,
+                cost_price: bundleItems.reduce((sum, bundleItem) => (
+                    sum + (resolveRoundedImportCostValue(bundleItem.cost_price, 0) * (Number(bundleItem.quantity) || 0))
+                ), 0),
+                type: baseEntry.type,
+                main_image: firstBundleImage,
+                bundle_items: bundleItems,
+                bundle_item_count: bundleItems.length,
+                bundle_quantity_total: bundleItems.reduce((sum, bundleItem) => sum + (Number(bundleItem.quantity) || 0), 0),
+                search_keywords: [
+                    baseEntry.name,
+                    baseEntry.sku,
+                    bundleOptionTitle,
+                    normalizeCanvasText(bundleOption?.option_post_title),
+                ].filter(Boolean),
+            });
+        });
+    });
+
+    return entries;
 };
 
 const waitForNodeImages = async (node) => {
@@ -612,7 +1070,7 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                     </thead>
                     <tbody>
                         {formData.items.map((item, index) => (
-                            <tr key={`${template?.id || 'template'}-${item.product_id}-${index}`} className="align-top">
+                            <tr key={`${template?.id || 'template'}-${item.line_id || item.product_id}-${index}`} className="align-top">
                                 {index === 0 && (
                                     <td rowSpan={formData.items.length} className="border border-[#2F1A14] bg-[#8E0B0B] p-4 align-middle">
                                         <div className="flex h-full flex-col items-center justify-between text-white">
@@ -655,10 +1113,29 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null })
     const nameRef = useRef(null);
     const [hasTruncation, setHasTruncation] = useState(false);
     const [isHovered, setIsHovered] = useState(false);
+    const displayName = product?.display_name || product?.name || '---';
     const quickFilterValues = useMemo(
         () => getProductAttributeDisplayValues(product, quickFilterAttribute?.id),
         [product, quickFilterAttribute]
     );
+    const secondaryMeta = useMemo(() => {
+        if (product?.entry_kind === SEARCH_ENTRY_VARIATION) {
+            return [
+                product?.parent_product_name ? `SP cha: ${product.parent_product_name}` : '',
+                product?.option_label ? `Biến thể: ${product.option_label}` : '',
+            ].filter(Boolean);
+        }
+
+        if (product?.entry_kind === SEARCH_ENTRY_BUNDLE_OPTION) {
+            return [
+                product?.bundle_parent_name ? `Bundle: ${product.bundle_parent_name}` : '',
+                product?.bundle_option_title ? `Tùy chọn: ${product.bundle_option_title}` : '',
+                product?.bundle_item_count ? `${product.bundle_item_count} sản phẩm` : '',
+            ].filter(Boolean);
+        }
+
+        return [];
+    }, [product]);
 
     const checkTruncation = useCallback(() => {
         const nameTruncated = nameRef.current && nameRef.current.scrollWidth > nameRef.current.clientWidth + 1;
@@ -679,7 +1156,7 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null })
             window.cancelAnimationFrame(frameId);
             window.removeEventListener('resize', handleResize);
         };
-    }, [checkTruncation, product.name]);
+    }, [checkTruncation, displayName]);
 
     const handleMouseEnter = () => {
         setHasTruncation(checkTruncation());
@@ -689,7 +1166,7 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null })
     return (
         <button
             type="button"
-            onClick={() => onSelect(product.id)}
+            onClick={() => onSelect(product)}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={() => setIsHovered(false)}
             className="w-full px-3 py-2.5 text-left hover:bg-primary/5 border-b border-primary/5 flex items-center gap-3 transition-colors group relative overflow-visible"
@@ -699,12 +1176,24 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null })
             </div>
             <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                    <p ref={nameRef} className="truncate text-[13px] font-bold tracking-tight text-primary">{product.name || '---'}</p>
+                    <p ref={nameRef} className="truncate text-[13px] font-bold tracking-tight text-primary">{displayName}</p>
+                    {secondaryMeta.length > 0 && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                            {secondaryMeta.map((meta) => (
+                                <span
+                                    key={`${product.entry_id || product.id}-${meta}`}
+                                    className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2 py-0.5 text-[10px] font-bold text-primary/70"
+                                >
+                                    {meta}
+                                </span>
+                            ))}
+                        </div>
+                    )}
                     {quickFilterAttribute && quickFilterValues.length > 0 && (
                         <div className="mt-1 flex flex-wrap items-center gap-1">
                             {quickFilterValues.slice(0, 2).map((value) => (
                                 <span
-                                    key={`${product.id}-${quickFilterAttribute.id}-${value}`}
+                                    key={`${product.entry_id || product.id}-${quickFilterAttribute.id}-${value}`}
                                     className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2 py-0.5 text-[10px] font-bold text-primary/70"
                                 >
                                     {value}
@@ -722,7 +1211,7 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null })
             {isHovered && hasTruncation && (
                 <div className="pointer-events-none absolute left-11 right-3 top-1/2 z-[120] -translate-y-1/2 rounded-sm border border-primary/10 bg-white/95 px-3 py-2 shadow-[0_18px_40px_rgba(15,23,42,0.16)] ring-1 ring-black/5 backdrop-blur-sm">
                     <div className="text-[12px] font-semibold leading-5 text-[#0F172A] break-words">
-                        {product.name || '---'}
+                        {displayName}
                     </div>
                 </div>
             )}
@@ -880,7 +1369,7 @@ const OrderForm = () => {
 
                 return {
                     ...item,
-                    name: latest.name ?? item.name,
+                    name: resolveLatestOrderItemName(item, latest),
                     sku: latest.sku ?? item.sku,
                     price: Number(latest.price ?? 0),
                     cost_price: resolveProductCostPrice(latest, item.cost_price),
@@ -1292,7 +1781,10 @@ const OrderForm = () => {
     // handleCancel now handles navigation directly without confirm for a faster experience
 
     const fetchProducts = useCallback(async (term = '', filterOverrides = {}) => {
-        const params = { per_page: 50, picker: 1 };
+        const params = {
+            per_page: isCompactCompositeProductSearch(term) ? 200 : 100,
+            picker: 1,
+        };
         if (term) params.search = term;
 
         const activeFilterAttributeId = filterOverrides.attributeId ?? productQuickFilterAttributeId;
@@ -1309,7 +1801,7 @@ const OrderForm = () => {
             : (window.localStorage.getItem('activeAccountId') || 'default');
         const cacheKey = JSON.stringify({ account_id: activeAccountId, ...params });
         const cachedProducts = productSearchCacheRef.current.get(cacheKey);
-        if (cachedProducts) {
+        if (Array.isArray(cachedProducts) && cachedProducts.length > 0) {
             setProducts(cachedProducts);
             return;
         }
@@ -1325,7 +1817,11 @@ const OrderForm = () => {
             const nextProducts = Array.isArray(prodRes.data.data)
                 ? prodRes.data.data.map((product) => normalizeProductPickerEntry(product))
                 : [];
-            productSearchCacheRef.current.set(cacheKey, nextProducts);
+            if (nextProducts.length > 0) {
+                productSearchCacheRef.current.set(cacheKey, nextProducts);
+            } else {
+                productSearchCacheRef.current.delete(cacheKey);
+            }
             setProducts(nextProducts);
         } catch (error) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
@@ -1528,9 +2024,9 @@ const OrderForm = () => {
     );
 
     const rankedSearchProducts = useMemo(() => {
-        const availableProducts = searchableProducts.filter(
-            (product) => !formData.items.some((item) => Number(item.product_id) === Number(product.id ?? product.product_id))
-        );
+        const availableProducts = buildProductSearchEntries(searchableProducts, {
+            includeNested: Boolean(searchTerm.trim()),
+        }).filter((product) => canAddSearchEntry(formData.items, product));
 
         if (!searchTerm.trim()) {
             return availableProducts.slice(0, 50);
@@ -1746,6 +2242,17 @@ const OrderForm = () => {
                 price: parseMoneyNumber(item.price, 0) || 0,
                 cost_price: resolveOrderItemCostPrice(item, shouldUseCurrentProductCost)
             })) || [];
+            const normalizedMappedItems = order.items?.map((item, index) => createOrderLineItem({
+                line_id: item?.id ? `saved-${item.id}` : `saved-${Number(item?.product_id) || 0}-${index + 1}`,
+                product_id: item.product_id,
+                name: item.product_name_snapshot || item.product?.name || `Sản phẩm #${item.product_id}`,
+                sku: item.product?.sku || item.product_sku_snapshot || 'N/A',
+                quantity: parseMoneyNumber(item.quantity, 0) || 0,
+                price: parseMoneyNumber(item.price, 0) || 0,
+                cost_price: resolveOrderItemCostPrice(item, shouldUseCurrentProductCost),
+                options: item.options || {},
+            })) || [];
+            void mappedItems;
             const mappedSupplementItems = (order.supplement_items || order.supplementItems || []).map((item) => ({
                 product_id: item.product_id,
                 name: item.product?.name || item.product_name_snapshot || `Sản phẩm #${item.product_id}`,
@@ -1755,7 +2262,7 @@ const OrderForm = () => {
                 cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
                 notes: item.notes || '',
             }));
-            const mappedCostTotal = calculateItemsCostTotal(mappedItems);
+            const mappedCostTotal = calculateItemsCostTotal(normalizedMappedItems);
             setFormData({
                 customer_name: order.customer_name || '',
                 customer_email: order.customer_email || '',
@@ -1775,14 +2282,14 @@ const OrderForm = () => {
                 return_status: isDuplicating
                     ? SUPPLEMENT_RETURN_STATUS_NOT_RETURNED
                     : normalizeSupplementReturnStatus(order.return_status || order.returnStatus),
-                items: order.items?.map(item => ({
+                items: normalizedMappedItems, /*
                     product_id: item.product_id,
                     name: item.product?.name || item.product_name_snapshot || `Sản phẩm #${item.product_id}`,
                     sku: item.product?.sku || item.product_sku_snapshot || `N/A`,
                     quantity: item.quantity,
                     price: item.price,
                     cost_price: resolveOrderItemCostPrice(item)
-                })) || [],
+                })) || [], */
                 supplement_items: mappedSupplementItems,
                 custom_attributes: customAttrValues,
                 shipping_fee: order.shipping_fee || 0,
@@ -1798,7 +2305,7 @@ const OrderForm = () => {
             });
             setFormData((prev) => ({
                 ...prev,
-                items: mappedItems,
+                items: normalizedMappedItems,
                 cost_total: mappedCostTotal,
                 supplement_items: mappedSupplementItems,
             }));
@@ -1843,7 +2350,18 @@ const OrderForm = () => {
                 cost_price: resolveProductCostPrice(item),
                 options: item.options || {}
             }));
-            const draftCostTotal = calculateItemsCostTotal(draftItems);
+            const normalizedDraftItems = (draft.items || []).map((item, index) => createOrderLineItem({
+                line_id: `lead-draft-${Number(item?.product_id) || 0}-${index + 1}`,
+                product_id: item.product_id,
+                name: item.name || item.product_name || `Sản phẩm #${item.product_id}`,
+                sku: item.sku || item.product_sku || 'N/A',
+                quantity: Number(item.quantity) || 1,
+                price: Number(item.price) || 0,
+                cost_price: resolveProductCostPrice(item),
+                options: item.options || {},
+            }));
+            void draftItems;
+            const draftCostTotal = calculateItemsCostTotal(normalizedDraftItems);
 
             setFormData((prev) => syncShippingAddress({
                 ...prev,
@@ -1869,7 +2387,7 @@ const OrderForm = () => {
                 type: draft.type || 'Lẻ',
                 shipment_status: draft.shipment_status || 'Chưa giao',
                 notes: draft.notes || '',
-                items: draftItems,
+                items: normalizedDraftItems,
                 supplement_items: [],
                 custom_attributes: draft.custom_attributes || {},
                 shipping_fee: Number(draft.shipping_fee) || 0,
@@ -2000,26 +2518,23 @@ const OrderForm = () => {
     }, [applyLatestProductsToOrderState]);
 
     const appendProductToOrder = useCallback((product, options = {}) => {
-        const targetProductId = parseInt(product?.target_product_id ?? product?.product_id ?? product?.id, 10);
-        if (!targetProductId) return;
+        const itemsToAppend = buildOrderItemsFromSearchEntry(product);
+        if (itemsToAppend.length === 0) return;
+        const entryKind = String(product?.entry_kind || SEARCH_ENTRY_PRODUCT);
 
         if (options.trackSearch && searchTerm.trim()) {
             pushSearchHistory(searchTerm);
         }
 
         setFormData((prev) => {
-            if (prev.items.some((item) => Number(item.product_id) === targetProductId)) {
-                return prev;
-            }
+            const nextItems = appendOrderItemsWithMerge(prev.items, itemsToAppend, {
+                incrementExisting: entryKind === SEARCH_ENTRY_BUNDLE_OPTION,
+            });
 
-            const nextItems = [...prev.items, {
-                product_id: targetProductId,
+            if (nextItems.length === prev.items.length) {
+                return prev; /*
                 name: product?.display_name || product?.name || `Sản phẩm #${targetProductId}`,
-                sku: product?.display_sku || product?.sku || 'N/A',
-                quantity: 1,
-                price: Number(product?.price ?? 0) || 0,
-                cost_price: resolveProductCostPrice(product),
-            }];
+            */ }
             const costTotal = calculateItemsCostTotal(nextItems);
 
             return {
@@ -2031,21 +2546,16 @@ const OrderForm = () => {
 
         setShowSearchHistory(false);
 
-        if (!hasProductCostSnapshot(product)) {
+        if (entryKind !== SEARCH_ENTRY_BUNDLE_OPTION && !hasProductCostSnapshot(product)) {
             hydrateMissingProductCostSnapshot(product);
         }
     }, [hydrateMissingProductCostSnapshot, pushSearchHistory, searchTerm]);
 
-    const addProductById = useCallback((productId) => {
-        if (!productId) return;
-
-        const normalizedProductId = parseInt(productId, 10);
-        const product = searchableProducts.find((entry) => Number(entry.id ?? entry.product_id) === normalizedProductId);
+    const addProductById = useCallback((product) => {
         if (!product) return;
-
         appendProductToOrder(product, { trackSearch: true });
         // Keep search term and dropdown open for consecutive selections
-    }, [appendProductToOrder, searchableProducts]);
+    }, [appendProductToOrder]);
 
     const updateItem = React.useCallback((index, field, value) => {
         setFormData(prev => {
@@ -2063,9 +2573,9 @@ const OrderForm = () => {
         });
     }, []);
 
-    const removeItem = React.useCallback((id) => {
+    const removeItem = React.useCallback((lineId) => {
         setFormData(prev => {
-            const newItems = prev.items.filter(item => item.product_id !== id);
+            const newItems = prev.items.filter(item => item.line_id !== lineId);
             const costTotal = calculateItemsCostTotal(newItems);
             return {
                 ...prev,
@@ -2568,8 +3078,22 @@ const OrderForm = () => {
                     notes: item.notes || '',
                 })).filter((item) => item.product_id && item.quantity > 0)
                 : [];
+            const normalizedItems = (Array.isArray(formData.items) ? formData.items : [])
+                .map((item) => ({
+                    product_id: Number(item.product_id) || 0,
+                    quantity: Math.max(0, Number(item.quantity) || 0),
+                    price: Math.max(0, Number(item.price) || 0),
+                    cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
+                    name: item.name || '',
+                    sku: item.sku || '',
+                    options: item.options && typeof item.options === 'object' && Object.keys(item.options).length > 0
+                        ? item.options
+                        : undefined,
+                }))
+                .filter((item) => item.product_id && item.quantity > 0);
             const payload = {
                 ...formData,
+                items: normalizedItems,
                 order_kind: isEdit ? normalizedOrderKind : MAIN_ORDER_KIND,
                 order_type: normalizedOrderType,
                 settlement_delta: specialOrderType ? (parseMoneyNumber(formData.settlement_delta, 0) || 0) : 0,
@@ -3117,7 +3641,7 @@ const OrderForm = () => {
                                             )}
                                             {rankedSearchProducts.map((p) => (
                                                     <ProductSearchOption
-                                                        key={p.id}
+                                                        key={p.entry_id || p.id}
                                                         product={p}
                                                         onSelect={addProductById}
                                                         quickFilterAttribute={activeProductQuickFilterAttribute}
@@ -3139,18 +3663,24 @@ const OrderForm = () => {
                                 {/* Scrollable Product Chips - Strictly Single Row */}
                                 <div className="flex w-full min-w-0 flex-nowrap items-center gap-2 overflow-x-auto overflow-y-hidden custom-scrollbar rounded-sm border border-primary/10 bg-primary/5 px-2 pb-1 h-[42px]">
                                     {formData.items.map((item, index) => (
-                                        <div key={item.product_id} className="bg-orange-50 hover:bg-orange-100/50 px-3 py-1.5 rounded-sm border border-orange-200 flex items-center gap-2 transition-all group/chip relative shadow-sm shrink-0">
+                                        <div key={item.line_id || `${item.product_id}-${index}`} className="bg-orange-50 hover:bg-orange-100/50 px-3 py-1.5 rounded-sm border border-orange-200 flex items-center gap-2 transition-all group/chip relative shadow-sm shrink-0">
                                             <div className="flex items-center gap-2 overflow-hidden">
                                                 <span className="text-[10px] text-orange-600/40 font-bold leading-none">{index + 1}.</span>
                                                 <span className="text-[11px] text-orange-600 font-bold leading-none whitespace-nowrap tracking-tight">{item.sku || 'N/A'}</span>
                                             </div>
-                                            <button type="button" onClick={() => removeItem(item.product_id)} className="text-orange-400 hover:text-brick transition-all leading-none transform hover:scale-125">
+                                            <button type="button" onClick={() => removeItem(item.line_id)} className="text-orange-400 hover:text-brick transition-all leading-none transform hover:scale-125">
                                                 <span className="material-symbols-outlined text-[12px]">close</span>
                                             </button>
 
                                             {/* Name Tooltip on Hover */}
                                             <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-slate-800 text-white text-[11px] font-bold rounded shadow-xl opacity-0 group-hover/chip:opacity-100 pointer-events-none transition-all whitespace-nowrap z-[150] border border-white/10 scale-90 group-hover/chip:scale-100 origin-bottom">
                                                 {item.name}
+                                                {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
+                                                    <div className="mt-1 text-[10px] font-medium text-white/80">
+                                                        {item.options?.bundle_parent_name ? `Bundle: ${item.options.bundle_parent_name}` : 'Bundle'}
+                                                        {item.options?.bundle_option_title ? ` - ${item.options.bundle_option_title}` : ''}
+                                                    </div>
+                                                ) : null}
                                                 <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-slate-800"></div>
                                             </div>
                                         </div>
@@ -3262,7 +3792,7 @@ const OrderForm = () => {
                                     <Reorder.Group axis="y" values={formData.items} onReorder={handleReorder} as="tbody" className="font-sans text-sm font-medium">
                                         {formData.items.map((item, index) => (
                                             <Reorder.Item
-                                                key={item.product_id}
+                                                key={item.line_id || `${item.product_id}-${index}`}
                                                 value={item}
                                                 as="tr"
                                                 className="hover:bg-primary/[0.01] transition-colors group cursor-grab active:cursor-grabbing active:border-primary/20 bg-white"
@@ -3283,11 +3813,11 @@ const OrderForm = () => {
                                                                             <button
                                                                                 type="button"
                                                                                 onPointerDown={(e) => e.stopPropagation()}
-                                                                                onClick={(e) => handleCopyCellValue(item.sku, 'mã sản phẩm', e, `${item.product_id}-sku-${index}`)}
-                                                                                className={`${copiedText === `${item.product_id}-sku-${index}` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`}
+                                                                                onClick={(e) => handleCopyCellValue(item.sku, 'mã sản phẩm', e, `${item.line_id || item.product_id}-sku-${index}`)}
+                                                                                className={`${copiedText === `${item.line_id || item.product_id}-sku-${index}` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`}
                                                                                 title="Sao chép mã SP"
                                                                             >
-                                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === `${item.product_id}-sku-${index}` ? 'check' : 'content_copy'}</span>
+                                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === `${item.line_id || item.product_id}-sku-${index}` ? 'check' : 'content_copy'}</span>
                                                                             </button>
                                                                         )}
                                                                     </div>
@@ -3314,11 +3844,11 @@ const OrderForm = () => {
                                                                             <button
                                                                                 type="button"
                                                                                 onPointerDown={(e) => e.stopPropagation()}
-                                                                                onClick={(e) => handleCopyCellValue(item.name, 'tên sản phẩm', e, `${item.product_id}-name-${index}`)}
-                                                                                className={`${copiedText === `${item.product_id}-name-${index}` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`}
+                                                                                onClick={(e) => handleCopyCellValue(item.name, 'tên sản phẩm', e, `${item.line_id || item.product_id}-name-${index}`)}
+                                                                                className={`${copiedText === `${item.line_id || item.product_id}-name-${index}` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`}
                                                                                 title="Sao chép tên SP"
                                                                             >
-                                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === `${item.product_id}-name-${index}` ? 'check' : 'content_copy'}</span>
+                                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === `${item.line_id || item.product_id}-name-${index}` ? 'check' : 'content_copy'}</span>
                                                                             </button>
                                                                         )}
                                                                     </div>
@@ -3389,7 +3919,7 @@ const OrderForm = () => {
                                                         case 'actions':
                                                             return (
                                                                 <td key={colId} className="py-2.5 text-center border border-primary/10">
-                                                                    <button type="button" onClick={() => removeItem(item.product_id)} className="text-primary/10 hover:text-brick transition-all transform hover:scale-125">
+                                                                    <button type="button" onClick={() => removeItem(item.line_id)} className="text-primary/10 hover:text-brick transition-all transform hover:scale-125">
                                                                         <span className="material-symbols-outlined text-[20px]">delete_outline</span>
                                                                     </button>
                                                                 </td>

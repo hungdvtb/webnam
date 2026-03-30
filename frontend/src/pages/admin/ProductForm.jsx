@@ -279,7 +279,8 @@ const DraggableBundleItem = ({
             </td>
             <td className="px-3 py-3 border-r border-gold/10">
                 {item.type === 'configurable' ? (
-                    <select
+                    <div className="space-y-1">
+                        <select
                         value={item.variant_id || ''}
                         onChange={(e) => handleUpdateBundleItemVariant(optionId, item.entry_id || item.id, e.target.value)}
                         className="w-full bg-stone/5 border border-stone/10 rounded px-2 py-1 text-[11px] font-bold text-black focus:outline-none focus:border-gold/30"
@@ -289,6 +290,13 @@ const DraggableBundleItem = ({
                             <option key={v.id} value={v.id}>{v.name || (v.attribute_values || []).map(av => av.value).join(' / ')}</option>
                         ))}
                     </select>
+                    {!item.variant_id ? (
+                        <p className="text-[10px] font-bold text-brick">Bat buoc chon bien the con de bundle ghi nhan dung ton kho.</p>
+                    ) : null}
+                    {false ? (
+                        <p className="text-[10px] font-bold text-brick">Báº¯t buá»™c chá»n biáº¿n thá»ƒ con Ä‘á»ƒ bundle ghi nháº­n Ä‘Ãºng tá»“n kho.</p>
+                    ) : null}
+                    </div>
                 ) : (
                     <span className="text-[11px] text-black/60 italic">Sản phẩm đơn</span>
                 )}
@@ -518,6 +526,16 @@ const formatNumberOutput = (num) => {
     return formatWholeMoneyInput(num);
 };
 
+const calculateBundleOptionSubtotal = (option) => {
+    const items = Array.isArray(option?.items) ? option.items : [];
+    return items.reduce((total, item) => {
+        const unitPrice = normalizeWholeMoneyNumber(item?.price) ?? 0;
+        const rawQuantity = Number(item?.quantity);
+        const quantity = Number.isFinite(rawQuantity) ? Math.max(0, rawQuantity) : 0;
+        return total + (unitPrice * quantity);
+    }, 0);
+};
+
 const formatImportCostOutput = (num) => {
     return formatRoundedImportCost(num);
 };
@@ -578,6 +596,17 @@ const createEmptyVariantQuickUpdateForm = () => ({
     expected_cost: '',
     weight: '',
     inventory_unit_id: '',
+});
+
+const SIMPLE_TO_CONFIG_PRESET_ATTRIBUTES = ['Mẫu', 'Kích thước', 'Loại men'];
+const createConvertVariantEntryId = () => `convert-variant-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+const createConvertVariantDraft = (overrides = {}) => ({
+    entry_id: createConvertVariantEntryId(),
+    is_existing: false,
+    value: '',
+    name: '',
+    sku: '',
+    ...overrides,
 });
 
 const Field = ({ label, children, className = "", labelClassName = "" }) => (
@@ -1013,6 +1042,20 @@ const ProductForm = () => {
         bundle_title: '',
         site_domain_id: ''
     });
+    const [productMeta, setProductMeta] = useState({
+        originalType: '',
+        parentConfigurable: null,
+    });
+    const [showConvertToConfigurableModal, setShowConvertToConfigurableModal] = useState(false);
+    const [isConvertingToConfigurable, setIsConvertingToConfigurable] = useState(false);
+    const [convertToConfigurableForm, setConvertToConfigurableForm] = useState({
+        parent_name: '',
+        attribute_source: 'preset',
+        preset_attribute_name: SIMPLE_TO_CONFIG_PRESET_ATTRIBUTES[0],
+        attribute_id: '',
+        custom_attribute_name: '',
+        variants: [],
+    });
 
     const [variants, setVariants] = useState([]);
     const [serverValidationErrors, setServerValidationErrors] = useState({});
@@ -1085,6 +1128,209 @@ const ProductForm = () => {
     const normalizeImportCostDraftValue = (value) => {
         return normalizeWholeMoneyDraft(value);
     };
+
+    const variantReadyAttributes = useMemo(() => (
+        allAttributes.filter((attribute) => (
+            attribute.entity_type === 'product'
+            && (attribute.frontend_type === 'select' || attribute.frontend_type === 'multiselect')
+        ))
+    ), [allAttributes]);
+
+    const canConvertSimpleProduct = useMemo(() => (
+        isEdit
+        && !isDuplicate
+        && (productMeta.originalType || formData.type) === 'simple'
+        && !productMeta.parentConfigurable
+    ), [formData.type, isDuplicate, isEdit, productMeta.originalType, productMeta.parentConfigurable]);
+
+    const resolvedConvertAttributeName = useMemo(() => {
+        if (convertToConfigurableForm.attribute_source === 'existing') {
+            const matchedAttribute = variantReadyAttributes.find((attribute) => (
+                String(attribute.id) === String(convertToConfigurableForm.attribute_id)
+            ));
+
+            return matchedAttribute?.name || '';
+        }
+
+        if (convertToConfigurableForm.attribute_source === 'custom') {
+            return String(convertToConfigurableForm.custom_attribute_name || '').trim();
+        }
+
+        return String(convertToConfigurableForm.preset_attribute_name || SIMPLE_TO_CONFIG_PRESET_ATTRIBUTES[0]).trim();
+    }, [
+        convertToConfigurableForm.attribute_id,
+        convertToConfigurableForm.attribute_source,
+        convertToConfigurableForm.custom_attribute_name,
+        convertToConfigurableForm.preset_attribute_name,
+        variantReadyAttributes,
+    ]);
+
+    const buildInitialConvertToConfigurableForm = useCallback((sourceProduct = {}) => ({
+        parent_name: String(sourceProduct?.name || formData.name || '').trim(),
+        attribute_source: 'preset',
+        preset_attribute_name: SIMPLE_TO_CONFIG_PRESET_ATTRIBUTES[0],
+        attribute_id: '',
+        custom_attribute_name: '',
+        variants: [
+            createConvertVariantDraft({
+                is_existing: true,
+                value: 'Mẫu gốc',
+                name: String(sourceProduct?.name || formData.name || '').trim(),
+                sku: String(sourceProduct?.sku || formData.sku || '').trim(),
+            }),
+        ],
+    }), [formData.name, formData.sku]);
+
+    const openConvertToConfigurableModal = useCallback(() => {
+        setConvertToConfigurableForm(buildInitialConvertToConfigurableForm({
+            name: formData.name,
+            sku: formData.sku,
+        }));
+        setShowConvertToConfigurableModal(true);
+    }, [buildInitialConvertToConfigurableForm, formData.name, formData.sku]);
+
+    const closeConvertToConfigurableModal = useCallback(() => {
+        if (isConvertingToConfigurable) return;
+        setShowConvertToConfigurableModal(false);
+    }, [isConvertingToConfigurable]);
+
+    const handleConvertVariantFieldChange = useCallback((entryId, field, value) => {
+        setConvertToConfigurableForm((prev) => ({
+            ...prev,
+            variants: prev.variants.map((variant) => {
+                if (variant.entry_id !== entryId) return variant;
+
+                return {
+                    ...variant,
+                    [field]: field === 'sku' ? normalizeSkuDraft(value) : value,
+                };
+            }),
+        }));
+    }, []);
+
+    const handleAddConvertVariant = useCallback(() => {
+        setConvertToConfigurableForm((prev) => ({
+            ...prev,
+            variants: [
+                ...prev.variants,
+                createConvertVariantDraft({
+                    name: prev.parent_name ? `${prev.parent_name} - ` : '',
+                }),
+            ],
+        }));
+    }, []);
+
+    const handleRemoveConvertVariant = useCallback((entryId) => {
+        setConvertToConfigurableForm((prev) => ({
+            ...prev,
+            variants: prev.variants.filter((variant) => variant.entry_id !== entryId || variant.is_existing),
+        }));
+    }, []);
+
+    const handleConvertToConfigurable = useCallback(async () => {
+        if (!id) return;
+
+        const parentName = String(convertToConfigurableForm.parent_name || '').trim() || String(formData.name || '').trim();
+        const attributeName = resolvedConvertAttributeName;
+        const normalizedVariants = convertToConfigurableForm.variants.map((variant, index) => {
+            const value = String(variant.value || '').trim();
+            const fallbackName = value
+                ? `${parentName || formData.name || 'Biến thể'} - ${value}`
+                : `${parentName || formData.name || 'Biến thể'} ${index + 1}`;
+
+            return {
+                value,
+                name: String(variant.name || '').trim() || fallbackName,
+                sku: variant.is_existing ? undefined : (String(variant.sku || '').trim() || undefined),
+            };
+        });
+
+        const missingValueVariant = normalizedVariants.findIndex((variant) => !variant.value);
+        if (!parentName) {
+            showToast({ message: 'Cần nhập tên sản phẩm cha trước khi chuyển đổi.', type: 'error' });
+            return;
+        }
+
+        if (convertToConfigurableForm.attribute_source === 'existing' && !convertToConfigurableForm.attribute_id) {
+            showToast({ message: 'Hãy chọn thuộc tính có sẵn để dùng làm thuộc tính biến thể.', type: 'error' });
+            return;
+        }
+
+        if (convertToConfigurableForm.attribute_source !== 'existing' && !attributeName) {
+            showToast({ message: 'Tên thuộc tính biến thể không được để trống.', type: 'error' });
+            return;
+        }
+
+        if (missingValueVariant >= 0) {
+            showToast({ message: `Biến thể #${missingValueVariant + 1} chưa có giá trị thuộc tính.`, type: 'error' });
+            return;
+        }
+
+        const duplicateValues = new Set();
+        const seenValues = new Set();
+        normalizedVariants.forEach((variant) => {
+            const key = variant.value.toLocaleLowerCase('vi');
+            if (seenValues.has(key)) {
+                duplicateValues.add(variant.value);
+            }
+            seenValues.add(key);
+        });
+
+        if (duplicateValues.size > 0) {
+            showToast({ message: 'Giá trị thuộc tính của các biến thể đang bị trùng nhau.', type: 'error' });
+            return;
+        }
+
+        setIsConvertingToConfigurable(true);
+
+        try {
+            const payload = {
+                parent_name: parentName,
+                variants: normalizedVariants,
+            };
+
+            if (convertToConfigurableForm.attribute_source === 'existing') {
+                payload.attribute_id = Number(convertToConfigurableForm.attribute_id);
+            } else {
+                payload.attribute_name = attributeName;
+            }
+
+            const response = await productApi.convertToConfigurable(id, payload);
+            const parentProductId = Number(response?.data?.parent_product_id || response?.data?.data?.id || 0);
+
+            if (!parentProductId) {
+                throw new Error('Missing parent product id');
+            }
+
+            showToast({
+                message: 'Sản phẩm đơn đã được chuyển thành nhóm biến thể. Dữ liệu lịch sử vẫn bám theo biến thể đầu tiên.',
+                type: 'success',
+            });
+            setShowConvertToConfigurableModal(false);
+            navigate(`/admin/products/edit/${parentProductId}`, {
+                replace: true,
+                state: location.state,
+            });
+        } catch (error) {
+            const data = error?.response?.data;
+            const errorList = data?.errors ? Object.values(data.errors).flat() : [];
+            const message = errorList[0] || data?.message || 'Không thể chuyển sản phẩm thành sản phẩm có biến thể.';
+            showToast({ message, type: 'error' });
+        } finally {
+            setIsConvertingToConfigurable(false);
+        }
+    }, [
+        convertToConfigurableForm.attribute_id,
+        convertToConfigurableForm.attribute_source,
+        convertToConfigurableForm.parent_name,
+        convertToConfigurableForm.variants,
+        formData.name,
+        id,
+        location.state,
+        navigate,
+        resolvedConvertAttributeName,
+        showToast,
+    ]);
 
     useEffect(() => {
         if (formData.type !== 'bundle' || bundleOptions.length === 0) {
@@ -1688,10 +1934,13 @@ const ProductForm = () => {
         fetchRelatedData();
         if (isEdit) {
             fetchProduct();
+        } else {
+            setProductMeta({ originalType: '', parentConfigurable: null });
+            setConvertToConfigurableForm(buildInitialConvertToConfigurableForm());
         }
         fetchBlogPosts();
         fetchDomains();
-    }, [id, isEdit]);
+    }, [buildInitialConvertToConfigurableForm, id, isEdit]);
 
     useEffect(() => {
         if (!inventoryUnits.length) return;
@@ -1986,6 +2235,17 @@ const ProductForm = () => {
         try {
             const response = await productApi.getOne(id);
             const data = response.data;
+            const parentConfigurable = Array.isArray(data.parent_configurable)
+                ? (data.parent_configurable[0] || null)
+                : (data.parent_configurable || null);
+            setProductMeta({
+                originalType: data.type || 'simple',
+                parentConfigurable,
+            });
+            setConvertToConfigurableForm(buildInitialConvertToConfigurableForm({
+                name: data.name,
+                sku: data.sku,
+            }));
             setFormData({
                 type: data.type || 'simple',
                 name: data.name,
@@ -2644,6 +2904,12 @@ const ProductForm = () => {
 
     const handleChange = (e) => {
         const { name, value, type, checked } = e.target;
+
+        if (name === 'type' && value === 'configurable' && canConvertSimpleProduct) {
+            openConvertToConfigurableModal();
+            return;
+        }
+
         setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
         if (name === 'sku') {
             clearServerValidationErrors(['sku', 'variants.']);
@@ -3007,6 +3273,9 @@ const ProductForm = () => {
 
         if (product.type === 'configurable') {
             void loadBundleVariantsForProduct(product.id);
+            showToast({ message: 'Hay chon mot bien the cu the cho item bundle nay de he thong ghi nhan dung ton kho.', type: 'info' });
+            return;
+            showToast({ message: 'Hãy chọn một biến thể cụ thể cho item bundle này để hệ thống ghi nhận đúng tồn kho.', type: 'info' });
         }
     };
 
@@ -3619,24 +3888,6 @@ const ProductForm = () => {
                             <div className="grid grid-cols-1 gap-y-8">
                                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
                                     <div>
-                                        <Field label={<>Tên sản phẩm <span className="text-brick text-[14px] ml-1">*</span></>}>
-                                            <OverflowPreviewInput
-                                                name="name"
-                                                value={formData.name}
-                                                onChange={handleChange}
-                                                required
-                                                editor="textarea"
-                                                rows={3}
-                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[16px] placeholder:text-stone/20"
-                                                mirrorClassName="text-[16px] font-bold text-primary"
-                                                popoverInputClassName="min-h-[92px] leading-6"
-                                                tooltipLabel="Tên sản phẩm"
-                                                placeholder="Nhập tên nghệ thuật của tác phẩm..."
-                                            />
-                                        </Field>
-                                    </div>
-
-                                    <div>
                                         <Field label={<>Mã sản phẩm (SKU) <span className="text-brick text-[14px] ml-1">*</span></>} className={`group/sku ${parentSkuError ? 'border-brick/50 bg-brick/5' : 'border-gold/20'}`}>
                                             <OverflowPreviewInput
                                                 name="sku"
@@ -3662,18 +3913,80 @@ const ProductForm = () => {
                                     </div>
 
                                     <div>
-                                        <Field label={<>Loại sản phẩm <span className="text-brick text-[14px] ml-1">*</span></>}>
-                                            <select
-                                                name="type"
-                                                value={formData.type}
+                                        <Field label={<>Tên sản phẩm <span className="text-brick text-[14px] ml-1">*</span></>}>
+                                            <OverflowPreviewInput
+                                                name="name"
+                                                value={formData.name}
                                                 onChange={handleChange}
-                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
-                                            >
-                                                {Object.entries(TYPE_INFO).map(([key, info]) => (
-                                                    <option key={key} value={key}>{info.label}</option>
-                                                ))}
-                                            </select>
+                                                required
+                                                editor="textarea"
+                                                rows={3}
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[16px] placeholder:text-stone/20"
+                                                mirrorClassName="text-[16px] font-bold text-primary"
+                                                popoverInputClassName="min-h-[92px] leading-6"
+                                                tooltipLabel="Tên sản phẩm"
+                                                placeholder="Nhập tên nghệ thuật của tác phẩm..."
+                                            />
                                         </Field>
+                                    </div>
+
+                                    {productMeta.parentConfigurable ? (
+                                        <div className="sm:col-span-2 lg:col-span-2">
+                                            <div className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-amber-200 bg-amber-50 px-4 py-3">
+                                                <div>
+                                                    <p className="text-[11px] font-black uppercase tracking-[0.18em] text-amber-800/70">Biến thể con</p>
+                                                    <p className="mt-1 text-[13px] font-bold text-amber-950">
+                                                        Sản phẩm này đang thuộc nhóm biến thể <span className="font-black">{productMeta.parentConfigurable.name}</span>.
+                                                    </p>
+                                                </div>
+                                                <Link
+                                                    to={`/admin/products/edit/${productMeta.parentConfigurable.id}`}
+                                                    className="inline-flex items-center gap-2 rounded-sm bg-amber-500 px-3 py-2 text-[11px] font-black uppercase tracking-[0.16em] text-white transition hover:bg-amber-600"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">account_tree</span>
+                                                    Mở sản phẩm cha
+                                                </Link>
+                                            </div>
+                                        </div>
+                                    ) : null}
+
+                                    <div>
+                                        <Field label={<>Loại sản phẩm <span className="text-brick text-[14px] ml-1">*</span></>}>
+                                            <div className="flex items-center gap-2">
+                                                <select
+                                                    name="type"
+                                                    value={formData.type}
+                                                    onChange={handleChange}
+                                                    className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
+                                                >
+                                                    {Object.entries(TYPE_INFO).map(([key, info]) => (
+                                                        <option
+                                                            key={key}
+                                                            value={key}
+                                                            disabled={isEdit && productMeta.originalType === 'simple' && key === 'configurable'}
+                                                        >
+                                                            {info.label}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                                {canConvertSimpleProduct ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={openConvertToConfigurableModal}
+                                                        className="inline-flex shrink-0 items-center gap-1.5 rounded-sm border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100"
+                                                        title="Tạo sản phẩm cha mới và giữ nguyên sản phẩm hiện tại làm biến thể đầu tiên"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[16px]">conversion_path</span>
+                                                        Chuyển thành SP có biến thể
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                        </Field>
+                                        {canConvertSimpleProduct ? (
+                                            <p className="mt-2 text-[11px] font-semibold text-emerald-700/80">
+                                                Với sản phẩm đơn đang có dữ liệu thật, hãy dùng nút chuyển đổi để giữ nguyên tồn kho, phiếu kho, bundle và đơn hàng cũ trên ID hiện tại.
+                                            </p>
+                                        ) : null}
                                     </div>
 
                                     <div>
@@ -3735,6 +4048,20 @@ const ProductForm = () => {
                             <div className="grid grid-cols-1 gap-y-8">
                                 <div className="grid grid-cols-1 gap-4">
                                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                                        <Field label={expectedCostLabel} className="border-primary/20 bg-stone/5">
+                                            <div className="flex items-center w-full">
+                                                <input
+                                                    type="text"
+                                                    name="expected_cost"
+                                                    value={formatImportCostInput(formData.expected_cost)}
+                                                    onChange={(e) => handlePriceInputChange(e, 'expected_cost')}
+                                                    onBlur={() => handleImportCostFieldBlur('expected_cost')}
+                                                    inputMode="numeric"
+                                                    className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]"
+                                                />
+                                                <span className="font-bold text-primary opacity-30 ml-2">₫</span>
+                                            </div>
+                                        </Field>
                                         <Field label="Giá bán lẻ (VNĐ)" className={`border-brick/30 bg-brick/[0.02] ${formData.price_type === 'sum' ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
                                             <div className="flex items-center w-full">
                                                 <input
@@ -3748,20 +4075,6 @@ const ProductForm = () => {
                                                     className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-brick font-black text-[16px]"
                                                 />
                                                 <span className="font-bold text-brick opacity-40 ml-2">₫</span>
-                                            </div>
-                                        </Field>
-                                        <Field label={expectedCostLabel} className="border-primary/20 bg-stone/5">
-                                            <div className="flex items-center w-full">
-                                                <input
-                                                    type="text"
-                                                    name="expected_cost"
-                                                    value={formatImportCostInput(formData.expected_cost)}
-                                                    onChange={(e) => handlePriceInputChange(e, 'expected_cost')}
-                                                    onBlur={() => handleImportCostFieldBlur('expected_cost')}
-                                                    inputMode="numeric"
-                                                    className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[15px]"
-                                                />
-                                                <span className="font-bold text-primary opacity-30 ml-2">₫</span>
                                             </div>
                                         </Field>
                                         <Field label={currentCostLabel} className="border-primary/20 bg-stone/10">
@@ -4307,13 +4620,13 @@ const ProductForm = () => {
                                                         Mã SKU
                                                         <div onMouseDown={(e) => handleVariantColumnResize('sku', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
                                                     </th>
-                                                    <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.price }}>
-                                                        Giá bán (VNĐ)
-                                                        <div onMouseDown={(e) => handleVariantColumnResize('price', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
-                                                    </th>
                                                     <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.expected_cost }}>
                                                         {expectedCostLabel}
                                                         <div onMouseDown={(e) => handleVariantColumnResize('expected_cost', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
+                                                    </th>
+                                                    <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.price }}>
+                                                        Giá bán (VNĐ)
+                                                        <div onMouseDown={(e) => handleVariantColumnResize('price', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
                                                     </th>
                                                     <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.current_cost }}>
                                                         {currentCostLabel}
@@ -4439,16 +4752,6 @@ const ProductForm = () => {
                                                             <td className="px-4 py-3 border-r border-stone/20">
                                                                 <div className="relative flex items-center justify-center">
                                                                     <input
-                                                                        className="w-full bg-[#fcf8f0] border border-transparent focus:border-brick/50 focus:bg-white pl-2 pr-5 py-2 rounded text-[13px] font-black text-brick text-center transition-all"
-                                                                        value={formatNumberOutput(v.price)}
-                                                                        onChange={(e) => handleVariantChange(index, 'price', e.target.value)}
-                                                                    />
-                                                                    <span className="absolute right-2 text-[10px] text-brick/40 font-bold">₫</span>
-                                                                </div>
-                                                            </td>
-                                                            <td className="px-4 py-3 border-r border-stone/20">
-                                                                <div className="relative flex items-center justify-center">
-                                                                    <input
                                                                         className="w-full bg-stone/5 border border-transparent focus:border-primary/50 focus:bg-white pl-2 pr-5 py-2 rounded text-[13px] font-bold text-primary text-center transition-all"
                                                                         value={formatImportCostInput(v.expected_cost)}
                                                                         onChange={(e) => handleVariantChange(index, 'expected_cost', e.target.value)}
@@ -4456,6 +4759,16 @@ const ProductForm = () => {
                                                                         inputMode="numeric"
                                                                     />
                                                                     <span className="absolute right-2 text-[10px] text-primary/30 font-bold">₫</span>
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-4 py-3 border-r border-stone/20">
+                                                                <div className="relative flex items-center justify-center">
+                                                                    <input
+                                                                        className="w-full bg-[#fcf8f0] border border-transparent focus:border-brick/50 focus:bg-white pl-2 pr-5 py-2 rounded text-[13px] font-black text-brick text-center transition-all"
+                                                                        value={formatNumberOutput(v.price)}
+                                                                        onChange={(e) => handleVariantChange(index, 'price', e.target.value)}
+                                                                    />
+                                                                    <span className="absolute right-2 text-[10px] text-brick/40 font-bold">₫</span>
                                                                 </div>
                                                             </td>
                                                             <td className="px-4 py-3 border-r border-stone/20">
@@ -4858,6 +5171,14 @@ const ProductForm = () => {
                                                                 className="w-full bg-transparent border-none p-0 text-[15px] font-black text-primary focus:ring-0"
                                                                 placeholder="Nhập tên tùy chọn..."
                                                             />
+                                                            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                                                                <span className="inline-flex items-center rounded-full border border-gold/10 bg-white px-2.5 py-1 font-black text-primary shadow-sm">
+                                                                    {Array.isArray(option?.items) ? option.items.length : 0} SP
+                                                                </span>
+                                                                <span className="inline-flex items-center rounded-full border border-brick/10 bg-brick/[0.08] px-2.5 py-1 font-black text-brick shadow-sm">
+                                                                    {'T\u1ed5ng ti\u1ec1n: '}{formatNumberOutput(calculateBundleOptionSubtotal(option))}{"\u20ab"}
+                                                                </span>
+                                                            </div>
                                                         </div>
                                                         <BundleOptionPostSelector
                                                             option={option}
@@ -4990,6 +5311,16 @@ const ProductForm = () => {
                                                                     />
                                                                 ))}
                                                             </tbody>
+                                                            <tfoot>
+                                                                <tr className="border-t border-gold/10 bg-[#fcfaf7]">
+                                                                    <td colSpan={4} className="px-5 py-3 text-right text-[11px] font-black uppercase tracking-[0.14em] text-primary/65">
+                                                                        {'T\u1ed5ng ti\u1ec1n t\u00f9y ch\u1ecdn'}
+                                                                    </td>
+                                                                    <td colSpan={2} className="px-5 py-3 text-right text-[13px] font-black text-brick">
+                                                                        {formatNumberOutput(calculateBundleOptionSubtotal(option))}{"\u20ab"}
+                                                                    </td>
+                                                                </tr>
+                                                            </tfoot>
                                                         </table>
                                                     )}
                                                 </div>
@@ -5637,6 +5968,208 @@ const ProductForm = () => {
                 </form>
             </div>
             <AnimatePresence>
+                {showConvertToConfigurableModal && (
+                    <div className="fixed inset-0 z-[106] flex items-center justify-center p-4">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={closeConvertToConfigurableModal}
+                            className="absolute inset-0 bg-primary/50 backdrop-blur-sm"
+                        />
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.96, y: 24 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.96, y: 24 }}
+                            className="relative w-full max-w-5xl overflow-hidden rounded-sm bg-white shadow-premium-lg"
+                        >
+                            <div className="flex items-start justify-between gap-4 border-b border-emerald-100 bg-[#f7fbf8] px-6 py-5">
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-3">
+                                        <span className="material-symbols-outlined rounded-full bg-emerald-100 p-2 text-emerald-700">conversion_path</span>
+                                        <div>
+                                            <h3 className="text-[16px] font-black uppercase tracking-tight text-primary">Chuyển thành sản phẩm có biến thể</h3>
+                                            <p className="mt-1 text-[12px] text-primary/65">
+                                                Hệ thống sẽ tạo một sản phẩm cha mới để gom nhóm. Sản phẩm hiện tại giữ nguyên ID, tồn kho và lịch sử, rồi trở thành biến thể đầu tiên.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={closeConvertToConfigurableModal}
+                                    className="text-stone/35 transition-colors hover:text-brick"
+                                    title="Đóng popup"
+                                >
+                                    <span className="material-symbols-outlined">close</span>
+                                </button>
+                            </div>
+
+                            <div className="space-y-6 px-6 py-6">
+                                <div className="grid gap-4 md:grid-cols-2">
+                                    <div className="rounded-sm border border-stone/15 bg-white px-3 py-3">
+                                        <label className="mb-2 block text-[11px] font-black uppercase tracking-[0.16em] text-primary/55">Tên sản phẩm cha</label>
+                                        <input
+                                            type="text"
+                                            value={convertToConfigurableForm.parent_name}
+                                            onChange={(event) => setConvertToConfigurableForm((prev) => ({ ...prev, parent_name: event.target.value }))}
+                                            className="w-full rounded-sm border border-stone/15 bg-stone/5 px-3 py-2 text-[14px] font-bold text-primary focus:border-emerald-300 focus:bg-white focus:outline-none"
+                                            placeholder="Ví dụ: Nậm thờ"
+                                        />
+                                        <p className="mt-2 text-[11px] text-primary/50">SKU của sản phẩm cha sẽ được hệ thống tự tạo riêng để không đụng SKU cũ.</p>
+                                    </div>
+
+                                    <div className="rounded-sm border border-stone/15 bg-white px-3 py-3">
+                                        <label className="mb-2 block text-[11px] font-black uppercase tracking-[0.16em] text-primary/55">Thuộc tính biến thể</label>
+                                        <div className="grid gap-2 sm:grid-cols-[180px_minmax(0,1fr)]">
+                                            <select
+                                                value={convertToConfigurableForm.attribute_source}
+                                                onChange={(event) => setConvertToConfigurableForm((prev) => ({ ...prev, attribute_source: event.target.value, attribute_id: '', custom_attribute_name: prev.custom_attribute_name }))}
+                                                className="rounded-sm border border-stone/15 bg-stone/5 px-3 py-2 text-[13px] font-bold text-primary focus:border-emerald-300 focus:bg-white focus:outline-none"
+                                            >
+                                                <option value="preset">Gợi ý nhanh</option>
+                                                <option value="existing">Thuộc tính có sẵn</option>
+                                                <option value="custom">Tự nhập</option>
+                                            </select>
+
+                                            {convertToConfigurableForm.attribute_source === 'existing' ? (
+                                                <select
+                                                    value={convertToConfigurableForm.attribute_id}
+                                                    onChange={(event) => setConvertToConfigurableForm((prev) => ({ ...prev, attribute_id: event.target.value }))}
+                                                    className="rounded-sm border border-stone/15 bg-stone/5 px-3 py-2 text-[13px] font-bold text-primary focus:border-emerald-300 focus:bg-white focus:outline-none"
+                                                >
+                                                    <option value="">Chọn thuộc tính</option>
+                                                    {variantReadyAttributes.map((attribute) => (
+                                                        <option key={attribute.id} value={attribute.id}>{attribute.name}</option>
+                                                    ))}
+                                                </select>
+                                            ) : convertToConfigurableForm.attribute_source === 'custom' ? (
+                                                <input
+                                                    type="text"
+                                                    value={convertToConfigurableForm.custom_attribute_name}
+                                                    onChange={(event) => setConvertToConfigurableForm((prev) => ({ ...prev, custom_attribute_name: event.target.value }))}
+                                                    className="rounded-sm border border-stone/15 bg-stone/5 px-3 py-2 text-[13px] font-bold text-primary focus:border-emerald-300 focus:bg-white focus:outline-none"
+                                                    placeholder="Ví dụ: Mẫu, Loại men, Kích thước"
+                                                />
+                                            ) : (
+                                                <select
+                                                    value={convertToConfigurableForm.preset_attribute_name}
+                                                    onChange={(event) => setConvertToConfigurableForm((prev) => ({ ...prev, preset_attribute_name: event.target.value }))}
+                                                    className="rounded-sm border border-stone/15 bg-stone/5 px-3 py-2 text-[13px] font-bold text-primary focus:border-emerald-300 focus:bg-white focus:outline-none"
+                                                >
+                                                    {SIMPLE_TO_CONFIG_PRESET_ATTRIBUTES.map((attributeName) => (
+                                                        <option key={attributeName} value={attributeName}>{attributeName}</option>
+                                                    ))}
+                                                </select>
+                                            )}
+                                        </div>
+                                        <p className="mt-2 text-[11px] text-primary/50">
+                                            Thuộc tính đang áp dụng: <span className="font-black text-emerald-700">{resolvedConvertAttributeName || 'Chưa chọn'}</span>
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="rounded-sm border border-emerald-100 bg-emerald-50/40 p-4">
+                                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                                        <div>
+                                            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-emerald-700">Danh sách biến thể sau chuyển đổi</p>
+                                            <p className="mt-1 text-[12px] text-primary/60">
+                                                Dòng đầu tiên luôn là sản phẩm cũ. Bạn có thể đổi tên hiển thị và đặt giá trị thuộc tính cho nó, nhưng SKU cũ sẽ được giữ nguyên.
+                                            </p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={handleAddConvertVariant}
+                                            className="inline-flex items-center gap-2 rounded-sm border border-emerald-200 bg-white px-3 py-2 text-[11px] font-black uppercase tracking-[0.16em] text-emerald-700 transition hover:bg-emerald-50"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">add</span>
+                                            Thêm biến thể
+                                        </button>
+                                    </div>
+
+                                    <div className="overflow-hidden rounded-sm border border-stone/10">
+                                        <div className="grid grid-cols-[160px_minmax(0,1fr)_160px_64px] border-b border-stone/10 bg-[#f7f4ec] text-[10px] font-black uppercase tracking-[0.18em] text-stone/55">
+                                            <div className="border-r border-stone/10 px-4 py-3">Giá trị thuộc tính</div>
+                                            <div className="border-r border-stone/10 px-4 py-3">Tên biến thể</div>
+                                            <div className="border-r border-stone/10 px-4 py-3">SKU</div>
+                                            <div className="px-4 py-3 text-center">Xóa</div>
+                                        </div>
+                                        <div className="max-h-[320px] overflow-y-auto custom-scrollbar bg-white">
+                                            {convertToConfigurableForm.variants.map((variant, index) => (
+                                                <div key={variant.entry_id} className="grid grid-cols-[160px_minmax(0,1fr)_160px_64px] border-b border-stone/10 last:border-b-0">
+                                                    <div className="border-r border-stone/10 px-3 py-3">
+                                                        <input
+                                                            type="text"
+                                                            value={variant.value}
+                                                            onChange={(event) => handleConvertVariantFieldChange(variant.entry_id, 'value', event.target.value)}
+                                                            className="w-full rounded-sm border border-stone/15 bg-stone/5 px-2 py-2 text-[12px] font-bold text-primary focus:border-emerald-300 focus:bg-white focus:outline-none"
+                                                            placeholder={index === 0 ? 'Ví dụ: Mẫu gốc' : 'Ví dụ: Khắc sen'}
+                                                        />
+                                                        {variant.is_existing ? (
+                                                            <p className="mt-2 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700">Sản phẩm cũ giữ nguyên ID</p>
+                                                        ) : null}
+                                                    </div>
+                                                    <div className="border-r border-stone/10 px-3 py-3">
+                                                        <input
+                                                            type="text"
+                                                            value={variant.name}
+                                                            onChange={(event) => handleConvertVariantFieldChange(variant.entry_id, 'name', event.target.value)}
+                                                            className="w-full rounded-sm border border-stone/15 bg-stone/5 px-2 py-2 text-[12px] font-bold text-primary focus:border-emerald-300 focus:bg-white focus:outline-none"
+                                                            placeholder="Tên biến thể hiển thị"
+                                                        />
+                                                    </div>
+                                                    <div className="border-r border-stone/10 px-3 py-3">
+                                                        <input
+                                                            type="text"
+                                                            value={variant.sku}
+                                                            onChange={(event) => handleConvertVariantFieldChange(variant.entry_id, 'sku', event.target.value)}
+                                                            readOnly={variant.is_existing}
+                                                            className={`w-full rounded-sm border px-2 py-2 text-[12px] font-mono font-bold focus:outline-none ${variant.is_existing ? 'cursor-not-allowed border-stone/10 bg-stone/10 text-stone/55' : 'border-stone/15 bg-stone/5 text-primary focus:border-emerald-300 focus:bg-white'}`}
+                                                            placeholder="Để trống để tự sinh"
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center justify-center px-3 py-3">
+                                                        {variant.is_existing ? (
+                                                            <span className="text-[10px] font-black uppercase tracking-[0.14em] text-stone/35">Khóa</span>
+                                                        ) : (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleRemoveConvertVariant(variant.entry_id)}
+                                                                className="text-stone/30 transition hover:text-brick"
+                                                                title="Xóa biến thể"
+                                                            >
+                                                                <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-end gap-3 border-t border-stone/10 bg-stone/5 px-6 py-4">
+                                <button
+                                    type="button"
+                                    onClick={closeConvertToConfigurableModal}
+                                    className="px-6 py-2 text-[11px] font-bold uppercase tracking-widest text-stone transition-all hover:text-primary"
+                                >
+                                    Đóng
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleConvertToConfigurable}
+                                    disabled={isConvertingToConfigurable}
+                                    className="inline-flex items-center gap-2 rounded-sm bg-emerald-600 px-6 py-2 text-[11px] font-black uppercase tracking-[0.16em] text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {isConvertingToConfigurable ? <span className="material-symbols-outlined animate-spin text-[16px]">refresh</span> : <span className="material-symbols-outlined text-[16px]">check_circle</span>}
+                                    Hoàn tất chuyển đổi
+                                </button>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
                 {showBundleOptionSorter && (
                     <div className="fixed inset-0 z-[104] flex items-center justify-center p-4">
                         <motion.div
@@ -5827,21 +6360,6 @@ const ProductForm = () => {
 
                                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                                     <div className="relative rounded-sm border border-stone/20 bg-white px-3 pt-3 pb-2 focus-within:border-purple-300">
-                                        <label className="absolute -top-3 left-2 bg-white px-1.5 text-[11px] font-black uppercase tracking-[0.14em] text-brick">
-                                            Giá bán (VNĐ)
-                                        </label>
-                                        <div className="relative">
-                                            <input
-                                                value={formatNumberOutput(variantQuickUpdateForm.price)}
-                                                onChange={(event) => handleVariantQuickUpdateFieldChange('price', event.target.value)}
-                                                className="w-full bg-transparent py-2 pr-5 text-[14px] font-black text-brick focus:outline-none"
-                                                placeholder="Nhập giá bán áp dụng"
-                                            />
-                                            <span className="absolute right-0 top-1/2 -translate-y-1/2 text-[10px] font-bold text-brick/40">₫</span>
-                                        </div>
-                                    </div>
-
-                                    <div className="relative rounded-sm border border-stone/20 bg-white px-3 pt-3 pb-2 focus-within:border-purple-300">
                                         <label className="absolute -top-3 left-2 bg-white px-1.5 text-[11px] font-black uppercase tracking-[0.14em] text-primary">
                                             {expectedCostLabel}
                                         </label>
@@ -5855,6 +6373,21 @@ const ProductForm = () => {
                                                 placeholder="Nhập giá nhập dự kiến"
                                             />
                                             <span className="absolute right-0 top-1/2 -translate-y-1/2 text-[10px] font-bold text-primary/35">₫</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="relative rounded-sm border border-stone/20 bg-white px-3 pt-3 pb-2 focus-within:border-purple-300">
+                                        <label className="absolute -top-3 left-2 bg-white px-1.5 text-[11px] font-black uppercase tracking-[0.14em] text-brick">
+                                            Giá bán (VNĐ)
+                                        </label>
+                                        <div className="relative">
+                                            <input
+                                                value={formatNumberOutput(variantQuickUpdateForm.price)}
+                                                onChange={(event) => handleVariantQuickUpdateFieldChange('price', event.target.value)}
+                                                className="w-full bg-transparent py-2 pr-5 text-[14px] font-black text-brick focus:outline-none"
+                                                placeholder="Nhập giá bán áp dụng"
+                                            />
+                                            <span className="absolute right-0 top-1/2 -translate-y-1/2 text-[10px] font-bold text-brick/40">₫</span>
                                         </div>
                                     </div>
 

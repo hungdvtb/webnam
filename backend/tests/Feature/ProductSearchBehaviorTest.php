@@ -95,6 +95,51 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.cost_price', 150000.0);
     }
 
+    public function test_picker_search_matches_compact_queries_for_variation_names(): void
+    {
+        $account = $this->authenticate();
+
+        $parent = $this->createProduct($account, [
+            'name' => 'Ong huong men lam',
+            'sku' => 'ML80-ONGHUONG-LAM',
+            'type' => 'configurable',
+        ]);
+
+        $variation = $this->createProduct($account, [
+            'name' => 'Ong huong men LAM - S1 - Cao 22cm',
+            'sku' => 'ML80-ONGHUONG-S1-22',
+        ]);
+
+        $this->attachVariation($parent, $variation);
+
+        $compactNameResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?picker=1&search=onghuong&per_page=20');
+
+        $compactNameResponse
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $parent->id);
+
+        $compactMixedResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?picker=1&search=onghuong22&per_page=20');
+
+        $compactMixedResponse
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $parent->id);
+
+        $compactSkuVariationResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?picker=1&search=ml80onghuong22&per_page=20');
+
+        $compactSkuVariationResponse
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $parent->id);
+    }
+
     public function test_name_search_uses_name_matching_instead_of_sku_token_matching(): void
     {
         $account = $this->authenticate();
@@ -117,6 +162,66 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertOk()
             ->assertJsonPath('total', 1)
             ->assertJsonPath('data.0.id', $matching->id);
+    }
+
+    public function test_picker_search_does_not_match_bundle_from_child_item_name_or_sku(): void
+    {
+        $account = $this->authenticate();
+
+        $matching = $this->createProduct($account, [
+            'name' => 'Ong huong men lam - S1 - Cao 22cm',
+            'sku' => 'ML80-ONGHUONG-S1-22',
+        ]);
+
+        $bundle = $this->createProduct($account, [
+            'name' => 'Bo do tho men lam 9 mon',
+            'sku' => 'BUNDLE-9MON-LAM',
+            'type' => 'bundle',
+        ]);
+
+        $this->attachBundleItem($bundle, $matching, [
+            'option_title' => 'Bo 9 mon',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?picker=1&search=' . urlencode('ong huong 22') . '&per_page=20');
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $matching->id)
+            ->assertJsonPath('data.0.sku', 'ML80-ONGHUONG-S1-22');
+    }
+
+    public function test_picker_search_can_match_bundle_by_option_title(): void
+    {
+        $account = $this->authenticate();
+
+        $bundleItem = $this->createProduct($account, [
+            'name' => 'Chan nen men lam',
+            'sku' => 'CHAN-NEN-LAM',
+        ]);
+
+        $bundle = $this->createProduct($account, [
+            'name' => 'Bo do tho men lam',
+            'sku' => 'BUNDLE-MEN-LAM-OPTION',
+            'type' => 'bundle',
+        ]);
+
+        $this->attachBundleItem($bundle, $bundleItem, [
+            'option_title' => 'Ong huong 22',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?picker=1&search=' . urlencode('ong huong 22') . '&per_page=20');
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $bundle->id)
+            ->assertJsonPath('data.0.sku', 'BUNDLE-MEN-LAM-OPTION');
     }
 
     public function test_long_specific_name_search_prefers_phrase_match_over_shared_token_matches(): void
@@ -380,6 +485,25 @@ class ProductSearchBehaviorTest extends TestCase
             'attribute_id' => $attribute->id,
             'value' => is_array($value) ? json_encode(array_values($value)) : $value,
         ]);
+    }
+
+    private function attachVariation(Product $parent, Product $variation, array $overrides = []): void
+    {
+        $parent->linkedProducts()->attach($variation->id, array_merge([
+            'link_type' => 'super_link',
+            'position' => 0,
+        ], $overrides));
+    }
+
+    private function attachBundleItem(Product $bundle, Product $item, array $overrides = []): void
+    {
+        $bundle->bundleItems()->attach($item->id, array_merge([
+            'link_type' => 'bundle',
+            'position' => 0,
+            'quantity' => 1,
+            'is_required' => 1,
+            'option_title' => 'Mac dinh',
+        ], $overrides));
     }
 
     private function createProduct(Account $account, array $overrides = []): Product

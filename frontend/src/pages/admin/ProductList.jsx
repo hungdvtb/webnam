@@ -168,6 +168,60 @@ function normalizeCopiedAdditionalInfo(rawValue) {
     return [];
 }
 
+function resolveBundleOptionTitle(bundleItem) {
+    const rawTitle = typeof bundleItem?.pivot?.option_title === 'string'
+        ? bundleItem.pivot.option_title.trim()
+        : '';
+
+    return rawTitle || 'Mặc định';
+}
+
+function buildBundleOptionGroups(bundleItems) {
+    if (!Array.isArray(bundleItems) || bundleItems.length === 0) {
+        return [];
+    }
+
+    const groups = [];
+    const groupMap = new Map();
+
+    bundleItems.forEach((bundleItem, index) => {
+        const optionTitle = resolveBundleOptionTitle(bundleItem);
+        const optionPostId = Number(bundleItem?.pivot?.option_post_id || 0);
+        const groupKey = optionPostId > 0
+            ? `post:${optionPostId}`
+            : `title:${optionTitle.toLowerCase()}`;
+
+        if (!groupMap.has(groupKey)) {
+            const nextGroup = {
+                key: groupKey,
+                title: optionTitle,
+                isDefault: Boolean(bundleItem?.pivot?.is_default),
+                itemCount: 0,
+                totalQuantity: 0,
+                items: [],
+            };
+
+            groupMap.set(groupKey, nextGroup);
+            groups.push(nextGroup);
+        }
+
+        const group = groupMap.get(groupKey);
+        const quantity = Math.max(1, Number(bundleItem?.pivot?.quantity ?? 1) || 1);
+
+        group.isDefault = group.isDefault || Boolean(bundleItem?.pivot?.is_default);
+        group.itemCount += 1;
+        group.totalQuantity += quantity;
+        group.items.push({
+            key: `${groupKey}-${bundleItem?.id || index}-${index}`,
+            name: bundleItem?.name || 'Sản phẩm bundle',
+            sku: bundleItem?.sku || '',
+            quantity,
+        });
+    });
+
+    return groups;
+}
+
 const ProductList = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
@@ -207,7 +261,6 @@ const ProductList = () => {
         specifications: true,
         additional_info: true,
     });
-    const [searchingBulkCopySources, setSearchingBulkCopySources] = useState(false);
     const [submittingBulkCopy, setSubmittingBulkCopy] = useState(false);
 
     const [editingProductId, setEditingProductId] = useState(null);
@@ -807,31 +860,21 @@ const ProductList = () => {
         }));
     };
 
-    const fetchBulkCopySourceProducts = async (query = bulkCopySourceQuery) => {
+    const fetchBulkCopySourceProducts = (query = bulkCopySourceQuery) => {
         if (!showBulkCopyModal) return;
 
-        setSearchingBulkCopySources(true);
+        const trimmedQuery = query.trim().toLowerCase();
+        const selectedProductMap = new Set(selectedIds.map((id) => String(id)));
+        const selectedProductsOnly = products.filter((product) => selectedProductMap.has(String(product.id)));
 
-        try {
-            const params = {
-                per_page: 50,
-            };
-            const trimmedQuery = query.trim();
+        const filteredProducts = trimmedQuery
+            ? selectedProductsOnly.filter((product) => (
+                String(product.name || '').toLowerCase().includes(trimmedQuery)
+                || String(product.sku || '').toLowerCase().includes(trimmedQuery)
+            ))
+            : selectedProductsOnly;
 
-            if (trimmedQuery) {
-                params.search = trimmedQuery;
-            }
-
-            const response = await productApi.getAll(params);
-            const rawData = response.data?.data || response.data || [];
-            setBulkCopySourceResults(Array.isArray(rawData) ? rawData : []);
-        } catch (error) {
-            console.error('Bulk copy source search error:', error);
-            setNotification({ type: 'error', message: 'Không thể tải danh sách sản phẩm nguồn.' });
-            setTimeout(() => setNotification(null), 4000);
-        } finally {
-            setSearchingBulkCopySources(false);
-        }
+        setBulkCopySourceResults(filteredProducts);
     };
 
     useEffect(() => {
@@ -839,10 +882,19 @@ const ProductList = () => {
 
         const timer = setTimeout(() => {
             fetchBulkCopySourceProducts();
-        }, 300);
+        }, 150);
 
         return () => clearTimeout(timer);
-    }, [bulkCopySourceQuery, showBulkCopyModal]);
+    }, [bulkCopySourceQuery, products, selectedIds, showBulkCopyModal]);
+
+    useEffect(() => {
+        if (!bulkCopySourceProduct?.id) return;
+
+        const stillSelected = selectedIds.some((id) => String(id) === String(bulkCopySourceProduct.id));
+        if (!stillSelected) {
+            setBulkCopySourceProduct(null);
+        }
+    }, [bulkCopySourceProduct, selectedIds]);
 
     const handleBulkCopySubmit = async () => {
         if (!bulkCopySourceProduct?.id) {
@@ -1065,11 +1117,27 @@ const ProductList = () => {
         } catch (error) { alert("Lỗi!"); } finally { setEditingCell(null); setLoading(false); }
     };
 
+    const getSortKeyForColumn = (column) => {
+        const columnId = typeof column === 'string' ? column : column?.id;
+
+        if (!columnId) return null;
+        if (columnId === 'actions' || columnId === 'images') return null;
+        if (columnId === 'stock') return 'actual_stock';
+
+        return columnId;
+    };
+
+    const isSortableColumn = (column) => {
+        if (typeof column === 'object' && column?.sortable === false) {
+            return false;
+        }
+
+        return getSortKeyForColumn(column) !== null;
+    };
+
     const handleSort = (columnId) => {
-        const validSortColumns = ['id', 'sku', 'supplier_product_code', 'name', 'price', 'cost_price', 'actual_stock', 'stock_quantity', 'created_at', 'type'];
-        let key = columnId === 'stock' ? 'actual_stock' : columnId;
-        if (key === 'actions') return;
-        if (!validSortColumns.includes(key)) return;
+        const key = getSortKeyForColumn(columnId);
+        if (!key) return;
 
         let newSort;
         if (sortConfig.key !== key) {
@@ -1288,7 +1356,7 @@ const ProductList = () => {
                                 className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 && !isTrashView ? 'bg-amber-50 text-amber-700 hover:bg-amber-600 hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
                                 title="Sao chép 2 mục từ 1 sản phẩm nguồn sang các sản phẩm đã chọn"
                             >
-                                <span className="material-symbols-outlined text-[18px]">content_copy</span>
+                                <span className="material-symbols-outlined text-[18px]">conversion_path</span>
                             </button>
                             <button 
                                 disabled={selectedIds.length === 0} 
@@ -1804,11 +1872,23 @@ const ProductList = () => {
                         <tr>
                             <th className="p-3 w-10 admin-table-header border border-primary/20 sticky-col-0"><input type="checkbox" checked={products.length > 0 && selectedIds.length === products.length} onChange={toggleSelectAll} className="size-4 accent-primary" /></th>
                             {renderedColumns.map((col, idx) => (
-                                <th key={col.id} draggable={col.id !== 'actions'} onDragStart={(e) => handleHeaderDragStart(e, idx)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleHeaderDrop(e, idx)} onDoubleClick={() => handleSort(col.id)} className={`px-3 py-2.5 border border-primary/10 cursor-move hover:bg-primary/5 relative group ${col.id === 'sku' ? 'sticky-col-1' : col.id === 'name' ? 'sticky-col-2' : ''}`} style={{ width: columnWidths[col.id] || col.minWidth }}>
+                                <th
+                                    key={col.id}
+                                    draggable={col.id !== 'actions'}
+                                    onDragStart={(e) => handleHeaderDragStart(e, idx)}
+                                    onDragOver={(e) => e.preventDefault()}
+                                    onDrop={(e) => handleHeaderDrop(e, idx)}
+                                    onDoubleClick={isSortableColumn(col) ? () => handleSort(col.id) : undefined}
+                                    className={`px-3 py-2.5 border border-primary/10 cursor-move hover:bg-primary/5 relative group ${col.id === 'sku' ? 'sticky-col-1' : col.id === 'name' ? 'sticky-col-2' : ''}`}
+                                    style={{ width: columnWidths[col.id] || col.minWidth }}
+                                    title={isSortableColumn(col) ? 'Nhấp đúp để sắp xếp' : undefined}
+                                >
                                     <div className={`flex items-center gap-1.5 ${col.align === 'center' ? 'justify-center' : col.align === 'right' ? 'justify-end' : ''}`}>
                                         {col.id !== 'actions' && <span className="material-symbols-outlined text-[14px] opacity-20 group-hover:opacity-100 text-primary">drag_indicator</span>}
                                         <span className="truncate text-primary font-black">{col.label}</span>
-                                        <SortIndicator colId={col.id === 'stock' ? 'actual_stock' : col.id} sortConfig={sortConfig} />
+                                        {isSortableColumn(col) ? (
+                                            <SortIndicator colId={getSortKeyForColumn(col)} sortConfig={sortConfig} />
+                                        ) : null}
                                     </div>
                                     {col.id !== 'actions' && <div onMouseDown={(e) => handleColumnResize(col.id, e)} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/20 transition-colors" />}
                                 </th>
@@ -1828,13 +1908,18 @@ const ProductList = () => {
                             </tr>
                         ) : (
                             products.map(product => {
-                                const isParent = product.type === 'configurable' || product.type === 'grouped';
+                                const isParent = product.type === 'configurable' || product.type === 'grouped' || product.type === 'bundle';
                                 const isChild = product.parent_products?.length > 0;
                                 const isExpanded = expandedRows.includes(product.id);
-                                const children = product.type === 'grouped' ? (product.grouped_items || []) : (product.variations || []);
+                                const bundleOptionGroups = product.type === 'bundle'
+                                    ? buildBundleOptionGroups(product.bundle_items || [])
+                                    : [];
+                                const children = product.type === 'grouped'
+                                    ? (product.grouped_items || [])
+                                    : (product.type === 'bundle' ? [] : (product.variations || []));
                                 
                                 const renderRow = (p, isSubRow = false) => {
-                                    const pIsParent = p.type === 'configurable' || p.type === 'grouped';
+                                    const pIsParent = p.type === 'configurable' || p.type === 'grouped' || p.type === 'bundle';
                                     const pIsChild = isSubRow || p.parent_products?.length > 0;
                                     
                                     // Custom aggregate price display for parent products
@@ -1888,7 +1973,7 @@ const ProductList = () => {
                                                         <button 
                                                             onClick={(e) => toggleExpandRow(p.id, e)} 
                                                             className={`size-6 flex items-center justify-center rounded-full border border-gold/30 text-gold transition-all expand-btn ${isExpanded ? 'bg-gold text-white rotate-90' : 'bg-white'}`}
-                                                            title={isExpanded ? 'Thu gọn' : (p.type === 'grouped' ? 'Xem thành phần' : 'Xem biến thể')}
+                                                            title={isExpanded ? 'Thu gọn' : (p.type === 'grouped' ? 'Xem thành phần' : (p.type === 'bundle' ? 'Xem tùy chọn bundle' : 'Xem biến thể'))}
                                                         >
                                                             <span className="material-symbols-outlined text-[18px]">chevron_right</span>
                                                         </button>
@@ -2176,7 +2261,80 @@ const ProductList = () => {
                                         <AnimatePresence>
                                             {isExpanded && (
                                                 <React.Fragment>
-                                                    {children.length > 0 ? (
+                                                    {product.type === 'bundle' ? (
+                                                        bundleOptionGroups.length > 0 ? (
+                                                            <motion.tr
+                                                                initial={{ opacity: 0, height: 0 }}
+                                                                animate={{ opacity: 1, height: 'auto' }}
+                                                                exit={{ opacity: 0, height: 0 }}
+                                                                className="row-child row-empty-child"
+                                                            >
+                                                                <td className="p-3 border border-primary/20 sticky-col-0" />
+                                                                <td colSpan={renderedColumns.length} className="border border-primary/20 bg-[#fcfaf7] px-5 py-4">
+                                                                    <div className="space-y-3">
+                                                                        <div>
+                                                                            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/55">Tùy chọn bundle</p>
+                                                                            <p className="mt-1 text-[12px] font-medium text-primary/65">
+                                                                                {bundleOptionGroups.length} tùy chọn • {(product.bundle_items || []).length} dòng sản phẩm
+                                                                            </p>
+                                                                        </div>
+
+                                                                        <div className="space-y-3">
+                                                                            {bundleOptionGroups.map((option, optionIndex) => (
+                                                                                <div key={`${product.id}-${option.key}`} className="rounded-sm border border-primary/10 bg-white p-3 shadow-sm">
+                                                                                    <div className="flex items-start justify-between gap-3">
+                                                                                        <div className="min-w-0">
+                                                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                                                <span className="rounded-sm bg-primary/5 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-primary">
+                                                                                                    Tùy chọn {optionIndex + 1}
+                                                                                                </span>
+                                                                                                {option.isDefault ? (
+                                                                                                    <span className="rounded-sm bg-gold/10 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-gold">
+                                                                                                        Mặc định
+                                                                                                    </span>
+                                                                                                ) : null}
+                                                                                            </div>
+                                                                                            <p className="mt-2 text-[13px] font-black text-[#0F172A]">{option.title}</p>
+                                                                                        </div>
+
+                                                                                        <div className="shrink-0 text-right">
+                                                                                            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/40">{option.itemCount} SP</p>
+                                                                                            <p className="mt-1 text-[12px] font-bold text-primary/75">x{option.totalQuantity}</p>
+                                                                                        </div>
+                                                                                    </div>
+
+                                                                                    <div className="mt-3 space-y-2">
+                                                                                        {option.items.map((item) => (
+                                                                                            <div key={item.key} className="flex items-start justify-between gap-3 rounded-sm border border-primary/10 bg-primary/[0.02] px-2.5 py-2">
+                                                                                                <div className="min-w-0">
+                                                                                                    <p className="truncate text-[12px] font-bold text-[#0F172A]">{item.name}</p>
+                                                                                                    <p className="truncate text-[10px] font-mono text-primary/40">{item.sku || '--'}</p>
+                                                                                                </div>
+                                                                                                <span className="shrink-0 rounded-sm bg-primary/10 px-2 py-0.5 text-[10px] font-black text-primary">x{item.quantity}</span>
+                                                                                            </div>
+                                                                                        ))}
+                                                                                    </div>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    </div>
+                                                                </td>
+                                                            </motion.tr>
+                                                        ) : (
+                                                            <motion.tr 
+                                                                initial={{ opacity: 0, height: 0 }}
+                                                                animate={{ opacity: 1, height: 'auto' }}
+                                                                exit={{ opacity: 0, height: 0 }}
+                                                                className="row-child row-empty-child"
+                                                            >
+                                                                <td className="p-3 border border-primary/20 sticky-col-0" />
+                                                                <td colSpan={renderedColumns.length} className="px-8 py-5 border border-primary/20 text-red-400 italic text-[12px] font-bold flex items-center gap-2">
+                                                                    <span className="material-symbols-outlined text-[16px]">info</span>
+                                                                    Bundle này hiện chưa có tùy chọn nào
+                                                                </td>
+                                                            </motion.tr>
+                                                        )
+                                                    ) : children.length > 0 ? (
                                                         children.map(child => renderRow(child, true))
                                                     ) : (
                                                         <motion.tr 
@@ -2457,7 +2615,7 @@ const ProductList = () => {
                     <div className="bg-white rounded p-6 w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200">
                         <div className="flex justify-between items-center mb-4 border-b border-primary/10 pb-4">
                             <h2 className="text-lg font-bold text-primary flex items-center gap-2">
-                                <span className="material-symbols-outlined">content_copy</span> Sao chép từ 1 sản phẩm nguồn
+                                <span className="material-symbols-outlined">conversion_path</span> Sao chép từ 1 sản phẩm nguồn
                             </h2>
                             <button onClick={closeBulkCopyModal} className="text-gray-500 hover:text-brick">
                                 <span className="material-symbols-outlined">close</span>
@@ -2466,7 +2624,7 @@ const ProductList = () => {
 
                         <div className="overflow-y-auto pr-2 custom-scrollbar flex-1 space-y-4">
                             <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-sm text-[13px]">
-                                <strong>Lưu ý:</strong> Đang chọn <strong>{selectedIds.length}</strong> sản phẩm. Bạn chọn 1 sản phẩm nguồn, chọn 2 mục cần copy, rồi bấm cập nhật để áp sang các sản phẩm còn lại. Nếu sản phẩm nguồn cũng đang nằm trong danh sách đã tick thì hệ thống sẽ tự loại nó ra.
+                                <strong>Lưu ý:</strong> Đang chọn <strong>{selectedIds.length}</strong> sản phẩm. Trong cửa sổ này bạn sẽ chọn <strong>1 sản phẩm nguồn từ chính danh sách đã tick</strong>, rồi copy 2 mục cần thiết sang các sản phẩm còn lại.
                             </div>
 
                             <section className="space-y-3">
@@ -2478,12 +2636,9 @@ const ProductList = () => {
                                         type="text"
                                         value={bulkCopySourceQuery}
                                         onChange={(event) => setBulkCopySourceQuery(event.target.value)}
-                                        placeholder="Tìm sản phẩm nguồn theo tên hoặc SKU..."
-                                        className="w-full h-11 bg-primary/5 border border-primary/20 pl-10 pr-10 rounded-sm text-[13px] focus:outline-none focus:border-primary"
+                                        placeholder="Lọc trong các sản phẩm đã chọn theo tên hoặc SKU..."
+                                        className="w-full h-11 bg-primary/5 border border-primary/20 pl-10 pr-4 rounded-sm text-[13px] focus:outline-none focus:border-primary"
                                     />
-                                    {searchingBulkCopySources && (
-                                        <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-gold text-[16px] animate-refresh-spin">refresh</span>
-                                    )}
                                 </div>
 
                                 {bulkCopySourceProduct ? (
@@ -2536,7 +2691,7 @@ const ProductList = () => {
                                         );
                                     }) : (
                                         <div className="rounded-sm border border-dashed border-stone/15 bg-stone/5 px-4 py-8 text-center text-[12px] text-stone/45">
-                                            {searchingBulkCopySources ? 'Đang tải sản phẩm nguồn...' : 'Không tìm thấy sản phẩm nguồn phù hợp.'}
+                                            Không tìm thấy sản phẩm nguồn phù hợp trong danh sách đã chọn.
                                         </div>
                                     )}
                                 </div>
@@ -2596,7 +2751,7 @@ const ProductList = () => {
                                     className="px-6 py-2 bg-amber-600 text-white rounded-sm font-bold text-[13px] hover:bg-amber-700 flex items-center gap-2"
                                     disabled={submittingBulkCopy}
                                 >
-                                    {submittingBulkCopy ? <span className="material-symbols-outlined animate-spin text-[16px]">sync</span> : <span className="material-symbols-outlined text-[16px]">content_copy</span>}
+                                    {submittingBulkCopy ? <span className="material-symbols-outlined animate-spin text-[16px]">sync</span> : <span className="material-symbols-outlined text-[16px]">conversion_path</span>}
                                     Sao chép cho {bulkCopyTargetCount} SP
                                 </button>
                             </div>

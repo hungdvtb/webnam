@@ -4038,6 +4038,54 @@ const ProductForm = () => {
                                         </Field>
                                     </div>
 
+                                    {canConvertSimpleProduct ? (
+                                        <div className="sm:col-span-2 lg:col-span-3 lg:col-start-3">
+                                            <div className="rounded-sm border border-emerald-200 bg-[linear-gradient(135deg,rgba(236,253,245,0.98),rgba(255,255,255,0.96))] px-4 py-4 shadow-[0_16px_30px_-24px_rgba(5,150,105,0.55)]">
+                                                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                                    <div className="min-w-0">
+                                                        <div className="flex items-start gap-3">
+                                                            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-emerald-500 text-white shadow-[0_10px_24px_-18px_rgba(16,185,129,0.9)]">
+                                                                <span className="material-symbols-outlined text-[20px]">conversion_path</span>
+                                                            </span>
+                                                            <div>
+                                                                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-emerald-700/70">Chuyen doi bien the</p>
+                                                                <h4 className="mt-1 text-[15px] font-black text-primary">Tao mot khu vuc rieng de thao tac gon, ro va khong chen vao form</h4>
+                                                                <p className="mt-1 max-w-[620px] text-[12px] leading-6 text-primary/72">
+                                                                    He thong se tao san pham cha moi de gom nhom. San pham hien tai van giu nguyen ID, ton kho, phieu kho, bundle va don hang cu, sau do tro thanh bien the dau tien.
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                        <div className="mt-3 flex flex-wrap gap-2">
+                                                            {['Giu nguyen ID cu', 'Khong reset ton kho', 'Khong doi lien ket don cu'].map((item) => (
+                                                                <span
+                                                                    key={item}
+                                                                    className="inline-flex items-center rounded-full border border-emerald-200 bg-white/90 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700"
+                                                                >
+                                                                    {item}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="flex w-full shrink-0 flex-col gap-2 lg:w-[240px]">
+                                                        <button
+                                                            type="button"
+                                                            onClick={openConvertToConfigurableModal}
+                                                            className="inline-flex w-full items-center justify-center gap-2 rounded-sm bg-emerald-600 px-4 py-3 text-[11px] font-black uppercase tracking-[0.16em] text-white transition hover:bg-emerald-700"
+                                                            title="Mo giao dien chuyen doi sang san pham co bien the"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[18px]">account_tree</span>
+                                                            Mo trinh chuyen doi
+                                                        </button>
+                                                        <p className="text-[11px] leading-5 text-emerald-800/75">
+                                                            Dung khi san pham don da co du lieu thuc va ban muon them mau, kich thuoc, loai men hoac cac phan loai khac.
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ) : null}
+
                                 </div>
                             </div>
                         </div>

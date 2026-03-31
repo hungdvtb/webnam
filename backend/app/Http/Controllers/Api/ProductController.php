@@ -13,24 +13,28 @@ use App\Models\Post;
 use App\Models\Product;
 use App\Models\ProductAttributeValue;
 use App\Models\ProductImage;
+use App\Models\SiteDomain;
 use App\Models\BulkUpdateLog;
 use App\Services\Inventory\ProductPricingService;
 use App\Services\OrderInventorySlipService;
 use App\Services\ProductSkuService;
+use App\Support\SimpleXlsx;
 use Illuminate\Http\Request;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
-
 use Illuminate\Database\Eloquent\Builder;
+use Throwable;
 
 class ProductController extends Controller
 {
     private const OVERSOLD_RESERVE_SOURCE = 'oversold_reserve';
+    private const PRODUCT_DETAIL_PATH = '/san-pham';
 
     public function __construct(
         protected ProductSkuService $productSkuService,
@@ -2118,7 +2122,7 @@ class ProductController extends Controller
         // Start with optimized column selection for products list to reduce memory & payload
         $query = Product::query()
             ->select([
-            'id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
+            'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
             'supplier_id', 'inventory_unit_id',
             'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title', 'site_domain_id'
         ])
@@ -2154,10 +2158,32 @@ class ProductController extends Controller
         $stockContext = $this->attachActualStockSubqueries($query, $request);
         $actualStockSql = $stockContext['actual_stock_sql'];
         $query->selectRaw($actualStockSql . ' AS actual_stock');
+        $supplierCodeExpression = $this->resolveProductSupplierCodeSortExpression();
+        if ($supplierCodeExpression !== null) {
+            $query->selectRaw($supplierCodeExpression . ' AS supplier_product_code');
+        }
 
         // Handle Trash View
         if ($request->boolean('is_trash')) {
             $query->onlyTrashed();
+        }
+
+        $selectedIds = $request->input('selected_ids', []);
+        if ($selectedIds !== null && $selectedIds !== '') {
+            $normalizedSelectedIds = is_array($selectedIds)
+                ? $selectedIds
+                : explode(',', (string) $selectedIds);
+
+            $normalizedSelectedIds = collect($normalizedSelectedIds)
+                ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            if (!empty($normalizedSelectedIds)) {
+                $query->whereIn('products.id', $normalizedSelectedIds);
+            }
         }
 
         // Filter by category
@@ -2491,6 +2517,1224 @@ class ProductController extends Controller
         );
 
         return response()->json($paginated);
+    }
+
+    public function downloadImportTemplate()
+    {
+        return $this->xlsxDownloadResponse(
+            'mau-import-san-pham.xlsx',
+            [[
+                'name' => 'SanPham',
+                'rows' => array_merge([$this->productImportHeaders()], $this->productImportTemplateRows()),
+            ]]
+        );
+    }
+
+    public function exportExcel(Request $request)
+    {
+        $columns = $this->resolveProductExportColumns($request->input('columns'));
+
+        if (empty($columns)) {
+            return response()->json([
+                'message' => 'Vui lòng chọn ít nhất 1 cột để xuất Excel.',
+            ], 422);
+        }
+
+        $products = $this->collectProductsForExcelExport($request);
+        $domains = $this->resolveScopedSiteDomains($request);
+        $fallbackBaseUrl = $this->resolveProductLinkFallbackBaseUrl($request);
+        $rows = [
+            $this->resolveProductExportColumnLabels($columns),
+        ];
+
+        foreach ($products as $product) {
+            $rows[] = array_map(
+                fn (string $column) => $this->resolveProductExportCell($product, $column, $domains, $fallbackBaseUrl),
+                $columns
+            );
+        }
+
+        return $this->xlsxDownloadResponse(
+            'san-pham-' . now()->format('Ymd-His') . '.xlsx',
+            [[
+                'name' => 'SanPham',
+                'rows' => $rows,
+            ]]
+        );
+    }
+
+    public function importExcel(Request $request)
+    {
+        $request->validate([
+            'file' => 'required|file|mimes:xlsx|max:10240',
+        ]);
+
+        try {
+            $rows = SimpleXlsx::readRows($request->file('file')->getRealPath());
+        } catch (Throwable $exception) {
+            return response()->json([
+                'message' => 'Không thể đọc file Excel. Vui lòng dùng file .xlsx hợp lệ.',
+                'errors' => [[
+                    'row' => 1,
+                    'column' => 'File',
+                    'message' => $exception->getMessage(),
+                ]],
+            ], 422);
+        }
+
+        [$records, $errors] = $this->validateProductImportRows($rows, $request);
+
+        if (!empty($errors)) {
+            return response()->json([
+                'message' => 'Phát hiện lỗi trong file import. Không có dữ liệu nào được cập nhật.',
+                'errors' => $errors,
+            ], 422);
+        }
+
+        try {
+            $summary = DB::transaction(fn () => $this->applyProductImport($records));
+        } catch (Throwable $exception) {
+            return response()->json([
+                'message' => 'Import sản phẩm thất bại. ' . $exception->getMessage(),
+            ], 422);
+        }
+
+        return response()->json([
+            'message' => sprintf(
+                'Import thành công: %d tạo mới, %d cập nhật, %d bỏ qua.',
+                $summary['created'],
+                $summary['updated'],
+                $summary['skipped']
+            ),
+            'summary' => $summary,
+        ]);
+    }
+
+    private function productImportHeaders(): array
+    {
+        return [
+            'ID',
+            'SKU',
+            'Slug',
+            'Link sản phẩm',
+            'Tên sản phẩm',
+            'Loại sản phẩm',
+            'Danh mục',
+            'Giá bán',
+            'Giá dự kiến',
+            'Tồn kho',
+            'Đang bán',
+            'Nổi bật',
+            'Mới',
+            'Domain',
+            'Video URL',
+            'Thông số',
+            'Tiêu đề bundle',
+        ];
+    }
+
+    private function productImportTemplateRows(): array
+    {
+        return [
+            [
+                '#ID nếu cập nhật',
+                '#SKU để cập nhật hoặc tạo mới',
+                '#slug sản phẩm',
+                '#https://ten-mien/san-pham/slug-hoac-id',
+                '#Tên sản phẩm',
+                '#simple / virtual / downloadable',
+                '#CODE:ma-danh-muc hoặc ID:12 hoặc NAME:Tên danh mục',
+                '#0',
+                '#0',
+                '#0',
+                '#1 hoặc 0',
+                '#1 hoặc 0',
+                '#1 hoặc 0',
+                '#example.com hoặc ID:1',
+                '#https://youtube.com/watch?v=...',
+                '#Thông số hoặc mô tả ngắn',
+                '#Tiêu đề bundle nếu cần',
+            ],
+            [
+                '#Dòng bắt đầu bằng # sẽ được bỏ qua',
+                '#Để trống để giữ nguyên khi cập nhật',
+                '#Có thể sửa slug hoặc sửa cột Link sản phẩm',
+                '#Nếu có cả slug và link, hệ thống ưu tiên slug',
+                '#Bắt buộc khi tạo mới',
+                '#Tạo mới chỉ hỗ trợ simple/virtual/downloadable',
+                '#Dùng NULL để xóa danh mục',
+                '#Giá bán mặc định 0 khi tạo mới',
+                '#Để trống nếu chưa có',
+                '#Tồn kho mặc định 0 khi tạo mới',
+                '#1 = đang bán, 0 = tạm ẩn',
+                '#1 = nổi bật, 0 = bình thường',
+                '#1 = mới, 0 = không',
+                '#Dùng NULL để xóa domain',
+                '#Dùng NULL để xóa video',
+                '#Dùng NULL để xóa thông số',
+                '#Dùng NULL để xóa tiêu đề bundle',
+            ],
+        ];
+    }
+
+    private function resolveProductExportColumns($value): array
+    {
+        $columns = is_array($value) ? $value : explode(',', (string) $value);
+        $defaultColumns = ['name', 'product_link'];
+        $supportedColumns = [
+            'id',
+            'sku',
+            'name',
+            'slug',
+            'product_link',
+            'type',
+            'category',
+            'price',
+            'cost_price',
+            'stock',
+            'status',
+            'is_featured',
+            'is_new',
+            'specifications',
+            'supplier_product_code',
+            'video_url',
+            'bundle_title',
+            'domain',
+        ];
+
+        $normalized = collect($columns)
+            ->map(fn ($column) => trim((string) $column))
+            ->filter()
+            ->reject(fn ($column) => in_array($column, ['actions', 'images'], true))
+            ->filter(function (string $column) use ($supportedColumns) {
+                return in_array($column, $supportedColumns, true)
+                    || preg_match('/^attr_\d+$/', $column) === 1;
+            })
+            ->unique()
+            ->values()
+            ->all();
+
+        return !empty($normalized) ? $normalized : $defaultColumns;
+    }
+
+    private function resolveProductExportColumnLabels(array $columns): array
+    {
+        $labels = [
+            'id' => 'ID',
+            'sku' => 'Mã SP',
+            'name' => 'Tên sản phẩm',
+            'slug' => 'Slug',
+            'product_link' => 'Link sản phẩm',
+            'type' => 'Loại sản phẩm',
+            'category' => 'Danh mục',
+            'price' => 'Giá bán',
+            'cost_price' => 'Giá dự kiến',
+            'stock' => 'Tồn kho',
+            'status' => 'Đang bán',
+            'is_featured' => 'Nổi bật',
+            'is_new' => 'Mới',
+            'specifications' => 'Thông số',
+            'supplier_product_code' => 'Mã NCC',
+            'video_url' => 'Video URL',
+            'bundle_title' => 'Tiêu đề bundle',
+            'domain' => 'Domain',
+        ];
+
+        $attributeIds = collect($columns)
+            ->map(function (string $column) {
+                if (preg_match('/^attr_(\d+)$/', $column, $matches) === 1) {
+                    return (int) $matches[1];
+                }
+
+                return null;
+            })
+            ->filter()
+            ->values()
+            ->all();
+
+        $attributesById = Attribute::query()
+            ->whereIn('id', $attributeIds)
+            ->get(['id', 'name'])
+            ->keyBy(fn (Attribute $attribute) => (int) $attribute->id);
+
+        return array_map(function (string $column) use ($labels, $attributesById) {
+            if (preg_match('/^attr_(\d+)$/', $column, $matches) === 1) {
+                $attributeId = (int) $matches[1];
+                return $attributesById->get($attributeId)?->name ?? ('Thuộc tính #' . $attributeId);
+            }
+
+            return $labels[$column] ?? Str::headline(str_replace('_', ' ', $column));
+        }, $columns);
+    }
+
+    private function collectProductsForExcelExport(Request $request): array
+    {
+        $products = [];
+        $page = 1;
+        $lastPage = 1;
+
+        do {
+            $pageRequest = $request->duplicate(array_merge($request->query(), [
+                'page' => $page,
+                'per_page' => 100,
+            ]));
+
+            $payload = $this->index($pageRequest)->getData(true);
+            $products = array_merge($products, $payload['data'] ?? []);
+            $lastPage = max(1, (int) ($payload['last_page'] ?? 1));
+            $page++;
+        } while ($page <= $lastPage);
+
+        return $products;
+    }
+
+    private function resolveProductExportCell(array $product, string $column, Collection $domains, ?string $fallbackBaseUrl): mixed
+    {
+        if (preg_match('/^attr_(\d+)$/', $column, $matches) === 1) {
+            return $this->resolveProductAttributeExportValue($product, (int) $matches[1]);
+        }
+
+        return match ($column) {
+            'id' => (int) ($product['id'] ?? 0),
+            'sku' => (string) ($product['sku'] ?? ''),
+            'name' => (string) ($product['name'] ?? ''),
+            'slug' => (string) ($product['slug'] ?? ''),
+            'product_link' => $this->buildProductPageUrlFromArray($product, $domains, $fallbackBaseUrl),
+            'type' => (string) ($product['type'] ?? ''),
+            'category' => $this->resolveProductExportCategory($product),
+            'price' => $product['price'] ?? '',
+            'cost_price' => $product['expected_cost'] ?? $product['cost_price'] ?? '',
+            'stock' => (int) round((float) ($product['actual_stock'] ?? $product['stock_quantity'] ?? 0)),
+            'status' => !empty($product['status']) ? 1 : 0,
+            'is_featured' => !empty($product['is_featured']) ? 1 : 0,
+            'is_new' => !empty($product['is_new']) ? 1 : 0,
+            'specifications' => $this->formatProductSpreadsheetValue($product['specifications'] ?? ''),
+            'supplier_product_code' => (string) ($product['supplier_product_code'] ?? ''),
+            'video_url' => (string) ($product['video_url'] ?? ''),
+            'bundle_title' => (string) ($product['bundle_title'] ?? ''),
+            'domain' => $this->resolveProductExportDomain($product, $domains),
+            default => '',
+        };
+    }
+
+    private function resolveProductExportCategory(array $product): string
+    {
+        $primaryCategory = trim((string) data_get($product, 'category.name', ''));
+        if ($primaryCategory !== '') {
+            return $primaryCategory;
+        }
+
+        return collect($product['categories'] ?? [])
+            ->pluck('name')
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->unique()
+            ->implode(', ');
+    }
+
+    private function resolveProductExportDomain(array $product, Collection $domains): string
+    {
+        $domain = $this->normalizeDomainValue((string) data_get($product, 'site_domain.domain', ''));
+        if ($domain !== '') {
+            return $domain;
+        }
+
+        $requestedDomainId = (int) ($product['site_domain_id'] ?? 0);
+        if ($requestedDomainId > 0) {
+            $matchedDomain = $domains->first(fn (SiteDomain $siteDomain) => (int) $siteDomain->id === $requestedDomainId);
+            if ($matchedDomain) {
+                return $this->normalizeDomainValue($matchedDomain->domain);
+            }
+        }
+
+        return $this->normalizeDomainValue($this->resolveDefaultDomainForProduct($product, $domains)?->domain);
+    }
+
+    private function buildProductPageUrlFromArray(array $product, Collection $domains, ?string $fallbackBaseUrl): string
+    {
+        $slug = trim((string) ($product['slug'] ?? ''));
+        $identifier = $slug !== '' ? $slug : trim((string) ($product['id'] ?? ''));
+
+        if ($identifier === '') {
+            return '';
+        }
+
+        $path = self::PRODUCT_DETAIL_PATH . '/' . rawurlencode($identifier);
+        $domain = $this->resolveProductExportDomain($product, $domains);
+
+        if ($domain !== '') {
+            return 'https://' . $domain . $path;
+        }
+
+        if ($fallbackBaseUrl) {
+            return rtrim($fallbackBaseUrl, '/') . $path;
+        }
+
+        return $path;
+    }
+
+    private function resolveDefaultDomainForProduct(array $product, Collection $domains): ?SiteDomain
+    {
+        $accountId = (int) ($product['account_id'] ?? 0);
+        $relevantDomains = $domains
+            ->filter(function (SiteDomain $siteDomain) use ($accountId) {
+                if ($accountId <= 0) {
+                    return true;
+                }
+
+                return (int) $siteDomain->account_id === $accountId;
+            })
+            ->values();
+
+        return $relevantDomains->first(fn (SiteDomain $siteDomain) => (bool) $siteDomain->is_default)
+            ?? $relevantDomains->first();
+    }
+
+    private function resolveProductAttributeExportValue(array $product, int $attributeId): string
+    {
+        return collect($product['attribute_values'] ?? [])
+            ->filter(fn ($value) => (int) ($value['attribute_id'] ?? 0) === $attributeId)
+            ->map(fn ($value) => $this->formatProductSpreadsheetValue($value['value'] ?? ''))
+            ->filter()
+            ->implode(', ');
+    }
+
+    private function formatProductSpreadsheetValue(mixed $value): string
+    {
+        if ($value === null) {
+            return '';
+        }
+
+        if (is_array($value)) {
+            return collect($value)
+                ->map(function ($item) {
+                    if (is_array($item)) {
+                        if (array_key_exists('label', $item) || array_key_exists('value', $item)) {
+                            $label = trim((string) ($item['label'] ?? ''));
+                            $cellValue = trim((string) ($item['value'] ?? ''));
+                            return trim($label . ($label !== '' && $cellValue !== '' ? ': ' : '') . $cellValue);
+                        }
+
+                        return json_encode($item, JSON_UNESCAPED_UNICODE);
+                    }
+
+                    return trim((string) $item);
+                })
+                ->filter()
+                ->implode(', ');
+        }
+
+        if (!is_string($value)) {
+            return trim((string) $value);
+        }
+
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return '';
+        }
+
+        try {
+            $decoded = json_decode($trimmed, true, 512, JSON_THROW_ON_ERROR);
+            if (is_array($decoded)) {
+                return $this->formatProductSpreadsheetValue($decoded);
+            }
+        } catch (Throwable $exception) {
+            // Keep original plain-text value.
+        }
+
+        return $trimmed;
+    }
+
+    private function resolveProductImportHeaderMap(array $headerRow): array
+    {
+        $aliases = [
+            'id' => ['id'],
+            'sku' => ['sku', 'ma_sp', 'ma_san_pham'],
+            'slug' => ['slug', 'duong_dan', 'url_key'],
+            'product_link' => ['link_san_pham', 'link_sp', 'duong_link_san_pham', 'url_san_pham'],
+            'name' => ['ten_san_pham', 'ten_sp', 'name'],
+            'type' => ['loai_san_pham', 'loai_hinh', 'type'],
+            'category' => ['danh_muc', 'category'],
+            'price' => ['gia_ban', 'price'],
+            'expected_cost' => ['gia_du_kien', 'gia_nhap_du_kien', 'expected_cost', 'cost_price'],
+            'stock_quantity' => ['ton_kho', 'so_luong_ton', 'stock_quantity'],
+            'status' => ['dang_ban', 'trang_thai_ban', 'status'],
+            'is_featured' => ['noi_bat', 'featured', 'is_featured'],
+            'is_new' => ['moi', 'is_new'],
+            'domain' => ['domain', 'ten_mien', 'site_domain'],
+            'video_url' => ['video_url', 'video', 'link_video'],
+            'specifications' => ['thong_so', 'specifications'],
+            'bundle_title' => ['tieu_de_bundle', 'bundle_title'],
+        ];
+
+        $headerMap = [];
+
+        foreach ($headerRow as $index => $cellValue) {
+            $normalized = $this->normalizeImportHeader((string) $cellValue);
+            if ($normalized === '') {
+                continue;
+            }
+
+            foreach ($aliases as $field => $patterns) {
+                if (in_array($normalized, $patterns, true) && !isset($headerMap[$field])) {
+                    $headerMap[$field] = $index;
+                }
+            }
+        }
+
+        return $headerMap;
+    }
+
+    private function validateProductImportRows(array $rows, Request $request): array
+    {
+        if (empty($rows)) {
+            return [[], [[
+                'row' => 1,
+                'column' => 'File',
+                'message' => 'File Excel không có dữ liệu.',
+            ]]];
+        }
+
+        $headerMap = $this->resolveProductImportHeaderMap($rows[0] ?? []);
+        if (!isset($headerMap['name']) && !isset($headerMap['sku']) && !isset($headerMap['id']) && !isset($headerMap['slug']) && !isset($headerMap['product_link'])) {
+            return [[], [[
+                'row' => 1,
+                'column' => 'Tiêu đề cột',
+                'message' => 'File import cần có ít nhất một cột định danh (ID, SKU, Slug, Link sản phẩm) hoặc cột Tên sản phẩm.',
+            ]]];
+        }
+
+        $products = Product::query()
+            ->get([
+                'id',
+                'sku',
+                'slug',
+                'name',
+                'type',
+                'category_id',
+                'site_domain_id',
+                'price',
+                'expected_cost',
+                'stock_quantity',
+                'status',
+                'is_featured',
+                'is_new',
+                'video_url',
+                'specifications',
+                'bundle_title',
+            ]);
+
+        $productLookup = [
+            'by_id' => $products->keyBy(fn (Product $product) => (int) $product->id),
+            'by_sku' => $products
+                ->filter(fn (Product $product) => filled($product->sku))
+                ->keyBy(fn (Product $product) => $this->normalizeImportLookupValue((string) $product->sku)),
+            'by_slug' => $products
+                ->filter(fn (Product $product) => filled($product->slug))
+                ->keyBy(fn (Product $product) => $this->normalizeImportLookupValue((string) $product->slug)),
+        ];
+
+        $categories = Category::query()->get(['id', 'name', 'code', 'slug']);
+        $categoryLookup = [
+            'by_id' => $categories->keyBy(fn (Category $category) => (int) $category->id),
+            'by_code' => $categories
+                ->filter(fn (Category $category) => filled($category->code))
+                ->keyBy(fn (Category $category) => Category::normalizeCode((string) $category->code)),
+            'by_slug' => $categories
+                ->filter(fn (Category $category) => filled($category->slug))
+                ->keyBy(fn (Category $category) => $this->normalizeImportLookupValue((string) $category->slug)),
+            'by_name' => $categories->groupBy(fn (Category $category) => $this->normalizeImportLookupValue((string) $category->name)),
+        ];
+
+        $siteDomains = $this->resolveScopedSiteDomains($request);
+        $siteDomainLookup = [
+            'by_id' => $siteDomains->keyBy(fn (SiteDomain $siteDomain) => (int) $siteDomain->id),
+            'by_domain' => $siteDomains->keyBy(fn (SiteDomain $siteDomain) => $this->normalizeDomainValue((string) $siteDomain->domain)),
+        ];
+
+        $records = [];
+        $errors = [];
+
+        foreach (array_slice($rows, 1) as $index => $row) {
+            $rowNumber = $index + 2;
+
+            if ($this->shouldSkipProductImportRow($row)) {
+                continue;
+            }
+
+            $rowErrors = [];
+            $productId = $this->parseImportedProductId($this->importCellValue($row, $headerMap, 'id'), $rowNumber, $rowErrors);
+            $rawSku = trim($this->importCellValue($row, $headerMap, 'sku'));
+            $rawSlug = trim($this->importCellValue($row, $headerMap, 'slug'));
+            $rawProductLink = trim($this->importCellValue($row, $headerMap, 'product_link'));
+            $rawName = trim($this->importCellValue($row, $headerMap, 'name'));
+            $rawType = trim($this->importCellValue($row, $headerMap, 'type'));
+            $rawCategory = trim($this->importCellValue($row, $headerMap, 'category'));
+            $rawDomain = trim($this->importCellValue($row, $headerMap, 'domain'));
+            $rawVideoUrl = trim($this->importCellValue($row, $headerMap, 'video_url'));
+            $rawSpecifications = trim($this->importCellValue($row, $headerMap, 'specifications'));
+            $rawBundleTitle = trim($this->importCellValue($row, $headerMap, 'bundle_title'));
+            $linkIdentifier = $this->extractProductIdentifierFromUrl($rawProductLink);
+            $slugFromLink = ($rawSlug === '' && $linkIdentifier !== null && !ctype_digit($linkIdentifier))
+                ? $linkIdentifier
+                : '';
+
+            $existingProduct = $this->resolveImportedProductMatch(
+                $productLookup,
+                $productId,
+                $rawSku,
+                $rawSlug !== '' ? $rawSlug : $slugFromLink,
+                $linkIdentifier,
+                $rowNumber,
+                $rowErrors
+            );
+
+            [$resolvedType, $typeProvided] = $this->parseImportedProductType(
+                $rawType,
+                $existingProduct?->type,
+                $rowNumber,
+                $rowErrors
+            );
+
+            if (!$existingProduct && $rawName === '') {
+                $rowErrors[] = $this->importError($rowNumber, 'Tên sản phẩm', 'Tên sản phẩm là bắt buộc khi tạo mới.');
+            }
+
+            $fields = [];
+
+            if ($rawName !== '') {
+                $fields['name'] = $rawName;
+            }
+
+            if ($rawSku !== '') {
+                $fields['sku'] = $rawSku;
+            }
+
+            if ($rawSlug !== '') {
+                $fields['slug'] = $rawSlug;
+            } elseif ($slugFromLink !== '') {
+                $fields['slug'] = $slugFromLink;
+            }
+
+            if ($typeProvided) {
+                $fields['type'] = $resolvedType;
+            }
+
+            if ($rawCategory !== '') {
+                $fields['category_id'] = $this->isImportNullishValue($rawCategory)
+                    ? null
+                    : $this->resolveImportedCategoryId($rawCategory, $categoryLookup, $rowNumber, $rowErrors);
+            }
+
+            if ($rawDomain !== '') {
+                $fields['site_domain_id'] = $this->isImportNullishValue($rawDomain)
+                    ? null
+                    : $this->resolveImportedSiteDomainId($rawDomain, $siteDomainLookup, $rowNumber, $rowErrors);
+            }
+
+            [$priceProvided, $priceValue] = $this->parseImportedOptionalNumber(
+                $this->importCellValue($row, $headerMap, 'price'),
+                $rowNumber,
+                'Giá bán',
+                $rowErrors
+            );
+            if ($priceProvided) {
+                $fields['price'] = $priceValue;
+            }
+
+            [$expectedCostProvided, $expectedCostValue] = $this->parseImportedOptionalNumber(
+                $this->importCellValue($row, $headerMap, 'expected_cost'),
+                $rowNumber,
+                'Giá dự kiến',
+                $rowErrors
+            );
+            if ($expectedCostProvided) {
+                $fields['expected_cost'] = $expectedCostValue;
+            }
+
+            [$stockProvided, $stockValue] = $this->parseImportedOptionalInteger(
+                $this->importCellValue($row, $headerMap, 'stock_quantity'),
+                $rowNumber,
+                'Tồn kho',
+                $rowErrors
+            );
+            if ($stockProvided) {
+                $fields['stock_quantity'] = $stockValue;
+            }
+
+            [$statusProvided, $statusValue] = $this->parseImportedOptionalBoolean(
+                $this->importCellValue($row, $headerMap, 'status'),
+                $rowNumber,
+                'Đang bán',
+                $rowErrors
+            );
+            if ($statusProvided) {
+                $fields['status'] = $statusValue;
+            }
+
+            [$featuredProvided, $featuredValue] = $this->parseImportedOptionalBoolean(
+                $this->importCellValue($row, $headerMap, 'is_featured'),
+                $rowNumber,
+                'Nổi bật',
+                $rowErrors
+            );
+            if ($featuredProvided) {
+                $fields['is_featured'] = $featuredValue;
+            }
+
+            [$newProvided, $newValue] = $this->parseImportedOptionalBoolean(
+                $this->importCellValue($row, $headerMap, 'is_new'),
+                $rowNumber,
+                'Mới',
+                $rowErrors
+            );
+            if ($newProvided) {
+                $fields['is_new'] = $newValue;
+            }
+
+            if ($rawVideoUrl !== '') {
+                $fields['video_url'] = $this->isImportNullishValue($rawVideoUrl) ? null : $rawVideoUrl;
+            }
+
+            if ($rawSpecifications !== '') {
+                $fields['specifications'] = $this->isImportNullishValue($rawSpecifications) ? null : $rawSpecifications;
+            }
+
+            if ($rawBundleTitle !== '') {
+                $fields['bundle_title'] = $this->isImportNullishValue($rawBundleTitle) ? null : $rawBundleTitle;
+            }
+
+            if (!empty($rowErrors)) {
+                $errors = array_merge($errors, $rowErrors);
+                continue;
+            }
+
+            $records[] = [
+                'row_number' => $rowNumber,
+                'existing_id' => $existingProduct ? (int) $existingProduct->id : null,
+                'fields' => $fields,
+                'type' => $resolvedType,
+            ];
+        }
+
+        return [$records, $errors];
+    }
+
+    private function applyProductImport(array $records): array
+    {
+        $summary = [
+            'created' => 0,
+            'updated' => 0,
+            'skipped' => 0,
+        ];
+
+        foreach ($records as $record) {
+            $fields = $record['fields'];
+
+            if ($record['existing_id']) {
+                $product = Product::query()->findOrFail((int) $record['existing_id']);
+
+                if (empty($fields)) {
+                    $summary['skipped']++;
+                    continue;
+                }
+
+                if (array_key_exists('sku', $fields)) {
+                    $fields['sku'] = $this->productSkuService->ensureUniqueSku(
+                        $fields['sku'],
+                        $fields['name'] ?? $product->name,
+                        $product->id
+                    );
+                }
+
+                if (array_key_exists('slug', $fields)) {
+                    $slugSeed = $fields['slug'] !== '' ? $fields['slug'] : ($fields['name'] ?? $product->name);
+                    $fields['slug'] = $this->productSkuService->generateUniqueSlug($slugSeed, $product->id);
+                }
+
+                if (array_key_exists('video_url', $fields)) {
+                    $fields['video_url'] = $this->normalizeVideoUrl($fields['video_url']);
+                }
+
+                $fillableFields = collect($fields)
+                    ->except(['category_id'])
+                    ->all();
+
+                if (!empty($fillableFields)) {
+                    $product->fill($fillableFields);
+                }
+
+                if (array_key_exists('category_id', $fields)) {
+                    $product->category_id = $fields['category_id'];
+                }
+
+                $product->save();
+
+                if (array_key_exists('category_id', $fields)) {
+                    $categoryId = $fields['category_id'];
+                    $this->syncProductCategories($product, $categoryId ? [(int) $categoryId] : []);
+                }
+
+                if (array_key_exists('expected_cost', $fields)) {
+                    $this->productPricingService->syncExpectedCost(
+                        $product,
+                        $product->expected_cost,
+                        $product->supplier_id,
+                        auth()->id()
+                    );
+                }
+
+                $summary['updated']++;
+                continue;
+            }
+
+            $name = trim((string) ($fields['name'] ?? ''));
+            $type = (string) ($record['type'] ?? 'simple');
+            $sku = array_key_exists('sku', $fields)
+                ? $this->productSkuService->ensureUniqueSku($fields['sku'], $name)
+                : $this->productSkuService->ensureUniqueSku(null, $name);
+            $slugSeed = trim((string) ($fields['slug'] ?? $name));
+
+            $product = Product::query()->create([
+                'type' => $type,
+                'name' => $name,
+                'sku' => $sku,
+                'slug' => $this->productSkuService->generateUniqueSlug($slugSeed),
+                'price' => $fields['price'] ?? 0,
+                'expected_cost' => $fields['expected_cost'] ?? null,
+                'stock_quantity' => $fields['stock_quantity'] ?? 0,
+                'status' => $fields['status'] ?? true,
+                'is_featured' => $fields['is_featured'] ?? false,
+                'is_new' => $fields['is_new'] ?? true,
+                'category_id' => $fields['category_id'] ?? null,
+                'site_domain_id' => $fields['site_domain_id'] ?? null,
+                'video_url' => array_key_exists('video_url', $fields) ? $this->normalizeVideoUrl($fields['video_url']) : null,
+                'specifications' => $fields['specifications'] ?? null,
+                'bundle_title' => $fields['bundle_title'] ?? null,
+            ]);
+
+            if (array_key_exists('category_id', $fields) && !empty($fields['category_id'])) {
+                $this->syncProductCategories($product, [(int) $fields['category_id']]);
+            }
+
+            if (array_key_exists('expected_cost', $fields)) {
+                $this->productPricingService->syncExpectedCost(
+                    $product,
+                    $product->expected_cost,
+                    $product->supplier_id,
+                    auth()->id()
+                );
+            }
+
+            $summary['created']++;
+        }
+
+        return $summary;
+    }
+
+    private function resolveImportedProductMatch(
+        array $lookup,
+        ?int $productId,
+        string $sku,
+        string $slug,
+        ?string $linkIdentifier,
+        int $rowNumber,
+        array &$errors
+    ): ?Product {
+        $candidates = [];
+
+        if ($productId !== null) {
+            $matchedById = $lookup['by_id']->get($productId);
+            if (!$matchedById) {
+                $errors[] = $this->importError($rowNumber, 'ID', 'Không tìm thấy sản phẩm theo ID đã nhập.');
+            } else {
+                $candidates[(int) $matchedById->id] = $matchedById;
+            }
+        }
+
+        if ($sku !== '') {
+            $matchedBySku = $lookup['by_sku']->get($this->normalizeImportLookupValue($sku));
+            if ($matchedBySku) {
+                $candidates[(int) $matchedBySku->id] = $matchedBySku;
+            }
+        }
+
+        if ($slug !== '') {
+            $matchedBySlug = $lookup['by_slug']->get($this->normalizeImportLookupValue($slug));
+            if ($matchedBySlug) {
+                $candidates[(int) $matchedBySlug->id] = $matchedBySlug;
+            }
+        }
+
+        if ($linkIdentifier !== null && $linkIdentifier !== '') {
+            $matchedByLink = null;
+
+            if (ctype_digit($linkIdentifier)) {
+                $matchedByLink = $lookup['by_id']->get((int) $linkIdentifier);
+            }
+
+            if (!$matchedByLink) {
+                $matchedByLink = $lookup['by_slug']->get($this->normalizeImportLookupValue($linkIdentifier));
+            }
+
+            if ($matchedByLink) {
+                $candidates[(int) $matchedByLink->id] = $matchedByLink;
+            }
+        }
+
+        if (count($candidates) > 1) {
+            $errors[] = $this->importError(
+                $rowNumber,
+                'ID / SKU / Slug / Link sản phẩm',
+                'Các định danh đang trỏ tới nhiều sản phẩm khác nhau. Vui lòng giữ lại đúng một định danh hợp lệ cho mỗi dòng.'
+            );
+            return null;
+        }
+
+        return !empty($candidates) ? array_values($candidates)[0] : null;
+    }
+
+    private function resolveImportedCategoryId(string $value, array $lookup, int $rowNumber, array &$errors): ?int
+    {
+        [$mode, $needle] = $this->splitImportReferenceToken($value);
+
+        if (($mode === 'id' || ($mode === null && ctype_digit($needle))) && $needle !== '') {
+            $category = $lookup['by_id']->get((int) $needle);
+            if ($category) {
+                return (int) $category->id;
+            }
+
+            $errors[] = $this->importError($rowNumber, 'Danh mục', 'Không tìm thấy danh mục theo ID đã nhập.');
+            return null;
+        }
+
+        if (($mode === 'code' || $mode === null) && $needle !== '') {
+            $normalizedCode = Category::normalizeCode($needle);
+            if ($normalizedCode !== null) {
+                $category = $lookup['by_code']->get($normalizedCode);
+                if ($category) {
+                    return (int) $category->id;
+                }
+
+                if ($mode === 'code') {
+                    $errors[] = $this->importError($rowNumber, 'Danh mục', 'Không tìm thấy danh mục theo mã đã nhập.');
+                    return null;
+                }
+            }
+        }
+
+        if (($mode === 'slug' || $mode === null) && $needle !== '') {
+            $category = $lookup['by_slug']->get($this->normalizeImportLookupValue($needle));
+            if ($category) {
+                return (int) $category->id;
+            }
+
+            if ($mode === 'slug') {
+                $errors[] = $this->importError($rowNumber, 'Danh mục', 'Không tìm thấy danh mục theo slug đã nhập.');
+                return null;
+            }
+        }
+
+        $candidates = $lookup['by_name']->get($this->normalizeImportLookupValue($needle), collect());
+        if ($candidates->count() === 1) {
+            return (int) $candidates->first()->id;
+        }
+
+        if ($candidates->count() > 1) {
+            $errors[] = $this->importError($rowNumber, 'Danh mục', 'Tên danh mục đang bị trùng. Vui lòng dùng CODE:... hoặc ID:... để chỉ rõ.');
+            return null;
+        }
+
+        $errors[] = $this->importError($rowNumber, 'Danh mục', 'Không tìm thấy danh mục phù hợp.');
+        return null;
+    }
+
+    private function resolveImportedSiteDomainId(string $value, array $lookup, int $rowNumber, array &$errors): ?int
+    {
+        [$mode, $needle] = $this->splitImportReferenceToken($value);
+        $normalizedDomain = $this->normalizeDomainValue($needle);
+
+        if (($mode === 'id' || ($mode === null && ctype_digit($needle))) && $needle !== '') {
+            $siteDomain = $lookup['by_id']->get((int) $needle);
+            if ($siteDomain) {
+                return (int) $siteDomain->id;
+            }
+
+            $errors[] = $this->importError($rowNumber, 'Domain', 'Không tìm thấy domain theo ID đã nhập.');
+            return null;
+        }
+
+        if ($normalizedDomain !== '') {
+            $siteDomain = $lookup['by_domain']->get($normalizedDomain);
+            if ($siteDomain) {
+                return (int) $siteDomain->id;
+            }
+        }
+
+        $errors[] = $this->importError($rowNumber, 'Domain', 'Không tìm thấy domain phù hợp trong hệ thống.');
+        return null;
+    }
+
+    private function resolveScopedSiteDomains(Request $request): Collection
+    {
+        $query = SiteDomain::query()->where('is_active', true);
+        $accountId = $request->header('X-Account-Id');
+
+        if (is_numeric($accountId) && (int) $accountId > 0) {
+            $query->where('account_id', (int) $accountId);
+        }
+
+        return $query
+            ->orderByDesc('is_default')
+            ->orderBy('id')
+            ->get(['id', 'account_id', 'domain', 'is_active', 'is_default']);
+    }
+
+    private function parseImportedProductType(
+        string $value,
+        ?string $existingType,
+        int $rowNumber,
+        array &$errors
+    ): array {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return [$existingType ?: 'simple', false];
+        }
+
+        $normalized = match ($this->normalizeImportLookupValue($trimmed)) {
+            'simple', 'don_gian' => 'simple',
+            'virtual', 'ao' => 'virtual',
+            'downloadable', 'tai_xuong' => 'downloadable',
+            'configurable', 'co_bien_the' => 'configurable',
+            'grouped', 'nhom' => 'grouped',
+            'bundle' => 'bundle',
+            default => null,
+        };
+
+        if ($normalized === null) {
+            $errors[] = $this->importError(
+                $rowNumber,
+                'Loại sản phẩm',
+                'Loại sản phẩm chỉ hỗ trợ simple, virtual hoặc downloadable khi import.'
+            );
+            return [$existingType ?: 'simple', false];
+        }
+
+        if ($existingType !== null && $normalized !== $existingType) {
+            $errors[] = $this->importError(
+                $rowNumber,
+                'Loại sản phẩm',
+                'Import Excel chưa hỗ trợ đổi loại sản phẩm hiện có. Hãy để trống cột này hoặc giữ đúng loại hiện tại.'
+            );
+            return [$existingType, false];
+        }
+
+        if ($existingType === null && !in_array($normalized, ['simple', 'virtual', 'downloadable'], true)) {
+            $errors[] = $this->importError(
+                $rowNumber,
+                'Loại sản phẩm',
+                'Tạo mới qua Excel hiện chỉ hỗ trợ simple, virtual hoặc downloadable.'
+            );
+            return ['simple', false];
+        }
+
+        return [$normalized, true];
+    }
+
+    private function parseImportedOptionalNumber(string $value, int $rowNumber, string $column, array &$errors): array
+    {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return [false, null];
+        }
+
+        $normalized = str_replace([',', ' '], '', $trimmed);
+        if (!is_numeric($normalized)) {
+            $errors[] = $this->importError($rowNumber, $column, 'Giá trị phải là số hợp lệ.');
+            return [false, null];
+        }
+
+        return [true, (float) $normalized];
+    }
+
+    private function parseImportedOptionalInteger(string $value, int $rowNumber, string $column, array &$errors): array
+    {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return [false, null];
+        }
+
+        if (!preg_match('/^-?\d+$/', $trimmed)) {
+            $errors[] = $this->importError($rowNumber, $column, 'Giá trị phải là số nguyên hợp lệ.');
+            return [false, null];
+        }
+
+        return [true, (int) $trimmed];
+    }
+
+    private function parseImportedOptionalBoolean(string $value, int $rowNumber, string $column, array &$errors): array
+    {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return [false, null];
+        }
+
+        $normalized = $this->normalizeImportLookupValue($trimmed);
+        $resolved = match ($normalized) {
+            '1', 'true', 'yes', 'co', 'dang_ban', 'ban', 'active', 'noi_bat', 'moi' => true,
+            '0', 'false', 'no', 'khong', 'tam_an', 'an', 'inactive' => false,
+            default => null,
+        };
+
+        if ($resolved === null) {
+            $errors[] = $this->importError($rowNumber, $column, 'Giá trị chỉ hợp lệ với 1 hoặc 0.');
+            return [false, null];
+        }
+
+        return [true, $resolved];
+    }
+
+    private function parseImportedProductId(string $value, int $rowNumber, array &$errors): ?int
+    {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        if (!ctype_digit($trimmed)) {
+            $errors[] = $this->importError($rowNumber, 'ID', 'ID phải là số nguyên dương.');
+            return null;
+        }
+
+        return (int) $trimmed;
+    }
+
+    private function extractProductIdentifierFromUrl(?string $value): ?string
+    {
+        $trimmed = trim((string) $value);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        $path = parse_url($trimmed, PHP_URL_PATH);
+        if (!is_string($path) || trim($path) === '') {
+            $path = $trimmed;
+        }
+
+        $segments = array_values(array_filter(explode('/', trim($path, '/')), fn ($segment) => $segment !== ''));
+        if (empty($segments)) {
+            return null;
+        }
+
+        $productSegment = trim(self::PRODUCT_DETAIL_PATH, '/');
+        $productIndex = array_search($productSegment, $segments, true);
+        $identifier = $productIndex !== false && isset($segments[$productIndex + 1])
+            ? $segments[$productIndex + 1]
+            : end($segments);
+
+        $identifier = urldecode((string) $identifier);
+
+        return $identifier !== '' ? $identifier : null;
+    }
+
+    private function normalizeDomainValue(?string $value): string
+    {
+        $trimmed = trim((string) $value);
+        if ($trimmed === '') {
+            return '';
+        }
+
+        $host = parse_url($trimmed, PHP_URL_HOST);
+        if (is_string($host) && $host !== '') {
+            $trimmed = $host;
+        }
+
+        $trimmed = preg_replace('#^https?://#i', '', $trimmed) ?? '';
+        $trimmed = explode('/', $trimmed)[0] ?? $trimmed;
+
+        return trim($trimmed, " \t\n\r\0\x0B/");
+    }
+
+    private function resolveProductLinkFallbackBaseUrl(Request $request): ?string
+    {
+        $origin = trim((string) $request->headers->get('origin', ''));
+        if ($origin !== '' && preg_match('#^https?://#i', $origin) === 1) {
+            return rtrim($origin, '/');
+        }
+
+        $appUrl = trim((string) config('app.url'));
+        if ($appUrl !== '' && preg_match('#^https?://#i', $appUrl) === 1) {
+            return rtrim($appUrl, '/');
+        }
+
+        return null;
+    }
+
+    private function shouldSkipProductImportRow(array $row): bool
+    {
+        $values = array_map(fn ($value) => trim((string) $value), $row);
+        $nonEmptyValues = array_values(array_filter($values, fn ($value) => $value !== ''));
+
+        if (empty($nonEmptyValues)) {
+            return true;
+        }
+
+        return str_starts_with($nonEmptyValues[0], '#');
+    }
+
+    private function importCellValue(array $row, array $headerMap, string $field): string
+    {
+        $index = $headerMap[$field] ?? null;
+        return $index === null ? '' : trim((string) ($row[$index] ?? ''));
+    }
+
+    private function splitImportReferenceToken(string $value): array
+    {
+        $trimmed = trim($value);
+        if (preg_match('/^(id|code|name|slug)\s*:\s*(.+)$/i', $trimmed, $matches) === 1) {
+            return [Str::lower($matches[1]), trim($matches[2])];
+        }
+
+        return [null, $trimmed];
+    }
+
+    private function normalizeImportHeader(string $value): string
+    {
+        return trim((string) Str::of(Str::ascii($value))
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', '_'), '_');
+    }
+
+    private function normalizeImportLookupValue(string $value): string
+    {
+        return trim((string) Str::of(Str::ascii($value))
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', '_'), '_');
+    }
+
+    private function isImportNullishValue(string $value): bool
+    {
+        return in_array($this->normalizeImportLookupValue($value), ['null', 'none', 'clear', 'xoa'], true);
+    }
+
+    private function importError(int $row, string $column, string $message): array
+    {
+        return [
+            'row' => $row,
+            'column' => $column,
+            'message' => $message,
+        ];
+    }
+
+    private function xlsxDownloadResponse(string $filename, array $sheets)
+    {
+        $binary = SimpleXlsx::buildWorkbook($sheets);
+
+        return response($binary, 200, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'Cache-Control' => 'no-store, no-cache, must-revalidate',
+        ]);
     }
 
     protected function normalizeVideoUrlCandidate(?string $value): string

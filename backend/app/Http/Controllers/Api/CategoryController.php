@@ -3,8 +3,10 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Account;
 use App\Models\Attribute;
 use App\Models\Category;
+use App\Models\SiteDomain;
 use App\Support\SimpleXlsx;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -33,6 +35,7 @@ class CategoryController extends Controller
             'parent_id' => 'nullable|integer',
             'description' => 'nullable|string',
             'banner' => 'nullable|image|max:5120',
+            'logo' => 'nullable|image|max:5120',
             'filterable_attribute_ids' => 'nullable|array',
         ]);
 
@@ -41,6 +44,11 @@ class CategoryController extends Controller
         $bannerPath = null;
         if ($request->hasFile('banner')) {
             $bannerPath = $request->file('banner')->store('category_banners', 'public');
+        }
+
+        $logoPath = null;
+        if ($request->hasFile('logo')) {
+            $logoPath = $request->file('logo')->store('category_logos', 'public');
         }
 
         $normalizedCode = Category::normalizeCode($request->input('code'));
@@ -53,6 +61,7 @@ class CategoryController extends Controller
                 'parent_id' => $parentId,
                 'description' => $request->description,
                 'banner_path' => $bannerPath,
+                'logo_path' => $logoPath,
                 'status' => $request->status ?? 1,
                 'order' => Category::where('parent_id', $parentId)->max('order') + 1,
                 'display_layout' => 'layout_1',
@@ -80,6 +89,7 @@ class CategoryController extends Controller
         \Log::info("Category update request for ID: {$id}", [
             'data' => $request->all(),
             'has_file' => $request->hasFile('banner'),
+            'has_logo_file' => $request->hasFile('logo'),
         ]);
 
         $category = Category::findOrFail($id);
@@ -89,6 +99,7 @@ class CategoryController extends Controller
             'code' => 'nullable|string|max:120',
             'parent_id' => 'sometimes|nullable|integer',
             'banner' => 'nullable|image|max:5120',
+            'logo' => 'nullable|image|max:5120',
             'filterable_attribute_ids' => 'nullable|array',
         ]);
 
@@ -110,6 +121,12 @@ class CategoryController extends Controller
             $category->banner_path = $request->file('banner')->store('category_banners', 'public');
         } elseif ($request->input('remove_banner') === 'true') {
             $category->banner_path = null;
+        }
+
+        if ($request->hasFile('logo')) {
+            $category->logo_path = $request->file('logo')->store('category_logos', 'public');
+        } elseif ($request->input('remove_logo') === 'true') {
+            $category->logo_path = null;
         }
 
         if ($request->has('parent_id')) {
@@ -241,6 +258,7 @@ class CategoryController extends Controller
             ->orderBy('order')
             ->orderBy('id')
             ->get([
+                'account_id',
                 'id',
                 'name',
                 'code',
@@ -262,7 +280,7 @@ class CategoryController extends Controller
             [[
                 'name' => 'DanhMucSanPham',
                 'rows' => array_merge(
-                    [$this->categoryImportHeaders()],
+                    [$this->categoryExportHeaders()],
                     $this->buildCategoryExportRows($categories, $attributes)
                 ),
             ]]
@@ -431,6 +449,13 @@ class CategoryController extends Controller
         ];
     }
 
+    private function categoryExportHeaders(): array
+    {
+        return array_merge($this->categoryImportHeaders(), [
+            'Link danh muc',
+        ]);
+    }
+
     private function categoryTemplateRows(): array
     {
         return [
@@ -463,8 +488,9 @@ class CategoryController extends Controller
     {
         $attributesById = $attributes->keyBy(fn ($attribute) => (int) $attribute->id);
         $categoriesById = $categories->keyBy(fn ($category) => (int) $category->id);
+        $domainsByAccountId = $this->buildCategoryDomainLookup($categories);
 
-        return array_map(function (Category $category) use ($attributesById, $categoriesById) {
+        return array_map(function (Category $category) use ($attributesById, $categoriesById, $domainsByAccountId) {
             /** @var Category|null $parent */
             $parent = $category->parent_id ? $categoriesById->get((int) $category->parent_id) : null;
 
@@ -478,8 +504,96 @@ class CategoryController extends Controller
                 $this->formatCategoryAttributeTokens((array) ($category->filterable_attribute_ids ?? []), $attributesById),
                 (int) ($category->status ?? 1),
                 $category->description ?? '',
+                $this->buildCategoryPublicUrl($category, $domainsByAccountId),
             ];
         }, $this->orderedCategoriesForExport($categories));
+    }
+
+    private function buildCategoryDomainLookup(Collection $categories): array
+    {
+        $accountIds = $categories
+            ->pluck('account_id')
+            ->filter()
+            ->map(fn ($accountId) => (int) $accountId)
+            ->unique()
+            ->values();
+
+        if ($accountIds->isEmpty()) {
+            return [];
+        }
+
+        $domainsByAccount = SiteDomain::query()
+            ->whereIn('account_id', $accountIds)
+            ->orderByDesc('is_default')
+            ->orderByDesc('is_active')
+            ->orderBy('id')
+            ->get(['account_id', 'domain', 'is_active', 'is_default'])
+            ->groupBy(fn ($domain) => (int) $domain->account_id);
+
+        $accountsById = Account::query()
+            ->whereIn('id', $accountIds)
+            ->get(['id', 'domain'])
+            ->keyBy(fn ($account) => (int) $account->id);
+
+        $resolved = [];
+
+        foreach ($accountIds as $accountId) {
+            $accountDomainRows = $domainsByAccount->get((int) $accountId, collect());
+            $siteDomain = $accountDomainRows->first(
+                fn ($domain) => (bool) $domain->is_active && (bool) $domain->is_default
+            ) ?? $accountDomainRows->first(
+                fn ($domain) => (bool) $domain->is_active
+            ) ?? $accountDomainRows->first(
+                fn ($domain) => (bool) $domain->is_default
+            ) ?? $accountDomainRows->first();
+
+            $baseUrl = $this->normalizeCategoryBaseUrl(
+                $siteDomain?->domain ?? $accountsById->get((int) $accountId)?->domain
+            );
+
+            if ($baseUrl !== null) {
+                $resolved[(int) $accountId] = $baseUrl;
+            }
+        }
+
+        return $resolved;
+    }
+
+    private function buildCategoryPublicUrl(Category $category, array $domainsByAccountId): string
+    {
+        $slug = trim((string) ($category->slug ?? ''));
+        if ($slug === '') {
+            return '';
+        }
+
+        $path = '/category/' . rawurlencode($slug);
+        $baseUrl = $domainsByAccountId[(int) ($category->account_id ?? 0)] ?? null;
+
+        return $baseUrl ? rtrim($baseUrl, '/') . $path : $path;
+    }
+
+    private function normalizeCategoryBaseUrl(?string $value): ?string
+    {
+        $domain = trim((string) $value);
+        if ($domain === '') {
+            return null;
+        }
+
+        if (!preg_match('/^https?:\/\//i', $domain)) {
+            $domain = 'https://' . ltrim($domain, '/');
+        }
+
+        $parts = parse_url($domain);
+        if (!$parts || empty($parts['host'])) {
+            return null;
+        }
+
+        $scheme = strtolower((string) ($parts['scheme'] ?? 'https'));
+        $host = strtolower((string) $parts['host']);
+        $port = isset($parts['port']) ? ':' . (int) $parts['port'] : '';
+        $path = trim((string) ($parts['path'] ?? ''), '/');
+
+        return $scheme . '://' . $host . $port . ($path !== '' ? '/' . $path : '');
     }
 
     private function orderedCategoriesForExport(Collection $categories): array

@@ -82,6 +82,43 @@ const DEFAULT_COLUMNS = [
     { id: 'product_link', label: 'Link SP', minWidth: '150px' },
 ];
 
+const DEFAULT_EXPORT_COLUMN_IDS = ['name', 'product_link'];
+const EXPORT_EXCLUDED_COLUMN_IDS = new Set(['actions', 'images']);
+
+function extractFilenameFromDisposition(headerValue, fallbackFilename) {
+    if (!headerValue) return fallbackFilename;
+
+    const utfMatch = headerValue.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utfMatch?.[1]) {
+        try {
+            return decodeURIComponent(utfMatch[1]);
+        } catch (error) {
+            return utfMatch[1];
+        }
+    }
+
+    const basicMatch = headerValue.match(/filename=\"?([^\"]+)\"?/i);
+    return basicMatch?.[1] || fallbackFilename;
+}
+
+function downloadBlobResponse(response, fallbackFilename) {
+    const blob = response?.data instanceof Blob
+        ? response.data
+        : new Blob([response?.data]);
+    const filename = extractFilenameFromDisposition(
+        response?.headers?.['content-disposition'],
+        fallbackFilename,
+    );
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(url);
+}
+
 function getPrimaryImage(product) {
     if (!product || !product.images || product.images.length === 0) return null;
     const primary = product.images.find(img => img.is_primary);
@@ -274,6 +311,7 @@ const ProductList = () => {
     const navigate = useNavigate();
     const filterRef = useRef(null);
     const columnSettingsRef = useRef(null);
+    const importInputRef = useRef(null);
     const [products, setProducts] = useState([]);
     const [categories, setCategories] = useState([]);
     const [suppliers, setSuppliers] = useState([]);
@@ -283,9 +321,17 @@ const ProductList = () => {
     const [selectedIds, setSelectedIds] = useState([]);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [showColumnSettings, setShowColumnSettings] = useState(false);
+    const [showExportModal, setShowExportModal] = useState(false);
     const [copiedText, setCopiedText] = useState(null);
     const [previewImage, setPreviewImage] = useState(null);
     const [expandedRows, setExpandedRows] = useState([]);
+    const [exportColumnIds, setExportColumnIds] = useState(DEFAULT_EXPORT_COLUMN_IDS);
+    const [exportOnlySelected, setExportOnlySelected] = useState(false);
+    const [isExportingExcel, setIsExportingExcel] = useState(false);
+    const [isDownloadingImportTemplate, setIsDownloadingImportTemplate] = useState(false);
+    const [isImportingExcel, setIsImportingExcel] = useState(false);
+    const [importExcelErrors, setImportExcelErrors] = useState([]);
+    const [importExcelErrorMessage, setImportExcelErrorMessage] = useState('');
 
     const toggleExpandRow = (productId, e) => {
         if (e) e.stopPropagation();
@@ -508,6 +554,41 @@ const ProductList = () => {
         setVisibleColumns
     } = useTableColumns('product_list', DEFAULT_COLUMNS);
 
+    const exportFieldOptions = availableColumns
+        .filter((column) => !EXPORT_EXCLUDED_COLUMN_IDS.has(column.id))
+        .map((column) => ({
+            id: column.id,
+            label: column.label,
+        }));
+
+    useEffect(() => {
+        const nextExportFieldOptions = availableColumns
+            .filter((column) => !EXPORT_EXCLUDED_COLUMN_IDS.has(column.id))
+            .map((column) => ({
+                id: column.id,
+                label: column.label,
+            }));
+
+        if (nextExportFieldOptions.length === 0) {
+            return;
+        }
+
+        const validIds = new Set(nextExportFieldOptions.map((option) => option.id));
+        setExportColumnIds((prev) => {
+            const filtered = prev.filter((id) => validIds.has(id));
+            if (filtered.length > 0) {
+                return filtered;
+            }
+
+            const preferredDefaults = DEFAULT_EXPORT_COLUMN_IDS.filter((id) => validIds.has(id));
+            if (preferredDefaults.length > 0) {
+                return preferredDefaults;
+            }
+
+            return nextExportFieldOptions.slice(0, 2).map((option) => option.id);
+        });
+    }, [availableColumns]);
+
     useEffect(() => {
         fetchInitialData();
         // Load with persisted page/filters
@@ -622,6 +703,57 @@ const ProductList = () => {
         } catch (error) { console.error("Error fetching initial data", error); }
     };
 
+    const buildQueryParams = (page = 1, currentFilters = filters, currentSort = sortConfig, limit = pagination.per_page) => {
+        const normalizedFilters = sanitizeProductFilters(currentFilters);
+        const params = {
+            page,
+            per_page: limit,
+            is_trash: isTrashView ? 1 : 0,
+            sort_by: currentSort.direction === 'none' ? 'id' : currentSort.key,
+            sort_order: currentSort.direction === 'none' ? 'desc' : currentSort.direction
+        };
+
+        if (normalizedFilters.search) {
+            params.search = normalizedFilters.search;
+        }
+
+        if (Array.isArray(normalizedFilters.category_id) && normalizedFilters.category_id.length > 0) {
+            params.category_ids = normalizedFilters.category_id.join(',');
+        }
+
+        if (Array.isArray(normalizedFilters.type) && normalizedFilters.type.length > 0) {
+            params.type = normalizedFilters.type.join(',');
+        }
+
+        if (Array.isArray(normalizedFilters.supplier_ids) && normalizedFilters.supplier_ids.length > 0) {
+            params.supplier_ids = normalizedFilters.supplier_ids.join(',');
+        }
+
+        if (normalizedFilters.missing_purchase_price) {
+            params.missing_purchase_price = 1;
+        }
+
+        if (normalizedFilters.multiple_suppliers) {
+            params.multiple_suppliers = 1;
+        }
+
+        ['is_featured', 'is_new', 'min_price', 'max_price', 'min_stock', 'max_stock', 'start_date', 'end_date'].forEach((key) => {
+            if (normalizedFilters[key] !== '' && normalizedFilters[key] !== null && normalizedFilters[key] !== undefined) {
+                params[key] = normalizedFilters[key];
+            }
+        });
+
+        if (normalizedFilters.attributes) {
+            Object.entries(normalizedFilters.attributes).forEach(([id, val]) => {
+                if (val && (Array.isArray(val) ? val.length > 0 : val !== '')) {
+                    params[`attributes[${id}]`] = Array.isArray(val) ? val.join(',') : val;
+                }
+            });
+        }
+
+        return params;
+    };
+
     const fetchTrashCount = async () => {
         try {
             const response = await productApi.getAll({ is_trash: 1, per_page: 1 });
@@ -632,53 +764,7 @@ const ProductList = () => {
     const fetchProducts = async (page = 1, currentFilters = filters, currentSort = sortConfig, limit = pagination.per_page) => {
         setLoading(true);
         try {
-            const normalizedFilters = sanitizeProductFilters(currentFilters);
-            const params = {
-                page,
-                per_page: limit,
-                is_trash: isTrashView ? 1 : 0,
-                sort_by: currentSort.direction === 'none' ? 'id' : currentSort.key,
-                sort_order: currentSort.direction === 'none' ? 'desc' : currentSort.direction
-            };
-
-            if (normalizedFilters.search) {
-                params.search = normalizedFilters.search;
-            }
-
-            if (Array.isArray(normalizedFilters.category_id) && normalizedFilters.category_id.length > 0) {
-                params.category_ids = normalizedFilters.category_id.join(',');
-            }
-
-            if (Array.isArray(normalizedFilters.type) && normalizedFilters.type.length > 0) {
-                params.type = normalizedFilters.type.join(',');
-            }
-
-            if (Array.isArray(normalizedFilters.supplier_ids) && normalizedFilters.supplier_ids.length > 0) {
-                params.supplier_ids = normalizedFilters.supplier_ids.join(',');
-            }
-
-            if (normalizedFilters.missing_purchase_price) {
-                params.missing_purchase_price = 1;
-            }
-
-            if (normalizedFilters.multiple_suppliers) {
-                params.multiple_suppliers = 1;
-            }
-
-            ['is_featured', 'is_new', 'min_price', 'max_price', 'min_stock', 'max_stock', 'start_date', 'end_date'].forEach((key) => {
-                if (normalizedFilters[key] !== '' && normalizedFilters[key] !== null && normalizedFilters[key] !== undefined) {
-                    params[key] = normalizedFilters[key];
-                }
-            });
-
-            if (normalizedFilters.attributes) {
-                Object.entries(normalizedFilters.attributes).forEach(([id, val]) => {
-                    if (val && (Array.isArray(val) ? val.length > 0 : val !== '')) {
-                        params[`attributes[${id}]`] = Array.isArray(val) ? val.join(',') : val;
-                    }
-                });
-            }
-
+            const params = buildQueryParams(page, currentFilters, currentSort, limit);
             const response = await productApi.getAll(params);
             setProducts(response.data.data);
             setPagination({
@@ -790,6 +876,124 @@ const ProductList = () => {
     };
 
     const handleRefresh = () => fetchProducts(1);
+
+    const closeImportErrorModal = () => {
+        setImportExcelErrors([]);
+        setImportExcelErrorMessage('');
+    };
+
+    const openExportModal = () => {
+        if (isTrashView) return;
+        setExportOnlySelected(false);
+        setShowExportModal(true);
+    };
+
+    const toggleExportColumn = (columnId) => {
+        setExportColumnIds((prev) => (
+            prev.includes(columnId)
+                ? prev.filter((id) => id !== columnId)
+                : [...prev, columnId]
+        ));
+    };
+
+    const handleSelectAllExportColumns = () => {
+        setExportColumnIds(exportFieldOptions.map((option) => option.id));
+    };
+
+    const handleDownloadExportExcel = async () => {
+        if (exportColumnIds.length === 0) {
+            setNotification({ type: 'error', message: 'Hãy chọn ít nhất 1 cột để xuất Excel.' });
+            setTimeout(() => setNotification(null), 3000);
+            return;
+        }
+
+        setIsExportingExcel(true);
+        try {
+            const params = {
+                ...buildQueryParams(1, filters, sortConfig, pagination.per_page),
+                columns: exportColumnIds.join(','),
+            };
+
+            if (exportOnlySelected && selectedIds.length > 0) {
+                params.selected_ids = selectedIds.join(',');
+            }
+
+            const response = await productApi.downloadExcel(params);
+            downloadBlobResponse(response, 'san-pham.xlsx');
+            setShowExportModal(false);
+        } catch (error) {
+            console.error('Product export error:', error);
+            setNotification({
+                type: 'error',
+                message: error?.response?.data?.message || 'KhÃ´ng thá»ƒ xuáº¥t Excel sáº£n pháº©m.',
+            });
+            setTimeout(() => setNotification(null), 3500);
+        } finally {
+            setIsExportingExcel(false);
+        }
+    };
+
+    const handleDownloadImportTemplate = async () => {
+        setIsDownloadingImportTemplate(true);
+        try {
+            const response = await productApi.downloadImportTemplate();
+            downloadBlobResponse(response, 'mau-import-san-pham.xlsx');
+        } catch (error) {
+            console.error('Product import template error:', error);
+            setNotification({
+                type: 'error',
+                message: error?.response?.data?.message || 'KhÃ´ng thá»ƒ táº£i file máº«u import.',
+            });
+            setTimeout(() => setNotification(null), 3500);
+        } finally {
+            setIsDownloadingImportTemplate(false);
+        }
+    };
+
+    const handleOpenImportPicker = () => {
+        if (isImportingExcel) return;
+        importInputRef.current?.click();
+    };
+
+    const handleImportFileChange = async (event) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+
+        if (!file) {
+            return;
+        }
+
+        const data = new FormData();
+        data.append('file', file);
+
+        setIsImportingExcel(true);
+        closeImportErrorModal();
+        try {
+            const response = await productApi.importExcel(data);
+            setNotification({
+                type: 'success',
+                message: response?.data?.message || 'Import Excel thÃ nh cÃ´ng.',
+            });
+            setTimeout(() => setNotification(null), 4000);
+            fetchProducts(pagination.current_page, filters, sortConfig, pagination.per_page);
+        } catch (error) {
+            console.error('Product import error:', error);
+            const importErrors = Array.isArray(error?.response?.data?.errors)
+                ? error.response.data.errors
+                : [];
+            const message = error?.response?.data?.message || 'KhÃ´ng thá»ƒ import file Excel sáº£n pháº©m.';
+
+            if (importErrors.length > 0) {
+                setImportExcelErrors(importErrors);
+                setImportExcelErrorMessage(message);
+            } else {
+                setNotification({ type: 'error', message });
+                setTimeout(() => setNotification(null), 4000);
+            }
+        } finally {
+            setIsImportingExcel(false);
+        }
+    };
 
     const toggleSelectAll = () => {
         if (selectedIds.length === products.length) setSelectedIds([]);
@@ -1461,6 +1665,160 @@ const ProductList = () => {
                 </div>
             )}
 
+            <input
+                ref={importInputRef}
+                type="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                className="hidden"
+                onChange={handleImportFileChange}
+            />
+
+            {showExportModal && (
+                <div className="fixed inset-0 z-[130] bg-black/60 flex items-center justify-center p-4" onClick={() => !isExportingExcel && setShowExportModal(false)}>
+                    <div
+                        className="bg-white rounded p-6 w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between gap-4 border-b border-primary/10 pb-4">
+                            <div>
+                                <h2 className="text-lg font-bold text-primary flex items-center gap-2">
+                                    <span className="material-symbols-outlined">download</span>
+                                    Xuất sản phẩm ra Excel
+                                </h2>
+                                <p className="mt-2 text-[13px] text-primary/65">
+                                    Chọn đúng các cột cần tải. Với nhu cầu làm web, bạn có thể chỉ bật <strong>Tên sản phẩm</strong> và <strong>Link SP</strong>.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => !isExportingExcel && setShowExportModal(false)}
+                                className="text-gray-500 hover:text-brick disabled:opacity-40"
+                                disabled={isExportingExcel}
+                            >
+                                <span className="material-symbols-outlined">close</span>
+                            </button>
+                        </div>
+
+                        <div className="mt-4 flex flex-wrap items-center gap-3">
+                            <button
+                                type="button"
+                                onClick={handleSelectAllExportColumns}
+                                className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
+                            >
+                                Chọn tất cả
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setExportColumnIds(DEFAULT_EXPORT_COLUMN_IDS.filter((id) => exportFieldOptions.some((option) => option.id === id)))}
+                                className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
+                            >
+                                Chọn nhanh: Tên + Link
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setExportColumnIds([])}
+                                className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-brick hover:bg-brick/5"
+                            >
+                                Bỏ chọn hết
+                            </button>
+                        </div>
+
+                        {selectedIds.length > 0 && (
+                            <label className="mt-4 inline-flex items-center gap-2 text-[13px] font-medium text-primary/75">
+                                <input
+                                    type="checkbox"
+                                    className="size-4 accent-primary"
+                                    checked={exportOnlySelected}
+                                    onChange={(event) => setExportOnlySelected(event.target.checked)}
+                                />
+                                Chỉ xuất <strong>{selectedIds.length}</strong> sản phẩm đang tick
+                            </label>
+                        )}
+
+                        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 overflow-y-auto pr-1 custom-scrollbar">
+                            {exportFieldOptions.map((option) => {
+                                const checked = exportColumnIds.includes(option.id);
+                                return (
+                                    <button
+                                        key={option.id}
+                                        type="button"
+                                        onClick={() => toggleExportColumn(option.id)}
+                                        className={`rounded-sm border px-4 py-3 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
+                                    >
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="truncate text-[13px] font-bold text-primary">{option.label}</div>
+                                                <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-primary/35">{option.id}</div>
+                                            </div>
+                                            <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
+                                                {checked ? 'check_circle' : 'radio_button_unchecked'}
+                                            </span>
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        <div className="mt-6 pt-4 border-t border-primary/10 flex flex-col md:flex-row md:items-center md:justify-between gap-3 shrink-0">
+                            <p className="text-[12px] text-primary/60">
+                                Đang chọn <strong>{exportColumnIds.length}</strong> cột để xuất.
+                            </p>
+                            <div className="flex justify-end gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowExportModal(false)}
+                                    className="px-4 py-2 border border-primary/20 text-primary rounded-sm font-bold text-[13px] hover:bg-primary/5"
+                                    disabled={isExportingExcel}
+                                >
+                                    Hủy
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleDownloadExportExcel}
+                                    className="px-6 py-2 bg-primary text-white rounded-sm font-bold text-[13px] hover:bg-primary/90 flex items-center gap-2"
+                                    disabled={isExportingExcel}
+                                >
+                                    {isExportingExcel ? <span className="material-symbols-outlined animate-spin text-[16px]">sync</span> : <span className="material-symbols-outlined text-[16px]">download</span>}
+                                    Tải file Excel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {importExcelErrors.length > 0 && (
+                <div className="fixed inset-0 z-[140] bg-black/60 flex items-center justify-center p-4" onClick={closeImportErrorModal}>
+                    <div
+                        className="bg-white rounded p-6 w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between gap-4 border-b border-primary/10 pb-4">
+                            <div>
+                                <h2 className="text-lg font-bold text-brick flex items-center gap-2">
+                                    <span className="material-symbols-outlined">error</span>
+                                    Import Excel thất bại
+                                </h2>
+                                <p className="mt-2 text-[13px] text-primary/65">{importExcelErrorMessage}</p>
+                            </div>
+                            <button type="button" onClick={closeImportErrorModal} className="text-gray-500 hover:text-brick">
+                                <span className="material-symbols-outlined">close</span>
+                            </button>
+                        </div>
+
+                        <div className="mt-4 overflow-y-auto pr-1 custom-scrollbar space-y-2">
+                            {importExcelErrors.map((error, index) => (
+                                <div key={`${error.row || 'row'}-${error.column || 'column'}-${index}`} className="rounded-sm border border-red-100 bg-red-50 px-4 py-3 text-[13px] text-red-800">
+                                    <strong>DÃ²ng {error?.row || '-'}</strong>
+                                    {error?.column ? ` - ${error.column}` : ''}
+                                    : {error?.message || 'Lá»—i khÃ´ng xÃ¡c Ä‘á»‹nh.'}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="flex-none bg-[#F8FAFC] pb-4 space-y-2">
                 <div className="flex justify-between items-center">
                     <h1 className="admin-header-title italic">Quản lý sản phẩm</h1>
@@ -1492,6 +1850,38 @@ const ProductList = () => {
                         >
                             <span className="material-symbols-outlined text-[18px]">filter_alt</span>
                         </button>
+
+                        {!isTrashView && (
+                            <React.Fragment>
+                                <button
+                                    onClick={openExportModal}
+                                    className="p-1.5 border border-primary/20 bg-white text-primary rounded-sm w-9 h-9 hover:bg-primary/5 transition-all"
+                                    title="Xuất Excel"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">download</span>
+                                </button>
+                                <button
+                                    onClick={handleDownloadImportTemplate}
+                                    disabled={isDownloadingImportTemplate}
+                                    className={`p-1.5 border border-primary/20 bg-white text-primary rounded-sm w-9 h-9 hover:bg-primary/5 transition-all ${isDownloadingImportTemplate ? 'opacity-70' : ''}`}
+                                    title="Tải file mẫu import"
+                                >
+                                    <span className={`material-symbols-outlined text-[18px] ${isDownloadingImportTemplate ? 'animate-refresh-spin' : ''}`}>
+                                        description
+                                    </span>
+                                </button>
+                                <button
+                                    onClick={handleOpenImportPicker}
+                                    disabled={isImportingExcel}
+                                    className={`p-1.5 border border-primary/20 bg-white text-primary rounded-sm w-9 h-9 hover:bg-primary/5 transition-all ${isImportingExcel ? 'opacity-70' : ''}`}
+                                    title="Nhập Excel"
+                                >
+                                    <span className={`material-symbols-outlined text-[18px] ${isImportingExcel ? 'animate-refresh-spin' : ''}`}>
+                                        upload_file
+                                    </span>
+                                </button>
+                            </React.Fragment>
+                        )}
                         
                         <div className="h-6 w-px bg-primary/20 mx-1"></div>
 

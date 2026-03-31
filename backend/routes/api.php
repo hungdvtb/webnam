@@ -60,6 +60,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/cart/remove', [CartController::class , 'remove']);
 
     // Admin Product routes
+    Route::get('/products/export', [ProductController::class , 'exportExcel']);
+    Route::get('/products/import/template', [ProductController::class , 'downloadImportTemplate']);
+    Route::post('/products/import', [ProductController::class , 'importExcel']);
     Route::post('/products', [ProductController::class , 'store']);
     Route::delete('/products/bulk-delete', [ProductController::class , 'bulkDelete']);
     Route::post('/products/bulk-restore', [ProductController::class , 'bulkRestore']);

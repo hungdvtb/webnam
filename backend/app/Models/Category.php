@@ -10,7 +10,7 @@ class Category extends Model
 {
     use \App\Traits\BelongsToAccount;
 
-    protected $fillable = ['name', 'code', 'slug', 'parent_id', 'description', 'banner_path', 'status', 'order', 'account_id', 'display_layout', 'filterable_attribute_ids'];
+    protected $fillable = ['name', 'code', 'slug', 'parent_id', 'description', 'banner_path', 'logo_path', 'status', 'order', 'account_id', 'display_layout', 'filterable_attribute_ids'];
 
     protected $casts = [
         'filterable_attribute_ids' => 'array',

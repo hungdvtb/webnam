@@ -7,21 +7,13 @@ import { Tree, getDescendants, isAncestor } from '@minoru/react-dnd-treeview';
 import { useUI } from '../../context/UIContext';
 import CategoryProductSortModal from '../../components/admin/CategoryProductSortModal';
 
-const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelected, onSelect, isCheckable, isChecked, onCheck, isDropTarget, allAttributes }) => {
+const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelected, onSelect, isCheckable, isChecked, onCheck, isDropTarget }) => {
+    /*
     
-    // Get filter labels
-    const filterIds = node.data?.filterable_attribute_ids || [];
-    const filterCount = Array.isArray(filterIds) ? filterIds.length : 0;
     
-    // Get all names of filters - Ensure ID comparison handles both string and number
-    const filterDisplay = [...new Set(filterIds
-        .map(id => {
-            const attr = allAttributes.find(a => Number(a.id) === Number(id));
-            return attr ? attr.name : null;
-        })
-        .filter(Boolean))]
         .join(', ') || 'Không có';
 
+    */
     return (
         <div 
             style={{ paddingLeft: depth * 24 }} 
@@ -71,16 +63,6 @@ const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelecte
                 </span>
                 <span className={`font-ui text-primary transition-all ${isSelected ? 'font-black scale-[1.02] translate-x-1' : 'font-bold'}`}>{node.text}</span>
             </div>
-            {/* Filter Info */}
-            <div className="hidden xl:flex items-center mr-4">
-                <div className="flex min-w-[120px] max-w-[160px] flex-col items-center justify-center gap-0.5 px-1">
-                    <span className="material-symbols-outlined text-[16px] text-primary/40">filter_alt</span>
-                    <span className={`text-[10px] font-bold tracking-tight uppercase text-center leading-tight ${filterCount > 0 ? 'text-umber' : 'text-stone/20 italic'}`}>
-                        {filterDisplay}
-                    </span>
-                </div>
-            </div>
-
             <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button 
                     onClick={(e) => { e.stopPropagation(); onEdit(node); }} 
@@ -155,9 +137,32 @@ const INITIAL_FORM_DATA = {
     description: '',
     parent_id: '',
     status: 1,
+    logo: null,
+    logo_url: null,
     banner: null,
     banner_url: null,
     filterable_attribute_ids: [],
+};
+
+const resolveCategoryAssetUrl = (value) => {
+    if (!value || typeof value !== 'string') {
+        return null;
+    }
+
+    const cleanPath = value.trim().replace(/^\/+/, '');
+    if (!cleanPath) {
+        return null;
+    }
+
+    if (/^https?:\/\//i.test(cleanPath)) {
+        return cleanPath;
+    }
+
+    const storagePath = cleanPath.startsWith('storage/')
+        ? cleanPath.substring(8)
+        : cleanPath;
+
+    return `${STORAGE_BASE_URL}/storage/${storagePath}`;
 };
 
 const escapeHtml = (value = '') => String(value)
@@ -711,6 +716,12 @@ const CategoryList = () => {
                 data.append('remove_banner', 'true');
             }
 
+            if (formData.logo instanceof File) {
+                data.append('logo', formData.logo);
+            } else if (formData.logo === null && formData.id) {
+                data.append('remove_logo', 'true');
+            }
+
             if (formData.id) {
                 await categoryApi.update(formData.id, data);
             } else {
@@ -735,18 +746,8 @@ const CategoryList = () => {
 
     const handleEdit = (node) => {
         const cat = node.data;
-        let bannerUrl = null;
-        if (cat.banner_path) {
-            const cleanPath = cat.banner_path.replace(/^\/+/, '');
-            // If it already contains http/https, use it as is
-            if (cleanPath.startsWith('http')) {
-                bannerUrl = cleanPath;
-            } else {
-                // Remove 'storage/' if it's already at the beginning to avoid duplication
-                const finalPath = cleanPath.startsWith('storage/') ? cleanPath.substring(8) : cleanPath;
-                bannerUrl = `${STORAGE_BASE_URL}/storage/${finalPath}`;
-            }
-        }
+        const bannerUrl = resolveCategoryAssetUrl(cat.banner_path);
+        const logoUrl = resolveCategoryAssetUrl(cat.logo_path);
 
         setFormData({
             id: cat.id,
@@ -754,6 +755,8 @@ const CategoryList = () => {
             description: cat.description || '',
             parent_id: cat.parent_id || '',
             status: cat.status,
+            logo: cat.logo_path,
+            logo_url: logoUrl,
             banner: cat.banner_path,
             banner_url: bannerUrl,
             filterable_attribute_ids: (cat.filterable_attribute_ids || []).map(id => Number(id))
@@ -1196,7 +1199,7 @@ const CategoryList = () => {
                                 />
                             </div>
                             <div className="flex-1 text-[10px] font-black uppercase tracking-[0.2em] text-primary/40 pl-11">Tên Danh Mục</div>
-                            <div className="hidden xl:flex items-center mr-6">
+                            <div className="hidden">
                                 <div className="min-w-[120px] max-w-[160px] text-[10px] font-black uppercase tracking-[0.2em] text-primary/60 text-center">Bộ lọc</div>
                             </div>
                         </div>
@@ -1249,7 +1252,6 @@ const CategoryList = () => {
                                                 onSelect={(id) => setSelectedId(id)}
                                                 isChecked={selectedIds.has(node.id)}
                                                 onCheck={handleCheck}
-                                                allAttributes={allAttributes}
                                             />
                                         )}
                                         renderPlaceholder={(props) => <Placeholder {...props} />}
@@ -1376,6 +1378,7 @@ const CategoryList = () => {
                                             />
                                         </div>
 
+                                        {false && (
                                         <div className="space-y-3 bg-gold/5 p-4 border border-gold/10 rounded-sm">
                                             <div className="flex items-center justify-between border-b border-gold/10 pb-2">
                                                 <label className="text-[10px] font-black uppercase tracking-widest text-primary">Bộ lọc thuộc tính</label>
@@ -1449,6 +1452,61 @@ const CategoryList = () => {
                                                     <p className="text-[9px] text-stone/40 italic mt-1">Kéo thả để thay đổi vị trí bộ lọc trên website</p>
                                                 </div>
                                             )}
+                                        </div>
+                                        )}
+
+                                        <div className="space-y-1.5">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Logo nho danh muc</label>
+                                                <span className="text-[9px] italic text-stone/40">Hien thi trong the danh muc ngoai web</span>
+                                            </div>
+                                            <div className="flex flex-col gap-3">
+                                                {formData.logo_url && (
+                                                    <div className="relative group/img flex h-32 items-center justify-center overflow-hidden rounded-sm border border-gold/10 bg-stone/5">
+                                                        <img src={formData.logo_url} alt="Logo Preview" className="max-h-[88px] max-w-[88px] object-contain" />
+                                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => document.getElementById('logo-upload').click()}
+                                                                className="size-8 rounded-full bg-white text-primary hover:bg-gold transition-colors flex items-center justify-center"
+                                                                title="Thay anh"
+                                                            >
+                                                                <span className="material-symbols-outlined text-sm">edit</span>
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setFormData({ ...formData, logo: null, logo_url: null })}
+                                                                className="size-8 rounded-full bg-white text-brick hover:bg-brick hover:text-white transition-colors flex items-center justify-center"
+                                                                title="Go anh"
+                                                            >
+                                                                <span className="material-symbols-outlined text-sm">delete</span>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                <input
+                                                    id="logo-upload"
+                                                    type="file"
+                                                    accept="image/*"
+                                                    className="hidden"
+                                                    onChange={e => {
+                                                        const file = e.target.files[0];
+                                                        if (file) {
+                                                            setFormData({ ...formData, logo: file, logo_url: URL.createObjectURL(file) });
+                                                        }
+                                                    }}
+                                                />
+                                                {!formData.logo_url && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => document.getElementById('logo-upload').click()}
+                                                        className="w-full h-20 border-2 border-dashed border-gold/20 hover:border-gold/40 hover:bg-gold/5 transition-all flex flex-col items-center justify-center gap-1 rounded-sm text-stone/40"
+                                                    >
+                                                        <span className="material-symbols-outlined text-xl">image</span>
+                                                        <span className="text-[10px] font-bold uppercase tracking-wider">Tai len logo nho</span>
+                                                    </button>
+                                                )}
+                                            </div>
                                         </div>
 
                                         <div className="space-y-1.5">

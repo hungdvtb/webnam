@@ -140,7 +140,7 @@ class StorefrontController extends Controller
                 $q->where('status', true)->whereDoesntHave('parentConfigurable');
             }])
             ->orderBy('order')
-            ->get(['id', 'name', 'slug', 'parent_id', 'description', 'order']);
+            ->get(['id', 'name', 'slug', 'parent_id', 'description', 'order', 'logo_path']);
 
         // Build tree structure
         $tree = $this->buildCategoryTree($categories);
@@ -603,7 +603,7 @@ class StorefrontController extends Controller
             ->whereNull('parent_id')
             ->withCount(['products' => fn($q) => $q->where('status', true)])
             ->orderBy('order')
-            ->get(['id', 'name', 'slug', 'description']);
+            ->get(['id', 'name', 'slug', 'description', 'logo_path']);
 
         // Recent reviews
         $reviews = ProductReview::query()
@@ -796,6 +796,7 @@ class StorefrontController extends Controller
                 'name' => $cat->name,
                 'slug' => $cat->slug,
                 'description' => $cat->description,
+                'logo_path' => $cat->logo_path,
                 'products_count' => $cat->products_count,
                 'children' => $children,
             ];
@@ -804,5 +805,4 @@ class StorefrontController extends Controller
         return $tree;
     }
 }
-
 

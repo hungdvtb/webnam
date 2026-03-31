@@ -1,8 +1,29 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
-import api from '../../services/api';
+import api, { STORAGE_BASE_URL } from '../../services/api';
 import { LeadFormModal } from '../../layouts/StorefrontLayout';
 import StoreLocationCards from '../../components/store/StoreLocationCards';
+
+const resolveCategoryLogoUrl = (value) => {
+    if (!value || typeof value !== 'string') {
+        return '';
+    }
+
+    const cleanPath = value.trim().replace(/^\/+/, '');
+    if (!cleanPath) {
+        return '';
+    }
+
+    if (/^https?:\/\//i.test(cleanPath)) {
+        return cleanPath;
+    }
+
+    const storagePath = cleanPath.startsWith('storage/')
+        ? cleanPath.substring(8)
+        : cleanPath;
+
+    return `${STORAGE_BASE_URL}/storage/${storagePath}`;
+};
 
 const ProductCard = ({ product, onConsult }) => {
     const [imageLoaded, setImageLoaded] = useState(false);
@@ -208,21 +229,38 @@ const CategoryGrid = ({ categories }) => {
 
     return (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 md:gap-4 lg:grid-cols-6">
-            {categories.slice(0, 6).map((category, index) => (
-                <Link
+            {categories.slice(0, 6).map((category, index) => {
+                const logoUrl = resolveCategoryLogoUrl(category.logo_path);
+
+                return (
+                    <Link
                     key={category.id}
                     to={`/danh-muc/${category.slug}`}
                     className={`group rounded-2xl border border-stone-100 bg-gradient-to-br ${gradients[index % gradients.length]} p-5 text-center transition-all duration-300 hover:-translate-y-1 hover:shadow-lg`}
                 >
-                    <div className="mb-2 text-3xl">{icons[index % icons.length]}</div>
+                    <div className="mb-3 flex justify-center">
+                        <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/80 bg-white/90 shadow-sm transition-transform duration-300 group-hover:scale-105">
+                            {logoUrl ? (
+                                <img
+                                    src={logoUrl}
+                                    alt={category.name}
+                                    loading="lazy"
+                                    className="h-10 w-10 object-contain"
+                                />
+                            ) : (
+                                <span className="text-3xl">{icons[index % icons.length]}</span>
+                            )}
+                        </div>
+                    </div>
                     <h3 className="text-sm font-bold text-stone-800 transition-colors group-hover:text-primary">
                         {category.name}
                     </h3>
                     <p className="mt-1 text-[10px] font-medium text-stone-500">
                         {category.products_count || 0} sản phẩm
                     </p>
-                </Link>
-            ))}
+                    </Link>
+                );
+            })}
         </div>
     );
 };

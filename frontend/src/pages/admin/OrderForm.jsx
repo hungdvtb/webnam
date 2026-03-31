@@ -3344,7 +3344,7 @@ const OrderForm = () => {
     if (loading) return <div className="p-8 text-center italic text-primary">Đang tải dữ liệu...</div>;
 
     return (
-        <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full overflow-y-auto">
+        <div className="relative flex flex-col flex-grow bg-[#fcfcfa] animate-fade-in p-0 md:p-6 min-h-0 overflow-y-auto">
             <style>{`
                 @keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
                 .animate-refresh-spin { animation: refresh-spin 0.8s linear infinite; }

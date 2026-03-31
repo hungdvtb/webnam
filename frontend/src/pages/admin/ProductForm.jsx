@@ -604,6 +604,58 @@ const areOrderedIdsEqual = (left = [], right = []) => (
     && left.every((value, index) => String(value) === String(right[index]))
 );
 
+const buildInventoryUnitReorderPayload = (draftUnits = [], sourceUnits = []) => {
+    const normalizedDraftUnits = Array.isArray(draftUnits)
+        ? draftUnits.filter((unit) => unit?.id !== undefined && unit?.id !== null && unit?.id !== '')
+        : [];
+
+    const draftOrderById = new Map(
+        normalizedDraftUnits.map((unit, index) => [String(unit.id), index])
+    );
+
+    const preferredDefaultId = String(
+        (normalizedDraftUnits.find((unit) => unit.is_default) || normalizedDraftUnits[0] || {}).id || ''
+    );
+
+    const latestUnits = Array.isArray(sourceUnits) && sourceUnits.length
+        ? sourceUnits
+        : normalizedDraftUnits;
+
+    const orderedUnits = latestUnits
+        .filter((unit) => unit?.id !== undefined && unit?.id !== null && unit?.id !== '')
+        .map((unit, index) => ({
+            ...unit,
+            _reorderIndex: draftOrderById.has(String(unit.id))
+                ? draftOrderById.get(String(unit.id))
+                : normalizedDraftUnits.length + index,
+        }))
+        .sort((left, right) => left._reorderIndex - right._reorderIndex);
+
+    const ids = orderedUnits.map((unit) => unit.id);
+    const defaultUnit = orderedUnits.find((unit) => String(unit.id) === preferredDefaultId)
+        || orderedUnits.find((unit) => unit.is_default)
+        || orderedUnits[0]
+        || null;
+
+    return {
+        ids,
+        defaultId: defaultUnit?.id || null,
+    };
+};
+
+const resolveApiErrorMessage = (error, fallbackMessage) => {
+    const validationMessage = Object.values(error?.response?.data?.errors || {})
+        .flat()
+        .find(Boolean);
+
+    if (validationMessage) return validationMessage;
+    if (error?.response?.status === 401) {
+        return 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.';
+    }
+
+    return error?.response?.data?.message || fallbackMessage;
+};
+
 const moveListItem = (items, fromIndex, toIndex) => {
     if (
         !Array.isArray(items)
@@ -1025,18 +1077,12 @@ const buildDuplicateVariantDrafts = (variants = [], parentSku = '') => {
     const reservedSkus = new Set([normalizeSkuSeed(parentSku)].filter(Boolean));
 
     return variants.map((variant) => {
-        const normalizedVariantSku = normalizeSkuSeed(variant?.sku);
-        let nextSku = normalizedVariantSku;
-
-        if (!nextSku || reservedSkus.has(nextSku)) {
-            nextSku = buildLocalVariantSku(parentSku, reservedSkus);
-        } else {
-            reservedSkus.add(nextSku);
-        }
+        const nextSku = buildLocalVariantSku(parentSku, reservedSkus);
 
         return {
             ...variant,
             sku: nextSku,
+            sku_auto: true,
             source_id: variant?.source_id ?? variant?.id ?? null,
         };
     });
@@ -2254,11 +2300,13 @@ const ProductForm = () => {
 
         setIsSavingInventoryUnitOrder(true);
         try {
-            const draftDefaultUnit = inventoryUnitsDraft.find((unit) => unit.is_default) || inventoryUnitsDraft[0] || null;
-            await inventoryApi.reorderUnits(
-                inventoryUnitsDraft.map((unit) => unit.id),
-                draftDefaultUnit?.id || null
+            const latestUnits = await fetchInventoryUnits();
+            const { ids: reorderedUnitIds, defaultId } = buildInventoryUnitReorderPayload(
+                inventoryUnitsDraft,
+                latestUnits.length ? latestUnits : inventoryUnits
             );
+
+            await inventoryApi.reorderUnits(reorderedUnitIds, defaultId);
             const refreshedUnits = await fetchInventoryUnits();
 
             if (!refreshedUnits.length) {
@@ -2275,7 +2323,10 @@ const ProductForm = () => {
             showToast({ message: 'Đã cập nhật thứ tự và ĐVT mặc định.', type: 'success' });
         } catch (error) {
             console.error("Error reordering inventory units", error);
-            showToast({ message: 'Không thể lưu cấu hình ĐVT.', type: 'error' });
+            showToast({
+                message: resolveApiErrorMessage(error, 'Không thể lưu cấu hình ĐVT.'),
+                type: 'error',
+            });
             await fetchInventoryUnits();
         } finally {
             setIsSavingInventoryUnitOrder(false);

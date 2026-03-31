@@ -2133,14 +2133,20 @@ class ProductController extends Controller
             'images:id,product_id,image_url,is_primary',
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
-            'variations:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id,site_domain_id',
+            'variations:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
+            'variations.supplier:id,name,code',
+            'variations.suppliers:id,name,code',
             'variations.attributeValues:id,product_id,attribute_id,value',
             'variations.unit:id,name',
             'variations.images:id,product_id,image_url,is_primary',
-            'groupedItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id,site_domain_id',
+            'groupedItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
+            'groupedItems.supplier:id,name,code',
+            'groupedItems.suppliers:id,name,code',
             'groupedItems.unit:id,name',
             'groupedItems.images:id,product_id,image_url,is_primary',
-            'bundleItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id,site_domain_id',
+            'bundleItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
+            'bundleItems.supplier:id,name,code',
+            'bundleItems.suppliers:id,name,code',
             'bundleItems.unit:id,name',
             'bundleItems.images:id,product_id,image_url,is_primary'
         ]);
@@ -3957,6 +3963,21 @@ class ProductController extends Controller
         $basicInfo = $request->input('basic_info', []);
         if (!array_key_exists('expected_cost', $basicInfo) && array_key_exists('cost_price', $basicInfo)) {
             $basicInfo['expected_cost'] = $basicInfo['cost_price'];
+        }
+        if (array_key_exists('supplier_ids', $basicInfo) || array_key_exists('supplier_id', $basicInfo)) {
+            $normalizedSupplierIds = $this->normalizeSupplierIds($request, $basicInfo);
+            $preferredSupplierId = filled($basicInfo['supplier_id'] ?? null)
+                ? (int) $basicInfo['supplier_id']
+                : null;
+
+            if ($preferredSupplierId) {
+                $normalizedSupplierIds = array_values(array_unique([$preferredSupplierId, ...$normalizedSupplierIds]));
+            }
+
+            $basicInfo['supplier_ids'] = $normalizedSupplierIds;
+            $basicInfo['supplier_id'] = $preferredSupplierId && in_array($preferredSupplierId, $normalizedSupplierIds, true)
+                ? $preferredSupplierId
+                : ($normalizedSupplierIds[0] ?? null);
         }
         $attributesData = $request->input('attributes', []);
 

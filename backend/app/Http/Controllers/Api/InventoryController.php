@@ -1119,6 +1119,8 @@ class InventoryController extends Controller
                     ->whereNull('account_id')
                     ->orWhere('account_id', $accountId);
             })
+            ->orderBy('sort_order')
+            ->orderBy('name')
             ->get(['id', 'is_default']);
 
         $visibleIds = $visibleUnits
@@ -1127,37 +1129,45 @@ class InventoryController extends Controller
             ->values();
 
         $requestedIds = $ids->unique()->values();
+        $unknownRequestedIds = $requestedIds
+            ->diff($visibleIds)
+            ->values();
+
+        if ($unknownRequestedIds->isNotEmpty()) {
+            throw ValidationException::withMessages([
+                'ids' => ['Danh sách đơn vị tính không hợp lệ. Vui lòng tải lại trang rồi thử lại.'],
+            ]);
+        }
+
+        $orderedIds = $requestedIds
+            ->concat(
+                $visibleIds->reject(
+                    fn (int $visibleId) => $requestedIds->containsStrict($visibleId)
+                )
+            )
+            ->values();
+
         $defaultId = isset($validated['default_id']) ? (int) $validated['default_id'] : null;
         $currentDefaultId = $visibleUnits
             ->firstWhere('is_default', true)
             ?->id;
 
         if ($defaultId === null) {
-            $defaultId = $currentDefaultId ? (int) $currentDefaultId : (int) ($requestedIds->first() ?? 0);
+            $defaultId = $currentDefaultId ? (int) $currentDefaultId : (int) ($orderedIds->first() ?? 0);
         }
 
-        if (
-            $requestedIds->count() !== $visibleIds->count()
-            || $requestedIds->diff($visibleIds)->isNotEmpty()
-            || $visibleIds->diff($requestedIds)->isNotEmpty()
-        ) {
-            throw ValidationException::withMessages([
-                'ids' => ['Danh sách đơn vị tính không hợp lệ. Vui lòng tải lại trang rồi thử lại.'],
-            ]);
-        }
-
-        if (!in_array($defaultId, $requestedIds->all(), true)) {
+        if (!in_array($defaultId, $orderedIds->all(), true)) {
             throw ValidationException::withMessages([
                 'default_id' => ['Đơn vị tính mặc định không hợp lệ. Vui lòng tải lại trang rồi thử lại.'],
             ]);
         }
 
-        DB::transaction(function () use ($requestedIds, $visibleIds, $defaultId) {
+        DB::transaction(function () use ($orderedIds, $visibleIds, $defaultId) {
             InventoryUnit::query()
                 ->whereIn('id', $visibleIds->all())
                 ->update(['is_default' => false]);
 
-            $requestedIds->values()->each(function (int $unitId, int $index) use ($defaultId) {
+            $orderedIds->values()->each(function (int $unitId, int $index) use ($defaultId) {
                 InventoryUnit::query()
                     ->whereKey($unitId)
                     ->update([

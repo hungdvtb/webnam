@@ -86,6 +86,21 @@ const supportedProductQuickFilterTypes = new Set(['select', 'multiselect']);
 const SEARCH_ENTRY_PRODUCT = 'product';
 const SEARCH_ENTRY_VARIATION = 'variation';
 const SEARCH_ENTRY_BUNDLE_OPTION = 'bundle_option';
+const orderFormColumnOrderStorageKey = 'order_form_column_order';
+const orderFormVisibleColumnsStorageKey = 'order_form_visible_columns';
+const orderFormColumnWidthsStorageKey = 'order_column_widths';
+const orderFormCostPriceMigrationStorageKey = 'added_cost_price_migrated_form';
+const ORDER_FORM_DEFAULT_COLUMN_IDS = ['stt', 'sku', 'name', 'quantity', 'price', 'cost_price', 'total', 'actions'];
+const ORDER_FORM_DEFAULT_COLUMN_WIDTHS = {
+    stt: 50,
+    sku: 150,
+    name: null,
+    quantity: 90,
+    price: 150,
+    cost_price: 150,
+    total: 170,
+    actions: 60,
+};
 const autoOpenSupplementItemOrderTypes = new Set([
     ORDER_TYPE_EXCHANGE_RETURN,
     ORDER_TYPE_PARTIAL_DELIVERY,
@@ -97,6 +112,120 @@ const createOrderLineId = (prefix = 'order-item') => {
     orderFormLineItemSequence += 1;
     return `${prefix}-${orderFormLineItemSequence}`;
 };
+const readOrderFormStorageJson = (storageKey, fallbackValue) => {
+    if (typeof window === 'undefined') return fallbackValue;
+
+    try {
+        const rawValue = window.localStorage.getItem(storageKey);
+        return rawValue ? JSON.parse(rawValue) : fallbackValue;
+    } catch (error) {
+        console.warn(`Unable to parse ${storageKey}`, error);
+        try {
+            window.localStorage.removeItem(storageKey);
+        } catch {}
+        return fallbackValue;
+    }
+};
+const writeOrderFormStorageJson = (storageKey, value) => {
+    if (typeof window === 'undefined') return;
+
+    try {
+        window.localStorage.setItem(storageKey, JSON.stringify(value));
+    } catch (error) {
+        console.warn(`Unable to persist ${storageKey}`, error);
+    }
+};
+const readOrderFormStorageValue = (storageKey, fallbackValue = '') => {
+    if (typeof window === 'undefined') return fallbackValue;
+
+    try {
+        return window.localStorage.getItem(storageKey) ?? fallbackValue;
+    } catch (error) {
+        console.warn(`Unable to read ${storageKey}`, error);
+        return fallbackValue;
+    }
+};
+const writeOrderFormStorageValue = (storageKey, value) => {
+    if (typeof window === 'undefined') return;
+
+    try {
+        window.localStorage.setItem(storageKey, value);
+    } catch (error) {
+        console.warn(`Unable to persist ${storageKey}`, error);
+    }
+};
+const normalizeStoredOrderFormColumnIds = (value) => Array.from(new Set(
+    (Array.isArray(value) ? value : [])
+        .map((columnId) => String(columnId || '').trim())
+        .filter((columnId) => ORDER_FORM_DEFAULT_COLUMN_IDS.includes(columnId))
+));
+const insertOrderFormColumnAfter = (columnIds, columnId, afterColumnId) => {
+    if (columnIds.includes(columnId)) {
+        return [...columnIds];
+    }
+
+    const nextColumnIds = [...columnIds];
+    const targetIndex = nextColumnIds.indexOf(afterColumnId);
+    nextColumnIds.splice(targetIndex >= 0 ? targetIndex + 1 : nextColumnIds.length, 0, columnId);
+    return nextColumnIds;
+};
+const normalizeStoredOrderFormColumnOrder = (value) => {
+    const nextColumnIds = normalizeStoredOrderFormColumnIds(value);
+
+    ORDER_FORM_DEFAULT_COLUMN_IDS.forEach((columnId) => {
+        if (!nextColumnIds.includes(columnId)) {
+            nextColumnIds.push(columnId);
+        }
+    });
+
+    return nextColumnIds;
+};
+const normalizeStoredOrderFormVisibleColumns = (value) => {
+    if (!Array.isArray(value)) {
+        return [...ORDER_FORM_DEFAULT_COLUMN_IDS];
+    }
+
+    const nextColumnIds = normalizeStoredOrderFormColumnIds(value);
+    return value.length > 0 && nextColumnIds.length === 0
+        ? [...ORDER_FORM_DEFAULT_COLUMN_IDS]
+        : nextColumnIds;
+};
+const normalizeStoredOrderFormColumnWidths = (value) => {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+
+    return Object.fromEntries(
+        Object.entries(ORDER_FORM_DEFAULT_COLUMN_WIDTHS).map(([columnId, fallbackWidth]) => {
+            const candidateWidth = source[columnId];
+            if (candidateWidth === null && fallbackWidth === null) {
+                return [columnId, null];
+            }
+
+            const normalizedWidth = Number(candidateWidth);
+            return [columnId, Number.isFinite(normalizedWidth) && normalizedWidth > 0 ? normalizedWidth : fallbackWidth];
+        })
+    );
+};
+const getStoredOrderFormColumnOrder = () => normalizeStoredOrderFormColumnOrder(
+    readOrderFormStorageJson(orderFormColumnOrderStorageKey, ORDER_FORM_DEFAULT_COLUMN_IDS)
+);
+const getStoredOrderFormVisibleColumns = () => {
+    const storedColumns = normalizeStoredOrderFormVisibleColumns(
+        readOrderFormStorageJson(orderFormVisibleColumnsStorageKey, ORDER_FORM_DEFAULT_COLUMN_IDS)
+    );
+    const hasCompletedCostPriceMigration = readOrderFormStorageValue(orderFormCostPriceMigrationStorageKey, '');
+
+    if (storedColumns.includes('cost_price') || hasCompletedCostPriceMigration) {
+        return storedColumns;
+    }
+
+    const migratedColumns = insertOrderFormColumnAfter(storedColumns, 'cost_price', 'price');
+    writeOrderFormStorageValue(orderFormCostPriceMigrationStorageKey, 'true');
+    writeOrderFormStorageJson(orderFormVisibleColumnsStorageKey, migratedColumns);
+    return migratedColumns;
+};
+const getStoredOrderFormColumnWidths = () => normalizeStoredOrderFormColumnWidths(
+    readOrderFormStorageJson(orderFormColumnWidthsStorageKey, ORDER_FORM_DEFAULT_COLUMN_WIDTHS)
+);
 const shouldAutoOpenSupplementItemsModal = (value) => autoOpenSupplementItemOrderTypes.has(normalizeOrderType(value));
 const sortQuoteTemplates = (templates = []) => [...(Array.isArray(templates) ? templates : [])].sort((a, b) => {
     const sortA = Number(a?.sort_order) || 0;
@@ -1428,34 +1557,9 @@ const OrderForm = () => {
         actions: { label: 'Xoá', width: 'w-12', align: 'center' }
     };
 
-    const [columnOrder, setColumnOrder] = useState(() => {
-        const saved = localStorage.getItem('order_form_column_order');
-        let order = saved ? JSON.parse(saved) : ['stt', 'sku', 'name', 'quantity', 'price', 'cost_price', 'total', 'actions'];
-        if (order && !order.includes('cost_price')) order.splice(order.indexOf('price') + 1, 0, 'cost_price');
-        return order;
-    });
-    const [visibleColumns, setVisibleColumns] = useState(() => {
-        const saved = localStorage.getItem('order_form_visible_columns');
-        let visible = saved ? JSON.parse(saved) : ['stt', 'sku', 'name', 'quantity', 'price', 'cost_price', 'total', 'actions'];
-        if (visible && !visible.includes('cost_price') && !localStorage.getItem('added_cost_price_migrated_form')) {
-            visible.splice(visible.indexOf('price') + 1, 0, 'cost_price');
-            localStorage.setItem('added_cost_price_migrated_form', 'true');
-        }
-        return visible;
-    });
-    const [columnWidths, setColumnWidths] = useState(() => {
-        const saved = localStorage.getItem('order_column_widths');
-        return saved ? JSON.parse(saved) : {
-            stt: 50,
-            sku: 150,
-            name: null, // Flexible
-            quantity: 90,
-            price: 150,
-            cost_price: 150,
-            total: 170,
-            actions: 60
-        };
-    });
+    const [columnOrder, setColumnOrder] = useState(() => getStoredOrderFormColumnOrder());
+    const [visibleColumns, setVisibleColumns] = useState(() => getStoredOrderFormVisibleColumns());
+    const [columnWidths, setColumnWidths] = useState(() => getStoredOrderFormColumnWidths());
 
     const [formData, setFormData] = useState({
         customer_name: '',
@@ -1752,9 +1856,9 @@ const OrderForm = () => {
     }, []);
 
     const saveColumnSettings = () => {
-        localStorage.setItem('order_form_column_order', JSON.stringify(columnOrder));
-        localStorage.setItem('order_form_visible_columns', JSON.stringify(visibleColumns));
-        localStorage.setItem('order_column_widths', JSON.stringify(columnWidths));
+        writeOrderFormStorageJson(orderFormColumnOrderStorageKey, normalizeStoredOrderFormColumnOrder(columnOrder));
+        writeOrderFormStorageJson(orderFormVisibleColumnsStorageKey, normalizeStoredOrderFormVisibleColumns(visibleColumns));
+        writeOrderFormStorageJson(orderFormColumnWidthsStorageKey, normalizeStoredOrderFormColumnWidths(columnWidths));
         setShowColumnConfig(false);
         alert('Đã lưu cấu hình bảng làm mặc định!');
     };
@@ -3734,11 +3838,13 @@ const OrderForm = () => {
                                                                                         onClick={(e) => {
                                                                                             e.stopPropagation();
                                                                                             if (visibleColumns.includes(colId)) {
-                                                                                                setVisibleColumns(visibleColumns.filter(c => c !== colId));
-                                                                                                localStorage.setItem('order_form_visible_columns', JSON.stringify(visibleColumns.filter(c => c !== colId)));
+                                                                                                const nextVisibleColumns = normalizeStoredOrderFormVisibleColumns(visibleColumns.filter(c => c !== colId));
+                                                                                                setVisibleColumns(nextVisibleColumns);
+                                                                                                writeOrderFormStorageJson(orderFormVisibleColumnsStorageKey, nextVisibleColumns);
                                                                                             } else {
-                                                                                                setVisibleColumns([...visibleColumns, colId]);
-                                                                                                localStorage.setItem('order_form_visible_columns', JSON.stringify([...visibleColumns, colId]));
+                                                                                                const nextVisibleColumns = normalizeStoredOrderFormVisibleColumns([...visibleColumns, colId]);
+                                                                                                setVisibleColumns(nextVisibleColumns);
+                                                                                                writeOrderFormStorageJson(orderFormVisibleColumnsStorageKey, nextVisibleColumns);
                                                                                             }
                                                                                         }}
                                                                                         className={`material-symbols-outlined text-lg ${visibleColumns.includes(colId) ? 'text-primary' : 'text-primary/10'}`}

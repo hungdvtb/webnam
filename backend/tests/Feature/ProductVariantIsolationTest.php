@@ -106,6 +106,54 @@ class ProductVariantIsolationTest extends TestCase
         );
     }
 
+    public function test_trashing_and_restoring_configurable_product_cascades_to_variant_children(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        [$parent, $variants] = $this->createConfigurableProductWithVariants();
+
+        $this->deleteJson("/api/products/{$parent->id}")
+            ->assertOk();
+
+        $this->assertSoftDeleted('products', ['id' => $parent->id]);
+        foreach ($variants as $variant) {
+            $this->assertSoftDeleted('products', ['id' => $variant->id]);
+        }
+
+        $this->postJson("/api/products/{$parent->id}/restore")
+            ->assertOk();
+
+        $this->assertDatabaseHas('products', ['id' => $parent->id, 'deleted_at' => null]);
+        foreach ($variants as $variant) {
+            $this->assertDatabaseHas('products', ['id' => $variant->id, 'deleted_at' => null]);
+        }
+    }
+
+    public function test_force_deleting_trashed_configurable_product_also_removes_variant_children(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        [$parent, $variants] = $this->createConfigurableProductWithVariants();
+
+        $this->deleteJson("/api/products/{$parent->id}")
+            ->assertOk();
+
+        $this->deleteJson("/api/products/{$parent->id}/force")
+            ->assertOk();
+
+        $this->assertDatabaseMissing('products', ['id' => $parent->id]);
+        foreach ($variants as $variant) {
+            $this->assertDatabaseMissing('products', ['id' => $variant->id]);
+            $this->assertSame(
+                0,
+                DB::table('product_links')
+                    ->where('link_type', 'super_link')
+                    ->where('linked_product_id', $variant->id)
+                    ->count()
+            );
+        }
+    }
+
     private function createProduct(array $overrides = []): Product
     {
         return Product::query()->create(array_merge([
@@ -117,5 +165,31 @@ class ProductVariantIsolationTest extends TestCase
             'status' => true,
             'stock_quantity' => 0,
         ], $overrides));
+    }
+
+    private function createConfigurableProductWithVariants(): array
+    {
+        $parent = $this->createProduct([
+            'name' => 'Configurable Parent',
+            'slug' => 'configurable-parent',
+            'sku' => 'CONFIG-PARENT',
+            'type' => 'configurable',
+        ]);
+
+        $variantA = $this->createProduct([
+            'name' => 'Config Variant A',
+            'slug' => 'config-variant-a',
+            'sku' => 'CONFIG-PARENT-V1',
+        ]);
+        $variantB = $this->createProduct([
+            'name' => 'Config Variant B',
+            'slug' => 'config-variant-b',
+            'sku' => 'CONFIG-PARENT-V2',
+        ]);
+
+        $parent->linkedProducts()->attach($variantA->id, ['link_type' => 'super_link', 'position' => 0]);
+        $parent->linkedProducts()->attach($variantB->id, ['link_type' => 'super_link', 'position' => 1]);
+
+        return [$parent, [$variantA, $variantB]];
     }
 }

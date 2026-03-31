@@ -558,8 +558,8 @@ const StorefrontProducts = () => {
     const page = Number.isNaN(pageParam) || pageParam < 1 ? 1 : pageParam;
 
     const currentCategory = categoryDetail || findCategoryBySlug(categories, activeCategorySlug);
-    const isLayoutTwo = categoryDetail?.display_layout === 'layout_2';
-    const activeSortOptions = isLayoutTwo ? LAYOUT_TWO_SORT_OPTIONS : DEFAULT_SORT_OPTIONS;
+    const isLayoutTwo = false;
+    const activeSortOptions = DEFAULT_SORT_OPTIONS;
     const categoryTitle = currentCategory?.name || (search ? `Kết quả: "${search}"` : 'Tất cả sản phẩm');
     const categoryDescription = currentCategory?.description || 'Khám phá bộ sưu tập tuyển chọn với bố cục được tối ưu cho mobile, dễ lướt và dễ so sánh.';
     const layoutTwoFilters = availableFilters.filter((filter) => ['select', 'multiselect'].includes(filter.type));
@@ -591,10 +591,10 @@ const StorefrontProducts = () => {
 
             params.set('sort', sort);
             params.set('page', String(page));
-            params.set('per_page', nextCategoryDetail?.display_layout === 'layout_2' ? '24' : '20');
+            params.set('per_page', '20');
+            params.delete('featured');
 
-            const endpoint = nextCategoryDetail?.display_layout === 'layout_2' ? '/web-api/products' : '/storefront/products';
-            const response = await api.get(`${endpoint}?${params.toString()}`);
+            const response = await api.get(`/storefront/products?${params.toString()}`);
             const payload = response.data || {};
 
             setProducts(payload.data || []);
@@ -603,7 +603,7 @@ const StorefrontProducts = () => {
                 last: payload.last_page || 1,
                 total: payload.total || 0,
             });
-            setAvailableFilters(Array.isArray(payload.available_filters) ? payload.available_filters : []);
+            setAvailableFilters([]);
         } catch (error) {
             console.error('Failed to load products', error);
             setProducts([]);

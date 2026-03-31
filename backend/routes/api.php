@@ -86,7 +86,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/categories/import/template', [CategoryController::class , 'downloadImportTemplate']);
     Route::post('/categories/import', [CategoryController::class , 'importExcel']);
     Route::post('/categories/reorder', [CategoryController::class , 'reorder']);
-    Route::post('/categories/bulk-layout', [CategoryController::class , 'bulkUpdateLayout']);
+    Route::delete('/categories/bulk-delete', [CategoryController::class , 'bulkDestroy']);
     Route::get('/categories/{id}/products', [CategoryController::class , 'products'])->whereNumber('id');
     Route::post('/categories/{id}/products/reorder', [CategoryController::class , 'reorderProducts'])->whereNumber('id');
     Route::post('/categories/{id}', [CategoryController::class , 'update'])->whereNumber('id');

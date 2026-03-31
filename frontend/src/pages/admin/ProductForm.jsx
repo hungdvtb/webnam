@@ -684,6 +684,27 @@ const createConvertVariantDraft = (overrides = {}) => ({
     ...overrides,
 });
 
+const buildInitialConvertToConfigurableForm = (sourceProduct = {}, fallbackProduct = {}) => {
+    const resolvedName = String(sourceProduct?.name || fallbackProduct?.name || '').trim();
+    const resolvedSku = String(sourceProduct?.sku || fallbackProduct?.sku || '').trim();
+
+    return {
+        parent_name: resolvedName,
+        attribute_source: 'preset',
+        preset_attribute_name: SIMPLE_TO_CONFIG_PRESET_ATTRIBUTES[0],
+        attribute_id: '',
+        custom_attribute_name: '',
+        variants: [
+            createConvertVariantDraft({
+                is_existing: true,
+                value: 'Mẫu gốc',
+                name: resolvedName,
+                sku: resolvedSku,
+            }),
+        ],
+    };
+};
+
 const Field = ({ label, children, className = "", labelClassName = "" }) => (
     <div className={`relative border border-stone/30 rounded-sm px-3 focus-within:border-primary/30 transition-colors flex items-center min-h-[40px] bg-white ${className}`}>
         <label className={`absolute -top-3 left-2 bg-white px-1.5 font-sans text-[13px] font-bold text-orange-700 tracking-tight leading-none ${labelClassName}`}>
@@ -1137,6 +1158,7 @@ const ProductForm = () => {
     const [blogResults, setBlogResults] = useState({}); // { index: results }
     const [domains, setDomains] = useState([]);
     const duplicateDraftDefaultsRef = useRef(null);
+    const legacyBundleVariantRepairNoticeShownRef = useRef(false);
 
     const [searchHistory, setSearchHistory] = useState(() => {
         const saved = localStorage.getItem('product_search_history');
@@ -1352,29 +1374,13 @@ const ProductForm = () => {
         };
     }, [resolvedConvertAttributeName]);
 
-    const buildInitialConvertToConfigurableForm = useCallback((sourceProduct = {}) => ({
-        parent_name: String(sourceProduct?.name || formData.name || '').trim(),
-        attribute_source: 'preset',
-        preset_attribute_name: SIMPLE_TO_CONFIG_PRESET_ATTRIBUTES[0],
-        attribute_id: '',
-        custom_attribute_name: '',
-        variants: [
-            createConvertVariantDraft({
-                is_existing: true,
-                value: 'Mẫu gốc',
-                name: String(sourceProduct?.name || formData.name || '').trim(),
-                sku: String(sourceProduct?.sku || formData.sku || '').trim(),
-            }),
-        ],
-    }), [formData.name, formData.sku]);
-
     const openConvertToConfigurableModal = useCallback(() => {
         setConvertToConfigurableForm(buildInitialConvertToConfigurableForm({
             name: formData.name,
             sku: formData.sku,
         }));
         setShowConvertToConfigurableModal(true);
-    }, [buildInitialConvertToConfigurableForm, formData.name, formData.sku]);
+    }, [formData.name, formData.sku]);
 
     const closeConvertToConfigurableModal = useCallback(() => {
         if (isConvertingToConfigurable) return;
@@ -1630,7 +1636,56 @@ const ProductForm = () => {
             price: normalizeMoneyValue(variant.price ?? item.price),
             cost_price: resolveDuplicateSafeCost(variant.cost_price, item.product_cost_price),
             image_url: resolveBundleItemImage(variant) || item.product_image_url || item.image_url,
+            legacy_missing_variant: false,
         };
+    };
+
+    const resolveLegacyBundleVariantSelection = (item, variants = [], siblingItems = []) => {
+        if (!item?.legacy_missing_variant || !Array.isArray(variants) || variants.length === 0) {
+            return null;
+        }
+
+        const normalizedItemSku = normalizeSkuSeed(item.product_sku || item.sku || '');
+        if (normalizedItemSku) {
+            const matchedBySku = variants.find((variant) => normalizeSkuSeed(variant?.sku) === normalizedItemSku);
+            if (matchedBySku) {
+                return matchedBySku;
+            }
+        }
+
+        const normalizedItemName = String(item.product_name || item.name || '').trim().toLocaleLowerCase('vi');
+        if (normalizedItemName) {
+            const matchedByName = variants.filter((variant) => (
+                String(variant?.name || '').trim().toLocaleLowerCase('vi') === normalizedItemName
+            ));
+            if (matchedByName.length === 1) {
+                return matchedByName[0];
+            }
+        }
+
+        const normalizedItemPrice = normalizeWholeMoneyNumber(item?.price);
+        if (normalizedItemPrice !== null) {
+            const matchedByPrice = variants.filter((variant) => (
+                normalizeWholeMoneyNumber(variant?.price) === normalizedItemPrice
+            ));
+            if (matchedByPrice.length === 1) {
+                return matchedByPrice[0];
+            }
+        }
+
+        const currentEntryKey = String(item.entry_id || item.id || '');
+        const usedVariantIds = new Set(
+            siblingItems
+                .filter((sibling) => (
+                    getBundleItemProductId(sibling) === getBundleItemProductId(item)
+                    && String(sibling.entry_id || sibling.id || '') !== currentEntryKey
+                    && sibling?.variant_id
+                ))
+                .map((sibling) => Number(sibling.variant_id))
+                .filter(Boolean)
+        );
+
+        return variants.find((variant) => !usedVariantIds.has(Number(variant.id))) || variants[0] || null;
     };
 
     const hydrateBundleItemsWithVariants = (productId, variants = []) => {
@@ -1639,19 +1694,40 @@ const ProductForm = () => {
             return;
         }
 
+        let autoResolvedCount = 0;
+
         setBundleOptions((prev) => prev.map((option) => ({
             ...option,
             items: option.items.map((item) => {
-                if (getBundleItemProductId(item) !== normalizedProductId || !item.variant_id) {
+                if (getBundleItemProductId(item) !== normalizedProductId) {
                     return item;
                 }
 
-                const selectedVariant = variants.find((variant) => Number(variant.id) === Number(item.variant_id));
-                return selectedVariant
-                    ? applyBundleItemVariantDisplay(item, selectedVariant)
-                    : restoreBundleItemBaseDisplay(item);
+                const selectedVariant = item.variant_id
+                    ? variants.find((variant) => Number(variant.id) === Number(item.variant_id))
+                    : null;
+                if (selectedVariant) {
+                    return applyBundleItemVariantDisplay(item, selectedVariant);
+                }
+
+                const baseItem = restoreBundleItemBaseDisplay(item);
+                const fallbackVariant = resolveLegacyBundleVariantSelection(baseItem, variants, option.items);
+                if (!fallbackVariant) {
+                    return baseItem;
+                }
+
+                autoResolvedCount += 1;
+                return applyBundleItemVariantDisplay(baseItem, fallbackVariant);
             }),
         })));
+
+        if (autoResolvedCount > 0 && !legacyBundleVariantRepairNoticeShownRef.current) {
+            legacyBundleVariantRepairNoticeShownRef.current = true;
+            showToast({
+                message: 'Một số item bundle cũ chưa có biến thể đã được tự chọn tạm biến thể đầu tiên. Vui lòng kiểm tra lại trước khi lưu.',
+                type: 'warning',
+            });
+        }
     };
 
     const loadBundleVariantsForProduct = async (productId, forceRefresh = false) => {
@@ -2127,7 +2203,7 @@ const ProductForm = () => {
         }
         fetchBlogPosts();
         fetchDomains();
-    }, [buildInitialConvertToConfigurableForm, id, isEdit]);
+    }, [id, isEdit]);
 
     useEffect(() => {
         if (!inventoryUnits.length) return;
@@ -2661,11 +2737,11 @@ const ProductForm = () => {
                         optionsMap[title].post_title = item.pivot?.option_post_title || '';
                     }
 
-                    optionsMap[title].items.push({
-                        entry_id: createBundleItemEntryId(),
-                        id: item.id,
-                        product_id: item.id,
-                        product_name: item.name,
+                        optionsMap[title].items.push({
+                            entry_id: createBundleItemEntryId(),
+                            id: item.id,
+                            product_id: item.id,
+                            product_name: item.name,
                         product_sku: item.sku,
                         product_price: normalizeMoneyValue(item.price),
                         product_cost_price: resolveDuplicateSafeCost(item.cost_price),
@@ -2677,11 +2753,12 @@ const ProductForm = () => {
                         quantity: item.pivot?.quantity ?? 1,
                         is_required: !!item.pivot?.is_required,
                         is_default: !!item.pivot?.is_default,
-                        image_url: (item.images?.find(img => img.is_primary) || item.images?.[0])?.image_url,
-                        type: item.type,
-                        variant_id: item.pivot?.variant_id || null,
-                        variant_label: ''
-                    });
+                            image_url: (item.images?.find(img => img.is_primary) || item.images?.[0])?.image_url,
+                            type: item.type,
+                            variant_id: item.pivot?.variant_id || null,
+                            variant_label: '',
+                            legacy_missing_variant: item.type === 'configurable' && !item.pivot?.variant_id,
+                        });
                 });
                 setBundleOptions(Object.entries(optionsMap).map(([title, optionData]) => ({
                     id: Math.random().toString(36).substr(2, 9),
@@ -3798,6 +3875,17 @@ const ProductForm = () => {
             setIsSaving(false);
             showToast({
                 message: 'Mã sản phẩm hoặc mã biến thể đang bị trùng trong form. Vui lòng kiểm tra lại trước khi lưu.',
+                type: 'error',
+            });
+            return;
+        }
+        const missingBundleVariantItems = formData.type === 'bundle'
+            ? compositeItemsForPricing.filter((item) => item?.type === 'configurable' && !item?.variant_id)
+            : [];
+        if (missingBundleVariantItems.length > 0) {
+            setIsSaving(false);
+            showToast({
+                message: `Còn ${missingBundleVariantItems.length} item bundle dạng configurable chưa chọn biến thể. Vui lòng chọn biến thể trước khi lưu.`,
                 type: 'error',
             });
             return;

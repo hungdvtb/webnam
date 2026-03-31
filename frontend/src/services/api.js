@@ -150,9 +150,9 @@ export const categoryApi = {
     store: (data) => api.post('/categories', data),
     update: (id, data) => api.post(`/categories/${id}`, data),
     destroy: (id) => api.delete(`/categories/${id}`),
+    bulkDelete: (ids) => api.delete('/categories/bulk-delete', { data: { ids } }),
     reorder: (items) => api.post('/categories/reorder', { items }),
     reorderProducts: (id, productIds) => api.post(`/categories/${id}/products/reorder`, { product_ids: productIds }),
-    bulkUpdateLayout: (data) => api.post('/categories/bulk-layout', data),
 };
 
 export const attributeApi = {

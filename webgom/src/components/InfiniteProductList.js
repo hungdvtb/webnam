@@ -50,12 +50,6 @@ export default function InfiniteProductList({ initialData }) {
               <Link href={`/product/${product.slug || product.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
                 <h3 className={styles.productName}>{product.name}</h3>
               </Link>
-              <div className={styles.rating}>
-                {[...Array(5)].map((_, index) => (
-                  <span key={index} className="material-symbols-outlined">star</span>
-                ))}
-                <span className={styles.reviewCount}>(24)</span>
-              </div>
               <div className={styles.cardFooter}>
                 <span className={styles.price}>
                   {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(product.price)}

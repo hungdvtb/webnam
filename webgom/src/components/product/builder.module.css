@@ -1190,6 +1190,13 @@
   font-style: italic;
 }
 
+.removedMetaValue {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(27, 54, 93, 0.42);
+  line-height: 1.1;
+}
+
 .restoreBtn {
   display: flex;
   align-items: center;
@@ -2319,6 +2326,59 @@
     width: 26px;
     height: 26px;
     border-radius: 6px;
+  }
+
+  .tableRowRemovedCompact {
+    padding-block: 0.52rem;
+    align-items: flex-start;
+  }
+
+  .tableRowRemovedCompact .colName {
+    gap: 0.16rem;
+  }
+
+  .tableRowRemovedCompact .removedLabel {
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  .tableRowRemovedCompact .variantHint {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .mobileRemovedContent {
+    min-width: 0;
+  }
+
+  .mobileRemovedBottom {
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .mobileRemovedMeta {
+    gap: 0.12rem;
+  }
+
+  .mobileRemovedActions {
+    justify-content: flex-end;
+    gap: 0.28rem;
+  }
+
+  .tableRowRemovedCompact .restoreBtn,
+  .tableRowRemovedCompact .selectSlotBtn {
+    gap: 2px;
+    padding: 4px 7px;
+    border-radius: 6px;
+    font-size: 9.5px;
+    line-height: 1.05;
+  }
+
+  .tableRowRemovedCompact .restoreBtn :global(.material-symbols-outlined),
+  .tableRowRemovedCompact .selectSlotBtn :global(.material-symbols-outlined) {
+    font-size: 11px !important;
   }
 
   .tableFooter {

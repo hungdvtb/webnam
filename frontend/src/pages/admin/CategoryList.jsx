@@ -5,10 +5,9 @@ import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { Tree, getDescendants, isAncestor } from '@minoru/react-dnd-treeview';
 import { useUI } from '../../context/UIContext';
+import CategoryProductSortModal from '../../components/admin/CategoryProductSortModal';
 
 const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelected, onSelect, isCheckable, isChecked, onCheck, isDropTarget, allAttributes }) => {
-    const layoutLabel = node.data?.display_layout === 'layout_2' ? 'Giao diện 2' : 'Giao diện 1';
-    const layoutIcon = node.data?.display_layout === 'layout_2' ? 'view_quilt' : 'view_compact';
     
     // Get filter labels
     const filterIds = node.data?.filterable_attribute_ids || [];
@@ -72,16 +71,8 @@ const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelecte
                 </span>
                 <span className={`font-ui text-primary transition-all ${isSelected ? 'font-black scale-[1.02] translate-x-1' : 'font-bold'}`}>{node.text}</span>
             </div>
-
-            {/* Layout & Filter Info */}
-            <div className="hidden xl:flex items-center gap-4 mr-4">
-                {/* Layout Column */}
-                <div className="flex w-20 flex-col items-center justify-center gap-0.5 border-x border-gold/5 px-2">
-                    <span className="material-symbols-outlined text-[16px] text-primary/40">{layoutIcon}</span>
-                    <span className="text-[10px] font-bold uppercase tracking-tight text-primary/60 whitespace-nowrap">{layoutLabel}</span>
-                </div>
-
-                {/* Filters Column */}
+            {/* Filter Info */}
+            <div className="hidden xl:flex items-center mr-4">
                 <div className="flex min-w-[120px] max-w-[160px] flex-col items-center justify-center gap-0.5 px-1">
                     <span className="material-symbols-outlined text-[16px] text-primary/40">filter_alt</span>
                     <span className={`text-[10px] font-bold tracking-tight uppercase text-center leading-tight ${filterCount > 0 ? 'text-umber' : 'text-stone/20 italic'}`}>
@@ -166,7 +157,6 @@ const INITIAL_FORM_DATA = {
     status: 1,
     banner: null,
     banner_url: null,
-    display_layout: 'layout_1',
     filterable_attribute_ids: [],
 };
 
@@ -338,7 +328,6 @@ const CategoryList = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [filterLevel, setFilterLevel] = useState('all'); // 'all', 'root', 'child'
     const [filterStatus, setFilterStatus] = useState('all'); // 'all', '1', '0'
-    const [filterLayout, setFilterLayout] = useState('all'); // 'all', 'layout_1', 'layout_2'
     const [showFilterMenu, setShowFilterMenu] = useState(false);
     const filterRef = React.useRef(null);
     const treeRef = React.useRef(null);
@@ -349,7 +338,7 @@ const CategoryList = () => {
     const [openNodes, setOpenNodes] = useState(new Set());
     const [formData, setFormData] = useState(INITIAL_FORM_DATA);
     const [selectedIds, setSelectedIds] = useState(new Set());
-    const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
     const [allAttributes, setAllAttributes] = useState([]);
     const [selectedCategoryMeta, setSelectedCategoryMeta] = useState(null);
     const [categoryProducts, setCategoryProducts] = useState([]);
@@ -358,6 +347,7 @@ const CategoryList = () => {
     const [categoryProductsDirty, setCategoryProductsDirty] = useState(false);
     const [draggingProductId, setDraggingProductId] = useState(null);
     const [dragOverProductId, setDragOverProductId] = useState(null);
+    const [isCategorySortModalOpen, setIsCategorySortModalOpen] = useState(false);
     const importInputRef = useRef(null);
     const [isExportingExcel, setIsExportingExcel] = useState(false);
     const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
@@ -391,13 +381,6 @@ const CategoryList = () => {
             matchedNodes = matchedNodes.filter(n => n.parent !== 0 && n.parent !== null);
         }
 
-        // Apply Layout filter
-        if (filterLayout === 'layout_1') {
-            matchedNodes = matchedNodes.filter(n => n.data.display_layout === 'layout_1' || !n.data.display_layout);
-        } else if (filterLayout === 'layout_2') {
-            matchedNodes = matchedNodes.filter(n => n.data.display_layout === 'layout_2');
-        }
-
         // Apply Search Query
         if (searchQuery.trim()) {
             const lowerQuery = searchQuery.toLowerCase();
@@ -405,7 +388,7 @@ const CategoryList = () => {
         }
         
         // If no filter is applied, return full tree
-        if (!searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all' && filterLayout === 'all') {
+        if (!searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all') {
             return treeData;
         }
 
@@ -429,7 +412,7 @@ const CategoryList = () => {
         });
         
         return treeData.filter(node => includeIds.has(node.id));
-    }, [treeData, searchQuery, filterLevel, filterStatus, filterLayout]);
+    }, [treeData, searchQuery, filterLevel, filterStatus]);
 
     const selectedCategoryNode = React.useMemo(
         () => treeData.find((node) => node.id === selectedId) || null,
@@ -526,6 +509,30 @@ const CategoryList = () => {
         moveCategoryProduct(currentIndex, currentIndex + offset);
     };
 
+    const moveCategoryProductToPosition = (productId, position) => {
+        const currentIndex = categoryProducts.findIndex((product) => product.id === productId);
+        if (currentIndex < 0) {
+            return;
+        }
+
+        const targetIndex = Math.min(
+            Math.max(Number(position) - 1, 0),
+            Math.max(categoryProducts.length - 1, 0),
+        );
+
+        moveCategoryProduct(currentIndex, targetIndex);
+    };
+
+    const resetCategoryProductDragState = () => {
+        setDraggingProductId(null);
+        setDragOverProductId(null);
+    };
+
+    const closeCategorySortModal = () => {
+        resetCategoryProductDragState();
+        setIsCategorySortModalOpen(false);
+    };
+
     const handleCategoryProductDragStart = (productId) => {
         setDraggingProductId(productId);
         setDragOverProductId(productId);
@@ -533,8 +540,7 @@ const CategoryList = () => {
 
     const handleCategoryProductDrop = (targetProductId) => {
         if (!draggingProductId || draggingProductId === targetProductId) {
-            setDraggingProductId(null);
-            setDragOverProductId(null);
+            resetCategoryProductDragState();
             return;
         }
 
@@ -542,8 +548,7 @@ const CategoryList = () => {
         const toIndex = categoryProducts.findIndex((product) => product.id === targetProductId);
 
         moveCategoryProduct(fromIndex, toIndex);
-        setDraggingProductId(null);
-        setDragOverProductId(null);
+        resetCategoryProductDragState();
     };
 
     const fetchInitialData = async () => {
@@ -584,8 +589,28 @@ const CategoryList = () => {
                 data: cat
             }));
             setTreeData(formattedData);
-            if (selectedId) {
+            const availableIds = new Set(formattedData.map((node) => node.id));
+            setSelectedIds((prev) => {
+                const next = new Set(Array.from(prev).filter((id) => availableIds.has(id)));
+                return next.size === prev.size ? prev : next;
+            });
+            const selectedStillExists = selectedId
+                ? formattedData.some((node) => node.id === selectedId)
+                : false;
+
+            if (selectedStillExists) {
                 loadCategoryProducts(selectedId);
+            } else {
+                setSelectedId(null);
+                setSelectedCategoryMeta(null);
+                setCategoryProducts([]);
+                setCategoryProductsDirty(false);
+                setIsCategorySortModalOpen(false);
+            }
+
+            if (formData.id && !formattedData.some((node) => node.id === formData.id)) {
+                setIsFormOpen(false);
+                setFormData(INITIAL_FORM_DATA);
             }
         } catch (error) {
             console.error('Error fetching categories:', error);
@@ -616,6 +641,7 @@ const CategoryList = () => {
             setSelectedCategoryMeta(null);
             setCategoryProducts([]);
             setCategoryProductsDirty(false);
+            setIsCategorySortModalOpen(false);
             return;
         }
 
@@ -637,7 +663,7 @@ const CategoryList = () => {
     }, [treeData, selectedId]);
 
     const handleDrop = async (newTree, options) => {
-        if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all' || filterLayout !== 'all') return; // Disable reorder when filtered
+        if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all') return; // Disable reorder when filtered
 
         setTreeData(newTree); // Optimistic UI update
 
@@ -670,8 +696,6 @@ const CategoryList = () => {
             }
             
             data.append('status', formData.status);
-            data.append('display_layout', formData.display_layout);
-            
             // Handle array of attributes
             if (formData.filterable_attribute_ids && formData.filterable_attribute_ids.length > 0) {
                 formData.filterable_attribute_ids.forEach((attrId) => {
@@ -732,7 +756,6 @@ const CategoryList = () => {
             status: cat.status,
             banner: cat.banner_path,
             banner_url: bannerUrl,
-            display_layout: cat.display_layout || 'layout_1',
             filterable_attribute_ids: (cat.filterable_attribute_ids || []).map(id => Number(id))
         });
         setIsFormOpen(true);
@@ -767,24 +790,39 @@ const CategoryList = () => {
         }
     };
 
-    const handleBulkUpdateLayout = async (layout) => {
-        if (selectedIds.size === 0) return;
-        
-        setIsBulkUpdating(true);
-        try {
-            await categoryApi.bulkUpdateLayout({
-                ids: Array.from(selectedIds),
-                display_layout: layout
-            });
-            alert(`Đã cập nhật giao diện ${layout === 'layout_1' ? '1' : '2'} cho ${selectedIds.size} danh mục.`);
-            setSelectedIds(new Set());
-            fetchCategories();
-        } catch (error) {
-            console.error("Bulk update error:", error);
-            alert("Lỗi khi cập nhật giao diện hàng loạt.");
-        } finally {
-            setIsBulkUpdating(false);
-        }
+    const handleBulkDelete = () => {
+        if (selectedIds.size === 0 || isBulkDeleting) return;
+
+        const ids = Array.from(selectedIds);
+        const selectedCount = ids.length;
+
+        showModal({
+            title: 'Xóa danh mục đã chọn',
+            content: `Bạn có chắc muốn xóa <strong>${selectedCount}</strong> danh mục đã chọn?<br /><br />Nếu trong số đó có danh mục cha, toàn bộ danh mục con bên trong cũng sẽ bị xóa theo.`,
+            type: 'warning',
+            actionText: 'Xóa danh mục',
+            onAction: async () => {
+                setIsBulkDeleting(true);
+                try {
+                    await categoryApi.bulkDelete(ids);
+                    setSelectedIds(new Set());
+                    showToast({
+                        message: `Đã xóa ${selectedCount} danh mục đã chọn.`,
+                        type: 'success',
+                    });
+                    await fetchCategories();
+                } catch (error) {
+                    console.error('Bulk delete error:', error);
+                    showModal({
+                        title: 'Lỗi',
+                        content: error?.response?.data?.message || 'Không thể xóa các danh mục đã chọn.',
+                        type: 'error',
+                    });
+                } finally {
+                    setIsBulkDeleting(false);
+                }
+            },
+        });
     };
 
     const handleDownloadTemplate = async () => {
@@ -941,6 +979,23 @@ const CategoryList = () => {
                             >
                                 <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>refresh</span>
                             </button>
+                            <button
+                                onClick={handleBulkDelete}
+                                className={`relative border p-1.5 transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 shadow-sm ${
+                                    selectedIds.size > 0
+                                        ? 'bg-brick text-white border-brick hover:bg-umber hover:border-umber'
+                                        : 'bg-white border-gold/20 text-stone/35'
+                                } ${isBulkDeleting ? 'opacity-70' : ''}`}
+                                title={selectedIds.size > 0 ? `Xóa ${selectedIds.size} danh mục đã chọn` : 'Chọn danh mục để xóa'}
+                                disabled={selectedIds.size === 0 || isBulkDeleting}
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${isBulkDeleting ? 'animate-pulse' : ''}`}>delete</span>
+                                {selectedIds.size > 0 && (
+                                    <span className="absolute -right-1.5 -top-1.5 min-w-[18px] rounded-full bg-gold px-1 text-center text-[9px] font-black leading-[18px] text-primary shadow-sm">
+                                        {selectedIds.size}
+                                    </span>
+                                )}
+                            </button>
 
                             <button
                                 onClick={handleDownloadTemplate}
@@ -982,10 +1037,10 @@ const CategoryList = () => {
                                 <button 
                                     data-filter-btn
                                     onClick={() => setShowFilterMenu(!showFilterMenu)}
-                                    className={`flex w-9 h-9 items-center justify-center rounded-sm border transition-all ${(filterLevel !== 'all' || filterStatus !== 'all' || filterLayout !== 'all') ? 'bg-primary/10 border-primary/20 text-primary' : 'bg-white border-gold/20 text-stone hover:border-gold/40 hover:text-primary shadow-sm'}`}
+                                    className={`flex w-9 h-9 items-center justify-center rounded-sm border transition-all ${(filterLevel !== 'all' || filterStatus !== 'all') ? 'bg-primary/10 border-primary/20 text-primary' : 'bg-white border-gold/20 text-stone hover:border-gold/40 hover:text-primary shadow-sm'}`}
                                     title="Bộ lọc nâng cao"
                                 >
-                                    <span className="material-symbols-outlined text-[18px]">{(filterLevel !== 'all' || filterStatus !== 'all' || filterLayout !== 'all') ? 'filter_alt' : 'filter_list'}</span>
+                                    <span className="material-symbols-outlined text-[18px]">{(filterLevel !== 'all' || filterStatus !== 'all') ? 'filter_alt' : 'filter_list'}</span>
                                 </button>
                                 
                                 {showFilterMenu && (
@@ -996,9 +1051,9 @@ const CategoryList = () => {
                                                     <span className="material-symbols-outlined text-[14px]">tune</span>
                                                     Tùy chọn lọc
                                                 </span>
-                                                {(filterLevel !== 'all' || filterStatus !== 'all' || filterLayout !== 'all') && (
+                                                {(filterLevel !== 'all' || filterStatus !== 'all') && (
                                                     <button 
-                                                        onClick={() => { setFilterLevel('all'); setFilterStatus('all'); setFilterLayout('all'); }} 
+                                                        onClick={() => { setFilterLevel('all'); setFilterStatus('all'); }} 
                                                         className="text-[10px] text-brick hover:underline font-bold"
                                                     >
                                                         Xóa lọc
@@ -1015,8 +1070,8 @@ const CategoryList = () => {
                                                     className="w-full bg-stone/5 border border-gold/10 p-2.5 text-[12px] focus:outline-none focus:border-primary font-body rounded-sm"
                                                 >
                                                     <option value="all">Tất cả cấp</option>
-                                                    <option value="root">Chỉ danh mục cha (Gốc)</option>
-                                                    <option value="child">Chỉ danh mục con</option>
+                                                    <option value="root">Danh mục gốc</option>
+                                                    <option value="child">Danh mục con</option>
                                                 </select>
                                             </div>
                                             <div className="space-y-2">
@@ -1028,19 +1083,7 @@ const CategoryList = () => {
                                                 >
                                                     <option value="all">Tất cả trạng thái</option>
                                                     <option value="1">Đang hiển thị</option>
-                                                    <option value="0">Đang bị ẩn</option>
-                                                </select>
-                                            </div>
-                                            <div className="space-y-2">
-                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Kiểu giao diện</label>
-                                                <select 
-                                                    value={filterLayout} 
-                                                    onChange={(e) => setFilterLayout(e.target.value)}
-                                                    className="w-full bg-stone/5 border border-gold/10 p-2.5 text-[12px] focus:outline-none focus:border-primary font-body rounded-sm"
-                                                >
-                                                    <option value="all">Tất cả kiểu</option>
-                                                    <option value="layout_1">Giao diện 1 (Mặc định)</option>
-                                                    <option value="layout_2">Giao diện 2 (Có lọc)</option>
+                                                    <option value="0">Đang ẩn</option>
                                                 </select>
                                             </div>
                                         </div>
@@ -1153,8 +1196,7 @@ const CategoryList = () => {
                                 />
                             </div>
                             <div className="flex-1 text-[10px] font-black uppercase tracking-[0.2em] text-primary/40 pl-11">Tên Danh Mục</div>
-                            <div className="hidden xl:flex items-center gap-4 mr-6">
-                                <div className="w-20 text-[10px] font-black uppercase tracking-[0.2em] text-primary/60 text-center">Giao diện</div>
+                            <div className="hidden xl:flex items-center mr-6">
                                 <div className="min-w-[120px] max-w-[160px] text-[10px] font-black uppercase tracking-[0.2em] text-primary/60 text-center">Bộ lọc</div>
                             </div>
                         </div>
@@ -1175,9 +1217,9 @@ const CategoryList = () => {
                                         ref={treeRef}
                                         tree={filteredTreeData}
                                         rootId={0}
-                                        canDrag={() => !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all' && filterLayout === 'all'}
+                                        canDrag={() => !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all'}
                                         canDrop={(tree, { dragSourceId, dropTargetId }) => {
-                                            if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all' || filterLayout !== 'all') return false;
+                                            if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all') return false;
 
                                             if (dragSourceId === undefined || dragSourceId === null) {
                                                 return undefined;
@@ -1228,35 +1270,26 @@ const CategoryList = () => {
                             )}
                         </div>
 
-                        {/* Bulk Action Bar */}
-                        {selectedIds.size > 0 && (
+                        {false && (
                             <div className="absolute bottom-6 left-1/2 z-[100] flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-3 rounded-[1.5rem] border border-white/10 bg-primary px-4 py-3 text-white shadow-[0_10px_40px_rgba(0,0,0,0.3)] animate-in slide-in-from-bottom duration-300">
                                 <div className="flex items-center gap-3 border-r border-white/10 pr-4">
                                     <div className="text-xl font-bold text-gold">{selectedIds.size}</div>
                                     <div className="text-[10px] font-black uppercase tracking-[0.2em] opacity-60">đã chọn</div>
                                 </div>
                                 <div className="flex flex-wrap items-center justify-center gap-2">
-                                    <span className="mr-1 text-[10px] font-black uppercase tracking-[0.2em] opacity-40">Cập nhật giao diện:</span>
-                                    <button 
-                                        disabled={isBulkUpdating}
-                                        onClick={() => handleBulkUpdateLayout('layout_1')}
-                                        className="flex items-center gap-2 bg-white/10 hover:bg-white/20 px-4 py-2 rounded-full transition-all text-[11px] font-bold uppercase tracking-wider disabled:opacity-50"
+                                    <button
+                                        disabled={isBulkDeleting}
+                                        onClick={handleBulkDelete}
+                                        className="flex items-center gap-2 rounded-full bg-brick px-4 py-2 text-[11px] font-bold uppercase tracking-wider text-white transition-all hover:bg-[#8f2d1d] disabled:opacity-50"
                                     >
-                                        <span className="material-symbols-outlined text-[18px]">view_compact</span>
-                                        Giao diện 1
-                                    </button>
-                                    <button 
-                                        disabled={isBulkUpdating}
-                                        onClick={() => handleBulkUpdateLayout('layout_2')}
-                                        className="flex items-center gap-2 bg-gold text-primary hover:bg-white px-4 py-2 rounded-full transition-all text-[11px] font-bold uppercase tracking-wider disabled:opacity-50"
-                                    >
-                                        <span className="material-symbols-outlined text-[18px]">view_quilt</span>
-                                        Giao diện 2
+                                        <span className={`material-symbols-outlined text-[18px] ${isBulkDeleting ? 'animate-pulse' : ''}`}>delete</span>
+                                        {isBulkDeleting ? 'Đang xóa' : 'Xóa'}
                                     </button>
                                 </div>
                                 <button 
+                                    disabled={isBulkDeleting}
                                     onClick={() => setSelectedIds(new Set())}
-                                    className="size-8 flex items-center justify-center rounded-full hover:bg-brick/20 text-white transition-all"
+                                    className="size-8 flex items-center justify-center rounded-full hover:bg-brick/20 text-white transition-all disabled:opacity-40"
                                 >
                                     <span className="material-symbols-outlined text-[20px]">close</span>
                                 </button>
@@ -1301,11 +1334,21 @@ const CategoryList = () => {
                                     <form id="category-form" onSubmit={handleFormSubmit} className="space-y-6">
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Tên danh mục</label>
-                                            <input required type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body rounded-sm" />
+                                            <input
+                                                required
+                                                type="text"
+                                                value={formData.name}
+                                                onChange={e => setFormData({ ...formData, name: e.target.value })}
+                                                className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body rounded-sm"
+                                            />
                                         </div>
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Danh mục cha</label>
-                                            <select value={formData.parent_id} onChange={e => setFormData({ ...formData, parent_id: e.target.value })} className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body rounded-sm appearance-none">
+                                            <select
+                                                value={formData.parent_id}
+                                                onChange={e => setFormData({ ...formData, parent_id: e.target.value })}
+                                                className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body rounded-sm appearance-none"
+                                            >
                                                 <option value="">-- Là Danh mục gốc --</option>
                                                 {(() => {
                                                     const renderOptions = (parentId = 0, prefix = '') => {
@@ -1326,34 +1369,16 @@ const CategoryList = () => {
                                         </div>
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Mô tả chi tiết</label>
-                                            <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body h-32 resize-none rounded-sm"></textarea>
-                                        </div>
-
-                                        <div className="space-y-1.5">
-                                            <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Kiểu hiển thị (Layout)</label>
-                                            <div className="grid grid-cols-2 gap-3">
-                                                <button 
-                                                    type="button"
-                                                    onClick={() => setFormData({ ...formData, display_layout: 'layout_1' })}
-                                                    className={`p-3 border rounded-sm flex flex-col items-center gap-2 transition-all ${formData.display_layout === 'layout_1' ? 'border-primary bg-primary/5 ring-1 ring-primary/20' : 'border-gold/10 bg-white hover:border-gold/30'}`}
-                                                >
-                                                    <span className="material-symbols-outlined text-2xl text-stone/40">view_compact</span>
-                                                    <span className={`text-[10px] font-black uppercase tracking-widest ${formData.display_layout === 'layout_1' ? 'text-primary' : 'text-stone/40'}`}>Giao diện 1</span>
-                                                </button>
-                                                <button 
-                                                    type="button"
-                                                    onClick={() => setFormData({ ...formData, display_layout: 'layout_2' })}
-                                                    className={`p-3 border rounded-sm flex flex-col items-center gap-2 transition-all ${formData.display_layout === 'layout_2' ? 'border-primary bg-primary/5 ring-1 ring-primary/20' : 'border-gold/10 bg-white hover:border-gold/30'}`}
-                                                >
-                                                    <span className="material-symbols-outlined text-2xl text-stone/40">view_quilt</span>
-                                                    <span className={`text-[10px] font-black uppercase tracking-widest ${formData.display_layout === 'layout_2' ? 'text-primary' : 'text-stone/40'}`}>Giao diện 2</span>
-                                                </button>
-                                            </div>
+                                            <textarea
+                                                value={formData.description}
+                                                onChange={e => setFormData({ ...formData, description: e.target.value })}
+                                                className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body h-32 resize-none rounded-sm"
+                                            />
                                         </div>
 
                                         <div className="space-y-3 bg-gold/5 p-4 border border-gold/10 rounded-sm">
                                             <div className="flex items-center justify-between border-b border-gold/10 pb-2">
-                                                <label className="text-[10px] font-black uppercase tracking-widest text-primary">Bộ lọc thuộc tính (Chỉ Layout 2)</label>
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-primary">Bộ lọc thuộc tính</label>
                                                 <span className="text-[9px] text-stone/40 italic">Chọn các thuộc tính hiển thị</span>
                                             </div>
                                             
@@ -1533,6 +1558,16 @@ const CategoryList = () => {
                                     <div className="flex flex-wrap items-center justify-end gap-2">
                                         <button
                                             type="button"
+                                            onClick={() => setIsCategorySortModalOpen(true)}
+                                            disabled={categoryProductsLoading}
+                                            className="flex h-9 items-center gap-2 rounded-sm border border-gold/15 px-3 text-[10px] font-black uppercase tracking-[0.14em] text-stone/60 transition-colors hover:border-primary hover:text-primary disabled:opacity-40"
+                                            title="Mở bảng sắp xếp sản phẩm"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">table_rows</span>
+                                            Bảng sắp xếp
+                                        </button>
+                                        <button
+                                            type="button"
                                             onClick={() => handleEdit(selectedCategoryNode)}
                                             className="flex h-9 w-9 items-center justify-center rounded-sm border border-gold/15 text-stone/60 transition-colors hover:border-primary hover:text-primary"
                                             title="Sửa danh mục đang chọn"
@@ -1572,9 +1607,6 @@ const CategoryList = () => {
                                 <div className="flex flex-wrap items-center gap-2 border-b border-gold/10 px-4 py-3">
                                     <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-primary">
                                         {selectedCategoryMeta?.products_count ?? categoryProducts.length} sản phẩm
-                                    </span>
-                                    <span className="rounded-full bg-gold/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-amber-700">
-                                        {selectedCategoryMeta?.display_layout === 'layout_2' ? 'Layout 2' : 'Layout 1'}
                                     </span>
                                     <span className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${
                                         Number(selectedCategoryMeta?.status ?? selectedCategoryNode.data?.status ?? 0) === 1
@@ -1638,8 +1670,7 @@ const CategoryList = () => {
                                                 onDragEnter={setDragOverProductId}
                                                 onDrop={handleCategoryProductDrop}
                                                 onDragEnd={() => {
-                                                    setDraggingProductId(null);
-                                                    setDragOverProductId(null);
+                                                    resetCategoryProductDragState();
                                                 }}
                                                 onMoveUp={() => moveCategoryProductByOffset(product.id, -1)}
                                                 onMoveDown={() => moveCategoryProductByOffset(product.id, 1)}
@@ -1661,6 +1692,27 @@ const CategoryList = () => {
                     </div>
                 </div>
             </div>
+            <CategoryProductSortModal
+                open={isCategorySortModalOpen}
+                onClose={closeCategorySortModal}
+                category={selectedCategoryMeta}
+                products={categoryProducts}
+                isLoading={categoryProductsLoading}
+                isSaving={categoryProductsSaving}
+                isDirty={categoryProductsDirty}
+                draggingProductId={draggingProductId}
+                dragOverProductId={dragOverProductId}
+                onDragStart={handleCategoryProductDragStart}
+                onDragEnter={setDragOverProductId}
+                onDrop={handleCategoryProductDrop}
+                onDragEnd={resetCategoryProductDragState}
+                onMoveUp={(productId) => moveCategoryProductByOffset(productId, -1)}
+                onMoveDown={(productId) => moveCategoryProductByOffset(productId, 1)}
+                onMoveToPosition={moveCategoryProductToPosition}
+                onRefresh={() => loadCategoryProducts(selectedId)}
+                onReset={() => loadCategoryProducts(selectedId)}
+                onSave={saveCategoryProductOrder}
+            />
         </DndProvider>
     );
 };

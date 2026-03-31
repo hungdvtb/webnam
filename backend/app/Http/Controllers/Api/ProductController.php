@@ -3875,13 +3875,86 @@ class ProductController extends Controller
     }
 
 
+    protected function resolveSuperLinkVariantIds(array $productIds): array
+    {
+        $normalizedIds = collect($productIds)
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($normalizedIds)) {
+            return [];
+        }
+
+        return DB::table('product_links')
+            ->whereIn('product_id', $normalizedIds)
+            ->where('link_type', 'super_link')
+            ->pluck('linked_product_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    protected function resolveProductTrashCascadeIds(array $productIds): array
+    {
+        return collect(array_merge($productIds, $this->resolveSuperLinkVariantIds($productIds)))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    protected function trashProductsWithVariants(array $productIds): void
+    {
+        $targetIds = $this->resolveProductTrashCascadeIds($productIds);
+
+        if (!empty($targetIds)) {
+            Product::query()->whereIn('id', $targetIds)->delete();
+        }
+    }
+
+    protected function restoreProductsWithVariants(array $productIds): void
+    {
+        $targetIds = $this->resolveProductTrashCascadeIds($productIds);
+
+        if (!empty($targetIds)) {
+            Product::onlyTrashed()->whereIn('id', $targetIds)->restore();
+        }
+    }
+
+    protected function forceDeleteProductsWithVariants(array $productIds): void
+    {
+        $targetIds = $this->resolveProductTrashCascadeIds($productIds);
+
+        if (empty($targetIds)) {
+            return;
+        }
+
+        DB::table('product_links')
+            ->where(function ($query) use ($targetIds) {
+                $query
+                    ->whereIn('product_id', $targetIds)
+                    ->orWhereIn('linked_product_id', $targetIds);
+            })
+            ->delete();
+
+        Product::onlyTrashed()->whereIn('id', $targetIds)->forceDelete();
+    }
+
     /**
      * Remove the specified resource from storage.
      */
     public function destroy($id)
     {
         $product = Product::findOrFail($id);
-        $product->delete();
+        DB::transaction(function () use ($product) {
+            $this->trashProductsWithVariants([$product->id]);
+        });
 
         return response()->json(['message' => 'Sản phẩm đã được chuyển vào thùng rác']);
     }
@@ -3892,7 +3965,9 @@ class ProductController extends Controller
     public function restore($id)
     {
         $product = Product::onlyTrashed()->findOrFail($id);
-        $product->restore();
+        DB::transaction(function () use ($product) {
+            $this->restoreProductsWithVariants([$product->id]);
+        });
 
         return response()->json(['message' => 'Sản phẩm đã được khôi phục thành công']);
     }
@@ -3903,7 +3978,9 @@ class ProductController extends Controller
     public function forceDelete($id)
     {
         $product = Product::onlyTrashed()->findOrFail($id);
-        $product->forceDelete();
+        DB::transaction(function () use ($product) {
+            $this->forceDeleteProductsWithVariants([$product->id]);
+        });
 
         return response()->json(['message' => 'Sản phẩm đã được xóa vĩnh viễn']);
     }
@@ -3913,8 +3990,16 @@ class ProductController extends Controller
      */
     public function bulkRestore(Request $request)
     {
-        $ids = $request->input('ids', []);
-        Product::onlyTrashed()->whereIn('id', $ids)->restore();
+        $ids = collect($request->input('ids', []))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        DB::transaction(function () use ($ids) {
+            $this->restoreProductsWithVariants($ids);
+        });
         return response()->json(['message' => 'Đã khôi phục các sản phẩm đã chọn']);
     }
 
@@ -3923,8 +4008,16 @@ class ProductController extends Controller
      */
     public function bulkForceDelete(Request $request)
     {
-        $ids = $request->input('ids', []);
-        Product::onlyTrashed()->whereIn('id', $ids)->forceDelete();
+        $ids = collect($request->input('ids', []))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        DB::transaction(function () use ($ids) {
+            $this->forceDeleteProductsWithVariants($ids);
+        });
         return response()->json(['message' => 'Đã xóa vĩnh viễn các sản phẩm đã chọn']);
     }
 
@@ -3933,8 +4026,16 @@ class ProductController extends Controller
      */
     public function bulkDelete(Request $request)
     {
-        $ids = $request->input('ids', []);
-        Product::whereIn('id', $ids)->delete();
+        $ids = collect($request->input('ids', []))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        DB::transaction(function () use ($ids) {
+            $this->trashProductsWithVariants($ids);
+        });
         return response()->json(['message' => 'Đã chuyển các sản phẩm đã chọn vào thùng rác']);
     }
 

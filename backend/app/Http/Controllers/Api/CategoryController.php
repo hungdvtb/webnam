@@ -55,7 +55,7 @@ class CategoryController extends Controller
                 'banner_path' => $bannerPath,
                 'status' => $request->status ?? 1,
                 'order' => Category::where('parent_id', $parentId)->max('order') + 1,
-                'display_layout' => $request->display_layout ?? 'layout_1',
+                'display_layout' => 'layout_1',
                 'filterable_attribute_ids' => $this->normalizeFilterableAttributeIds(
                     $request->input('filterable_attribute_ids')
                 ),
@@ -120,7 +120,7 @@ class CategoryController extends Controller
         }
         $category->description = $request->input('description', $category->description);
         $category->status = $request->input('status', $category->status);
-        $category->display_layout = $request->input('display_layout', $category->display_layout);
+        $category->display_layout = 'layout_1';
 
         if ($request->has('filterable_attribute_ids')) {
             $category->filterable_attribute_ids = $this->normalizeFilterableAttributeIds(
@@ -181,19 +181,47 @@ class CategoryController extends Controller
         return response()->json(['message' => 'Tree reordered successfully']);
     }
 
-    public function bulkUpdateLayout(Request $request)
+    public function bulkDestroy(Request $request)
     {
         $request->validate([
-            'ids' => 'required|array',
-            'ids.*' => 'exists:categories,id',
-            'display_layout' => 'required|string|in:layout_1,layout_2',
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer|distinct',
         ]);
 
-        Category::whereIn('id', $request->ids)->update([
-            'display_layout' => $request->display_layout,
-        ]);
+        $ids = collect($request->input('ids', []))
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter()
+            ->unique()
+            ->values();
 
-        return response()->json(['message' => 'Bulk update successful']);
+        if ($ids->isEmpty()) {
+            throw ValidationException::withMessages([
+                'ids' => ['Vui long chon it nhat mot danh muc hop le de xoa.'],
+            ]);
+        }
+
+        $existingIds = Category::query()
+            ->whereIn('id', $ids)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values();
+
+        if ($existingIds->count() !== $ids->count()) {
+            throw ValidationException::withMessages([
+                'ids' => ['Mot hoac nhieu danh muc khong ton tai hoac khong hop le.'],
+            ]);
+        }
+
+        DB::transaction(function () use ($existingIds) {
+            Category::query()
+                ->whereIn('id', $existingIds)
+                ->delete();
+        });
+
+        return response()->json([
+            'message' => 'Da xoa cac danh muc da chon.',
+            'deleted_count' => $existingIds->count(),
+        ]);
     }
 
     public function downloadImportTemplate()
@@ -380,7 +408,7 @@ class CategoryController extends Controller
                 'name' => $category->name,
                 'slug' => $category->slug,
                 'parent_id' => $category->parent_id ? (int) $category->parent_id : null,
-                'display_layout' => $category->display_layout,
+                'display_layout' => 'layout_1',
                 'status' => (int) $category->status,
                 'products_count' => (int) ($category->products_count ?? $products->count()),
             ],
@@ -412,7 +440,7 @@ class CategoryController extends Controller
                 '#Ten danh muc',
                 '#CODE:ma-cha hoac ID:12 hoac NAME:Ten danh muc cha',
                 '#0',
-                '#layout_1 hoac layout_2',
+                '#layout_1',
                 '#duong-kinh, loai-men',
                 '#1 hoac 0',
                 '#Dong bat dau bang # se duoc bo qua khi import',
@@ -423,7 +451,7 @@ class CategoryController extends Controller
                 '#Can giu duy nhat cot Ma danh muc neu muon cap nhat bang ma',
                 '#De trong cot Danh muc cha neu muon dua ve cap goc',
                 '#Neu de trong cot Thu tu, he thong se giu hoac noi tiep thu tu hien tai',
-                '#layout_1',
+                '#layout_1 (co dinh)',
                 '#Nhan theo ma thuoc tinh hoac ten thuoc tinh',
                 '#1',
                 '#File mau nay co the tai ve, dien du lieu roi import lai',
@@ -446,7 +474,7 @@ class CategoryController extends Controller
                 $category->name,
                 $parent ? ('CODE:' . $parent->resolvedCode()) : '',
                 (int) ($category->order ?? 0),
-                $category->display_layout ?: 'layout_1',
+                'layout_1',
                 $this->formatCategoryAttributeTokens((array) ($category->filterable_attribute_ids ?? []), $attributesById),
                 (int) ($category->status ?? 1),
                 $category->description ?? '',
@@ -742,7 +770,7 @@ class CategoryController extends Controller
             $category->slug = Category::buildUniqueSlug($record['name'], $record['existing_id']);
             $category->description = $record['description'] !== '' ? $record['description'] : null;
             $category->status = $record['status'];
-            $category->display_layout = $record['layout'];
+            $category->display_layout = 'layout_1';
             $category->filterable_attribute_ids = $record['filterable_attribute_ids'];
 
             if (!$isExisting) {
@@ -1167,15 +1195,15 @@ class CategoryController extends Controller
     {
         $value = trim($value);
         if ($value === '') {
-            return [$fallback ?: 'layout_1', null];
+            return ['layout_1', null];
         }
 
         $normalized = $this->normalizeLookupValue($value);
 
         return match ($normalized) {
-            'layout_1', 'layout1', '1', 'giao_dien_1', 'giao_dien_mot' => ['layout_1', null],
-            'layout_2', 'layout2', '2', 'giao_dien_2', 'giao_dien_hai' => ['layout_2', null],
-            default => [null, 'Giao dien chi hop le voi layout_1 hoac layout_2.'],
+            'layout_1', 'layout1', '1', 'giao_dien_1', 'giao_dien_mot',
+            'layout_2', 'layout2', '2', 'giao_dien_2', 'giao_dien_hai' => ['layout_1', null],
+            default => [null, 'Giao dien chi hop le voi layout_1.'],
         };
     }
 

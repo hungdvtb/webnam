@@ -162,13 +162,7 @@ const Shop = () => {
                         
                         const currentCat = categories.find(c => c.id === selectedCategory);
                         
-                        // If Layout 2 is active for the category, only show its selected filters
-                        if (currentCat?.display_layout === 'layout_2') {
-                            const allowedIds = currentCat.filterable_attribute_ids || [];
-                            return allowedIds.some(id => Number(id) === Number(attr.id));
-                        }
-                        
-                        // Default: only show attributes marked as filterable_frontend
+                        // Only show attributes marked as filterable_frontend
                         return attr.is_filterable_frontend;
                     }).map(attr => (
                         <div key={attr.id}>

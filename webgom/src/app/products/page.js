@@ -149,7 +149,7 @@ function renderPagination({ stylesModule, currentPage, lastPage, total, itemCoun
 
 export default async function ProductsPage({ searchParams }) {
   const resolvedSearchParams = await searchParams;
-  const currentCategorySlug = resolvedSearchParams?.category || '';
+  const requestedCategorySlug = resolvedSearchParams?.category || '';
   const currentSort = resolvedSearchParams?.sort || 'popular';
   const searchQuery = resolvedSearchParams?.search || '';
   const currentPage = parsePageParam(resolvedSearchParams?.page);
@@ -174,33 +174,39 @@ export default async function ProductsPage({ searchParams }) {
   let categories = [];
   let categoryInfo = null;
 
-  try {
-    const requests = [
-      getWebProducts({
-        category: currentCategorySlug,
-        sort: currentSort,
-        search: searchQuery,
-        attrs: currentAttrs,
-        page: currentPage,
-        per_page: PRODUCTS_PER_PAGE,
-      }),
-      getWebCategories(),
-    ];
+  const [productsResult, categoriesResult, categoryInfoResult] = await Promise.allSettled([
+    getWebProducts({
+      category: requestedCategorySlug,
+      sort: currentSort,
+      search: searchQuery,
+      attrs: currentAttrs,
+      page: currentPage,
+      per_page: PRODUCTS_PER_PAGE,
+    }),
+    getWebCategories(),
+    requestedCategorySlug ? getWebCategory(requestedCategorySlug) : Promise.resolve(null),
+  ]);
 
-    if (currentCategorySlug) {
-      requests.push(getWebCategory(currentCategorySlug));
-    }
-
-    const results = await Promise.all(requests);
-    productsData = results[0];
-    categories = results[1];
-
-    if (currentCategorySlug) {
-      categoryInfo = results[2];
-    }
-  } catch (error) {
-    console.error('Failed to fetch products/categories:', error);
+  if (productsResult.status === 'fulfilled') {
+    productsData = productsResult.value;
+  } else {
+    console.error('Failed to fetch products:', productsResult.reason);
   }
+
+  if (categoriesResult.status === 'fulfilled') {
+    categories = categoriesResult.value;
+  } else {
+    console.error('Failed to fetch categories:', categoriesResult.reason);
+  }
+
+  if (categoryInfoResult.status === 'fulfilled') {
+    categoryInfo = categoryInfoResult.value;
+  } else if (requestedCategorySlug) {
+    console.warn(`Category slug "${requestedCategorySlug}" could not be resolved. Falling back to the full product collection.`, categoryInfoResult.reason);
+  }
+
+  const currentCategorySlug = categoryInfo?.slug
+    || (categories.some((category) => category.slug === requestedCategorySlug) ? requestedCategorySlug : '');
 
   let bannerUrl = '/banner-store.png';
 

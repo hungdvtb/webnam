@@ -1514,10 +1514,66 @@ export default function BundleProductView({
                 {/* Rows */}
                 <div className={builderStyles.tableBody}>
                   {tabItems.map((item, idx) => {
+                    const itemKey = item.bundle_item_uid || item.id;
+
                     if (item.removed) {
+                      if (isMobileBundleViewport) {
+                        return (
+                          <div
+                            key={itemKey}
+                            className={`${builderStyles.tableRow} ${builderStyles.tableRowRemoved} ${builderStyles.tableRowMobileCompact} ${builderStyles.tableRowRemovedCompact}`}
+                          >
+                            <div className={builderStyles.colStt}>
+                              <span className={builderStyles.sttBadge} style={{ opacity: 0.3 }}>{idx + 1}</span>
+                            </div>
+                            <div className={builderStyles.colImg}>
+                              <div className={`${builderStyles.tableImgWrap} ${builderStyles.tableImgEmpty}`}>
+                                <span className="material-symbols-outlined" style={{ fontSize: 16, color: '#ccc' }}>image_not_supported</span>
+                              </div>
+                            </div>
+                            <div className={`${builderStyles.mobileItemContent} ${builderStyles.mobileRemovedContent}`}>
+                              <div className={builderStyles.colName}>
+                                <p className={builderStyles.removedLabel}>Vị trí đã xóa</p>
+                                <span className={builderStyles.variantHint}>Chọn sản phẩm thay thế cho vị trí này</span>
+                              </div>
+                              <div className={`${builderStyles.mobileItemBottom} ${builderStyles.mobileRemovedBottom}`}>
+                                <div className={`${builderStyles.mobilePriceStack} ${builderStyles.mobileRemovedMeta}`}>
+                                  <div className={builderStyles.mobilePriceLine}>
+                                    <span className={builderStyles.mobileMetaLabel}>Đơn giá</span>
+                                    <span className={builderStyles.removedMetaValue}>—</span>
+                                  </div>
+                                  <div className={builderStyles.mobilePriceLine}>
+                                    <span className={builderStyles.mobileMetaLabel}>Thành tiền</span>
+                                    <span className={builderStyles.removedMetaValue}>—</span>
+                                  </div>
+                                </div>
+                                <div className={`${builderStyles.mobileControlStack} ${builderStyles.mobileRemovedActions}`}>
+                                  <button
+                                    className={builderStyles.restoreBtn}
+                                    onClick={() => restoreBundleItem ? restoreBundleItem(item.bundle_item_uid || item.id) : null}
+                                    title="Khôi phục sản phẩm"
+                                  >
+                                    <span className="material-symbols-outlined" style={{ fontSize: 12 }}>restart_alt</span>
+                                    Khôi phục
+                                  </button>
+                                  <button
+                                    className={builderStyles.selectSlotBtn}
+                                    onClick={() => openSelectionModal(item)}
+                                    title="Chọn sản phẩm khác"
+                                  >
+                                    <span className="material-symbols-outlined" style={{ fontSize: 12 }}>add</span>
+                                    Chọn lại
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+
                       // Placeholder row
                       return (
-                        <div key={item.bundle_item_uid || item.id} className={`${builderStyles.tableRow} ${builderStyles.tableRowRemoved}`}>
+                        <div key={itemKey} className={`${builderStyles.tableRow} ${builderStyles.tableRowRemoved}`}>
                           <div className={builderStyles.colStt}>
                             <span className={builderStyles.sttBadge} style={{ opacity: 0.3 }}>{idx + 1}</span>
                           </div>
@@ -1558,7 +1614,7 @@ export default function BundleProductView({
                     const lineTotal = parseFloat(item.price || 0) * (item.qty || 1);
                     if (isMobileBundleViewport) {
                       return (
-                        <div key={item.bundle_item_uid || item.id} className={`${builderStyles.tableRow} ${builderStyles.tableRowMobileCompact}`}>
+                        <div key={itemKey} className={`${builderStyles.tableRow} ${builderStyles.tableRowMobileCompact}`}>
                           <div className={builderStyles.colStt}>
                             <span className={builderStyles.sttBadge}>{idx + 1}</span>
                           </div>
@@ -1640,7 +1696,7 @@ export default function BundleProductView({
                     }
 
                     return (
-                      <div key={item.bundle_item_uid || item.id} className={builderStyles.tableRow}>
+                      <div key={itemKey} className={builderStyles.tableRow}>
                         {/* STT */}
                         <div className={builderStyles.colStt}>
                           <span className={builderStyles.sttBadge}>{idx + 1}</span>

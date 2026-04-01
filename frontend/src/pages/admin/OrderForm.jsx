@@ -81,7 +81,6 @@ const defaultQuoteSettings = {
 const productSearchHistoryStorageKey = 'order_form_product_search_history';
 const productQuickFilterAttributeStorageKey = 'order_form_product_quick_filter_attribute_id';
 const productQuickSetupStorageKey = 'order_form_product_quick_setup_map_v1';
-const productQuickSetupLimit = 15;
 const supportedProductQuickFilterTypes = new Set(['select', 'multiselect']);
 const SEARCH_ENTRY_PRODUCT = 'product';
 const SEARCH_ENTRY_VARIATION = 'variation';
@@ -360,25 +359,33 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
 
     return (Array.isArray(items) ? items : [])
         .map((item) => {
-            const productId = Number(item?.product_id ?? item?.id ?? 0);
+            const productId = Number(item?.product_id ?? item?.target_product_id ?? item?.id ?? 0);
             if (!Number.isFinite(productId) || productId <= 0) return null;
             if (seenProductIds.has(productId)) return null;
             seenProductIds.add(productId);
 
+            const parentProductId = Number(item?.parent_product_id ?? 0);
+
             return {
                 id: productId,
                 product_id: productId,
+                target_product_id: productId,
                 sku: String(item?.sku ?? '').trim(),
+                display_sku: String(item?.display_sku ?? item?.sku ?? '').trim(),
                 name: String(item?.name ?? '').trim(),
+                display_name: String(item?.display_name ?? item?.name ?? '').trim(),
                 price: Number(item?.price ?? 0) || 0,
                 expected_cost: parseMoneyNumber(item?.expected_cost),
                 cost_price: resolveProductCostPrice(item),
                 main_image: String(item?.main_image ?? '').trim(),
                 type: String(item?.type ?? '').trim(),
+                entry_kind: String(item?.entry_kind ?? SEARCH_ENTRY_PRODUCT).trim(),
+                parent_product_id: Number.isFinite(parentProductId) && parentProductId > 0 ? parentProductId : null,
+                parent_product_name: String(item?.parent_product_name ?? '').trim(),
+                option_label: String(item?.option_label ?? '').trim(),
             };
         })
-        .filter(Boolean)
-        .slice(0, productQuickSetupLimit);
+        .filter(Boolean);
 };
 const normalizeQuickFilterOptionValue = (value) => String(value ?? '').trim();
 const parseProductAttributeValueList = (value) => {
@@ -551,7 +558,7 @@ const ORDER_KIND_META = {
         shortLabel: 'Đơn nháp',
         icon: 'draft_orders',
         submitLabel: 'Lưu đơn nháp',
-        createTitle: 'Tạo đơn hàng mới',
+        createTitle: 'Tạo đơn nháp',
         editTitle: 'Chỉnh sửa đơn nháp',
     },
 };
@@ -894,6 +901,20 @@ const canAddSearchEntry = (currentItems = [], entry) => {
         buildOrderItemMergeKey(item) === buildOrderItemMergeKey(addition)
     )));
 };
+const isSearchEntryAlreadyInOrder = (currentItems = [], entry) => {
+    if (!entry || typeof entry !== 'object') {
+        return false;
+    }
+
+    const additions = buildOrderItemsFromSearchEntry(entry);
+    if (additions.length === 0) {
+        return false;
+    }
+
+    return additions.every((addition) => currentItems.some((item) => (
+        buildOrderItemMergeKey(item) === buildOrderItemMergeKey(addition)
+    )));
+};
 const buildProductSearchEntries = (products = [], { includeNested = false } = {}) => {
     const entries = [];
     const seenEntryIds = new Set();
@@ -914,15 +935,19 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
         }
 
         const product = normalizeProductPickerEntry(rawProduct);
+        const baseName = normalizeCanvasText(product?.name) || 'Sản phẩm';
+        const baseDisplayName = normalizeCanvasText(product?.display_name) || baseName;
+        const baseSku = normalizeCanvasText(product?.sku);
+        const baseDisplaySku = normalizeCanvasText(product?.display_sku) || baseSku;
         const baseEntry = {
             entry_id: `product-${Number(product?.id ?? product?.product_id) || 0}`,
             entry_kind: SEARCH_ENTRY_PRODUCT,
             id: Number(product?.id ?? product?.product_id) || 0,
             target_product_id: Number(product?.id ?? product?.product_id) || 0,
-            name: normalizeCanvasText(product?.name) || 'Sản phẩm',
-            display_name: normalizeCanvasText(product?.name) || 'Sản phẩm',
-            sku: normalizeCanvasText(product?.sku),
-            display_sku: normalizeCanvasText(product?.sku),
+            name: baseName,
+            display_name: baseDisplayName,
+            sku: baseSku,
+            display_sku: baseDisplaySku,
             price: Number(product?.price ?? 0) || 0,
             expected_cost: parseMoneyNumber(product?.expected_cost),
             cost_price: resolveProductCostPrice(product),
@@ -930,8 +955,10 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
             main_image: getPickerPrimaryImage(product),
             attribute_values: getPickerAttributeValues(product),
             search_keywords: [
-                normalizeCanvasText(product?.name),
-                normalizeCanvasText(product?.sku),
+                baseName,
+                baseDisplayName,
+                baseSku,
+                baseDisplaySku,
                 buildAttributeValueSummary(product),
             ].filter(Boolean),
         };
@@ -1048,6 +1075,121 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
     });
 
     return entries;
+};
+const buildProductQuickSetupEntries = (products = []) => (
+    buildProductSearchEntries(products, { includeNested: true })
+        .filter((entry) => String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) !== SEARCH_ENTRY_BUNDLE_OPTION)
+        .filter((entry) => canAddSearchEntry([], entry))
+);
+const buildStoredQuickSetupSearchEntries = (items = []) => {
+    const entries = [];
+    const seenEntryIds = new Set();
+
+    (Array.isArray(items) ? items : []).forEach((item) => {
+        const targetProductId = Number(item?.target_product_id ?? item?.product_id ?? item?.id) || 0;
+        if (!targetProductId) {
+            return;
+        }
+
+        const entryKind = String(item?.entry_kind || SEARCH_ENTRY_PRODUCT).trim() || SEARCH_ENTRY_PRODUCT;
+        const parentProductId = Number(item?.parent_product_id ?? 0);
+        const parentProductName = normalizeCanvasText(item?.parent_product_name);
+        const baseName = normalizeCanvasText(item?.name) || 'Sản phẩm';
+        const displayName = normalizeCanvasText(item?.display_name)
+            || (entryKind === SEARCH_ENTRY_VARIATION
+                ? buildVariationDisplayName(parentProductName, baseName, item?.option_label)
+                : baseName);
+        const sku = normalizeCanvasText(item?.sku);
+        const displaySku = normalizeCanvasText(item?.display_sku) || sku;
+        const optionLabel = normalizeCanvasText(item?.option_label);
+        const entryId = normalizeCanvasText(item?.entry_id) || `${entryKind}-${targetProductId}`;
+
+        if (seenEntryIds.has(entryId)) {
+            return;
+        }
+
+        seenEntryIds.add(entryId);
+        entries.push({
+            ...item,
+            entry_id: entryId,
+            entry_kind: entryKind,
+            id: targetProductId,
+            product_id: targetProductId,
+            target_product_id: targetProductId,
+            name: baseName,
+            display_name: displayName,
+            sku,
+            display_sku: displaySku,
+            price: Number(item?.price ?? 0) || 0,
+            expected_cost: parseMoneyNumber(item?.expected_cost),
+            cost_price: resolveProductCostPrice(item),
+            type: normalizeCanvasText(item?.type),
+            main_image: getPickerPrimaryImage(item),
+            parent_product_id: Number.isFinite(parentProductId) && parentProductId > 0 ? parentProductId : null,
+            parent_product_name: parentProductName,
+            option_label: optionLabel,
+            search_keywords: [
+                baseName,
+                displayName,
+                sku,
+                displaySku,
+                parentProductName,
+                optionLabel,
+            ].filter(Boolean),
+        });
+    });
+
+    return entries;
+};
+const getProductQuickSetupEntryId = (entry) => Number(
+    entry?.target_product_id
+    ?? entry?.product_id
+    ?? entry?.id
+    ?? 0
+) || 0;
+const mergeProductQuickSetupEntries = (products = [], selectedItems = []) => {
+    const fetchedEntries = Array.isArray(products) ? products : [];
+    const fetchedMap = new Map();
+
+    fetchedEntries.forEach((entry) => {
+        const entryId = getProductQuickSetupEntryId(entry);
+        if (entryId > 0 && !fetchedMap.has(entryId)) {
+            fetchedMap.set(entryId, entry);
+        }
+    });
+
+    const mergedEntries = [];
+    const seenEntryIds = new Set();
+    const pushEntry = (entry) => {
+        const entryId = getProductQuickSetupEntryId(entry);
+        if (entryId <= 0 || seenEntryIds.has(entryId)) return;
+
+        seenEntryIds.add(entryId);
+        mergedEntries.push(entry);
+    };
+
+    (Array.isArray(selectedItems) ? selectedItems : []).forEach((item) => {
+        const entryId = getProductQuickSetupEntryId(item);
+        if (entryId <= 0) return;
+
+        const fallbackEntry = normalizeProductPickerEntry({
+            ...item,
+            id: entryId,
+            product_id: entryId,
+            target_product_id: entryId,
+            entry_kind: item?.entry_kind || SEARCH_ENTRY_PRODUCT,
+            display_name: item?.display_name || item?.name,
+            display_sku: item?.display_sku || item?.sku,
+        });
+
+        pushEntry(fetchedMap.get(entryId) || fallbackEntry);
+    });
+
+    fetchedEntries.forEach((entry) => {
+        pushEntry(entry);
+    });
+
+    return mergedEntries;
 };
 
 const waitForNodeImages = async (node) => {
@@ -1238,7 +1380,7 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
     );
 };
 
-const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null }) => {
+const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, isAlreadyInOrder = false }) => {
     const nameRef = useRef(null);
     const [hasTruncation, setHasTruncation] = useState(false);
     const [isHovered, setIsHovered] = useState(false);
@@ -1295,10 +1437,14 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null })
     return (
         <button
             type="button"
-            onClick={() => onSelect(product)}
+            onClick={() => {
+                if (isAlreadyInOrder) return;
+                onSelect(product);
+            }}
             onMouseEnter={handleMouseEnter}
             onMouseLeave={() => setIsHovered(false)}
-            className="w-full px-3 py-2.5 text-left hover:bg-primary/5 border-b border-primary/5 flex items-center gap-3 transition-colors group relative overflow-visible"
+            aria-disabled={isAlreadyInOrder}
+            className={`w-full px-3 py-2.5 text-left border-b border-primary/5 flex items-center gap-3 transition-colors group relative overflow-visible ${isAlreadyInOrder ? 'cursor-not-allowed bg-primary/[0.03] opacity-75' : 'hover:bg-primary/5'}`}
         >
             <div className="size-8 bg-primary/5 rounded-sm flex items-center justify-center text-primary/10 overflow-hidden shrink-0">
                 {product.main_image ? <img src={product.main_image} alt="" className="size-full object-cover" /> : <span className="material-symbols-outlined text-sm">image</span>}
@@ -1333,6 +1479,13 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null })
                             )}
                         </div>
                     )}
+                    {isAlreadyInOrder && (
+                        <div className="mt-1">
+                            <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-amber-700">
+                                Đã có trong đơn
+                            </span>
+                        </div>
+                    )}
                 </div>
                 <span className="shrink-0 pt-0.5 text-[14px] font-extrabold text-blue-600">{new Intl.NumberFormat('vi-VN').format(product.price)}₫</span>
             </div>
@@ -1355,6 +1508,7 @@ const OrderForm = () => {
     const duplicateFromId = queryParams.get('duplicate_from');
     const leadId = queryParams.get('lead_id');
     const returnTo = queryParams.get('return_to');
+    const requestedOrderKind = getNormalizedOrderKind(queryParams.get('kind'));
     const isEdit = !!id;
     const navigate = useNavigate();
     const { user } = useAuth();
@@ -1362,7 +1516,9 @@ const OrderForm = () => {
 
     const [loading, setLoading] = useState(isEdit || !!duplicateFromId);
     const [saving, setSaving] = useState(false);
-    const [orderKind, setOrderKind] = useState(MAIN_ORDER_KIND);
+    const [orderKind, setOrderKind] = useState(() => (
+        !isEdit && requestedOrderKind === DRAFT_ORDER_KIND ? DRAFT_ORDER_KIND : MAIN_ORDER_KIND
+    ));
     const orderKindMeta = getOrderKindMeta(orderKind);
     const [products, setProducts] = useState([]);
     const [attributes, setAttributes] = useState([]);
@@ -1401,6 +1557,7 @@ const OrderForm = () => {
     const lastVisitedProductQuickSetupKeyRef = useRef('');
     const copyFeedbackTimeoutRef = useRef(null);
     const copyNotificationTimeoutRef = useRef(null);
+    const productSearchContainerRef = useRef(null);
     const productSearchAbortRef = useRef(null);
     const productSearchCacheRef = useRef(new Map());
     const productQuickSetupAbortRef = useRef(null);
@@ -1468,10 +1625,14 @@ const OrderForm = () => {
                                 return {
                                     ...item,
                                     sku: latest.sku ?? item?.sku ?? '',
+                                    display_sku: item?.display_sku ?? latest.sku ?? item?.sku ?? '',
                                     name: latest.name ?? item?.name ?? '',
+                                    display_name: item?.display_name ?? latest.display_name ?? latest.name ?? item?.name ?? '',
                                     price: resolveMoneyValue(latest.price, item?.price, 0),
                                     expected_cost: parseMoneyNumber(latest.expected_cost, parseMoneyNumber(item?.expected_cost)),
                                     cost_price: resolveProductCostPrice({ ...item, ...latest }),
+                                    main_image: String(latest.main_image ?? item?.main_image ?? '').trim(),
+                                    type: latest.type ?? item?.type ?? '',
                                 };
                             }),
                         ])
@@ -1589,6 +1750,10 @@ const OrderForm = () => {
     const selectedQuickSetupProductIds = useMemo(
         () => new Set(activeProductQuickSetupItems.map((item) => Number(item.product_id)).filter(Boolean)),
         [activeProductQuickSetupItems]
+    );
+    const visibleProductQuickSetupProducts = useMemo(
+        () => mergeProductQuickSetupEntries(productQuickSetupProducts, activeProductQuickSetupItems),
+        [activeProductQuickSetupItems, productQuickSetupProducts]
     );
 
     const [provinces, setProvinces] = useState([]);
@@ -1800,6 +1965,32 @@ const OrderForm = () => {
         setShowSearchHistory(false);
         setShowProductQuickFilterPanel(false);
     }, []);
+
+    const clearProductSearchInput = useCallback(() => {
+        setSearchTerm('');
+        setDebouncedSearchTerm('');
+        setShowSearchHistory(false);
+    }, []);
+
+    useEffect(() => {
+        if (!showSearchDropdown) return undefined;
+
+        const handlePointerDownOutsideSearch = (event) => {
+            const container = productSearchContainerRef.current;
+            const target = event.target;
+
+            if (!container || !target || container.contains(target)) {
+                return;
+            }
+
+            closeProductSearchDropdown();
+        };
+
+        document.addEventListener('pointerdown', handlePointerDownOutsideSearch, true);
+        return () => {
+            document.removeEventListener('pointerdown', handlePointerDownOutsideSearch, true);
+        };
+    }, [closeProductSearchDropdown, showSearchDropdown]);
 
     useEffect(() => {
         const handleKeyDown = (e) => {
@@ -2023,17 +2214,29 @@ const OrderForm = () => {
     const handleAddProductToQuickSetup = useCallback((product) => {
         if (!product) return;
 
+        const targetProductId = Number(product?.target_product_id ?? product?.product_id ?? product?.id ?? 0);
+        if (!Number.isFinite(targetProductId) || targetProductId <= 0) {
+            return;
+        }
+
         const nextItems = normalizeStoredProductQuickSetupItems([
             ...activeProductQuickSetupItems,
             {
-                product_id: product.id,
+                product_id: targetProductId,
+                target_product_id: targetProductId,
                 sku: product.sku,
+                display_sku: product.display_sku ?? product.sku,
                 name: product.name,
+                display_name: product.display_name ?? product.name,
                 price: product.price,
                 expected_cost: parseMoneyNumber(product?.expected_cost),
                 cost_price: resolveProductCostPrice(product),
                 main_image: product.main_image,
                 type: product.type,
+                entry_kind: product.entry_kind ?? SEARCH_ENTRY_PRODUCT,
+                parent_product_id: Number(product?.parent_product_id ?? 0) || null,
+                parent_product_name: product.parent_product_name ?? '',
+                option_label: product.option_label ?? '',
             },
         ]);
 
@@ -2107,7 +2310,7 @@ const OrderForm = () => {
             if (controller.signal.aborted) return;
 
             const nextProducts = Array.isArray(response.data.data)
-                ? response.data.data.map((product) => normalizeProductPickerEntry(product))
+                ? buildProductQuickSetupEntries(response.data.data)
                 : [];
             productQuickSetupCacheRef.current.set(cacheKey, nextProducts);
             setProductQuickSetupProducts(nextProducts);
@@ -2122,21 +2325,33 @@ const OrderForm = () => {
         }
     }, [activeProductQuickFilterAttribute, normalizedProductQuickFilterValues]);
 
-    const searchableProducts = useMemo(
-        () => (isProductQuickModeActive ? activeProductQuickSetupItems : products),
-        [activeProductQuickSetupItems, isProductQuickModeActive, products]
+    const quickModeSearchEntries = useMemo(
+        () => buildStoredQuickSetupSearchEntries(activeProductQuickSetupItems),
+        [activeProductQuickSetupItems]
     );
 
     const rankedSearchProducts = useMemo(() => {
-        const availableProducts = buildProductSearchEntries(searchableProducts, {
-            includeNested: Boolean(searchTerm.trim()),
-        }).filter((product) => canAddSearchEntry(formData.items, product));
+        const searchableEntries = isProductQuickModeActive
+            ? quickModeSearchEntries
+            : buildProductSearchEntries(products, {
+                includeNested: Boolean(searchTerm.trim()),
+            });
+        const preparedProducts = searchableEntries
+            .map((product) => ({
+                ...product,
+                __alreadyInOrder: isSearchEntryAlreadyInOrder(formData.items, product),
+            }))
+            .filter((product) => (
+                isProductQuickModeActive
+                    ? buildOrderItemsFromSearchEntry(product).length > 0
+                    : canAddSearchEntry(formData.items, product)
+            ));
 
         if (!searchTerm.trim()) {
-            return availableProducts.slice(0, 50);
+            return preparedProducts.slice(0, 50);
         }
 
-        return availableProducts
+        return preparedProducts
             .map((product) => ({
                 ...product,
                 __searchScore: scoreProductSearchResult(product, searchTerm)
@@ -2147,7 +2362,7 @@ const OrderForm = () => {
                 || String(left.name || '').localeCompare(String(right.name || ''), 'vi')
             ))
             .slice(0, 50);
-    }, [formData.items, searchableProducts, searchTerm]);
+    }, [formData.items, isProductQuickModeActive, products, quickModeSearchEntries, searchTerm]);
 
     useEffect(() => {
         const timerId = setTimeout(() => {
@@ -2335,9 +2550,9 @@ const OrderForm = () => {
                 }
             });
 
-            setOrderKind(isDuplicating ? MAIN_ORDER_KIND : nextOrderKind);
+            setOrderKind(isDuplicating ? requestedOrderKind : nextOrderKind);
             setRegionType(order.district ? 'old' : 'new');
-            const shouldUseCurrentProductCost = (isDuplicating ? MAIN_ORDER_KIND : nextOrderKind) === MAIN_ORDER_KIND;
+            const shouldUseCurrentProductCost = (isDuplicating ? requestedOrderKind : nextOrderKind) === MAIN_ORDER_KIND;
             const mappedItems = order.items?.map(item => ({
                 product_id: item.product_id,
                 name: item.product?.name || item.product_name_snapshot || `Sản phẩm #${item.product_id}`,
@@ -3145,9 +3360,9 @@ const OrderForm = () => {
         }
     };
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        const normalizedOrderKind = getNormalizedOrderKind(orderKind);
+    const handleSubmit = async (e, submitOrderKind = null) => {
+        e?.preventDefault?.();
+        const normalizedOrderKind = getNormalizedOrderKind(submitOrderKind || orderKind);
         const isMainOrder = !isDraftOrderKind(normalizedOrderKind);
 
         const normalizedAddressDetail = extractAddressDetail({
@@ -3158,13 +3373,20 @@ const OrderForm = () => {
             regionType
         });
         const effectiveAddressDetail = normalizedAddressDetail || formData.address_detail.trim() || formData.shipping_address.trim();
+        const trimmedCustomerName = String(formData.customer_name || '').trim();
+        const trimmedCustomerPhone = String(formData.customer_phone || '').trim();
 
         if (isMainOrder && !effectiveAddressDetail) {
             alert('Vui lòng nhập địa chỉ giao hàng.');
             return;
         }
 
-        if (formData.customer_phone && !validateVietnamesePhone(formData.customer_phone)) {
+        if (!isMainOrder && !trimmedCustomerName && !trimmedCustomerPhone) {
+            alert('Vui lòng nhập tên khách hàng hoặc số điện thoại cho đơn nháp.');
+            return;
+        }
+
+        if (trimmedCustomerPhone && !validateVietnamesePhone(trimmedCustomerPhone)) {
             alert('Số điện thoại không hợp lệ.');
             return;
         }
@@ -3197,8 +3419,10 @@ const OrderForm = () => {
                 .filter((item) => item.product_id && item.quantity > 0);
             const payload = {
                 ...formData,
+                customer_name: trimmedCustomerName,
+                customer_phone: trimmedCustomerPhone,
                 items: normalizedItems,
-                order_kind: isEdit ? normalizedOrderKind : MAIN_ORDER_KIND,
+                order_kind: normalizedOrderKind,
                 order_type: normalizedOrderType,
                 settlement_delta: specialOrderType ? (parseMoneyNumber(formData.settlement_delta, 0) || 0) : 0,
                 return_tracking_code: specialOrderType ? String(formData.return_tracking_code || '').trim() : '',
@@ -3236,8 +3460,8 @@ const OrderForm = () => {
             const savedOrder = response?.data || null;
             const savedOrderKind = getNormalizedOrderKind(savedOrder?.order_kind || payload.order_kind);
 
-            if (leadId || returnTo) {
-                if (leadId && returnTo) {
+            if (leadId) {
+                if (savedOrderKind === MAIN_ORDER_KIND && returnTo) {
                     writeLeadListReturnHint(returnTo, {
                         leadId: Number(leadId),
                         orderId: savedOrder?.id || null,
@@ -3247,6 +3471,10 @@ const OrderForm = () => {
                         updatedAt: new Date().toISOString(),
                     });
                 }
+                navigateBack();
+            } else if (savedOrderKind === DRAFT_ORDER_KIND) {
+                navigate(buildOrderListUrl(savedOrderKind));
+            } else if (returnTo) {
                 navigateBack();
             } else {
                 navigate(buildOrderListUrl(savedOrderKind));
@@ -3344,7 +3572,7 @@ const OrderForm = () => {
     if (loading) return <div className="p-8 text-center italic text-primary">Đang tải dữ liệu...</div>;
 
     return (
-        <div className="relative flex flex-col flex-grow bg-[#fcfcfa] animate-fade-in p-0 md:p-6 min-h-0 overflow-y-auto">
+        <div className="relative flex min-h-full flex-col bg-[#fcfcfa] animate-fade-in p-0 md:p-6">
             <style>{`
                 @keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
                 .animate-refresh-spin { animation: refresh-spin 0.8s linear infinite; }
@@ -3413,6 +3641,16 @@ const OrderForm = () => {
                                 Chuyển sang đơn nháp
                             </button>
                         )}
+                        {!isEdit && !isDraftOrderKind(orderKind) && (
+                            <button
+                                type="button"
+                                onClick={() => handleSubmit(null, DRAFT_ORDER_KIND)}
+                                disabled={saving}
+                                className="px-3 h-9 bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-700 hover:text-white text-[12px] font-semibold rounded-sm transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                Chuyển sang đơn nháp
+                            </button>
+                        )}
                         <button type="button" onClick={handleCancel} className="px-4 h-9 bg-white border border-primary/10 text-primary/60 hover:text-brick text-[12px] font-semibold rounded-sm transition-all">
                             Hủy thoát
                         </button>
@@ -3426,9 +3664,9 @@ const OrderForm = () => {
                 </div>
             </div>
 
-            <form id="order-form" onSubmit={handleSubmit} className="grid grid-cols-1 gap-[10px] flex-1 min-h-0 xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.95fr)]">
+            <form id="order-form" onSubmit={handleSubmit} className="grid grid-cols-1 gap-[10px] xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.95fr)] xl:items-start">
                 {/* Left Section: Product Management & Custom Attributes */}
-                <div className="flex flex-col gap-[10px] max-w-full min-w-0">
+                <div className="flex max-w-full min-w-0 flex-col gap-[10px]">
                     <div className="bg-white border border-primary/10 p-4 shadow-sm rounded-sm">
                         {/* Title & Product Selector Tags */}
                         <div className="flex flex-col xl:flex-row xl:items-start gap-[10px] border-b border-primary/10 pb-4">
@@ -3447,7 +3685,7 @@ const OrderForm = () => {
                             <div className="relative z-[100] flex-1 min-w-0">
                                 <div className="grid grid-cols-1 gap-[10px] lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start">
                                 {/* Flexible Search Input */}
-                                <div className="relative w-full min-w-0">
+                                <div ref={productSearchContainerRef} className="relative z-[110] w-full min-w-0">
                                     <div className="flex items-center bg-primary/5 border border-primary/10 rounded-sm px-3 h-10 focus-within:border-primary/30 focus-within:bg-white transition-all shadow-sm">
                                         <span className="material-symbols-outlined text-[16px] text-primary/40 mr-2">search</span>
                                         <input
@@ -3465,19 +3703,18 @@ const OrderForm = () => {
                                                 setShowProductQuickSetupPanel(false);
                                                 setShowSearchDropdown(true);
                                             }}
-                                            onClick={() => {
-                                                setShowProductQuickSetupPanel(false);
-                                                setShowSearchDropdown(true);
-                                                setShowSearchHistory(false);
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Escape' && searchTerm !== '') {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    clearProductSearchInput();
+                                                }
                                             }}
                                         />
                                         {searchTerm && (
                                             <button
                                                 type="button"
-                                                onClick={() => {
-                                                    setSearchTerm('');
-                                                    setShowSearchHistory(false);
-                                                }}
+                                                onClick={clearProductSearchInput}
                                                 className="text-primary/30 hover:text-brick ml-2"
                                             >
                                                 <span className="material-symbols-outlined text-[14px]">close</span>
@@ -3594,25 +3831,37 @@ const OrderForm = () => {
 
                                                             <div className="mt-2 text-[10px] font-semibold text-primary/40">
                                                                 {activeProductQuickSetupItems.length > 0
-                                                                    ? 'Danh sách này sẽ được dùng cho lớp lọc nhanh của thuộc tính đang chọn.'
+                                                                    ? `Đang lưu ${activeProductQuickSetupItems.length} sản phẩm cho bộ lọc này. Các sản phẩm đã chọn sẽ tự ghim lên đầu danh sách để bạn kiểm tra nhanh.`
                                                                     : 'Chọn vài sản phẩm để tạo lớp lọc nhanh cho thuộc tính đang chọn.'}
                                                             </div>
 
                                                             <div className="mt-3 max-h-[420px] overflow-y-auto custom-scrollbar space-y-2 pr-1">
-                                                                {productQuickSetupProducts.length > 0 ? productQuickSetupProducts.map((product) => {
-                                                                    const isSelected = selectedQuickSetupProductIds.has(Number(product.id));
+                                                                {visibleProductQuickSetupProducts.length > 0 ? visibleProductQuickSetupProducts.map((product) => {
+                                                                    const targetProductId = Number(product?.target_product_id ?? product?.product_id ?? product?.id);
+                                                                    const isVariation = String(product?.entry_kind || SEARCH_ENTRY_PRODUCT) === SEARCH_ENTRY_VARIATION;
+                                                                    const isSelected = selectedQuickSetupProductIds.has(targetProductId);
 
                                                                     return (
                                                                         <button
-                                                                            key={`setup-product-${product.id}`}
+                                                                            key={`setup-product-${product.entry_kind || SEARCH_ENTRY_PRODUCT}-${targetProductId}`}
                                                                             type="button"
-                                                                            onClick={() => (isSelected ? handleRemoveProductFromQuickSetup(product.id) : handleAddProductToQuickSetup(product))}
+                                                                            onClick={() => (isSelected ? handleRemoveProductFromQuickSetup(targetProductId) : handleAddProductToQuickSetup(product))}
                                                                             className={`w-full rounded-sm border px-3 py-2 text-left transition-all ${isSelected ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary hover:border-primary/25 hover:bg-white'}`}
                                                                         >
                                                                             <div className="flex items-center justify-between gap-3">
                                                                                 <div className="min-w-0">
                                                                                     <div className="truncate text-[12px] font-semibold text-[#0F172A]">
-                                                                                        {product.name || '---'}
+                                                                                        {product.display_name || product.name || '---'}
+                                                                                    </div>
+                                                                                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-semibold text-primary/45">
+                                                                                        {(product.display_sku || product.sku) && (
+                                                                                            <span>{product.display_sku || product.sku}</span>
+                                                                                        )}
+                                                                                        {isVariation && product.option_label && (
+                                                                                            <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2 py-0.5 text-[10px] font-bold text-primary/65">
+                                                                                                {product.option_label}
+                                                                                            </span>
+                                                                                        )}
                                                                                     </div>
                                                                                 </div>
                                                                                 <div className="shrink-0 text-right">
@@ -3649,7 +3898,7 @@ const OrderForm = () => {
                                     )}
 
                                     {showSearchDropdown && (
-                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl rounded-sm z-[100] max-h-[400px] overflow-auto custom-scrollbar">
+                                        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl rounded-sm z-[120] max-h-[400px] overflow-auto custom-scrollbar">
                                             {shouldShowProductQuickFilterPanel && (
                                                 <div className="border-b border-primary/10 bg-primary/[0.02] px-3 py-3">
                                                     <div className="flex flex-col gap-2">
@@ -3743,24 +3992,19 @@ const OrderForm = () => {
                                                     </div>
                                                 </div>
                                             )}
-                                            {rankedSearchProducts.map((p) => (
+                                                {rankedSearchProducts.map((p) => (
                                                     <ProductSearchOption
                                                         key={p.entry_id || p.id}
                                                         product={p}
                                                         onSelect={addProductById}
                                                         quickFilterAttribute={activeProductQuickFilterAttribute}
+                                                        isAlreadyInOrder={Boolean(p.__alreadyInOrder)}
                                                     />
                                                 ))}
                                             {(searchTerm.trim() !== '' || hasActiveProductQuickFilter) && rankedSearchProducts.length === 0 && (
                                                 <div className="p-4 text-center italic text-primary/20 text-[11px] uppercase font-black tracking-widest">Không có kết quả khả dụng...</div>
                                             )}
                                         </div>
-                                    )}
-                                    {showSearchDropdown && (
-                                        <div
-                                            className="fixed inset-0 z-[90]"
-                                            onClick={closeProductSearchDropdown}
-                                        />
                                     )}
                                 </div>
 
@@ -4109,7 +4353,7 @@ const OrderForm = () => {
                 </div>
 
                 {/* Right Section: Sidebar Metadata */}
-                <div className="w-full min-w-0 max-w-full flex flex-col gap-[10px]">
+                <div className="flex w-full min-w-0 max-w-full flex-col gap-[10px]">
                     <div className="bg-white border border-primary/10 p-4 shadow-sm rounded-sm">
                         <div className="flex items-center gap-2.5 mb-[10px] border-b border-primary/10 pb-3">
                             <span className="material-symbols-outlined text-primary/40 text-[18px]">assignment</span>

@@ -1,6 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
+const normalizeSearchValue = (value = '') => String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toLowerCase()
+    .trim();
+
+const buildProductSearchValue = (product) => normalizeSearchValue([
+    product?.name,
+    product?.sku,
+    product?.id,
+    product?.category_name,
+].filter((value) => value !== null && value !== undefined && value !== '').join(' '));
+
 const CategoryProductSortRow = ({
     product,
     index,
@@ -179,6 +193,7 @@ const CategoryProductSortModal = ({
     onSave,
 }) => {
     const [positionDrafts, setPositionDrafts] = useState({});
+    const [searchQuery, setSearchQuery] = useState('');
 
     useEffect(() => {
         if (!open) {
@@ -214,6 +229,10 @@ const CategoryProductSortModal = ({
         );
     }, [products, open]);
 
+    useEffect(() => {
+        setSearchQuery('');
+    }, [open, category?.id]);
+
     if (!open) {
         return null;
     }
@@ -221,6 +240,11 @@ const CategoryProductSortModal = ({
     const isBusy = isLoading || isSaving;
     const categoryName = category?.name || 'Danh mục';
     const totalProducts = products.length;
+    const normalizedSearchQuery = normalizeSearchValue(searchQuery);
+    const filteredProducts = normalizedSearchQuery
+        ? products.filter((product) => buildProductSearchValue(product).includes(normalizedSearchQuery))
+        : products;
+    const productPositions = new Map(products.map((product, index) => [product.id, index]));
 
     const handleClose = () => {
         onDragEnd();
@@ -253,6 +277,12 @@ const CategoryProductSortModal = ({
         }));
         onMoveToPosition(productId, nextPosition);
     };
+
+    const helperText = isLoading
+        ? 'Đang tải sản phẩm...'
+        : normalizedSearchQuery
+            ? `Hiển thị ${filteredProducts.length}/${totalProducts} sản phẩm khớp. Vị trí vẫn là thứ tự thật trong danh mục.`
+            : 'Nhập số thứ tự rồi nhấn Enter để chuyển nhanh.';
 
     return (
         <div
@@ -287,6 +317,11 @@ const CategoryProductSortModal = ({
                                 <span className="rounded-full bg-primary/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-primary">
                                     {category?.products_count ?? totalProducts} sản phẩm
                                 </span>
+                                {normalizedSearchQuery ? (
+                                    <span className="rounded-full bg-gold/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">
+                                        {filteredProducts.length} khớp tìm kiếm
+                                    </span>
+                                ) : null}
                                 {isDirty ? (
                                     <span className="rounded-full bg-amber-100 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">
                                         Chưa lưu thay đổi
@@ -299,47 +334,78 @@ const CategoryProductSortModal = ({
                             </div>
                         </div>
 
-                        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                            <div className="text-[11px] text-stone/55">
-                                {isLoading ? 'Đang tải sản phẩm...' : 'Nhập số thứ tự rồi nhấn Enter để chuyển nhanh.'}
+                        <div className="mt-4">
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                                <label className="text-[10px] font-black uppercase tracking-[0.16em] text-stone/55">
+                                    Tìm nhanh sản phẩm
+                                </label>
+                                <div className="text-[11px] text-stone/55">
+                                    {helperText}
+                                </div>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={onRefresh}
-                                    disabled={isBusy}
-                                    className="flex h-10 items-center gap-2 rounded-sm border border-gold/15 px-3 text-[11px] font-black uppercase tracking-[0.12em] text-stone/70 transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                    <span className={`material-symbols-outlined text-[16px] ${isBusy ? 'animate-spin' : ''}`}>refresh</span>
-                                    Tải lại
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={onReset}
-                                    disabled={!isDirty || isBusy}
-                                    className="flex h-10 items-center gap-2 rounded-sm border border-gold/15 px-3 text-[11px] font-black uppercase tracking-[0.12em] text-stone/70 transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                    <span className="material-symbols-outlined text-[16px]">history</span>
-                                    Hoàn tác
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={onSave}
-                                    disabled={!isDirty || isBusy}
-                                    className="flex h-10 items-center gap-2 rounded-sm bg-brick px-4 text-[11px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-umber disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                    <span className="material-symbols-outlined text-[16px]">save</span>
-                                    {isSaving ? 'Đang lưu' : 'Lưu thứ tự'}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={handleClose}
-                                    className="flex h-10 items-center gap-2 rounded-sm border border-gold/15 px-3 text-[11px] font-black uppercase tracking-[0.12em] text-stone/70 transition-colors hover:border-primary hover:text-primary"
-                                >
-                                    <span className="material-symbols-outlined text-[16px]">close</span>
-                                    Đóng
-                                </button>
+                            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-4">
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex h-11 items-center gap-2 rounded-sm border border-gold/15 bg-white px-3 shadow-sm shadow-gold/5">
+                                        <span className="material-symbols-outlined text-[18px] text-stone/35">search</span>
+                                        <input
+                                            type="text"
+                                            value={searchQuery}
+                                            onChange={(event) => setSearchQuery(event.target.value)}
+                                            placeholder="Tìm theo tên, SKU hoặc ID sản phẩm"
+                                            autoComplete="off"
+                                            className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-primary outline-none placeholder:text-stone/35"
+                                        />
+                                        {searchQuery ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => setSearchQuery('')}
+                                                className="flex h-8 w-8 items-center justify-center rounded-full text-stone/45 transition-colors hover:bg-stone-100 hover:text-brick"
+                                                title="Xóa từ khóa tìm kiếm"
+                                            >
+                                                <span className="material-symbols-outlined text-[16px]">close</span>
+                                            </button>
+                                        ) : null}
+                                    </div>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-2 rounded-sm border border-gold/15 bg-white p-1 shadow-sm shadow-gold/5 lg:flex-nowrap lg:shrink-0">
+                                    <button
+                                        type="button"
+                                        onClick={onRefresh}
+                                        disabled={isBusy}
+                                        className="flex h-10 items-center gap-2 rounded-sm px-3 text-[11px] font-black uppercase tracking-[0.12em] text-stone/70 transition-colors hover:bg-primary/5 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                        <span className={`material-symbols-outlined text-[16px] ${isBusy ? 'animate-spin' : ''}`}>refresh</span>
+                                        Tải lại
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={onReset}
+                                        disabled={!isDirty || isBusy}
+                                        className="flex h-10 items-center gap-2 rounded-sm px-3 text-[11px] font-black uppercase tracking-[0.12em] text-stone/70 transition-colors hover:bg-primary/5 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">history</span>
+                                        Hoàn tác
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={onSave}
+                                        disabled={!isDirty || isBusy}
+                                        className="flex h-10 items-center gap-2 rounded-sm bg-brick px-4 text-[11px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-umber disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">save</span>
+                                        {isSaving ? 'Đang lưu' : 'Lưu thứ tự'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleClose}
+                                        className="flex h-10 items-center gap-2 rounded-sm px-3 text-[11px] font-black uppercase tracking-[0.12em] text-stone/70 transition-colors hover:bg-primary/5 hover:text-primary"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">close</span>
+                                        Đóng
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -362,6 +428,24 @@ const CategoryProductSortModal = ({
                                     Khi danh mục đã được gắn sản phẩm, bảng sắp xếp sẽ hiển thị tại đây để bạn kéo thả hoặc nhập số thứ tự.
                                 </p>
                             </div>
+                        ) : filteredProducts.length === 0 ? (
+                            <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 px-6 text-center opacity-70">
+                                <span className="material-symbols-outlined text-[48px] text-stone/40">search_off</span>
+                                <p className="text-[12px] font-bold uppercase tracking-[0.18em] text-stone/50">
+                                    Không tìm thấy sản phẩm phù hợp
+                                </p>
+                                <p className="max-w-md text-[12px] leading-relaxed text-stone/55">
+                                    Thử lại với tên sản phẩm, SKU hoặc ID khác. Bạn cũng có thể xóa bộ lọc để quay lại toàn bộ danh sách.
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={() => setSearchQuery('')}
+                                    className="flex h-10 items-center gap-2 rounded-sm border border-gold/15 px-3 text-[11px] font-black uppercase tracking-[0.12em] text-stone/70 transition-colors hover:border-primary hover:text-primary"
+                                >
+                                    <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+                                    Xóa tìm kiếm
+                                </button>
+                            </div>
                         ) : (
                             <div className="overflow-x-auto">
                                 <table className="min-w-full border-collapse">
@@ -375,11 +459,11 @@ const CategoryProductSortModal = ({
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {products.map((product, index) => (
+                                        {filteredProducts.map((product) => (
                                             <CategoryProductSortRow
                                                 key={product.id}
                                                 product={product}
-                                                index={index}
+                                                index={productPositions.get(product.id) ?? 0}
                                                 total={totalProducts}
                                                 draftPosition={positionDrafts[product.id]}
                                                 isDragging={draggingProductId === product.id}
@@ -407,7 +491,8 @@ const CategoryProductSortModal = ({
                     </div>
 
                     <div className="border-t border-gold/10 bg-white px-6 py-4 text-[11px] text-stone/55">
-                        Frontend sẽ dùng đúng thứ tự này sau khi bạn bấm <span className="font-black uppercase tracking-[0.12em] text-primary">Lưu thứ tự</span>.
+                        Frontend sẽ dùng đúng thứ tự này sau khi bạn bấm <span className="font-black uppercase tracking-[0.12em] text-primary">Lưu thứ tự</span>.{' '}
+                        {normalizedSearchQuery ? 'Bảng đang hiển thị bản lọc, nhưng số vị trí vẫn là thứ tự thật.' : ''}
                     </div>
                 </div>
             </div>

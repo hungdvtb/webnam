@@ -702,9 +702,9 @@
   }
 
   .productName {
-    min-height: calc(1.32em * 2);
+    min-height: calc(1.44em * 2);
     font-size: 0.92rem;
-    line-height: 1.32;
+    line-height: 1.44;
   }
 
   .price {
@@ -862,9 +862,9 @@
   }
 
   .productName {
-    min-height: calc(1.28em * 2);
+    min-height: calc(1.42em * 2);
     font-size: 0.8rem;
-    line-height: 1.28;
+    line-height: 1.42;
   }
 
   .footer {
@@ -891,5 +891,21 @@
     padding: 0 0.7rem;
     border-radius: 10px;
     font-size: 0.82rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .productName {
+    min-height: calc(1.58em * 2);
+    font-size: 0.92rem;
+    line-height: 1.58;
+  }
+}
+
+@media (max-width: 480px) {
+  .productName {
+    min-height: calc(1.62em * 2);
+    font-size: 0.8rem;
+    line-height: 1.62;
   }
 }

@@ -542,7 +542,7 @@ const LIST_VIEW_META = {
         emptyTitle: 'Chưa có đơn nháp',
         emptyDescription: 'Các đơn đã chuyển sang đơn nháp sẽ hiển thị tại đây',
         selectedLabel: 'đơn nháp',
-        createTitle: 'Tạo đơn hàng mới',
+        createTitle: 'Tạo đơn nháp',
     },
     trash: {
         listTitle: 'Thùng rác đơn hàng',
@@ -2244,8 +2244,15 @@ const OrderList = () => {
 
     const handleCreateOrder = useCallback(() => {
         orderApi.preloadBootstrap({ mode: 'form' });
-        navigate(`/admin/orders/new?return_to=${encodeURIComponent(currentListUrl)}`);
-    }, [currentListUrl, navigate]);
+        const params = new URLSearchParams();
+        params.set('return_to', currentListUrl);
+
+        if (isDraftView) {
+            params.set('kind', DRAFT_ORDER_KIND);
+        }
+
+        navigate(`/admin/orders/new?${params.toString()}`);
+    }, [currentListUrl, isDraftView, navigate]);
 
     const warmOrderEditor = useCallback((orderId) => {
         orderApi.preloadBootstrap({ mode: 'form' });

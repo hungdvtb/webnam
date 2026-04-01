@@ -90,6 +90,153 @@ class OrderDraftFlowTest extends TestCase
         $this->assertSame(3, (int) $order->items()->first()->quantity);
     }
 
+    public function test_store_draft_order_with_only_customer_name_and_no_items(): void
+    {
+        [$account] = $this->authenticate();
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => 'Khach chi co ten',
+                'customer_email' => '',
+                'customer_phone' => '',
+                'shipping_address' => '',
+                'items' => [],
+            ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('order_kind', Order::KIND_DRAFT)
+            ->assertJsonPath('customer_name', 'Khach chi co ten')
+            ->assertJsonPath('shipping_status_source', 'manual');
+
+        $order = Order::query()->findOrFail((int) $response->json('id'));
+
+        $this->assertSame(Order::KIND_DRAFT, $order->order_kind);
+        $this->assertSame('Khach chi co ten', $order->customer_name);
+        $this->assertSame('', (string) $order->customer_phone);
+        $this->assertSame('', (string) $order->shipping_address);
+        $this->assertSame(0.0, (float) $order->total_price);
+        $this->assertSame(0.0, (float) $order->cost_total);
+        $this->assertSame(0, $order->items()->count());
+    }
+
+    public function test_store_draft_order_with_only_customer_phone_and_no_items(): void
+    {
+        [$account] = $this->authenticate();
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => '',
+                'customer_email' => '',
+                'customer_phone' => '0912345678',
+                'shipping_address' => '',
+                'items' => [],
+            ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('order_kind', Order::KIND_DRAFT)
+            ->assertJsonPath('customer_phone', '0912345678')
+            ->assertJsonPath('shipping_status_source', 'manual');
+
+        $order = Order::query()->findOrFail((int) $response->json('id'));
+
+        $this->assertSame(Order::KIND_DRAFT, $order->order_kind);
+        $this->assertSame('', (string) $order->customer_name);
+        $this->assertSame('0912345678', (string) $order->customer_phone);
+        $this->assertSame('', (string) $order->shipping_address);
+        $this->assertSame(0.0, (float) $order->total_price);
+        $this->assertSame(0, $order->items()->count());
+    }
+
+    public function test_update_draft_order_can_clear_contact_fields_and_items_if_customer_name_exists(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham xoa thong tin',
+            'sku' => 'DRAFT-CLEAR-001',
+            'price' => 125000,
+        ]);
+
+        $order = $this->createDraftOrder($account, $user, $product, [
+            'customer_name' => 'Khach cu',
+            'customer_phone' => '0912345678',
+            'shipping_address' => '123 Nguyen Trai',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$order->id}", [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => 'Khach nhap toi gian',
+                'customer_phone' => '',
+                'shipping_address' => '',
+                'items' => [],
+            ]);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('id', $order->id)
+            ->assertJsonPath('order_kind', Order::KIND_DRAFT)
+            ->assertJsonPath('customer_name', 'Khach nhap toi gian');
+
+        $order->refresh();
+
+        $this->assertSame(Order::KIND_DRAFT, $order->order_kind);
+        $this->assertSame('Khach nhap toi gian', $order->customer_name);
+        $this->assertSame('', (string) $order->customer_phone);
+        $this->assertSame('', (string) $order->shipping_address);
+        $this->assertSame(0.0, (float) $order->total_price);
+        $this->assertSame(0.0, (float) $order->cost_total);
+        $this->assertSame(0, $order->items()->count());
+    }
+
+    public function test_update_draft_order_can_keep_only_customer_phone(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham phone toi gian',
+            'sku' => 'DRAFT-PHONE-ONLY-001',
+            'price' => 145000,
+        ]);
+
+        $order = $this->createDraftOrder($account, $user, $product, [
+            'customer_name' => 'Khach cu',
+            'customer_phone' => '0912345678',
+            'shipping_address' => '123 Nguyen Trai',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$order->id}", [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => '',
+                'customer_phone' => '0987654321',
+                'shipping_address' => '',
+                'items' => [],
+            ]);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('id', $order->id)
+            ->assertJsonPath('order_kind', Order::KIND_DRAFT)
+            ->assertJsonPath('customer_name', '')
+            ->assertJsonPath('customer_phone', '0987654321');
+
+        $order->refresh();
+
+        $this->assertSame(Order::KIND_DRAFT, $order->order_kind);
+        $this->assertSame('', (string) $order->customer_name);
+        $this->assertSame('0987654321', (string) $order->customer_phone);
+        $this->assertSame('', (string) $order->shipping_address);
+        $this->assertSame(0.0, (float) $order->total_price);
+        $this->assertSame(0, $order->items()->count());
+    }
+
     public function test_draft_order_costs_round_up_to_the_nearest_thousand(): void
     {
         [$account] = $this->authenticate();

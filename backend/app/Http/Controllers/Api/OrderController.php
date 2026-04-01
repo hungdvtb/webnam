@@ -551,7 +551,44 @@ class OrderController extends Controller
         }
     }
 
-    private function collectRequestItems(Request $request): array
+    private function normalizePersistedOrderTextFields(array $payload): array
+    {
+        foreach (['customer_name', 'customer_email', 'customer_phone', 'shipping_address'] as $field) {
+            if (array_key_exists($field, $payload)) {
+                $payload[$field] = trim((string) ($payload[$field] ?? ''));
+            }
+        }
+
+        return $payload;
+    }
+
+    private function validateDraftOrderPayload(array $payload): void
+    {
+        $customerName = trim((string) ($payload['customer_name'] ?? ''));
+        $customerPhone = trim((string) ($payload['customer_phone'] ?? ''));
+
+        if ($customerName === '' && $customerPhone === '') {
+            throw ValidationException::withMessages([
+                'customer_name' => 'Đơn nháp phải có tên khách hàng hoặc số điện thoại.',
+            ]);
+        }
+    }
+
+    private function allowsEmptyItems(string $orderKind): bool
+    {
+        return $this->normalizeOrderKind($orderKind) === self::ORDER_KIND_DRAFT;
+    }
+
+    private function validateOfficialOrderItems(iterable $items): void
+    {
+        if (collect($items)->isEmpty()) {
+            throw ValidationException::withMessages([
+                'items' => 'Đơn chính thức phải có ít nhất 1 sản phẩm.',
+            ]);
+        }
+    }
+
+    private function collectRequestItems(Request $request, bool $allowEmptyItems = false): array
     {
         if ($request->has('items')) {
             return collect($request->input('items', []))
@@ -559,6 +596,10 @@ class OrderController extends Controller
                 ->filter(fn ($item) => !empty($item['product_id']) && (int) ($item['quantity'] ?? 0) > 0)
                 ->values()
                 ->all();
+        }
+
+        if ($allowEmptyItems) {
+            return [];
         }
 
         $cart = Cart::with('items.product')->where('user_id', Auth::id())->first();
@@ -581,7 +622,7 @@ class OrderController extends Controller
         })->all();
     }
 
-    private function syncManualOrderItems(Order $order, array $rawItems): array
+    private function syncManualOrderItems(Order $order, array $rawItems, bool $allowEmptyItems = false): array
     {
         $normalizedItems = collect($rawItems)
             ->map(fn ($item) => is_array($item) ? $item : [])
@@ -589,6 +630,14 @@ class OrderController extends Controller
             ->values();
 
         if ($normalizedItems->isEmpty()) {
+            if ($allowEmptyItems) {
+                return [
+                    'items' => [],
+                    'total_price' => 0,
+                    'cost_total' => 0,
+                    'profit_total' => 0,
+                ];
+            }
             throw ValidationException::withMessages([
                 'items' => 'Đơn hàng phải có ít nhất 1 sản phẩm.',
             ]);
@@ -650,7 +699,7 @@ class OrderController extends Controller
             return app(InventoryService::class)->attachInventoryToOrder($order, $rawItems);
         }
 
-        return $this->syncManualOrderItems($order, $rawItems);
+        return $this->syncManualOrderItems($order, $rawItems, $this->allowsEmptyItems($orderKind));
     }
 
     private function releaseInventoryIfNeeded(Order $order): void
@@ -916,6 +965,7 @@ class OrderController extends Controller
                 'ward' => $original->ward,
                 'shipping_address' => $original->shipping_address,
             ], filled($original->district) ? 'old' : 'new');
+            $this->validateOfficialOrderItems($original->items);
         }
 
         return $this->runOrderNumberMutation($targetKind, function () use ($original, $targetKind) {
@@ -1018,6 +1068,7 @@ class OrderController extends Controller
                 'ward' => $payload['ward'] ?? $order->ward,
                 'shipping_address' => $payload['shipping_address'] ?? $order->shipping_address,
             ], (string) ($payload['region_type'] ?? 'new'));
+            $this->validateOfficialOrderItems($order->items);
         }
 
         return $this->runOrderNumberMutation($targetKind, function () use ($order, $targetKind, $currentKind) {
@@ -2037,9 +2088,11 @@ class OrderController extends Controller
 
         if ($this->requiresOfficialValidation($orderKind)) {
             $this->validateOfficialOrderPayload($request->all(), $regionType);
+        } elseif ($this->allowsEmptyItems($orderKind)) {
+            $this->validateDraftOrderPayload($request->all());
         }
 
-        $rawItems = $this->collectRequestItems($request);
+        $rawItems = $this->collectRequestItems($request, $this->allowsEmptyItems($orderKind));
 
         return $this->runOrderNumberMutation($orderKind, function () use ($request, $accountId, $rawItems, $orderKind, $orderType) {
             return DB::transaction(function () use ($request, $accountId, $rawItems, $orderKind, $orderType) {
@@ -2056,6 +2109,12 @@ class OrderController extends Controller
                 $request->input('return_tracking_code'),
                 $request->input('return_status')
             );
+            $persistedTextFields = $this->normalizePersistedOrderTextFields([
+                'customer_name' => $request->input('customer_name'),
+                'customer_email' => $request->input('customer_email'),
+                'customer_phone' => $request->input('customer_phone'),
+                'shipping_address' => $request->input('shipping_address'),
+            ]);
 
             $order = Order::create(array_merge([
                 'user_id' => Auth::id(),
@@ -2066,10 +2125,10 @@ class OrderController extends Controller
                 'order_type' => $orderType,
                 'total_price' => 0,
                 'status' => $request->status ?? $this->defaultStatusForKind($accountId, $orderKind),
-                'customer_name' => $request->customer_name,
-                'customer_email' => $request->customer_email,
-                'customer_phone' => $request->customer_phone,
-                'shipping_address' => $request->shipping_address,
+                'customer_name' => $persistedTextFields['customer_name'],
+                'customer_email' => $persistedTextFields['customer_email'],
+                'customer_phone' => $persistedTextFields['customer_phone'],
+                'shipping_address' => $persistedTextFields['shipping_address'],
                 'province' => $request->province,
                 'district' => $request->district,
                 'ward' => $request->ward,
@@ -2303,13 +2362,18 @@ class OrderController extends Controller
                     'ward' => $request->input('ward', $order->ward),
                     'shipping_address' => $request->input('shipping_address', $order->shipping_address),
                 ], (string) $request->input('region_type', 'new'));
+            } elseif ($this->allowsEmptyItems($requestedKind)) {
+                $this->validateDraftOrderPayload([
+                    'customer_name' => $request->input('customer_name', $order->customer_name),
+                    'customer_phone' => $request->input('customer_phone', $order->customer_phone),
+                ]);
             }
 
-            $data = $request->only([
+            $data = $this->normalizePersistedOrderTextFields($request->only([
                 'order_number', 'customer_name', 'customer_email', 'customer_phone', 
                 'shipping_address', 'province', 'district', 'ward', 'notes', 'source', 
                 'type', 'shipment_status', 'shipping_fee', 'discount', 'status'
-            ]);
+            ]));
             $data['order_type'] = $requestedOrderType;
             $data['settlement_delta'] = $requestedOrderType === self::ORDER_TYPE_STANDARD
                 ? 0

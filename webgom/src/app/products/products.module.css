@@ -897,10 +897,10 @@
   }
 
   .productName {
-    min-height: 2.42em;
-    margin-bottom: 0.2rem;
+    min-height: calc(1.4em * 2);
+    margin-bottom: 0.26rem;
     font-size: 0.88rem;
-    line-height: 1.21;
+    line-height: 1.4;
   }
 
   .cardFooter {
@@ -976,10 +976,10 @@
   }
 
   .productName {
-    min-height: 2.3em;
-    margin-bottom: 0.16rem;
+    min-height: calc(1.42em * 2);
+    margin-bottom: 0.22rem;
     font-size: 0.8rem;
-    line-height: 1.15;
+    line-height: 1.42;
   }
 
   .price {
@@ -1003,5 +1003,23 @@
 @media (max-width: 359px) {
   .productGrid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .productName {
+    min-height: calc(1.56em * 2);
+    margin-bottom: 0.28rem;
+    font-size: 0.88rem;
+    line-height: 1.56;
+  }
+}
+
+@media (max-width: 480px) {
+  .productName {
+    min-height: calc(1.6em * 2);
+    margin-bottom: 0.24rem;
+    font-size: 0.8rem;
+    line-height: 1.6;
   }
 }

@@ -4419,4 +4419,10 @@
     padding-top: 8px;
     padding-bottom: 8px;
   }
+
+  .simpleView .currentPrice,
+  .configurableView .currentPrice,
+  .bundleView .currentPrice {
+    color: var(--brick);
+  }
 }

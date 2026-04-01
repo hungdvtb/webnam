@@ -53,10 +53,6 @@ const getCartItemMeta = (item) => {
     });
   }
 
-  if (item?.sku) {
-    chips.push(`SKU ${item.sku}`);
-  }
-
   return Array.from(
     new Set(
       chips.filter((chip) => chip && chip.toLowerCase() !== normalizedName)
@@ -1217,10 +1213,11 @@ export default function CartPage() {
                 {cartItems.map((item) => {
                   const itemMeta = getCartItemMeta(item);
                   const imgSrc = getImageUrl(item);
+                  const isBundleItem = item.groupedItems?.length > 0;
                   const originalCount = item.originalSubCount ?? item.groupedItems?.length ?? 0;
-                  const isFullCombo = item.groupedItems?.length > 0 &&
+                  const isFullCombo = isBundleItem &&
                     item.groupedItems.length >= originalCount;
-                  const effectivePrice = item.groupedItems?.length > 0
+                  const effectivePrice = isBundleItem
                     ? item.groupedItems.reduce((s, gi) => s + (parseFloat(gi.price || 0) * (gi.qty || 1)), 0)
                     : item.price;
                   const lineTotal = effectivePrice * item.quantity;
@@ -1265,45 +1262,83 @@ export default function CartPage() {
                             </div>
                           ) : (
                             <p className={styles.mobileMetaFallback}>
-                              {item.groupedItems?.length > 0 ? 'Combo bộ sưu tập' : 'Tác phẩm đơn'}
+                              {isBundleItem ? 'Combo bộ sưu tập' : 'Tác phẩm đơn'}
                             </p>
                           )}
 
-                          <div className={styles.mobileItemFooter}>
-                            <div className={styles.mobilePriceGroup}>
-                              <span className={styles.mobileLabel}>
-                                {item.groupedItems?.length > 0 ? 'Giá combo' : 'Đơn giá'}
-                              </span>
-                              <strong className={styles.mobileUnitPrice}>{formatPrice(effectivePrice)}</strong>
-                            </div>
+                          {isBundleItem ? (
+                            <>
+                              <div className={styles.mobileBundleMetricsGrid}>
+                                <div className={`${styles.mobilePriceGroup} ${styles.mobileBundleMetric} ${styles.mobileBundlePriceMetric}`}>
+                                  <span className={styles.mobileLabel}>Giá combo</span>
+                                  <strong className={styles.mobileUnitPrice}>{formatPrice(effectivePrice)}</strong>
+                                </div>
 
-                            <div className={styles.mobileQuantityCtrl}>
-                              <button
-                                type="button"
-                                onClick={() => updateQuantity(item.cartKey, item.quantity - 1)}
-                                aria-label={`Giảm số lượng ${item.name}`}
-                              >
-                                −
-                              </button>
-                              <span>{item.quantity}</span>
-                              <button
-                                type="button"
-                                onClick={() => updateQuantity(item.cartKey, item.quantity + 1)}
-                                aria-label={`Tăng số lượng ${item.name}`}
-                              >
-                                +
-                              </button>
-                            </div>
-                          </div>
+                                <div className={styles.mobileBundleRightStack}>
+                                  <div className={`${styles.mobileBundleMetric} ${styles.mobileBundleTotalMetric}`}>
+                                    <span className={styles.mobileLineLabel}>Thành tiền</span>
+                                    <strong className={styles.mobileLinePrice}>{formatPrice(lineTotal)}</strong>
+                                  </div>
 
-                          <div className={styles.mobileLineTotal}>
-                            <span className={styles.mobileLineLabel}>Thành tiền</span>
-                            <strong className={styles.mobileLinePrice}>{formatPrice(lineTotal)}</strong>
-                          </div>
+                                  <div className={styles.mobileBundleQtyInline}>
+                                    <div className={`${styles.mobileQuantityCtrl} ${styles.mobileBundleQuantityCtrl}`}>
+                                      <button
+                                        type="button"
+                                        onClick={() => updateQuantity(item.cartKey, item.quantity - 1)}
+                                        aria-label={`Giảm số lượng ${item.name}`}
+                                      >
+                                        −
+                                      </button>
+                                      <span>{item.quantity}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => updateQuantity(item.cartKey, item.quantity + 1)}
+                                        aria-label={`Tăng số lượng ${item.name}`}
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className={styles.mobileItemFooter}>
+                                <div className={styles.mobilePriceGroup}>
+                                  <span className={styles.mobileLabel}>Đơn giá</span>
+                                  <strong className={styles.mobileUnitPrice}>{formatPrice(effectivePrice)}</strong>
+                                </div>
+
+                                <div className={styles.mobileQuantityCtrl}>
+                                  <button
+                                    type="button"
+                                    onClick={() => updateQuantity(item.cartKey, item.quantity - 1)}
+                                    aria-label={`Giảm số lượng ${item.name}`}
+                                  >
+                                    −
+                                  </button>
+                                  <span>{item.quantity}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => updateQuantity(item.cartKey, item.quantity + 1)}
+                                    aria-label={`Tăng số lượng ${item.name}`}
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className={styles.mobileLineTotal}>
+                                <span className={styles.mobileLineLabel}>Thành tiền</span>
+                                <strong className={styles.mobileLinePrice}>{formatPrice(lineTotal)}</strong>
+                              </div>
+                            </>
+                          )}
                         </div>
                       </div>
 
-                      {item.groupedItems?.length > 0 && (
+                      {isBundleItem && (
                         <div className={styles.mobileBundleBlock}>
                           <div className={styles.mobileBundleTopRow}>
                             <div className={styles.mobileBundleSummary}>
@@ -1415,7 +1450,7 @@ export default function CartPage() {
                         <div className={styles.itemDetails}>
                           <h4 className={styles.itemName}>{item.name}</h4>
                           <p className={styles.itemMeta}>
-                            {item.sku ? `SKU: ${item.sku}` :
+                            {false ? `SKU: ${item.sku}` :
                               (item.groupedItems?.length > 0 ? 'Combo bộ sưu tập' : 'Tác phẩm đơn')}
                           </p>
                           <div className={styles.itemActions}>

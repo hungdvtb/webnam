@@ -279,7 +279,7 @@ const ProductCard = ({ product, onConsult, categoryLabel }) => {
                 </Link>
 
                 <div className="mt-auto space-y-1">
-                    <p className="m-price text-[18px] font-black leading-none text-[#c08d40] md:text-[22px]">
+                    <p className="m-price text-[18px] font-black leading-none text-red-600 md:text-[22px]">
                         {primaryPrice}
                     </p>
                     {secondaryPrice ? (

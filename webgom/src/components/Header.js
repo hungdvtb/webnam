@@ -52,6 +52,12 @@ const MOBILE_ORDER_ITEM = {
   icon: "shopping_bag",
   activePrefixes: ["/cart", "/dat-hang", "/checkout", "/cam-on", "/order-success", "/order-history"],
 };
+const MOBILE_BOTTOM_LABEL_LINE_MAP = {
+  "san pham": ["S\u1ea3n", "ph\u1ea9m"],
+  "gioi thieu": ["Gi\u1edbi", "thi\u1ec7u"],
+  "kien thuc": ["Ki\u1ebfn", "th\u1ee9c"],
+  "dat hang": ["\u0110\u1eb7t", "h\u00e0ng"],
+};
 const SEARCH_HISTORY_STORAGE_KEY = "webgom_mobile_search_history";
 const MAX_SEARCH_HISTORY_ITEMS = 6;
 
@@ -86,6 +92,16 @@ const normalizePath = (value = "") => {
   const normalized = pathOnly.startsWith("/") ? pathOnly : `/${pathOnly.replace(/^\/+/, "")}`;
 
   return normalized || "/";
+};
+const getMobileBottomLabelLines = (value = "") => {
+  const label = String(value || "").trim();
+
+  if (!label) return [""];
+
+  const normalized = toComparableText(label);
+  const mappedLines = MOBILE_BOTTOM_LABEL_LINE_MAP[normalized];
+
+  return Array.isArray(mappedLines) && mappedLines.length > 0 ? mappedLines : [label];
 };
 const getMobileMenuMeta = (item = {}) => {
   const label = toComparableText(item?.title || item?.label || "");
@@ -807,10 +823,10 @@ export default function Header({
                   ? isMobileProductsMenuOpen || isMobileMenuItemActive(pathname, item)
                   : isMobileMenuItemActive(pathname, item);
                 const className = `mobile-bottom-item ${isActive ? "mobile-bottom-item-active" : ""} ${
-                  isOrderItem ? "mobile-bottom-item-order" : ""
-                } ${isOrderEntryMode ? "mobile-bottom-item-order-entry" : ""} ${
-                  isOrderConfirmMode ? "mobile-bottom-item-order-confirm" : ""
-                }`;
+                  isProductsTrigger ? "mobile-bottom-item-products" : ""
+                } ${isOrderItem ? "mobile-bottom-item-order" : ""} ${
+                  isOrderEntryMode ? "mobile-bottom-item-order-entry" : ""
+                } ${isOrderConfirmMode ? "mobile-bottom-item-order-confirm" : ""}`;
                 const itemTitle = isOrderEntryMode
                   ? "Địa chỉ nhận hàng"
                   : isOrderConfirmMode
@@ -820,7 +836,7 @@ export default function Header({
                   ? ["Địa chỉ", "nhận hàng"]
                   : isOrderConfirmMode
                     ? ["Xác nhận", "đơn hàng"]
-                    : [item.shortLabel];
+                    : getMobileBottomLabelLines(item.shortLabel);
 
                 const content = (
                   <span className="mobile-bottom-item__content">
@@ -1676,11 +1692,16 @@ export default function Header({
           }
 
           .mobile-bottom-nav {
+            --mobile-bottom-item-height: 70px;
+            --mobile-bottom-item-gap: 4px;
+            --mobile-bottom-icon-size: 23px;
+            --mobile-bottom-label-size: clamp(10.4px, 2.75vw, 11.2px);
+            --mobile-bottom-label-line: 1.16;
             position: fixed;
             inset: auto 0 0;
             z-index: 995;
             display: block;
-            padding: 0 10px calc(env(safe-area-inset-bottom, 0px) + 10px);
+            padding: 0 9px calc(env(safe-area-inset-bottom, 0px) + 9px);
             pointer-events: none;
           }
 
@@ -1690,8 +1711,8 @@ export default function Header({
             display: grid;
             grid-template-columns: repeat(5, minmax(0, 1fr));
             align-items: stretch;
-            gap: 6px;
-            padding: 8px 8px;
+            gap: 4px;
+            padding: 7px 6px;
             border: 1px solid rgba(197, 160, 89, 0.14);
             border-radius: 20px 20px 0 0;
             background: rgba(255, 255, 255, 0.97);
@@ -1707,7 +1728,7 @@ export default function Header({
             display: flex;
             align-items: stretch;
             justify-content: stretch;
-            min-height: 64px;
+            min-height: var(--mobile-bottom-item-height);
             padding: 0;
             border: 0;
             background: transparent;
@@ -1734,15 +1755,15 @@ export default function Header({
             box-sizing: border-box;
             width: 100%;
             min-width: 0;
-            min-height: 64px;
+            min-height: var(--mobile-bottom-item-height);
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 5px;
-            padding: 7px 3px 6px;
+            gap: var(--mobile-bottom-item-gap);
+            padding: 7px 4px 6px;
             border: 1px solid transparent;
-            border-radius: 14px;
+            border-radius: 15px;
             background: transparent;
             transition:
               background-color 180ms ease,
@@ -1799,38 +1820,36 @@ export default function Header({
               inset 0 0 0 1px rgba(185, 136, 60, 0.14);
           }
 
-          .mobile-bottom-item-order-entry .mobile-bottom-item__content,
-          .mobile-bottom-item-order-confirm .mobile-bottom-item__content {
-            min-height: 74px;
-            padding: 6px 6px 7px;
+          .mobile-bottom-item-order-entry .mobile-bottom-item__content {
+            min-height: var(--mobile-bottom-item-height);
+            padding: 7px 4px 6px;
+            border-color: rgba(166, 75, 42, 0.22);
+            background: linear-gradient(180deg, rgba(255, 248, 244, 0.98) 0%, rgba(255, 255, 255, 1) 100%);
+            box-shadow: inset 0 0 0 1px rgba(166, 75, 42, 0.08);
           }
 
-          .mobile-bottom-item-order-entry .mobile-bottom-item__content {
-            border-color: rgba(148, 163, 184, 0.34);
-            background: linear-gradient(180deg, rgba(248, 250, 252, 0.98) 0%, rgba(255, 255, 255, 1) 100%);
-            box-shadow:
-              0 10px 22px rgba(148, 163, 184, 0.12),
-              inset 0 0 0 1px rgba(226, 232, 240, 0.92);
+          .mobile-bottom-item-order-confirm .mobile-bottom-item__content {
+            min-height: calc(var(--mobile-bottom-item-height) + 2px);
+            padding: 6px 5px 7px;
           }
 
           .mobile-bottom-item-order-entry .mobile-bottom-item__icon-wrap {
-            background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
-            color: #334155;
-            box-shadow: 0 8px 16px rgba(148, 163, 184, 0.18);
+            background: linear-gradient(135deg, rgba(245, 217, 204, 0.98) 0%, rgba(232, 180, 154, 0.98) 100%);
+            color: rgb(166, 75, 42);
+            box-shadow: 0 6px 12px rgba(166, 75, 42, 0.14);
           }
 
           .mobile-bottom-item-order-entry .mobile-bottom-item__label {
-            color: #475569;
+            color: rgb(166, 75, 42);
+            font-weight: 800;
           }
 
           .mobile-bottom-item-order-entry:hover .mobile-bottom-item__content,
           .mobile-bottom-item-order-entry:focus-visible .mobile-bottom-item__content,
           .mobile-bottom-item-order-entry.mobile-bottom-item-active .mobile-bottom-item__content {
-            border-color: rgba(100, 116, 139, 0.4);
-            background: linear-gradient(180deg, rgba(241, 245, 249, 0.98) 0%, rgba(255, 255, 255, 1) 100%);
-            box-shadow:
-              0 14px 28px rgba(148, 163, 184, 0.16),
-              inset 0 0 0 1px rgba(203, 213, 225, 0.98);
+            border-color: rgba(166, 75, 42, 0.28);
+            background: linear-gradient(180deg, rgba(255, 244, 238, 0.98) 0%, rgba(255, 255, 255, 1) 100%);
+            box-shadow: inset 0 0 0 1px rgba(166, 75, 42, 0.1);
           }
 
           .mobile-bottom-item-order-confirm .mobile-bottom-item__content {
@@ -1864,8 +1883,8 @@ export default function Header({
 
           .mobile-bottom-item-order-entry .mobile-bottom-item__label-wrap,
           .mobile-bottom-item-order-confirm .mobile-bottom-item__label-wrap {
-            min-height: 36px;
-            flex-basis: 36px;
+            min-height: auto;
+            flex-basis: auto;
           }
 
           .mobile-bottom-item__label-wrap-multiline {
@@ -1873,17 +1892,18 @@ export default function Header({
           }
 
           .mobile-bottom-item__label-multiline {
+            flex-direction: column;
+            gap: 0;
             font-size: inherit;
-            line-height: 1.1;
-            white-space: normal;
+            line-height: var(--mobile-bottom-label-line);
           }
 
           .mobile-bottom-item__icon-wrap {
             box-sizing: border-box;
-            width: 24px;
-            min-width: 24px;
-            height: 24px;
-            flex: 0 0 24px;
+            width: var(--mobile-bottom-icon-size);
+            min-width: var(--mobile-bottom-icon-size);
+            height: var(--mobile-bottom-icon-size);
+            flex: 0 0 var(--mobile-bottom-icon-size);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1910,8 +1930,8 @@ export default function Header({
           }
 
           .mobile-bottom-item-order-entry .mobile-bottom-item__icon-wrap.mobile-bottom-item__icon-wrap-active {
-            background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
-            color: #334155;
+            background: linear-gradient(135deg, rgba(245, 217, 204, 0.98) 0%, rgba(232, 180, 154, 0.98) 100%);
+            color: rgb(166, 75, 42);
           }
 
           .mobile-bottom-item-order-confirm .mobile-bottom-item__icon-wrap.mobile-bottom-item__icon-wrap-active {
@@ -1920,7 +1940,7 @@ export default function Header({
           }
 
           .mobile-bottom-item-order-entry .mobile-bottom-item__icon.mobile-bottom-item__icon-active {
-            color: #334155;
+            color: rgb(166, 75, 42);
           }
 
           .mobile-bottom-item-order-confirm .mobile-bottom-item__icon.mobile-bottom-item__icon-active {
@@ -1933,8 +1953,10 @@ export default function Header({
             align-items: center;
             justify-content: center;
             width: 100%;
-            min-height: 20px;
-            flex: 0 0 20px;
+            min-width: 0;
+            max-width: 100%;
+            min-height: auto;
+            flex: 0 1 auto;
             transition: min-height 180ms ease;
           }
 
@@ -1943,21 +1965,47 @@ export default function Header({
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 1px;
+            gap: 0;
             max-width: 100%;
             width: 100%;
-            font-size: 13px;
+            font-size: var(--mobile-bottom-label-size);
             font-weight: 700;
-            line-height: 1.1;
+            line-height: var(--mobile-bottom-label-line);
             text-align: center;
-            white-space: nowrap;
+            white-space: normal;
+            overflow: visible;
+            text-overflow: clip;
+            letter-spacing: -0.02em;
+            word-break: normal;
+            overflow-wrap: anywhere;
             margin: 0;
             padding: 0;
           }
 
           .mobile-bottom-item__label-line {
             display: block;
+            width: 100%;
+            min-width: 0;
             max-width: 100%;
+            line-height: inherit;
+          }
+
+          .mobile-bottom-item-active:not(.mobile-bottom-item-order-confirm) .mobile-bottom-item__label {
+            color: #44546d;
+          }
+
+          .mobile-bottom-item-products .mobile-bottom-item__label,
+          .mobile-bottom-item-products.mobile-bottom-item-active .mobile-bottom-item__label,
+          .mobile-bottom-item-products:hover .mobile-bottom-item__label,
+          .mobile-bottom-item-products:focus-visible .mobile-bottom-item__label {
+            color: rgb(26, 26, 26);
+          }
+
+          .mobile-bottom-item-order-entry .mobile-bottom-item__label,
+          .mobile-bottom-item-order-entry.mobile-bottom-item-active .mobile-bottom-item__label,
+          .mobile-bottom-item-order-entry:hover .mobile-bottom-item__label,
+          .mobile-bottom-item-order-entry:focus-visible .mobile-bottom-item__label {
+            color: rgb(166, 75, 42);
           }
 
           :global(body) {
@@ -2008,35 +2056,41 @@ export default function Header({
           }
 
           .mobile-bottom-nav {
-            padding: 0 8px calc(env(safe-area-inset-bottom, 0px) + 8px);
+            --mobile-bottom-item-height: 68px;
+            --mobile-bottom-icon-size: 22px;
+            --mobile-bottom-label-size: 10px;
+            padding: 0 7px calc(env(safe-area-inset-bottom, 0px) + 7px);
           }
 
           .mobile-bottom-nav__inner {
             gap: 4px;
-            padding: 8px 7px;
+            padding: 7px 6px;
           }
 
           .mobile-bottom-item,
           .mobile-bottom-item__content {
-            min-height: 60px;
+            min-height: var(--mobile-bottom-item-height);
           }
 
           .mobile-bottom-item__content {
-            gap: 4px;
-            padding: 6px 2px 5px;
+            padding: 6px 3px 5px;
           }
 
-          .mobile-bottom-item-order-entry .mobile-bottom-item__content,
+          .mobile-bottom-item-order-entry .mobile-bottom-item__content {
+            min-height: var(--mobile-bottom-item-height);
+            padding: 6px 3px 5px;
+          }
+
           .mobile-bottom-item-order-confirm .mobile-bottom-item__content {
-            min-height: 72px;
+            min-height: calc(var(--mobile-bottom-item-height) + 2px);
             padding: 6px 4px 6px;
           }
 
           .mobile-bottom-item__icon-wrap {
-            width: 22px;
-            height: 22px;
-            min-width: 22px;
-            flex-basis: 22px;
+            width: var(--mobile-bottom-icon-size);
+            height: var(--mobile-bottom-icon-size);
+            min-width: var(--mobile-bottom-icon-size);
+            flex-basis: var(--mobile-bottom-icon-size);
           }
 
           .mobile-bottom-item__icon {
@@ -2044,33 +2098,24 @@ export default function Header({
           }
 
           .mobile-bottom-item__label-wrap {
-            min-height: 20px;
-            flex-basis: 20px;
+            min-height: auto;
+            flex-basis: auto;
           }
 
           .mobile-bottom-item__label {
-            font-size: 13px;
+            font-size: var(--mobile-bottom-label-size);
           }
 
           .mobile-bottom-item-order-entry .mobile-bottom-item__label-wrap,
           .mobile-bottom-item-order-confirm .mobile-bottom-item__label-wrap {
-            min-height: 34px;
-            flex-basis: 34px;
-          }
-
-          .mobile-bottom-item__label-multiline {
-            font-size: inherit;
+            min-height: auto;
+            flex-basis: auto;
           }
         }
 
         @media (min-width: 375px) and (max-width: 767px) {
           .mobile-bottom-nav__inner {
-            grid-template-columns:
-              minmax(0, 0.965fr)
-              minmax(0, 0.965fr)
-              minmax(0, 0.965fr)
-              minmax(0, 0.965fr)
-              minmax(0, 1.14fr);
+            grid-template-columns: repeat(5, minmax(0, 1fr));
           }
         }
       `}</style>

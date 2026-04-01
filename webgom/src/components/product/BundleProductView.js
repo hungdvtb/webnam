@@ -1115,7 +1115,7 @@ export default function BundleProductView({
       <div className={styles.bundleBreadcrumb}>
         <Breadcrumb product={product} />
       </div>
-      <div className="flex flex-col gap-12">
+      <div className={styles.bundlePageSections}>
         <div className={styles.mainGrid}>
           {/* Gallery */}
           <div className={styles.galleryColumn}>
@@ -1309,8 +1309,7 @@ export default function BundleProductView({
         <div
           id="bundle-list"
           ref={bundleListRef}
-          className="pt-16 border-t border-stone/10"
-          style={{ marginTop: '10px' }}
+          className={`${styles.bundleDetailSection} pt-16 border-t border-stone/10`}
         >
           <div className="text-center" style={{ marginBottom: '10px' }}>
             <h2

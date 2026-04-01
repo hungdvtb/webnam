@@ -697,18 +697,19 @@
   }
 
   .categoryTag {
-    font-size: 8px;
+    font-size: 11px;
     letter-spacing: 0.08em;
+    text-transform: none;
   }
 
   .productName {
     min-height: calc(1.44em * 2);
-    font-size: 0.92rem;
+    font-size: 14px;
     line-height: 1.44;
   }
 
   .price {
-    font-size: 1rem;
+    font-size: 16px;
   }
 
   .footer {
@@ -858,12 +859,12 @@
   }
 
   .categoryTag {
-    font-size: 7px;
+    font-size: 11px;
   }
 
   .productName {
     min-height: calc(1.42em * 2);
-    font-size: 0.8rem;
+    font-size: 14px;
     line-height: 1.42;
   }
 
@@ -872,7 +873,7 @@
   }
 
   .price {
-    font-size: 0.92rem;
+    font-size: 16px;
   }
 
   .cartAction {
@@ -897,7 +898,7 @@
 @media (max-width: 768px) {
   .productName {
     min-height: calc(1.58em * 2);
-    font-size: 0.92rem;
+    font-size: 14px;
     line-height: 1.58;
   }
 }
@@ -905,7 +906,7 @@
 @media (max-width: 480px) {
   .productName {
     min-height: calc(1.62em * 2);
-    font-size: 0.8rem;
+    font-size: 14px;
     line-height: 1.62;
   }
 }

@@ -85,7 +85,13 @@ export default function SimpleProductView({
                 setQuantity={setQuantity}
                 statusText="Sẵn sàng giao ngay"
               />
-              <BuyButtons onAddToCart={handleAddToCart} onBuyNow={handleBuyNow} />
+              <BuyButtons
+                onAddToCart={handleAddToCart}
+                onBuyNow={handleBuyNow}
+                addToCartLabel="Thêm vào giỏ"
+                buyNowLabel="Mua ngay"
+                disableUppercase
+              />
             </div>
           </div>
         </div>

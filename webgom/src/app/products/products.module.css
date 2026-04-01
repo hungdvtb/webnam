@@ -314,9 +314,21 @@
   -webkit-appearance: none;
 }
 
+.sortDropdown {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
 @media (min-width: 768px) {
   .filterBarControls {
     align-items: center;
+  }
+
+  .sortDropdown {
+    flex: 0 0 auto;
+    width: clamp(230px, 22vw, 310px);
+    max-width: 100%;
+    margin-left: auto;
   }
 
   .sortSelect {
@@ -748,12 +760,17 @@
   }
 
   .categoryDropdown,
+  .sortDropdown,
   .sortSelect {
     width: 100%;
     min-width: 0;
   }
 
   .categoryDropdown {
+    flex: none;
+  }
+
+  .sortDropdown {
     flex: none;
   }
 
@@ -892,14 +909,15 @@
 
   .productCategory {
     margin-bottom: 0.22rem;
-    font-size: 0.52rem;
+    font-size: 11px;
     letter-spacing: 0.08em;
+    text-transform: none;
   }
 
   .productName {
     min-height: calc(1.4em * 2);
     margin-bottom: 0.26rem;
-    font-size: 0.88rem;
+    font-size: 14px;
     line-height: 1.4;
   }
 
@@ -908,7 +926,7 @@
   }
 
   .price {
-    font-size: 0.92rem;
+    font-size: 16px;
   }
 
   .cartBtn {
@@ -932,6 +950,10 @@
   .filterBarControls {
     grid-template-columns: minmax(0, 1.14fr) minmax(0, 0.96fr);
     gap: 0.5rem;
+  }
+
+  .sortDropdown {
+    width: 100%;
   }
 
   .sortSelect {
@@ -978,12 +1000,12 @@
   .productName {
     min-height: calc(1.42em * 2);
     margin-bottom: 0.22rem;
-    font-size: 0.8rem;
+    font-size: 14px;
     line-height: 1.42;
   }
 
   .price {
-    font-size: 0.84rem;
+    font-size: 16px;
   }
 
   .cartBtn {
@@ -1010,7 +1032,7 @@
   .productName {
     min-height: calc(1.56em * 2);
     margin-bottom: 0.28rem;
-    font-size: 0.88rem;
+    font-size: 14px;
     line-height: 1.56;
   }
 }
@@ -1019,7 +1041,7 @@
   .productName {
     min-height: calc(1.6em * 2);
     margin-bottom: 0.24rem;
-    font-size: 0.8rem;
+    font-size: 14px;
     line-height: 1.6;
   }
 }

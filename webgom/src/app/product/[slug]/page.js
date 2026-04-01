@@ -38,6 +38,9 @@ export default async function ProductDetailPage({ params }) {
   // Determine main image for the description section
   const images = product.images || [];
   const mainImage = images.find(img => img.is_primary) || images[0];
+  const productPageGapClass = product?.type === 'simple'
+    ? styles.productPageMainSimple
+    : styles.productPageMainCompact;
 
   const parseVideoLinks = (html) => {
     if (!html) return '';
@@ -64,14 +67,13 @@ export default async function ProductDetailPage({ params }) {
 
   return (
     <div className={styles.productDetail}>
-      <main className="container py-10">
+      <main className={`container py-10 ${styles.productPageMain} ${productPageGapClass}`}>
+        <div className={styles.productPageSections}>
+          {/* Dynamic Product Content (Gallery + Info + Variants) */}
+          <ProductDetailContent product={product} />
 
-
-        {/* Dynamic Product Content (Gallery + Info + Variants) */}
-        <ProductDetailContent product={product} />
-
-        {/* Detailed Tabs Section */}
-        <div className={styles.tabsSection}>
+          {/* Detailed Tabs Section */}
+          <div className={styles.tabsSection}>
           <div className={styles.tabHeader}>
             <h3 className={styles.tabTitle}>Mô tả chi tiết</h3>
           </div>
@@ -93,10 +95,11 @@ export default async function ProductDetailPage({ params }) {
               </div>
             )}
           </div>
-        </div>
+          </div>
 
-        {/* Related Products */}
-        <RelatedProductsSection relatedProducts={relatedProducts} />
+          {/* Related Products */}
+          <RelatedProductsSection relatedProducts={relatedProducts} />
+        </div>
         {false && (
         <div className={`${styles.relatedSection} ${!hasRelatedProducts ? styles.relatedSectionEmpty : ''}`}>
             <div className={styles.relatedHeader}>

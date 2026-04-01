@@ -221,7 +221,7 @@ export default function ComponentSelectionModal({
           {loading ? (
             <div className={styles.loaderWrapper}>
               <div className={styles.loader}></div>
-              <p style={{ color: '#c5a065', fontWeight: 900, margin: 0 }}>ĐANG TÌM KIẾM...</p>
+              <p className={styles.loaderText}>ĐANG TÌM KIẾM...</p>
             </div>
           ) : displayItems.length > 0 ? (
             <div className={styles.productGrid}>
@@ -248,9 +248,6 @@ export default function ComponentSelectionModal({
                     </div>
                     <div className={styles.productCardInfo}>
                       <p className={styles.productCardName}>{item.name}</p>
-                      {item.sku && (
-                        <p className={styles.productCardSku}>SKU: {item.sku}</p>
-                      )}
                       <p className={styles.productCardPrice}>{formatPrice(item.price || 0)}</p>
                       {item.stock_quantity !== undefined && (
                         <span className={styles.inStock}>
@@ -270,11 +267,11 @@ export default function ComponentSelectionModal({
             <div className={styles.emptyState}>
               <span className="material-symbols-outlined">inventory_2</span>
               {errorMsg ? (
-                <p style={{ color: '#dc2626', fontWeight: 600, padding: 10, background: '#fee2e2', borderRadius: 8 }}>
+                <p className={styles.emptyStateError}>
                   {errorMsg}
                 </p>
               ) : (
-                <p style={{ color: '#555', fontWeight: 600 }}>
+                <p className={styles.emptyStateMessage}>
                   {mode === 'variants'
                     ? 'Không có biến thể nào khác cho sản phẩm này.'
                     : 'Không tìm thấy sản phẩm phù hợp.'}
@@ -295,7 +292,7 @@ export default function ComponentSelectionModal({
 
         {/* Footer */}
         <div className={styles.modalFooter}>
-          <span style={{ fontSize: 13, color: '#555', fontWeight: 600 }}>
+          <span className={styles.modalResultCount}>
             {displayItems.length} kết quả
           </span>
           <button type="button" onClick={handleClose} className={styles.footerBtn}>Đóng</button>

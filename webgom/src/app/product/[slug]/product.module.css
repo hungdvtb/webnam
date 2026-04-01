@@ -13,6 +13,16 @@
   padding-top: 0 !important;
 }
 
+.productPageMain {
+  --page-section-gap: 5rem;
+}
+
+.productPageSections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--page-section-gap);
+}
+
 .productDetail h1,
 .productDetail h2,
 .productDetail h3,
@@ -507,6 +517,17 @@
   width: 100%;
 }
 
+.configOptionsMobileDropdownOpen {
+  z-index: 40;
+}
+
+.configOptionsMobileBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: transparent;
+}
+
 .configOptionsMobileTrigger {
   width: 100%;
 }
@@ -520,6 +541,11 @@
 }
 
 .configOptionsMobileOption {
+  width: 100%;
+}
+
+.configOptionsMobileSpacer {
+  display: block;
   width: 100%;
 }
 
@@ -1650,7 +1676,7 @@
 
 /* Tabs / Description */
 .tabsSection {
-  margin-top: 5rem;
+  margin-top: 0;
 }
 
 .tabHeader {
@@ -1773,7 +1799,7 @@
 
 /* Related Products */
 .relatedSection {
-  margin-top: 5rem;
+  margin-top: 0;
 }
 
 .relatedSectionEmpty {
@@ -2825,7 +2851,7 @@
 
   .productDetail main {
     width: 100%;
-    padding-bottom: 2.5rem !important;
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem) !important;
   }
 
   .mainGrid {
@@ -2845,6 +2871,43 @@
     display: none;
   }
 
+  .simpleView {
+    --mobile-product-block-gap: 0.9rem;
+  }
+
+  .productPageMainSimple {
+    --mobile-page-section-gap: 0.9rem;
+  }
+
+  .configurableView,
+  .bundleView {
+    --mobile-product-block-gap: 0.5rem;
+  }
+
+  .productPageMainCompact {
+    --mobile-page-section-gap: 0.5rem;
+  }
+
+  .productPageSections {
+    gap: var(--mobile-page-section-gap);
+  }
+
+  .simpleInfoWrapper,
+  .simpleView .simpleDetailStack,
+  .configurableView .infoWrapper,
+  .bundleView .infoWrapper {
+    gap: var(--mobile-product-block-gap);
+  }
+
+  .configurableView .titleSection,
+  .bundleView .titleSection,
+  .bundleView .relatedOptionsCard,
+  .bundleView .configOptionsCard,
+  .bundleView .bundleActionMobileDock {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+  }
+
   .bundleView .configOptionsCard {
     padding: 0.82rem;
     border-radius: 1.15rem;
@@ -2855,17 +2918,52 @@
 
   .bundleView .configOptionsTitle {
     margin-bottom: 0.7rem;
-    font-size: 0.62rem;
+    font-size: 13px;
     letter-spacing: 0.09em;
   }
 
+  .bundleView .relatedOptionsTitle {
+    font-size: 13px;
+  }
+
+  .bundleView .relatedOptionsGrid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.35rem;
+  }
+
+  .bundleView .relatedOptionBtn {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    gap: 0.35rem;
+    padding: 0.5rem 0.2rem;
+  }
+
+  .bundleView .relatedOptionImgWrap {
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+  }
+
+  .bundleView .relatedOptionText {
+    display: block;
+    font-size: 13px;
+    line-height: 1.15;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
   .bundleView .configOptionsMobileDropdown {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 0.48rem;
   }
 
   .bundleView .configOptionsMobileTrigger {
+    position: relative;
+    z-index: 1;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -2944,9 +3042,22 @@
   }
 
   .bundleView .configOptionsMobileMenu {
+    position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
-    gap: 0.42rem;
+    gap: 0;
+    max-height: min(18rem, 52vh);
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+  }
+
+  .bundleView .configOptionsMobileSpacer {
+    flex: 0 0 0.42rem;
+    height: 0.42rem;
   }
 
   .bundleView .configOptionsMobileOption {
@@ -4010,7 +4121,7 @@
 }
 
   .simpleInfoWrapper {
-    gap: 0.8rem;
+    gap: var(--mobile-product-block-gap);
   }
 
   .simpleHeroCard {
@@ -4052,7 +4163,7 @@
 
   .simpleView .simpleDetailStack {
     order: 2;
-    gap: 0.9rem;
+    gap: var(--mobile-product-block-gap);
   }
 
   .simpleView .simpleMobileActionSection {

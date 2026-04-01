@@ -11,7 +11,7 @@ import BuyButtons from './common/BuyButtons';
 import SpecificationList from './common/SpecificationList';
 import ActionLinks from './common/ActionLinks';
 import ComponentSelectionModal from './common/ComponentSelectionModal';
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { Fragment, useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Breadcrumb from './common/Breadcrumb';
 import { resolveImageObjectUrl } from '@/lib/media';
@@ -53,6 +53,8 @@ const getMobileStickyHeaderHeight = () => {
   const promoBar = document.querySelector('.top-promotion-bar');
   return Math.round(promoBar?.getBoundingClientRect().height || 32);
 };
+
+const sentenceCaseButtonStyle = { textTransform: 'none' };
 
 
 const BUNDLE_ITEM_CHANGE_LABEL = 'Đổi kích thước';
@@ -272,6 +274,35 @@ export default function BundleProductView({
   const [isMobileHeroConfigMenuOpen, setIsMobileHeroConfigMenuOpen] = useState(false);
   const [isMobileConfigMenuOpen, setIsMobileConfigMenuOpen] = useState(false);
   const bundleListRef = useRef(null);
+  const closeMobileHeroConfigMenu = () => setIsMobileHeroConfigMenuOpen(false);
+  const closeMobileConfigMenu = () => setIsMobileConfigMenuOpen(false);
+  const stopDropdownEventPropagation = (event) => {
+    event.stopPropagation();
+  };
+  const shouldHandleDropdownOptionSelection = (event) => {
+    if (!event) {
+      return true;
+    }
+
+    if (event.detail === 0) {
+      return true;
+    }
+
+    const clientX = Number(event.clientX ?? event.nativeEvent?.clientX);
+    const clientY = Number(event.clientY ?? event.nativeEvent?.clientY);
+    const rect = event.currentTarget?.getBoundingClientRect?.();
+
+    if (!rect || !Number.isFinite(clientX) || !Number.isFinite(clientY)) {
+      return true;
+    }
+
+    return (
+      clientX >= rect.left &&
+      clientX <= rect.right &&
+      clientY >= rect.top &&
+      clientY <= rect.bottom
+    );
+  };
 
   const getBundleSlotPosition = (item, fallbackIndex = 0) => {
     const rawPosition = item?.source_position ?? item?.pivot?.position ?? fallbackIndex;
@@ -401,60 +432,23 @@ export default function BundleProductView({
   }, [activeTab]);
 
   useEffect(() => {
-    if (!isMobileHeroConfigMenuOpen || typeof document === 'undefined') {
+    if ((!isMobileHeroConfigMenuOpen && !isMobileConfigMenuOpen) || typeof document === 'undefined') {
       return undefined;
     }
-
-    const handlePointerDown = (event) => {
-      if (!event.target.closest('[data-bundle-top-config-selector="true"]')) {
-        setIsMobileHeroConfigMenuOpen(false);
-      }
-    };
 
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
         setIsMobileHeroConfigMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('touchstart', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('touchstart', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isMobileHeroConfigMenuOpen]);
-
-  useEffect(() => {
-    if (!isMobileConfigMenuOpen || typeof document === 'undefined') {
-      return undefined;
-    }
-
-    const handlePointerDown = (event) => {
-      if (!event.target.closest('[data-bundle-mobile-config-selector="true"]')) {
         setIsMobileConfigMenuOpen(false);
       }
     };
 
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        setIsMobileConfigMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('touchstart', handlePointerDown);
     document.addEventListener('keydown', handleKeyDown);
 
     return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('touchstart', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isMobileConfigMenuOpen]);
+  }, [isMobileConfigMenuOpen, isMobileHeroConfigMenuOpen]);
 
   // Items of the active tab (including removed ones for placeholder)
   const tabItems = useMemo(() => {
@@ -788,13 +782,24 @@ export default function BundleProductView({
           <span className={builderStyles.mobileConfigRailMeta}>{mobileConfigHint}</span>
         </div>
 
-        <div className={builderStyles.mobileConfigDropdown}>
+        <div
+          className={`${builderStyles.mobileConfigDropdown} ${isMobileConfigMenuOpen ? builderStyles.mobileConfigDropdownOpen : ''}`}
+        >
+          {isMobileConfigMenuOpen ? (
+            <div
+              className={builderStyles.mobileConfigDropdownBackdrop}
+              aria-hidden="true"
+              onPointerDown={closeMobileConfigMenu}
+            />
+          ) : null}
+
           <div className={builderStyles.mobileConfigDropdownRow}>
             <button
               type="button"
               aria-haspopup="listbox"
               aria-expanded={isMobileConfigMenuOpen}
               className={`${builderStyles.mobileConfigDropdownTrigger} ${isMobileConfigMenuOpen ? builderStyles.mobileConfigDropdownTriggerOpen : ''}`}
+              onPointerDown={stopDropdownEventPropagation}
               onClick={() => setIsMobileConfigMenuOpen((currentValue) => !currentValue)}
             >
               <span className={builderStyles.mobileConfigDropdownValueWrap}>
@@ -824,21 +829,30 @@ export default function BundleProductView({
           </div>
 
           {isMobileConfigMenuOpen ? (
-            <div className={builderStyles.mobileConfigDropdownMenu} role="listbox" aria-label="Danh s\u00E1ch c\u1EA5u h\u00ECnh b\u1ED9">
-              {configurations.map((config) => {
+            <div
+              className={builderStyles.mobileConfigDropdownMenu}
+              role="listbox"
+              aria-label="Danh s\u00E1ch c\u1EA5u h\u00ECnh b\u1ED9"
+              onPointerDown={stopDropdownEventPropagation}
+              onClick={stopDropdownEventPropagation}
+            >
+              {configurations.map((config, index) => {
                 const isSelected = activeTab === config;
                 const isDiscountReady = isConfigEligibleForDiscount(config);
 
                 return (
+                  <Fragment key={config}>
                   <button
-                    key={config}
                     type="button"
                     role="option"
                     aria-selected={isSelected}
                     className={`${builderStyles.mobileConfigDropdownOption} ${isSelected ? builderStyles.mobileConfigDropdownOptionActive : ''}`}
-                    onClick={() => {
+                    onClick={(event) => {
+                      if (!shouldHandleDropdownOptionSelection(event)) {
+                        return;
+                      }
                       handleTabChange(config);
-                      setIsMobileConfigMenuOpen(false);
+                      closeMobileConfigMenu();
                     }}
                   >
                     <span className={builderStyles.mobileConfigDropdownOptionMain}>
@@ -857,6 +871,15 @@ export default function BundleProductView({
                       </span>
                     </span>
                   </button>
+                  {index < configurations.length - 1 ? (
+                    <div
+                      className={builderStyles.mobileConfigDropdownSpacer}
+                      aria-hidden="true"
+                      onPointerDown={stopDropdownEventPropagation}
+                      onClick={stopDropdownEventPropagation}
+                    />
+                  ) : null}
+                  </Fragment>
                 );
               })}
             </div>
@@ -897,6 +920,7 @@ export default function BundleProductView({
                   type="button"
                   className={builderStyles.mobileConfigBuyBtn}
                   onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
+                  style={sentenceCaseButtonStyle}
                 >
                   <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
                     shopping_cart_checkout
@@ -920,14 +944,23 @@ export default function BundleProductView({
 
     return (
       <div
-        className={styles.configOptionsMobileDropdown}
+        className={`${styles.configOptionsMobileDropdown} ${isMobileHeroConfigMenuOpen ? styles.configOptionsMobileDropdownOpen : ''}`}
         data-bundle-top-config-selector="true"
       >
+        {isMobileHeroConfigMenuOpen ? (
+          <div
+            className={styles.configOptionsMobileBackdrop}
+            aria-hidden="true"
+            onPointerDown={closeMobileHeroConfigMenu}
+          />
+        ) : null}
+
         <button
           type="button"
           aria-haspopup="listbox"
           aria-expanded={isMobileHeroConfigMenuOpen}
           className={`${styles.configOptionsMobileTrigger} ${isMobileHeroConfigMenuOpen ? styles.configOptionsMobileTriggerOpen : ''}`}
+          onPointerDown={stopDropdownEventPropagation}
           onClick={() => setIsMobileHeroConfigMenuOpen((currentValue) => !currentValue)}
         >
           <span className={styles.configOptionsMobileTriggerCopy}>
@@ -945,19 +978,24 @@ export default function BundleProductView({
           <div
             className={styles.configOptionsMobileMenu}
             role="listbox"
+            onPointerDown={stopDropdownEventPropagation}
+            onClick={stopDropdownEventPropagation}
             aria-label={product.bundle_title || 'Danh sách cấu hình bộ'}
           >
-            {configurations.map((config) => {
+            {configurations.map((config, index) => {
               const isActive = selectedConfig === config;
 
               return (
+                <Fragment key={config}>
                 <button
-                  key={config}
                   type="button"
                   role="option"
                   aria-selected={isActive}
                   className={`${styles.configOptionsMobileOption} ${isActive ? styles.configOptionsMobileOptionActive : ''}`}
-                  onClick={() => {
+                  onClick={(event) => {
+                    if (!shouldHandleDropdownOptionSelection(event)) {
+                      return;
+                    }
                     handleMobileHeroConfigSelection(config);
                   }}
                 >
@@ -975,6 +1013,15 @@ export default function BundleProductView({
                     </span>
                   </span>
                 </button>
+                {index < configurations.length - 1 ? (
+                  <div
+                    className={styles.configOptionsMobileSpacer}
+                    aria-hidden="true"
+                    onPointerDown={stopDropdownEventPropagation}
+                    onClick={stopDropdownEventPropagation}
+                  />
+                ) : null}
+                </Fragment>
               );
             })}
           </div>
@@ -1051,6 +1098,7 @@ export default function BundleProductView({
               <button
                 className={builderStyles.buyTabBtnSmall}
                 onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
+                style={sentenceCaseButtonStyle}
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 18 }}>shopping_cart_checkout</span>
                 Mua ngay
@@ -1243,7 +1291,13 @@ export default function BundleProductView({
                   setQuantity={setQuantity}
                   statusText="Sẵn sàng giao ngay"
                 />
-                <BuyButtons onAddToCart={handleAddToCart} onBuyNow={handleBuyNow} />
+                <BuyButtons
+                  onAddToCart={handleAddToCart}
+                  onBuyNow={handleBuyNow}
+                  addToCartLabel="Thêm vào giỏ"
+                  buyNowLabel="Mua ngay"
+                  disableUppercase
+                />
               </div>
 
               <TrustBadges />
@@ -1357,6 +1411,7 @@ export default function BundleProductView({
                     <button
                       className={builderStyles.buyTabBtnSmall}
                       onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
+                      style={sentenceCaseButtonStyle}
                     >
                       <span className="material-symbols-outlined" style={{ fontSize: 18 }}>shopping_cart_checkout</span>
                       Mua ngay
@@ -1676,6 +1731,7 @@ export default function BundleProductView({
                       <button
                         className={builderStyles.buyTabBtn}
                         onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
+                        style={sentenceCaseButtonStyle}
                       >
                         <span className="material-symbols-outlined" style={{ fontSize: 20 }}>shopping_cart_checkout</span>
                         Mua bộ {activeTab || 'này'} ngay

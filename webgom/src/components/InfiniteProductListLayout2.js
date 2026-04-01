@@ -2,10 +2,14 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import config from '@/lib/config';
 import styles from '../app/products/layout2.module.css';
 import { useCart } from '@/context/CartContext';
 import { flyToCart } from '@/utils/flyToCart';
+import { resolveImageObjectUrl } from '@/lib/media';
+
+const FALLBACK_PRODUCT_IMAGE = '/logo-dai-thanh.png';
+const FALLBACK_CATEGORY_NAME = 'Gốm Sứ';
+const FALLBACK_PRODUCT_ALT = 'Sản phẩm gốm sứ';
 
 export default function InfiniteProductListLayout2({ initialData }) {
   const products = initialData?.data || [];
@@ -18,39 +22,21 @@ export default function InfiniteProductListLayout2({ initialData }) {
           <div key={product.id} className={styles.productCard}>
             <div className={styles.imageArea}>
               <Link href={`/product/${product.slug || product.id}`} className={styles.imageLink}>
-                {(() => {
-                  const img = product.primary_image;
-                  let src = 'https://placehold.co/400';
-
-                  if (img) {
-                    if (img.image_url && img.image_url.startsWith('http')) src = img.image_url;
-                    else if (img.url && img.url.startsWith('http')) src = img.url;
-                    else if (img.path && img.path !== 'undefined' && img.path !== 'null') {
-                      const cleanPath = img.path.startsWith('/') ? img.path.substring(1) : img.path;
-                      src = `${config.storageUrl}/${cleanPath}`;
-                    } else if (img.url) {
-                      src = img.url;
-                    }
-                  }
-
-                  return (
-                    <Image
-                      src={src}
-                      alt={product.name}
-                      fill
-                      className={styles.image}
-                      sizes="(max-width: 767px) 50vw, (max-width: 1200px) 50vw, 25vw"
-                      unoptimized
-                    />
-                  );
-                })()}
+                <Image
+                  src={resolveImageObjectUrl(product.primary_image, FALLBACK_PRODUCT_IMAGE)}
+                  alt={product.name || FALLBACK_PRODUCT_ALT}
+                  fill
+                  className={styles.image}
+                  sizes="(max-width: 767px) 50vw, (max-width: 1200px) 50vw, 25vw"
+                  unoptimized
+                />
               </Link>
 
               {product.is_new && <div className={styles.badge}>Bán chạy</div>}
             </div>
 
             <div className={styles.cardBody}>
-              <span className={styles.categoryTag}>{product.category?.name || 'Gốm Sứ'}</span>
+              <span className={styles.categoryTag}>{product.category?.name || FALLBACK_CATEGORY_NAME}</span>
 
               <Link href={`/product/${product.slug || product.id}`} className={styles.productLink}>
                 <h3 className={styles.productName}>{product.name}</h3>
@@ -68,7 +54,7 @@ export default function InfiniteProductListLayout2({ initialData }) {
                       event.preventDefault();
                       addToCart(product, 1);
                       const card = event.currentTarget.closest(`.${styles.productCard}`);
-                      const imgSrc = card?.querySelector('img')?.src || '/logo-dai-thanh.png';
+                      const imgSrc = card?.querySelector('img')?.src || FALLBACK_PRODUCT_IMAGE;
                       flyToCart(event, imgSrc);
                     }}
                   >

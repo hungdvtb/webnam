@@ -622,7 +622,7 @@ export default function Header({
       <header className="site-header">
         <div className="container header-content">
         <Link
-          href="/"
+          href="/products"
           className="logo-section"
           aria-label={resolvedBrandTitle}
         >

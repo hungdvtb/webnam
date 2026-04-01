@@ -19,6 +19,7 @@ const StorefrontHeader = ({ headerConfig, siteInfo }) => {
     const [searchQuery, setSearchQuery] = useState('');
     const [scrolled, setScrolled] = useState(false);
     const location = useLocation();
+    const logoTargetPath = '/san-pham';
 
     const noticeText = (headerConfig?.topNoticeText || '').trim();
     const logoUrl = headerConfig?.logoUrl || '/logo-brand.jpg';
@@ -60,7 +61,7 @@ const StorefrontHeader = ({ headerConfig, siteInfo }) => {
                         <span className="material-symbols-outlined text-2xl">{menuOpen ? 'close' : 'menu'}</span>
                     </button>
 
-                    <Link to="/" className="flex min-w-0 flex-1 items-center gap-2.5 md:flex-none">
+                    <Link to={logoTargetPath} className="flex min-w-0 flex-1 items-center gap-2.5 md:flex-none">
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary md:h-11 md:w-11">
                             <img src={logoUrl} alt={headerConfig?.brandText || siteInfo?.name || 'Cửa hàng'} className="h-full w-full object-contain bg-white" />
                         </div>

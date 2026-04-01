@@ -63,6 +63,7 @@ const Navbar = () => {
     const topNoticeText = (headerConfig.topNoticeText || '').trim();
     const brandText = headerConfig.brandText || 'GỐM ĐẠI THÀNH';
     const logoUrl = headerConfig.logoUrl || '/logo-brand.jpg';
+    const logoTargetPath = isLegacyPath ? '/old/shop' : '/san-pham';
 
     const handleLogout = async () => {
         await logout();
@@ -89,7 +90,7 @@ const Navbar = () => {
 
             <div className="flex items-center justify-between whitespace-nowrap border-b border-gold/20 px-6 py-4 transition-all lg:px-12">
                 <div className="flex items-center gap-8">
-                    <Link className="group flex items-center gap-3 text-primary" to="/">
+                    <Link className="group flex items-center gap-3 text-primary" to={logoTargetPath}>
                         <div className="flex h-14 items-center overflow-hidden">
                             <img src={logoUrl} alt={brandText} className="h-full object-contain" />
                         </div>

@@ -2,10 +2,14 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import config from '@/lib/config';
 import styles from '../app/products/products.module.css';
 import { useCart } from '@/context/CartContext';
 import { flyToCart } from '@/utils/flyToCart';
+import { resolveImageObjectUrl } from '@/lib/media';
+
+const FALLBACK_PRODUCT_IMAGE = '/logo-dai-thanh.png';
+const FALLBACK_CATEGORY_NAME = 'Bát Tràng Premium';
+const FALLBACK_PRODUCT_ALT = 'Sản phẩm gốm sứ';
 
 export default function InfiniteProductList({ initialData }) {
   const products = initialData?.data || [];
@@ -17,39 +21,23 @@ export default function InfiniteProductList({ initialData }) {
         {products.map((product) => (
           <div key={product.id} className={styles.productCard}>
             <Link href={`/product/${product.slug || product.id}`} className={styles.imageWrapper}>
-              {(() => {
-                const img = product.primary_image;
-                let src = 'https://placehold.co/400';
-
-                if (img) {
-                  if (img.image_url && img.image_url.startsWith('http')) src = img.image_url;
-                  else if (img.url && img.url.startsWith('http')) src = img.url;
-                  else if (img.path && img.path !== 'undefined' && img.path !== 'null') {
-                    const cleanPath = img.path.startsWith('/') ? img.path.substring(1) : img.path;
-                    src = `${config.storageUrl}/${cleanPath}`;
-                  } else if (img.url) {
-                    src = img.url;
-                  }
-                }
-
-                return (
-                  <Image
-                    src={src}
-                    alt={product.name}
-                    fill
-                    sizes="(max-width: 359px) 100vw, (max-width: 767px) 50vw, (max-width: 1200px) 33vw, 25vw"
-                    style={{ objectFit: 'cover' }}
-                    unoptimized
-                  />
-                );
-              })()}
+              <Image
+                src={resolveImageObjectUrl(product.primary_image, FALLBACK_PRODUCT_IMAGE)}
+                alt={product.name || FALLBACK_PRODUCT_ALT}
+                fill
+                sizes="(max-width: 359px) 100vw, (max-width: 767px) 50vw, (max-width: 1200px) 33vw, 25vw"
+                style={{ objectFit: 'cover' }}
+                unoptimized
+              />
               {product.is_new && <span className={styles.badge}>Mới</span>}
             </Link>
+
             <div className={styles.productInfo}>
-              <p className={styles.productCategory}>{product.category?.name || 'Bát Tràng Premium'}</p>
+              <p className={styles.productCategory}>{product.category?.name || FALLBACK_CATEGORY_NAME}</p>
               <Link href={`/product/${product.slug || product.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
                 <h3 className={styles.productName}>{product.name}</h3>
               </Link>
+
               <div className={styles.cardFooter}>
                 <span className={styles.price}>
                   {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(product.price)}
@@ -60,7 +48,7 @@ export default function InfiniteProductList({ initialData }) {
                     event.preventDefault();
                     addToCart(product, 1);
                     const card = event.currentTarget.closest(`.${styles.productCard}`);
-                    const imgSrc = card?.querySelector('img')?.src || '/logo-dai-thanh.png';
+                    const imgSrc = card?.querySelector('img')?.src || FALLBACK_PRODUCT_IMAGE;
                     flyToCart(event, imgSrc);
                   }}
                 >

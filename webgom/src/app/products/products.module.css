@@ -194,9 +194,12 @@
 }
 
 .dropdownBackdrop,
-.dropdownViewport,
 .dropdownHeader {
   display: none;
+}
+
+.dropdownViewport {
+  display: block;
 }
 
 .dropdownContent {
@@ -472,12 +475,15 @@
 
 .productGrid {
   display: grid;
+  align-items: start;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
 }
 
 .productCard {
   display: flex;
+  min-width: 0;
+  height: 100%;
   flex-direction: column;
   overflow: hidden;
   border: 1px solid rgba(27, 54, 93, 0.05);
@@ -495,7 +501,7 @@
   position: relative;
   display: block;
   width: 100%;
-  padding-top: 100%;
+  aspect-ratio: 1 / 1;
   overflow: hidden;
   border-bottom: 1px solid rgba(27, 54, 93, 0.05);
   background: #f0f0f0;
@@ -664,12 +670,12 @@
 
 @media (min-width: 768px) {
   .productGrid {
-    grid-template-columns: repeat(auto-fit, minmax(238px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
     gap: 0.82rem;
   }
 
   .imageWrapper {
-    padding-top: 104%;
+    aspect-ratio: 1 / 1.04;
   }
 
   .productInfo {
@@ -900,7 +906,7 @@
   }
 
   .imageWrapper {
-    padding-top: 110%;
+    aspect-ratio: 1 / 1.1;
   }
 
   .productInfo {
@@ -990,7 +996,7 @@
   }
 
   .imageWrapper {
-    padding-top: 116%;
+    aspect-ratio: 1 / 1.16;
   }
 
   .productInfo {

@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import stylesStandard from "../app/products/products.module.css";
 import styles2 from "../app/products/layout2.module.css";
 
 export default function CategoryDropdown({ categories, currentCategorySlug, variant = "layout1" }) {
+  const searchParams = useSearchParams();
   const [isOpen, setIsOpen] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [mobileViewportStyle, setMobileViewportStyle] = useState({});
@@ -97,6 +99,21 @@ export default function CategoryDropdown({ categories, currentCategorySlug, vari
 
   flatten();
 
+  const buildCategoryHref = (categorySlug) => {
+    const params = new URLSearchParams(searchParams?.toString() || "");
+
+    if (categorySlug) {
+      params.set("category", categorySlug);
+    } else {
+      params.delete("category");
+    }
+
+    params.delete("page");
+
+    const query = params.toString();
+    return query ? `/products?${query}` : "/products";
+  };
+
   return (
     <div className={styles.categoryDropdown} ref={dropdownRef}>
       <button
@@ -153,7 +170,7 @@ export default function CategoryDropdown({ categories, currentCategorySlug, vari
 
               <div className={styles.dropdownList}>
                 <Link
-                  href="/products"
+                  href={buildCategoryHref("")}
                   className={`${styles.dropdownItem} ${!currentCategorySlug ? styles.activeItem : ""}`}
                   onClick={() => setIsOpen(false)}
                   style={{ fontSize: "0.875rem" }}
@@ -166,7 +183,7 @@ export default function CategoryDropdown({ categories, currentCategorySlug, vari
                 {flattenedCategories.map((cat) => (
                   <Link
                     key={cat.id}
-                    href={`/products?category=${cat.slug}`}
+                    href={buildCategoryHref(cat.slug)}
                     className={`${styles.dropdownItem} ${currentCategorySlug === cat.slug ? styles.activeItem : ""}`}
                     onClick={() => setIsOpen(false)}
                     style={{ fontSize: "0.875rem", paddingLeft: cat.level > 0 ? `${cat.level + 1}rem` : "1rem" }}

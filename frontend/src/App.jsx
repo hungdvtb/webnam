@@ -131,6 +131,7 @@ function App() {
 
               <Route path="/cam-on" element={<OrderThankYou />} />
               <Route path="/old/cam-on" element={<OrderThankYou />} />
+              <Route path="/cart" element={<Navigate to="/old/cart" replace />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
 

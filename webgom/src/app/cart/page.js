@@ -1205,7 +1205,7 @@ export default function CartPage() {
           <aside className={styles.sidebar}>
             <div className={styles.summaryCard}>
               <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                Tóm Tắt Đơn Hàng 
+                Tóm tắt đơn hàng 
                 <span style={{ fontSize: '0.8rem', fontWeight: 'normal', color: '#64748b', textTransform: 'none' }}>({cartCount} sản phẩm)</span>
               </h3>
 
@@ -1266,43 +1266,7 @@ export default function CartPage() {
                             </p>
                           )}
 
-                          {isBundleItem ? (
-                            <>
-                              <div className={styles.mobileBundleMetricsGrid}>
-                                <div className={`${styles.mobilePriceGroup} ${styles.mobileBundleMetric} ${styles.mobileBundlePriceMetric}`}>
-                                  <span className={styles.mobileLabel}>Giá combo</span>
-                                  <strong className={styles.mobileUnitPrice}>{formatPrice(effectivePrice)}</strong>
-                                </div>
-
-                                <div className={styles.mobileBundleRightStack}>
-                                  <div className={`${styles.mobileBundleMetric} ${styles.mobileBundleTotalMetric}`}>
-                                    <span className={styles.mobileLineLabel}>Thành tiền</span>
-                                    <strong className={styles.mobileLinePrice}>{formatPrice(lineTotal)}</strong>
-                                  </div>
-
-                                  <div className={styles.mobileBundleQtyInline}>
-                                    <div className={`${styles.mobileQuantityCtrl} ${styles.mobileBundleQuantityCtrl}`}>
-                                      <button
-                                        type="button"
-                                        onClick={() => updateQuantity(item.cartKey, item.quantity - 1)}
-                                        aria-label={`Giảm số lượng ${item.name}`}
-                                      >
-                                        −
-                                      </button>
-                                      <span>{item.quantity}</span>
-                                      <button
-                                        type="button"
-                                        onClick={() => updateQuantity(item.cartKey, item.quantity + 1)}
-                                        aria-label={`Tăng số lượng ${item.name}`}
-                                      >
-                                        +
-                                      </button>
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            </>
-                          ) : (
+                          {isBundleItem ? null : (
                             <>
                               <div className={styles.mobileItemFooter}>
                                 <div className={styles.mobilePriceGroup}>
@@ -1337,6 +1301,42 @@ export default function CartPage() {
                           )}
                         </div>
                       </div>
+
+                      {isBundleItem ? (
+                        <div className={styles.mobileBundleItemFooterFull}>
+                          <div className={styles.mobileBundleMetricsGrid}>
+                            <div className={`${styles.mobilePriceGroup} ${styles.mobileBundleMetric} ${styles.mobileBundlePriceMetric}`}>
+                              <span className={styles.mobileLabel}>Giá combo</span>
+                              <strong className={styles.mobileUnitPrice}>{formatPrice(effectivePrice)}</strong>
+                            </div>
+
+                            <div className={styles.mobileBundleQtyInline}>
+                              <div className={`${styles.mobileQuantityCtrl} ${styles.mobileBundleQuantityCtrl}`}>
+                                <button
+                                  type="button"
+                                  onClick={() => updateQuantity(item.cartKey, item.quantity - 1)}
+                                  aria-label={`Giảm số lượng ${item.name}`}
+                                >
+                                  −
+                                </button>
+                                <span>{item.quantity}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => updateQuantity(item.cartKey, item.quantity + 1)}
+                                  aria-label={`Tăng số lượng ${item.name}`}
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className={`${styles.mobileBundleMetric} ${styles.mobileBundleTotalMetric}`}>
+                              <span className={styles.mobileLineLabel}>Thành tiền</span>
+                              <strong className={styles.mobileLinePrice}>{formatPrice(lineTotal)}</strong>
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
 
                       {isBundleItem && (
                         <div className={styles.mobileBundleBlock}>

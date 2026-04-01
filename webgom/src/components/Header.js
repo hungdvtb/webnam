@@ -40,7 +40,7 @@ const MOBILE_NAV_META = [
     labelKeys: ["he thong cua hang"],
     hrefKeys: ["/stores", "/he-thong-cua-hang"],
     icon: "location_on",
-    shortLabel: "Showroom",
+    shortLabel: "C\u1eeda h\u00e0ng",
     activePrefixes: ["/stores", "/he-thong-cua-hang"],
   },
 ];
@@ -56,6 +56,7 @@ const MOBILE_BOTTOM_LABEL_LINE_MAP = {
   "san pham": ["S\u1ea3n", "ph\u1ea9m"],
   "gioi thieu": ["Gi\u1edbi", "thi\u1ec7u"],
   "kien thuc": ["Ki\u1ebfn", "th\u1ee9c"],
+  "cua hang": ["C\u1eeda", "h\u00e0ng"],
   "dat hang": ["\u0110\u1eb7t", "h\u00e0ng"],
 };
 const SEARCH_HISTORY_STORAGE_KEY = "webgom_mobile_search_history";
@@ -1695,8 +1696,8 @@ export default function Header({
             --mobile-bottom-item-height: 70px;
             --mobile-bottom-item-gap: 4px;
             --mobile-bottom-icon-size: 23px;
-            --mobile-bottom-label-size: clamp(10.4px, 2.75vw, 11.2px);
-            --mobile-bottom-label-line: 1.16;
+            --mobile-bottom-label-size: 13px;
+            --mobile-bottom-label-line: 1.15;
             position: fixed;
             inset: auto 0 0;
             z-index: 995;
@@ -2058,7 +2059,7 @@ export default function Header({
           .mobile-bottom-nav {
             --mobile-bottom-item-height: 68px;
             --mobile-bottom-icon-size: 22px;
-            --mobile-bottom-label-size: 10px;
+            --mobile-bottom-label-size: 13px;
             padding: 0 7px calc(env(safe-area-inset-bottom, 0px) + 7px);
           }
 

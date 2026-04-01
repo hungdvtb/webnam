@@ -16,8 +16,6 @@ import { createPortal } from 'react-dom';
 import Breadcrumb from './common/Breadcrumb';
 import { resolveImageObjectUrl } from '@/lib/media';
 
-const MOBILE_STICKY_CLUSTER_GAP = 8;
-
 const normalizeConfigMediaKey = (configName = '') =>
   String(configName)
     .normalize('NFD')
@@ -56,7 +54,6 @@ const getMobileStickyHeaderHeight = () => {
   return Math.round(promoBar?.getBoundingClientRect().height || 32);
 };
 
-const getMobileStickyPinnedTop = () => getMobileStickyHeaderHeight() + MOBILE_STICKY_CLUSTER_GAP;
 
 const BUNDLE_ITEM_CHANGE_LABEL = 'Đổi kích thước';
 const BUNDLE_ITEM_CHANGE_TITLE = 'Đổi kích thước cho sản phẩm trong bộ';
@@ -274,11 +271,7 @@ export default function BundleProductView({
   const [activeTab, setActiveTab] = useState(null);
   const [isMobileHeroConfigMenuOpen, setIsMobileHeroConfigMenuOpen] = useState(false);
   const [isMobileConfigMenuOpen, setIsMobileConfigMenuOpen] = useState(false);
-  const [isMobileStickyClusterActive, setIsMobileStickyClusterActive] = useState(false);
-  const [mobileStickyClusterLayout, setMobileStickyClusterLayout] = useState({ top: 0, left: 0, width: 0, height: 0 });
   const bundleListRef = useRef(null);
-  const mobileStickyClusterShellRef = useRef(null);
-  const mobileStickyClusterRef = useRef(null);
 
   const getBundleSlotPosition = (item, fallbackIndex = 0) => {
     const rawPosition = item?.source_position ?? item?.pivot?.position ?? fallbackIndex;
@@ -614,84 +607,6 @@ export default function BundleProductView({
   const tabDiscountAmount = isFullCombo ? Math.round(tabSubtotal * DISCOUNT_RATE) : 0;
   const tabFinalPrice = tabSubtotal - tabDiscountAmount;
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-
-    if (!isMobileBundleViewport) {
-      setIsMobileStickyClusterActive(false);
-      setMobileStickyClusterLayout({ top: 0, left: 0, width: 0, height: 0 });
-      return undefined;
-    }
-
-    let frameId = 0;
-
-    const updateStickyState = () => {
-      const stickyClusterShell = mobileStickyClusterShellRef.current;
-      const stickyCluster = mobileStickyClusterRef.current;
-      const bundleList = bundleListRef.current;
-      const stickyPinnedTop = getMobileStickyPinnedTop();
-
-      if (!stickyClusterShell || !stickyCluster || !bundleList) {
-        setIsMobileStickyClusterActive(false);
-        setMobileStickyClusterLayout({ top: 0, left: 0, width: 0, height: 0 });
-        return;
-      }
-
-      const stickyClusterShellRect = stickyClusterShell.getBoundingClientRect();
-      const bundleListRect = bundleList.getBoundingClientRect();
-      const stickyClusterHeight = stickyCluster.offsetHeight;
-      const canRemainPinned = bundleListRect.bottom > stickyPinnedTop + stickyClusterHeight + 18;
-      const nextStickyState = stickyClusterShellRect.top <= stickyPinnedTop + 1 && canRemainPinned;
-
-      setMobileStickyClusterLayout((currentValue) => {
-        const nextValue = {
-          top: stickyPinnedTop,
-          left: Math.round(stickyClusterShellRect.left),
-          width: Math.round(stickyClusterShellRect.width),
-          height: Math.round(stickyClusterHeight),
-        };
-
-        return (
-          currentValue.top === nextValue.top &&
-          currentValue.left === nextValue.left &&
-          currentValue.width === nextValue.width &&
-          currentValue.height === nextValue.height
-        )
-          ? currentValue
-          : nextValue;
-      });
-
-      setIsMobileStickyClusterActive((currentValue) =>
-        currentValue === nextStickyState ? currentValue : nextStickyState
-      );
-    };
-
-    const requestStickyUpdate = () => {
-      if (frameId) {
-        window.cancelAnimationFrame(frameId);
-      }
-
-      frameId = window.requestAnimationFrame(() => {
-        frameId = 0;
-        updateStickyState();
-      });
-    };
-
-    updateStickyState();
-    window.addEventListener('scroll', requestStickyUpdate, { passive: true });
-    window.addEventListener('resize', requestStickyUpdate);
-
-    return () => {
-      if (frameId) {
-        window.cancelAnimationFrame(frameId);
-      }
-
-      window.removeEventListener('scroll', requestStickyUpdate);
-      window.removeEventListener('resize', requestStickyUpdate);
-      setMobileStickyClusterLayout({ top: 0, left: 0, width: 0, height: 0 });
-    };
-  }, [isMobileBundleViewport, activeTab, isFullCombo, tabFinalPrice, tabItems.length]);
-
   // For upper info section: selectedItems (all configs) for top-level displayPrice
   const selectedItems = bundleItems.filter(item => item.selected && !item.removed);
   const subtotal = selectedItems.reduce((acc, it) => acc + (parseFloat(it.price || 0) * (it.qty || 1)), 0);
@@ -792,20 +707,20 @@ export default function BundleProductView({
 
   const scrollToBundleDetailControls = ({ behavior = 'smooth' } = {}) => {
     const detailSection = bundleListRef.current;
-    const stickyClusterShell = mobileStickyClusterShellRef.current;
 
     if (typeof window === 'undefined') {
       return;
     }
 
-    if (!isMobileBundleViewport || !stickyClusterShell) {
-      detailSection?.scrollIntoView({ behavior, block: 'start' });
+    if (!detailSection) {
       return;
     }
 
-    const stickyPinnedTop = getMobileStickyPinnedTop();
-    const shellTop = window.scrollY + stickyClusterShell.getBoundingClientRect().top;
-    const targetTop = Math.max(0, Math.round(shellTop - stickyPinnedTop));
+    const stickyOffset = isMobileBundleViewport ? getMobileStickyHeaderHeight() + 8 : 0;
+    const targetTop = Math.max(
+      0,
+      Math.round(window.scrollY + detailSection.getBoundingClientRect().top - stickyOffset)
+    );
 
     window.scrollTo({ top: targetTop, behavior });
   };
@@ -855,21 +770,6 @@ export default function BundleProductView({
     closeBundleActions();
   };
 
-  const mobileStickyClusterShellStyle =
-    isMobileBundleViewport && isMobileStickyClusterActive && mobileStickyClusterLayout.height > 0
-      ? { height: `${mobileStickyClusterLayout.height}px` }
-      : undefined;
-
-  const mobileStickyClusterStyle =
-    isMobileBundleViewport && isMobileStickyClusterActive && mobileStickyClusterLayout.width > 0
-      ? {
-          top: `${mobileStickyClusterLayout.top}px`,
-          left: `${mobileStickyClusterLayout.left}px`,
-          width: `${mobileStickyClusterLayout.width}px`,
-          maxWidth: `${mobileStickyClusterLayout.width}px`,
-        }
-      : undefined;
-
   const renderBundleConfigGrid = () => {
     if (configurations.length === 0) {
       return null;
@@ -898,7 +798,6 @@ export default function BundleProductView({
               onClick={() => setIsMobileConfigMenuOpen((currentValue) => !currentValue)}
             >
               <span className={builderStyles.mobileConfigDropdownValueWrap}>
-                <span className={builderStyles.mobileConfigDropdownEyebrow}>{'\u0110ang ch\u1ECDn'}</span>
                 <span className={builderStyles.mobileConfigDropdownValue}>{selectedConfig}</span>
               </span>
 
@@ -974,8 +873,9 @@ export default function BundleProductView({
                     {formatPrice(tabFinalPrice)}
                   </span>
                 </div>
+              </div>
 
-                <span
+              <span
                   className={`${builderStyles.mobileConfigOfferChip} ${
                     isFullCombo
                       ? builderStyles.mobileConfigOfferChipActive
@@ -991,7 +891,6 @@ export default function BundleProductView({
                       : `Đủ ${tabItems.length} món: -${(DISCOUNT_RATE * 100).toFixed(0)}%`}
                   </span>
                 </span>
-              </div>
 
               {handleBuyTabConfig && tabItems.some((item) => !item.removed) ? (
                 <button
@@ -1032,7 +931,6 @@ export default function BundleProductView({
           onClick={() => setIsMobileHeroConfigMenuOpen((currentValue) => !currentValue)}
         >
           <span className={styles.configOptionsMobileTriggerCopy}>
-            <span className={styles.configOptionsMobileTriggerEyebrow}>{'Đang chọn'}</span>
             <span className={styles.configOptionsMobileTriggerValue}>{selectedConfig}</span>
           </span>
 
@@ -1084,53 +982,6 @@ export default function BundleProductView({
       </div>
     );
   };
-
-  const renderStickyBundleDetailControls = () => (
-    <>
-      {renderBundleConfigGrid()}
-
-      {tabItems.length > 0 && (
-        <div className={builderStyles.topActionBar}>
-          {isFullCombo ? (
-            <div className={builderStyles.discountBannerInline}>
-              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>local_offer</span>
-              <span>
-                {'\u0042\u1ea1n \u0111ang mua tr\u1ecdn b\u1ed9 \u2014 \u01afu \u0111\u00e3i gi\u1ea3m '}
-                <strong>{(DISCOUNT_RATE * 100).toFixed(0)}%</strong>
-                !
-              </span>
-            </div>
-          ) : (
-            <div className={builderStyles.discountHintInline}>
-              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>info</span>
-              <span>
-                {'Mua \u0111\u1ee7 '}
-                <strong>{tabItems.length} {'m\u00f3n'}</strong>
-                {' nh\u1eadn \u01b0u \u0111\u00e3i gi\u1ea3m '}
-                {(DISCOUNT_RATE * 100).toFixed(0)}%
-              </span>
-            </div>
-          )}
-
-          <div className={builderStyles.quickSummaryTopInline}>
-            <div className={builderStyles.quickSummaryPrice}>
-              <span className={builderStyles.quickSummaryLabel}>{'Thanh to\u00e1n:'}</span>
-              <span className={builderStyles.quickSummaryValue}>{formatPrice(tabFinalPrice)}</span>
-            </div>
-            {handleBuyTabConfig && tabItems.some((item) => !item.removed) && (
-              <button
-                className={builderStyles.buyTabBtnSmall}
-                onClick={() => handleBuyTabConfig(tabItems, tabFinalPrice)}
-              >
-                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>shopping_cart_checkout</span>
-                {'Mua ngay'}
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-    </>
-  );
 
   const renderBundleDetailControls = () => (
     <>
@@ -1408,27 +1259,35 @@ export default function BundleProductView({
           style={{ marginTop: '10px' }}
         >
           <div className="text-center" style={{ marginBottom: '10px' }}>
-            <h2 className="text-3xl font-display font-bold text-primary italic" style={{ marginBottom: '10px' }}>Chi tiết thành phần bộ</h2>
+            <h2
+              className="font-display font-bold text-primary italic"
+              style={{
+                marginBottom: '10px',
+                fontSize: isMobileBundleViewport ? '18px' : '30px',
+                lineHeight: isMobileBundleViewport ? '1.25' : undefined,
+              }}
+            >
+              Chi tiết thành phần bộ
+            </h2>
             <div className="w-20 h-1 bg-accent mx-auto rounded-full"></div>
-            <p className="text-stone/50 max-w-2xl mx-auto" style={{ marginTop: '10px' }}>
+            <p
+              className="text-stone/50 max-w-2xl mx-auto"
+              style={{
+                marginTop: '10px',
+                fontSize: isMobileBundleViewport ? '14px' : '18px',
+                lineHeight: isMobileBundleViewport ? '1.5' : undefined,
+              }}
+            >
               Tùy chỉnh số lượng hoặc thay đổi từng món theo từng cấu hình để phù hợp nhu cầu của Quý khách.
             </p>
           </div>
 
           <div className="max-w-5xl mx-auto" style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
 
-            <div
-              ref={mobileStickyClusterShellRef}
-              className={builderStyles.mobileStickyClusterShell}
-              style={mobileStickyClusterShellStyle}
-            >
-              <div
-                ref={mobileStickyClusterRef}
-                className={`${builderStyles.mobileStickyCluster} ${isMobileBundleViewport && isMobileStickyClusterActive ? builderStyles.mobileStickyClusterHidden : ''} ${isMobileBundleViewport && isModalOpen ? builderStyles.mobileStickyClusterSuppressed : ''}`}
-              >
-                <div className={builderStyles.tabBarGridWrap}>
-                  {renderBundleConfigGrid()}
-                </div>
+            <div className={builderStyles.mobileStickyCluster}>
+              <div className={builderStyles.tabBarGridWrap}>
+                {renderBundleConfigGrid()}
+              </div>
 
               {/* === Tab bar === */}
             {configurations.length > 0 && (
@@ -1506,17 +1365,7 @@ export default function BundleProductView({
                 </div>
               </div>
             )}
-              </div>
             </div>
-
-            {isMobileBundleViewport && !isModalOpen && isMobileStickyClusterActive && mobileStickyClusterLayout.width > 0 && (
-                <div
-                  className={`${builderStyles.mobileStickyCluster} ${builderStyles.mobileStickyClusterFloating}`}
-                  style={mobileStickyClusterStyle}
-                >
-                {renderStickyBundleDetailControls()}
-              </div>
-            )}
 
             {/* === Table === */}
             {tabItems.length > 0 ? (
@@ -1559,10 +1408,6 @@ export default function BundleProductView({
                               </div>
                               <div className={`${builderStyles.mobileItemBottom} ${builderStyles.mobileRemovedBottom}`}>
                                 <div className={`${builderStyles.mobilePriceStack} ${builderStyles.mobileRemovedMeta}`}>
-                                  <div className={builderStyles.mobilePriceLine}>
-                                    <span className={builderStyles.mobileMetaLabel}>Đơn giá</span>
-                                    <span className={builderStyles.removedMetaValue}>—</span>
-                                  </div>
                                   <div className={builderStyles.mobilePriceLine}>
                                     <span className={builderStyles.mobileMetaLabel}>Thành tiền</span>
                                     <span className={builderStyles.removedMetaValue}>—</span>
@@ -1665,15 +1510,10 @@ export default function BundleProductView({
                                   {BUNDLE_ITEM_CHANGE_LABEL}
                                 </button>
                               </div>
-                              {item.sku && <span className={builderStyles.variantHint}>SKU: {item.sku}</span>}
                             </div>
 
                             <div className={builderStyles.mobileItemBottom}>
                               <div className={builderStyles.mobilePriceStack}>
-                                <div className={builderStyles.mobilePriceLine}>
-                                  <span className={builderStyles.mobileMetaLabel}>{'\u0110\u01A1n gi\u00E1'}</span>
-                                  <span className={builderStyles.unitPrice}>{formatPrice(item.price)}</span>
-                                </div>
                                 <div className={builderStyles.mobilePriceLine}>
                                   <span className={builderStyles.mobileMetaLabel}>{'Th\u00E0nh ti\u1EC1n'}</span>
                                   <span className={builderStyles.lineTotal}>{formatPrice(lineTotal)}</span>

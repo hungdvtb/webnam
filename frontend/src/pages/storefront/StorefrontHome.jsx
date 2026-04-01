@@ -42,13 +42,13 @@ const ProductCard = ({ product, onConsult }) => {
                 />
 
                 {hasDiscount ? (
-                    <div className="absolute left-3 top-3 rounded-lg bg-red-600 px-2.5 py-1 text-[10px] font-black uppercase text-white shadow-lg">
+                    <div className="m-chip absolute left-3 top-3 rounded-lg bg-red-600 px-2.5 py-1 font-black uppercase text-white shadow-lg">
                         -{Math.round((1 - product.current_price / product.price) * 100)}%
                     </div>
                 ) : null}
 
                 {product.is_new ? (
-                    <div className="absolute right-3 top-3 rounded-lg bg-emerald-600 px-2.5 py-1 text-[10px] font-black uppercase text-white shadow-lg">
+                    <div className="m-chip absolute right-3 top-3 rounded-lg bg-emerald-600 px-2.5 py-1 font-black uppercase text-white shadow-lg">
                         Mới
                     </div>
                 ) : null}
@@ -56,19 +56,19 @@ const ProductCard = ({ product, onConsult }) => {
 
             <div className="p-4">
                 <Link to={`/san-pham/${product.slug || product.id}`}>
-                    <h3 className="line-clamp-2 text-sm font-bold leading-snug text-stone-800 transition-colors hover:text-primary">
+                    <h3 className="m-copy line-clamp-2 font-bold leading-snug text-stone-800 transition-colors hover:text-primary">
                         {product.name}
                     </h3>
                 </Link>
 
                 {product.category ? (
-                    <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-stone-400">
+                    <p className="m-kicker mt-1 font-bold uppercase tracking-wider text-stone-400">
                         {product.category.name}
                     </p>
                 ) : null}
 
                 <div className="mt-2 flex items-baseline gap-2">
-                    <span className="text-base font-black text-red-600">
+                    <span className="m-label font-black text-red-600">
                         {Number(product.current_price).toLocaleString()}đ
                     </span>
                     {hasDiscount ? (
@@ -81,7 +81,7 @@ const ProductCard = ({ product, onConsult }) => {
                 <div className="mt-3 flex gap-2">
                     <Link
                         to={`/san-pham/${product.slug || product.id}`}
-                        className="flex-1 rounded-xl bg-primary py-2 text-center text-xs font-bold text-white transition-all hover:brightness-90 active:scale-95"
+                        className="m-btn-sm flex-1 rounded-xl bg-primary py-2 text-center font-bold text-white transition-all hover:brightness-90 active:scale-95"
                     >
                         Chi tiết
                     </Link>
@@ -91,7 +91,7 @@ const ProductCard = ({ product, onConsult }) => {
                             event.preventDefault();
                             onConsult?.(product);
                         }}
-                        className="rounded-xl border border-stone-200 px-3 py-2 text-xs font-bold text-stone-600 transition-all hover:bg-stone-50 active:scale-95"
+                        className="m-btn-sm rounded-xl border border-stone-200 px-3 py-2 font-bold text-stone-600 transition-all hover:bg-stone-50 active:scale-95"
                     >
                         Tư vấn
                     </button>
@@ -121,13 +121,13 @@ const BannerSlider = ({ banners }) => {
         return (
             <div className="relative bg-gradient-to-br from-primary via-primary/90 to-stone-800 text-white">
                 <div className="mx-auto max-w-7xl px-4 py-16 text-center md:py-24">
-                    <h2 className="mb-4 text-3xl font-black uppercase tracking-tight md:text-5xl">
+                    <h2 className="m-display mb-4 text-3xl font-black uppercase tracking-tight md:text-5xl">
                         Gốm Sứ Bát Tràng
                     </h2>
-                    <p className="mx-auto mb-8 max-w-xl text-base text-white/80 md:text-lg">
+                    <p className="m-copy mx-auto mb-8 max-w-xl text-base text-white/80 md:text-lg">
                         Nơi tôn vinh vẻ đẹp truyền thống qua từng sản phẩm thủ công tinh xảo.
                     </p>
-                    <Link to="/san-pham" className="inline-flex items-center gap-2 rounded-xl bg-white px-8 py-3.5 text-sm font-black uppercase tracking-widest text-primary shadow-xl transition-all hover:bg-stone-50">
+                    <Link to="/san-pham" className="m-btn inline-flex items-center gap-2 rounded-xl bg-white px-8 py-3.5 font-black uppercase tracking-widest text-primary shadow-xl transition-all hover:bg-stone-50">
                         Xem sản phẩm
                         <span className="material-symbols-outlined text-lg">arrow_forward</span>
                     </Link>
@@ -159,19 +159,19 @@ const BannerSlider = ({ banners }) => {
                 <div className="mx-auto w-full max-w-7xl">
                     <div className="max-w-lg text-white">
                         {banner?.title ? (
-                            <h2 className="mb-2 text-2xl font-black uppercase tracking-tight drop-shadow-lg md:text-4xl">
+                            <h2 className="m-display mb-2 text-2xl font-black uppercase tracking-tight drop-shadow-lg md:text-4xl">
                                 {banner.title}
                             </h2>
                         ) : null}
                         {banner?.subtitle ? (
-                            <p className="mb-5 text-sm text-white/90 drop-shadow md:text-base">
+                            <p className="m-copy mb-5 text-white/90 drop-shadow md:text-base">
                                 {banner.subtitle}
                             </p>
                         ) : null}
                         {banner?.button_text ? (
                             <Link
                                 to={banner.link_url || '/san-pham'}
-                                className="inline-flex items-center gap-2 rounded-xl bg-white px-6 py-3 text-sm font-black uppercase tracking-wider text-stone-900 shadow-xl transition-all hover:bg-stone-50"
+                                className="m-btn inline-flex items-center gap-2 rounded-xl bg-white px-6 py-3 font-black uppercase tracking-wider text-stone-900 shadow-xl transition-all hover:bg-stone-50"
                             >
                                 {banner.button_text}
                                 <span className="material-symbols-outlined text-lg">arrow_forward</span>
@@ -200,11 +200,11 @@ const BannerSlider = ({ banners }) => {
 const SectionTitle = ({ title, subtitle, link, linkText }) => (
     <div className="mb-8 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-            <h2 className="text-xl font-black uppercase tracking-tight text-stone-900 md:text-2xl">{title}</h2>
-            {subtitle ? <p className="mt-1 text-sm font-medium text-stone-500">{subtitle}</p> : null}
+            <h2 className="m-title text-xl font-black uppercase tracking-tight text-stone-900 md:text-2xl">{title}</h2>
+            {subtitle ? <p className="m-copy mt-1 font-medium text-stone-500">{subtitle}</p> : null}
         </div>
         {link ? (
-            <Link to={link} className="flex items-center gap-1 text-sm font-bold text-primary hover:underline">
+            <Link to={link} className="m-btn-sm flex items-center gap-1 font-bold text-primary hover:underline">
                 {linkText || 'Xem tất cả'}
                 <span className="material-symbols-outlined text-sm">arrow_forward</span>
             </Link>
@@ -252,10 +252,10 @@ const CategoryGrid = ({ categories }) => {
                             )}
                         </div>
                     </div>
-                    <h3 className="text-sm font-bold text-stone-800 transition-colors group-hover:text-primary">
+                    <h3 className="m-copy font-bold text-stone-800 transition-colors group-hover:text-primary">
                         {category.name}
                     </h3>
-                    <p className="mt-1 text-[10px] font-medium text-stone-500">
+                    <p className="m-kicker mt-1 font-medium text-stone-500">
                         {category.products_count || 0} sản phẩm
                     </p>
                     </Link>
@@ -381,7 +381,7 @@ const StorefrontHome = () => {
                         <div className="mt-5">
                             <Link
                                 to="/stores"
-                                className="inline-flex min-h-[54px] w-full items-center justify-center rounded-[22px] border border-primary/15 bg-white px-5 py-3 text-sm font-black uppercase tracking-[0.14em] text-primary transition hover:border-primary/30 hover:bg-primary/[0.03]"
+                                className="m-btn inline-flex min-h-[54px] w-full items-center justify-center rounded-[22px] border border-primary/15 bg-white px-5 py-3 font-black uppercase tracking-[0.14em] text-primary transition hover:border-primary/30 hover:bg-primary/[0.03]"
                             >
                                 Xem thêm cửa hàng
                             </Link>
@@ -392,19 +392,19 @@ const StorefrontHome = () => {
 
             <section className="bg-primary text-white">
                 <div className="mx-auto max-w-4xl px-4 py-12 text-center md:py-16">
-                    <h2 className="mb-3 text-2xl font-black uppercase tracking-tight md:text-3xl">Bạn cần tư vấn?</h2>
-                    <p className="mx-auto mb-8 max-w-md text-base text-white/80">
+                    <h2 className="m-display mb-3 text-2xl font-black uppercase tracking-tight md:text-3xl">Bạn cần tư vấn?</h2>
+                    <p className="m-copy mx-auto mb-8 max-w-md text-base text-white/80">
                         Hãy để chúng tôi giúp bạn chọn sản phẩm phù hợp nhất. Tư vấn miễn phí, không ràng buộc.
                     </p>
                     <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
-                        <a href={phoneHref} className="flex items-center gap-2 rounded-xl bg-white px-8 py-3.5 text-sm font-black uppercase tracking-widest text-primary shadow-xl transition-all hover:bg-stone-50">
+                        <a href={phoneHref} className="m-btn inline-flex items-center gap-2 rounded-xl bg-white px-8 py-3.5 font-black uppercase tracking-widest text-primary shadow-xl transition-all hover:bg-stone-50">
                             <span className="material-symbols-outlined">call</span>
                             Gọi ngay: {phoneLabel}
                         </a>
                         <button
                             type="button"
                             onClick={() => setConsultProduct({})}
-                            className="flex items-center gap-2 rounded-xl border-2 border-white px-8 py-3.5 text-sm font-black uppercase tracking-widest text-white transition-all hover:bg-white/10"
+                            className="m-btn flex items-center gap-2 rounded-xl border-2 border-white px-8 py-3.5 font-black uppercase tracking-widest text-white transition-all hover:bg-white/10"
                         >
                             <span className="material-symbols-outlined">edit_note</span>
                             Gửi yêu cầu

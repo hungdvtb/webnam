@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import api, { orderApi, productApi, leadApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -31,6 +31,7 @@ import {
     validateVietnamesePhone
 } from '../../utils/administrativeUnits';
 import {
+    calculateGrossProfitTotal,
     calculateRoundedImportCostLineTotal,
     formatRoundedImportCost,
     normalizeRoundedImportCostNumber,
@@ -1562,6 +1563,9 @@ const OrderForm = () => {
     const productSearchCacheRef = useRef(new Map());
     const productQuickSetupAbortRef = useRef(null);
     const productQuickSetupCacheRef = useRef(new Map());
+    const productQuickSetupListRef = useRef(null);
+    const productQuickSetupSearchInputRef = useRef(null);
+    const pendingProductQuickSetupViewportRef = useRef(null);
     const activeProductQuickFilterAttribute = useMemo(
         () => productQuickFilterAttributes.find((attribute) => String(attribute.id) === String(productQuickFilterAttributeId)) || null,
         [productQuickFilterAttributeId, productQuickFilterAttributes]
@@ -1755,6 +1759,49 @@ const OrderForm = () => {
         () => mergeProductQuickSetupEntries(productQuickSetupProducts, activeProductQuickSetupItems),
         [activeProductQuickSetupItems, productQuickSetupProducts]
     );
+
+    const captureProductQuickSetupViewport = useCallback(() => {
+        if (!showProductQuickSetupPanel) return;
+
+        const listNode = productQuickSetupListRef.current;
+        if (!listNode) return;
+
+        pendingProductQuickSetupViewportRef.current = {
+            scrollTop: listNode.scrollTop,
+            searchWasFocused: document.activeElement === productQuickSetupSearchInputRef.current,
+        };
+    }, [showProductQuickSetupPanel]);
+
+    useLayoutEffect(() => {
+        const pendingViewport = pendingProductQuickSetupViewportRef.current;
+        if (!pendingViewport || !showProductQuickSetupPanel) return undefined;
+
+        const restoreViewport = () => {
+            const listNode = productQuickSetupListRef.current;
+            if (!listNode) return;
+
+            listNode.scrollTop = pendingViewport.scrollTop;
+
+            if (pendingViewport.searchWasFocused && productQuickSetupSearchInputRef.current && document.activeElement !== productQuickSetupSearchInputRef.current) {
+                try {
+                    productQuickSetupSearchInputRef.current.focus({ preventScroll: true });
+                } catch {
+                    productQuickSetupSearchInputRef.current.focus();
+                }
+            }
+        };
+
+        restoreViewport();
+
+        const frameId = window.requestAnimationFrame(() => {
+            restoreViewport();
+            pendingProductQuickSetupViewportRef.current = null;
+        });
+
+        return () => {
+            window.cancelAnimationFrame(frameId);
+        };
+    }, [showProductQuickSetupPanel, visibleProductQuickSetupProducts]);
 
     const [provinces, setProvinces] = useState([]);
     const [districts, setDistricts] = useState([]);
@@ -2249,6 +2296,17 @@ const OrderForm = () => {
             activeProductQuickSetupItems.filter((item) => Number(item.product_id) !== Number(productId))
         );
     }, [activeProductQuickSetupItems, saveActiveProductQuickSetupItems]);
+
+    const handleToggleProductQuickSetupSelection = useCallback((product, productId, isSelected) => {
+        captureProductQuickSetupViewport();
+
+        if (isSelected) {
+            handleRemoveProductFromQuickSetup(productId);
+            return;
+        }
+
+        handleAddProductToQuickSetup(product);
+    }, [captureProductQuickSetupViewport, handleAddProductToQuickSetup, handleRemoveProductFromQuickSetup]);
 
     const toggleProductQuickMode = useCallback(() => {
         if (activeProductQuickSetupItems.length === 0) return;
@@ -2909,20 +2967,26 @@ const OrderForm = () => {
     };
 
     const calculateTotal = () => {
-        return calculateSubtotal() + Number(formData.shipping_fee) - Number(formData.discount);
+        return calculateSubtotal()
+            + (parseMoneyNumber(formData.shipping_fee, 0) || 0)
+            - (parseMoneyNumber(formData.discount, 0) || 0);
     };
 
     const normalizedOrderType = normalizeOrderType(formData.order_type);
     const orderTypeMeta = getOrderTypeMeta(normalizedOrderType);
     const specialOrderType = isSpecialOrderType(normalizedOrderType);
+    const subtotalAmount = calculateSubtotal();
+    const totalPaymentAmount = calculateTotal();
+    const costTotalAmount = parseMoneyNumber(formData.cost_total, 0) || 0;
+    const grossProfitAmount = calculateGrossProfitTotal(totalPaymentAmount, costTotalAmount);
     const supplementItemsTotal = calculateSupplementItemsTotal(formData.supplement_items);
     const supplementItemsCostTotal = calculateSupplementItemsCostTotal(formData.supplement_items);
     const reportRevenueTotal = specialOrderType
-        ? (calculateTotal() - supplementItemsTotal + (parseMoneyNumber(formData.settlement_delta, 0) || 0))
-        : calculateTotal();
+        ? (totalPaymentAmount - supplementItemsTotal + (parseMoneyNumber(formData.settlement_delta, 0) || 0))
+        : totalPaymentAmount;
     const reportCostTotal = specialOrderType
-        ? ((parseMoneyNumber(formData.cost_total, 0) || 0) - supplementItemsCostTotal)
-        : (parseMoneyNumber(formData.cost_total, 0) || 0);
+        ? (costTotalAmount - supplementItemsCostTotal)
+        : costTotalAmount;
     const reportProfitTotal = reportRevenueTotal - reportCostTotal;
     const supplementDeclarationCount = Array.isArray(formData.supplement_items)
         ? formData.supplement_items.length
@@ -3813,6 +3877,7 @@ const OrderForm = () => {
                                                                 <div className="flex min-w-[180px] flex-1 items-center rounded-sm border border-primary/10 bg-white px-3 h-9 shadow-sm">
                                                                     <span className="material-symbols-outlined text-[15px] text-primary/35 mr-2">search</span>
                                                                     <input
+                                                                        ref={productQuickSetupSearchInputRef}
                                                                         type="text"
                                                                         value={productQuickSetupSearchTerm}
                                                                         onChange={(event) => setProductQuickSetupSearchTerm(event.target.value)}
@@ -3835,7 +3900,7 @@ const OrderForm = () => {
                                                                     : 'Chọn vài sản phẩm để tạo lớp lọc nhanh cho thuộc tính đang chọn.'}
                                                             </div>
 
-                                                            <div className="mt-3 max-h-[420px] overflow-y-auto custom-scrollbar space-y-2 pr-1">
+                                                            <div ref={productQuickSetupListRef} className="mt-3 max-h-[420px] overflow-y-auto custom-scrollbar space-y-2 pr-1">
                                                                 {visibleProductQuickSetupProducts.length > 0 ? visibleProductQuickSetupProducts.map((product) => {
                                                                     const targetProductId = Number(product?.target_product_id ?? product?.product_id ?? product?.id);
                                                                     const isVariation = String(product?.entry_kind || SEARCH_ENTRY_PRODUCT) === SEARCH_ENTRY_VARIATION;
@@ -3845,7 +3910,8 @@ const OrderForm = () => {
                                                                         <button
                                                                             key={`setup-product-${product.entry_kind || SEARCH_ENTRY_PRODUCT}-${targetProductId}`}
                                                                             type="button"
-                                                                            onClick={() => (isSelected ? handleRemoveProductFromQuickSetup(targetProductId) : handleAddProductToQuickSetup(product))}
+                                                                            onMouseDown={(event) => event.preventDefault()}
+                                                                            onClick={() => handleToggleProductQuickSetupSelection(product, targetProductId, isSelected)}
                                                                             className={`w-full rounded-sm border px-3 py-2 text-left transition-all ${isSelected ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary hover:border-primary/25 hover:bg-white'}`}
                                                                         >
                                                                             <div className="flex items-center justify-between gap-3">
@@ -4293,7 +4359,7 @@ const OrderForm = () => {
                                 <div className="flex items-baseline gap-4">
                                     <span className="font-sans font-bold text-brick/60 text-[12px]">Tổng thanh toán:</span>
                                     <span className="font-sans font-black text-brick text-[32px] leading-none tracking-tighter">
-                                        {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(calculateTotal())}<span className="text-[16px] ml-1 opacity-40 font-bold">₫</span>
+                                        {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(totalPaymentAmount)}<span className="text-[16px] ml-1 opacity-40 font-bold">₫</span>
                                     </span>
                                 </div>
                             </div>
@@ -4305,7 +4371,7 @@ const OrderForm = () => {
                                 <div className="flex justify-between items-center" data-screenshot-hide="true">
                                     <span className="font-bold text-blue-600/40 text-[12px]">Tổng tiền sản phẩm:</span>
                                     <span className="font-bold text-blue-600 text-[16px] leading-none">
-                                        {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(calculateSubtotal())}₫
+                                        {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(subtotalAmount)}₫
                                     </span>
                                 </div>
 
@@ -4344,7 +4410,14 @@ const OrderForm = () => {
                                 <div className="flex justify-between items-center pt-4 mt-4 border-t-2 border-blue-600/10" data-screenshot-hide="true">
                                     <span className="font-bold text-blue-600/30 text-[12px]">Tổng giá vốn nhập:</span>
                                     <div className="flex items-center gap-1 font-bold text-blue-600/50 text-sm">
-                                        <span className="bg-blue-600/5 px-2 py-0.5 rounded-sm">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(formData.cost_total)}₫</span>
+                                        <span className="bg-blue-600/5 px-2 py-0.5 rounded-sm">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(costTotalAmount)}₫</span>
+                                    </div>
+                                </div>
+
+                                <div className="flex justify-between items-center" data-screenshot-hide="true">
+                                    <span className="font-bold text-blue-600/30 text-[12px]">Lãi gộp:</span>
+                                    <div className="flex items-center gap-1 font-bold text-blue-600/50 text-sm">
+                                        <span className="bg-blue-600/5 px-2 py-0.5 rounded-sm">{new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(grossProfitAmount)}₫</span>
                                     </div>
                                 </div>
                             </div>

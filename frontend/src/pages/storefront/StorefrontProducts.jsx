@@ -261,33 +261,33 @@ const ProductCard = ({ product, onConsult, categoryLabel }) => {
                 />
                 <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/18 to-transparent" />
                 {badge ? (
-                    <span className={`absolute right-3 top-3 rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] shadow-lg ${badge.className}`}>
+                    <span className={`m-chip absolute right-3 top-3 rounded-full px-3 py-1 font-black uppercase tracking-[0.16em] shadow-lg ${badge.className}`}>
                         {badge.label}
                     </span>
                 ) : null}
             </Link>
 
             <div className="flex flex-1 flex-col gap-2.5 px-3.5 pb-3.5 pt-3 md:px-4 md:pb-4 md:pt-3.5">
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[#c08d40]">
+                <p className="m-kicker text-[10px] font-black uppercase tracking-[0.2em] text-[#c08d40]">
                     {cardCategory}
                 </p>
 
                 <Link to={`/san-pham/${product.slug || product.id}`}>
-                    <h3 className="line-clamp-2 min-h-[2.7rem] text-[15px] font-black leading-[1.34] text-primary transition-colors group-hover:text-[#284f86] md:min-h-[3rem] md:text-[18px]">
+                    <h3 className="m-title line-clamp-2 min-h-[2.7rem] text-[15px] font-black leading-[1.34] text-primary transition-colors group-hover:text-[#284f86] md:min-h-[3rem] md:text-[18px]">
                         {product.name}
                     </h3>
                 </Link>
 
                 <div className="mt-auto space-y-1">
-                    <p className="text-[18px] font-black leading-none text-[#c08d40] md:text-[22px]">
+                    <p className="m-price text-[18px] font-black leading-none text-[#c08d40] md:text-[22px]">
                         {primaryPrice}
                     </p>
                     {secondaryPrice ? (
-                        <p className="text-[11px] font-medium text-stone-400 line-through">
+                        <p className="m-meta text-[11px] font-medium text-stone-400 line-through">
                             {secondaryPrice}
                         </p>
                     ) : (
-                        <p className="text-[11px] font-medium leading-relaxed text-stone-400">
+                        <p className="m-meta text-[11px] font-medium leading-relaxed text-stone-400">
                             {product?.is_featured ? 'Được chọn nhiều cho không gian thờ' : 'Gốm thủ công tuyển chọn'}
                         </p>
                     )}
@@ -296,7 +296,7 @@ const ProductCard = ({ product, onConsult, categoryLabel }) => {
                 <div className="mt-1 flex items-center gap-2">
                     <Link
                         to={`/san-pham/${product.slug || product.id}`}
-                        className="flex-1 rounded-[16px] bg-primary px-3 py-2.5 text-center text-[11px] font-black uppercase tracking-[0.12em] text-white transition-all hover:brightness-95"
+                        className="m-btn-sm flex-1 rounded-[16px] bg-primary px-3 py-2.5 text-center font-black uppercase tracking-[0.12em] text-white transition-all hover:brightness-95"
                     >
                         Xem chi tiết
                     </Link>
@@ -306,7 +306,7 @@ const ProductCard = ({ product, onConsult, categoryLabel }) => {
                             event.preventDefault();
                             onConsult?.(product);
                         }}
-                        className="rounded-[16px] border border-[#eadfce] px-3 py-2.5 text-[11px] font-bold text-primary transition-all hover:bg-[#f8f3eb]"
+                        className="m-btn-sm rounded-[16px] border border-[#eadfce] px-3 py-2.5 font-bold text-primary transition-all hover:bg-[#f8f3eb]"
                     >
                         Tư vấn
                     </button>
@@ -319,10 +319,10 @@ const ProductCard = ({ product, onConsult, categoryLabel }) => {
 const FilterBlock = ({ index, label, children }) => (
     <div className="space-y-2 md:space-y-3">
         <div className="flex items-center gap-2 md:gap-3">
-            <span className="inline-flex min-w-[28px] items-center justify-center rounded-lg bg-[#f5ecde] px-1.5 py-1 text-[9px] font-black uppercase tracking-[0.08em] text-[#bc8b3e] md:min-w-[36px] md:rounded-xl md:px-2 md:py-1.5 md:text-[11px] md:tracking-[0.12em]">
+            <span className="m-chip inline-flex min-w-[28px] items-center justify-center rounded-lg bg-[#f5ecde] px-1.5 py-1 font-black uppercase tracking-[0.08em] text-[#bc8b3e] md:min-w-[36px] md:rounded-xl md:px-2 md:py-1.5 md:text-[11px] md:tracking-[0.12em]">
                 {String(index).padStart(2, '0')}
             </span>
-            <p className="text-[10px] font-black uppercase leading-none tracking-[0.12em] text-[#bc8b3e] md:text-[13px] md:tracking-[0.18em]">
+            <p className="m-kicker text-[10px] font-black uppercase leading-none tracking-[0.12em] text-[#bc8b3e] md:text-[13px] md:tracking-[0.18em]">
                 {label}
             </p>
         </div>
@@ -358,7 +358,7 @@ const LayoutTwoFilterCard = ({
                                 <select
                                     value={value}
                                     onChange={(event) => onSelectFilter(filter.code, event.target.value)}
-                                    className="min-h-[42px] w-full appearance-none rounded-[14px] border border-[#d9dde5] bg-[#fcfaf7] px-3 py-2 pr-9 text-[13px] font-semibold text-stone-700 outline-none transition focus:border-primary focus:bg-white md:min-h-[52px] md:rounded-[18px] md:px-4 md:py-3 md:pr-11 md:text-sm"
+                                    className="m-input min-h-[42px] w-full appearance-none rounded-[14px] border border-[#d9dde5] bg-[#fcfaf7] px-3 py-2 pr-9 font-semibold text-stone-700 outline-none transition focus:border-primary focus:bg-white md:min-h-[52px] md:rounded-[18px] md:px-4 md:py-3 md:pr-11 md:text-sm"
                                 >
                                     <option value="">{`Tất cả ${filter.name.toLowerCase()}`}</option>
                                     {filter.options.map((option) => (
@@ -381,7 +381,7 @@ const LayoutTwoFilterCard = ({
                         <select
                             value={sort}
                             onChange={(event) => onUpdateParam('sort', event.target.value)}
-                            className="min-h-[42px] w-full appearance-none rounded-[14px] border border-[#d9dde5] bg-[#fcfaf7] px-3 py-2 pr-9 text-[13px] font-semibold text-stone-700 outline-none transition focus:border-primary focus:bg-white md:min-h-[52px] md:rounded-[18px] md:px-4 md:py-3 md:pr-11 md:text-sm"
+                            className="m-input min-h-[42px] w-full appearance-none rounded-[14px] border border-[#d9dde5] bg-[#fcfaf7] px-3 py-2 pr-9 font-semibold text-stone-700 outline-none transition focus:border-primary focus:bg-white md:min-h-[52px] md:rounded-[18px] md:px-4 md:py-3 md:pr-11 md:text-sm"
                         >
                             {LAYOUT_TWO_SORT_OPTIONS.map((option) => (
                                 <option key={option.value} value={option.value}>
@@ -400,7 +400,7 @@ const LayoutTwoFilterCard = ({
                         <button
                             type="button"
                             onClick={() => onUpdateParam('featured', '')}
-                            className={`min-h-[40px] rounded-[14px] px-2.5 py-2 text-[11px] font-black leading-tight transition-all md:min-h-[52px] md:rounded-[18px] md:px-4 md:py-3 md:text-sm ${
+                            className={`m-btn-sm min-h-[40px] rounded-[14px] px-2.5 py-2 font-black leading-tight transition-all md:min-h-[52px] md:rounded-[18px] md:px-4 md:py-3 md:text-sm ${
                                 !featured
                                     ? 'bg-primary text-white shadow-md'
                                     : 'border border-[#e7dccb] bg-[#faf6f0] text-stone-500'
@@ -411,7 +411,7 @@ const LayoutTwoFilterCard = ({
                         <button
                             type="button"
                             onClick={() => onUpdateParam('featured', featured ? '' : '1')}
-                            className={`min-h-[40px] rounded-[14px] px-2.5 py-2 text-[11px] font-black leading-tight transition-all md:min-h-[52px] md:rounded-[18px] md:px-4 md:py-3 md:text-sm ${
+                            className={`m-btn-sm min-h-[40px] rounded-[14px] px-2.5 py-2 font-black leading-tight transition-all md:min-h-[52px] md:rounded-[18px] md:px-4 md:py-3 md:text-sm ${
                                 featured
                                     ? 'bg-primary text-white shadow-md'
                                     : 'border border-[#e7dccb] bg-[#faf6f0] text-stone-500'
@@ -439,7 +439,7 @@ const LayoutTwoFilterCard = ({
                     <button
                         type="button"
                         onClick={onReset}
-                        className="self-start rounded-full border border-[#e2d4bf] px-2.5 py-1 font-bold uppercase tracking-[0.08em] text-[#9b7840] transition hover:bg-[#faf4ea] md:self-auto md:px-3 md:py-1.5 md:tracking-[0.12em]"
+                        className="m-btn-sm self-start rounded-full border border-[#e2d4bf] px-2.5 py-1 font-bold uppercase tracking-[0.08em] text-[#9b7840] transition hover:bg-[#faf4ea] md:self-auto md:px-3 md:py-1.5 md:tracking-[0.12em]"
                     >
                         Xóa lọc nhanh
                     </button>
@@ -511,7 +511,7 @@ const EmptyState = ({ isLayoutTwo = false, onReset }) => (
             <button
                 type="button"
                 onClick={onReset}
-                className="mt-5 rounded-full border border-[#dfcfb7] px-5 py-2.5 text-xs font-black uppercase tracking-[0.16em] text-[#9a7740] transition hover:bg-[#faf4ea]"
+                className="m-btn-sm mt-5 rounded-full border border-[#dfcfb7] px-5 py-2.5 font-black uppercase tracking-[0.16em] text-[#9a7740] transition hover:bg-[#faf4ea]"
             >
                 Xóa toàn bộ bộ lọc
             </button>
@@ -765,7 +765,7 @@ const StorefrontProducts = () => {
                 <div className="mx-auto max-w-7xl px-4 py-6 md:py-8">
                     <div className="mb-6 flex items-center justify-between gap-4">
                         <div>
-                            <h1 className="text-xl font-black uppercase tracking-tight text-stone-900 md:text-2xl">
+                            <h1 className="m-title text-xl font-black uppercase tracking-tight text-stone-900 md:text-2xl">
                                 {categoryTitle}
                             </h1>
                             <p className="mt-1 text-xs font-medium text-stone-500">
@@ -776,7 +776,7 @@ const StorefrontProducts = () => {
                             <button
                                 type="button"
                                 onClick={() => setShowFilter((previous) => !previous)}
-                                className="flex items-center gap-1.5 rounded-xl border border-stone-200 px-3 py-2 text-xs font-bold text-stone-700 md:hidden"
+                                className="m-btn-sm flex items-center gap-1.5 rounded-xl border border-stone-200 px-3 py-2 font-bold text-stone-700 md:hidden"
                             >
                                 <span className="material-symbols-outlined text-sm">tune</span>
                                 Lọc
@@ -784,7 +784,7 @@ const StorefrontProducts = () => {
                             <select
                                 value={sort}
                                 onChange={(event) => updateParam('sort', event.target.value)}
-                                className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-bold text-stone-700 outline-none"
+                                className="m-input rounded-xl border border-stone-200 bg-white px-3 py-2 font-bold text-stone-700 outline-none"
                             >
                                 {activeSortOptions.map((option) => (
                                     <option key={option.value} value={option.value}>
@@ -798,7 +798,7 @@ const StorefrontProducts = () => {
                     <div className="flex gap-6">
                         <aside className={`${showFilter ? 'block' : 'hidden'} w-full shrink-0 md:block md:w-56`}>
                             <div className="rounded-2xl border border-stone-100 bg-white p-4">
-                                <h3 className="mb-3 text-[10px] font-black uppercase tracking-widest text-stone-800">
+                                <h3 className="m-kicker mb-3 text-[10px] font-black uppercase tracking-widest text-stone-800">
                                     Danh mục
                                 </h3>
                                 <div className="space-y-1">

@@ -141,71 +141,71 @@ const StorefrontCheckout = () => {
             </div>
 
             <div className="max-w-4xl mx-auto px-4 py-8 md:py-12">
-                <h1 className="text-xl md:text-2xl font-black text-stone-900 uppercase tracking-tight mb-8 text-center">Thông tin đặt hàng</h1>
+                <h1 className="m-title mb-8 text-center text-xl font-black uppercase tracking-tight text-stone-900 md:text-2xl">Thông tin đặt hàng</h1>
 
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-6 md:gap-10">
                     {/* Order Form */}
                     <form onSubmit={handleSubmit} className="md:col-span-3 space-y-5">
                         <div className="bg-white rounded-2xl border border-stone-100 p-5 md:p-6 space-y-4">
-                            <h3 className="text-xs font-black text-stone-800 uppercase tracking-widest flex items-center gap-2">
+                            <h3 className="m-kicker flex items-center gap-2 text-xs font-black uppercase tracking-widest text-stone-800">
                                 <span className="material-symbols-outlined text-primary text-base">person</span>
                                 Thông tin người nhận
                             </h3>
                             <div>
-                                <label className="text-[10px] font-bold text-stone-700 uppercase tracking-widest block mb-1.5">Họ tên *</label>
+                                <label className="m-kicker mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-stone-700">Họ tên *</label>
                                 <input type="text" required value={form.customer_name} onChange={e => updateField('customer_name', e.target.value)}
                                        placeholder="Nhập họ tên người nhận"
-                                       className="w-full bg-stone-50 border border-stone-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
+                                       className="m-input w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
-                                    <label className="text-[10px] font-bold text-stone-700 uppercase tracking-widest block mb-1.5">Số điện thoại *</label>
+                                    <label className="m-kicker mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-stone-700">Số điện thoại *</label>
                                     <input type="tel" required value={form.phone} onChange={e => updateField('phone', e.target.value)}
                                            placeholder="0xxx xxx xxx"
-                                           className="w-full bg-stone-50 border border-stone-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
+                                           className="m-input w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
                                 </div>
                                 <div>
-                                    <label className="text-[10px] font-bold text-stone-700 uppercase tracking-widest block mb-1.5">Email</label>
+                                    <label className="m-kicker mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-stone-700">Email</label>
                                     <input type="email" value={form.email} onChange={e => updateField('email', e.target.value)}
                                            placeholder="email@example.com (tùy chọn)"
-                                           className="w-full bg-stone-50 border border-stone-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
+                                           className="m-input w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
                                 </div>
                             </div>
                         </div>
 
                         <div className="bg-white rounded-2xl border border-stone-100 p-5 md:p-6 space-y-4">
-                            <h3 className="text-xs font-black text-stone-800 uppercase tracking-widest flex items-center gap-2">
+                            <h3 className="m-kicker flex items-center gap-2 text-xs font-black uppercase tracking-widest text-stone-800">
                                 <span className="material-symbols-outlined text-primary text-base">location_on</span>
                                 Địa chỉ giao hàng
                             </h3>
                             <div>
-                                <label className="text-[10px] font-bold text-stone-700 uppercase tracking-widest block mb-1.5">Địa chỉ *</label>
+                                <label className="m-kicker mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-stone-700">Địa chỉ *</label>
                                 <input type="text" required value={form.address} onChange={e => updateField('address', e.target.value)}
                                        placeholder="Số nhà, tên đường..."
-                                       className="w-full bg-stone-50 border border-stone-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
+                                       className="m-input w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="text-[10px] font-bold text-stone-700 uppercase tracking-widest block mb-1.5">Quận/Huyện</label>
+                                    <label className="m-kicker mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-stone-700">Quận/Huyện</label>
                                     <input type="text" value={form.district} onChange={e => updateField('district', e.target.value)}
-                                           className="w-full bg-stone-50 border border-stone-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
+                                           className="m-input w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
                                 </div>
                                 <div>
-                                    <label className="text-[10px] font-bold text-stone-700 uppercase tracking-widest block mb-1.5">Phường/Xã</label>
+                                    <label className="m-kicker mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-stone-700">Phường/Xã</label>
                                     <input type="text" value={form.ward} onChange={e => updateField('ward', e.target.value)}
-                                           className="w-full bg-stone-50 border border-stone-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
+                                           className="m-input w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
                                 </div>
                             </div>
                             <div>
-                                <label className="text-[10px] font-bold text-stone-700 uppercase tracking-widest block mb-1.5">Ghi chú</label>
+                                <label className="m-kicker mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-stone-700">Ghi chú</label>
                                 <textarea rows={3} value={form.notes} onChange={e => updateField('notes', e.target.value)}
                                           placeholder="Ghi chú về đơn hàng, yêu cầu đặc biệt..."
-                                          className="w-full bg-stone-50 border border-stone-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 resize-none" />
+                                          className="m-input w-full resize-none rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20" />
                             </div>
                         </div>
 
                         <button type="submit" disabled={submitting}
-                                className="w-full py-4 bg-primary text-white rounded-xl text-sm font-black uppercase tracking-widest shadow-xl hover:brightness-90 active:scale-[0.98] transition-all disabled:opacity-50">
+                                className="m-btn w-full rounded-xl bg-primary py-4 font-black uppercase tracking-widest text-white shadow-xl transition-all hover:brightness-90 active:scale-[0.98] disabled:opacity-50">
                             {submitting ? (
                                 <span className="flex items-center justify-center gap-2">
                                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
@@ -220,7 +220,7 @@ const StorefrontCheckout = () => {
                     {/* Order Summary */}
                     <div className="md:col-span-2">
                         <div className="bg-white rounded-2xl border border-stone-100 p-5 md:p-6 sticky top-20">
-                            <h3 className="text-xs font-black text-stone-800 uppercase tracking-widest mb-4 flex items-center gap-2">
+                            <h3 className="m-kicker mb-4 flex items-center gap-2 text-xs font-black uppercase tracking-widest text-stone-800">
                                 <span className="material-symbols-outlined text-primary text-base">shopping_bag</span>
                                 Đơn hàng
                             </h3>
@@ -234,7 +234,7 @@ const StorefrontCheckout = () => {
                                         <div className="flex-1 min-w-0">
                                             <h4 className="text-sm font-bold text-stone-800 line-clamp-2">{product.name}</h4>
                                             <p className="text-xs text-stone-500 mt-1">{product.sku}</p>
-                                            {resolvedBundleOption ? <p className="mt-1 text-xs font-bold text-primary">Tùy chọn bộ: {resolvedBundleOption}</p> : null}
+                                            {resolvedBundleOption ? <p className="m-meta mt-1 font-bold text-primary">Tùy chọn bộ: {resolvedBundleOption}</p> : null}
                                         </div>
                                     </div>
 
@@ -253,7 +253,7 @@ const StorefrontCheckout = () => {
 
                                     {bundleSummaryItems.length > 0 ? (
                                         <div className="rounded-xl bg-stone-50 p-3">
-                                            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-stone-500">
+                                            <p className="m-kicker text-[10px] font-black uppercase tracking-[0.16em] text-stone-500">
                                                 Thành phần bộ
                                             </p>
                                             <div className="mt-2 space-y-2">
@@ -261,9 +261,9 @@ const StorefrontCheckout = () => {
                                                     <div key={`${item.product_id || item.base_product_id || index}-${index}`} className="flex items-start justify-between gap-3 text-xs text-stone-600">
                                                         <div className="min-w-0">
                                                             <p className="font-bold text-stone-800">{item.product_name}</p>
-                                                            <p className="mt-0.5 text-[11px] text-stone-500">{item.product_sku || 'N/A'} x{item.quantity || 1}</p>
+                                                            <p className="m-meta mt-0.5 text-stone-500">{item.product_sku || 'N/A'} x{item.quantity || 1}</p>
                                                         </div>
-                                                        <span className="shrink-0 font-black text-primary">
+                                                        <span className="m-label shrink-0 font-black text-primary">
                                                             {Number(item.line_total || 0).toLocaleString()}đ
                                                         </span>
                                                     </div>
@@ -281,9 +281,9 @@ const StorefrontCheckout = () => {
                                             <span className="text-stone-500">Vận chuyển</span>
                                             <span className="font-bold text-stone-500 italic">Liên hệ</span>
                                         </div>
-                                        <div className="flex justify-between text-lg font-black pt-2 border-t border-stone-100">
+                                        <div className="flex justify-between border-t border-stone-100 pt-2 text-lg font-black">
                                             <span className="text-stone-800">Tổng cộng</span>
-                                            <span className="text-red-600">{totalPrice.toLocaleString()}đ</span>
+                                            <span className="m-price text-red-600">{totalPrice.toLocaleString()}đ</span>
                                         </div>
                                     </div>
                                 </div>

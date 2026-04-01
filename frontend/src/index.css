@@ -4,6 +4,22 @@
 
 :root {
     --font-roboto: 'Roboto', sans-serif;
+    --mobile-font-12: 12px;
+    --mobile-font-14: 14px;
+    --mobile-font-16: 16px;
+    --mobile-font-18: 18px;
+    --mobile-font-20: 20px;
+    --mobile-leading-meta: 1.35;
+    --mobile-leading-body: 1.55;
+    --mobile-leading-label: 1.4;
+    --mobile-leading-title: 1.25;
+    --mobile-space-1: 4px;
+    --mobile-space-2: 8px;
+    --mobile-space-3: 12px;
+    --mobile-space-4: 16px;
+    --mobile-space-5: 20px;
+    --mobile-space-6: 24px;
+    --mobile-button-pad-y: 5px;
 }
 
 @layer base {
@@ -429,5 +445,193 @@
 
     .ql-image-actions-popup .material-symbols-outlined {
         font-size: 18px;
+    }
+
+    @media (max-width: 767px) {
+        .mobile-type-scope,
+        .mobile-standalone {
+            font-size: var(--mobile-font-14);
+            line-height: var(--mobile-leading-body);
+        }
+
+        .mobile-type-scope :where(p, li, dd, dt, blockquote, label, input, textarea, select),
+        .mobile-standalone :where(p, li, dd, dt, blockquote, label, input, textarea, select) {
+            line-height: var(--mobile-leading-body);
+        }
+
+        .mobile-type-scope :where(input, textarea, select),
+        .mobile-standalone :where(input, textarea, select) {
+            font-size: var(--mobile-font-14) !important;
+            line-height: var(--mobile-leading-body) !important;
+        }
+
+        .mobile-type-scope :where(button):not(.material-symbols-outlined):not([class*="h-"]):not([class*="w-"]):not([class*="size-"]),
+        .mobile-standalone :where(button):not(.material-symbols-outlined):not([class*="h-"]):not([class*="w-"]):not([class*="size-"]) {
+            padding-top: var(--mobile-button-pad-y) !important;
+            padding-bottom: var(--mobile-button-pad-y) !important;
+            min-height: auto !important;
+            line-height: var(--mobile-leading-label) !important;
+        }
+
+        .mobile-type-scope :where(.text-xs, [class*="text-[8px]"], [class*="text-[9px]"], [class*="text-[10px]"], [class*="text-[11px]"], [class*="text-[11.5px]"], [class*="text-[12px]"]):not(.material-symbols-outlined),
+        .mobile-standalone :where(.text-xs, [class*="text-[8px]"], [class*="text-[9px]"], [class*="text-[10px]"], [class*="text-[11px]"], [class*="text-[11.5px]"], [class*="text-[12px]"]):not(.material-symbols-outlined) {
+            font-size: var(--mobile-font-12) !important;
+            line-height: var(--mobile-leading-meta) !important;
+        }
+
+        .mobile-type-scope :where(.text-sm, [class*="text-[13px]"], [class*="text-[14px]"]):not(.material-symbols-outlined),
+        .mobile-standalone :where(.text-sm, [class*="text-[13px]"], [class*="text-[14px]"]):not(.material-symbols-outlined) {
+            font-size: var(--mobile-font-14) !important;
+            line-height: var(--mobile-leading-body) !important;
+        }
+
+        .mobile-type-scope :where(.text-base, [class*="text-[15px]"], [class*="text-[16px]"], [class*="text-[17px]"]):not(.material-symbols-outlined),
+        .mobile-standalone :where(.text-base, [class*="text-[15px]"], [class*="text-[16px]"], [class*="text-[17px]"]):not(.material-symbols-outlined) {
+            font-size: var(--mobile-font-16) !important;
+            line-height: var(--mobile-leading-label) !important;
+        }
+
+        .mobile-type-scope :where(.text-lg, [class*="text-[18px]"]):not(.material-symbols-outlined),
+        .mobile-standalone :where(.text-lg, [class*="text-[18px]"]):not(.material-symbols-outlined) {
+            font-size: var(--mobile-font-18) !important;
+            line-height: var(--mobile-leading-title) !important;
+        }
+
+        .mobile-type-scope :where(
+            .text-xl,
+            .text-2xl,
+            .text-3xl,
+            .text-4xl,
+            .text-5xl,
+            .text-6xl,
+            .text-7xl,
+            .text-8xl,
+            [class*="text-[20px]"],
+            [class*="text-[22px]"],
+            [class*="text-[23px]"],
+            [class*="text-[24px]"],
+            [class*="text-[26px]"],
+            [class*="text-[28px]"],
+            [class*="text-[30px]"],
+            [class*="text-[31px]"],
+            [class*="text-[34px]"],
+            [class*="text-[38px]"],
+            [class*="text-[44px]"],
+            [class*="text-[56px]"],
+            [class*="text-[1.35rem]"],
+            [class*="text-[1.6rem]"],
+            [class*="text-[1.85rem]"],
+            [class*="text-[1.9rem]"],
+            [class*="text-[2rem]"],
+            [class*="text-[2.15rem]"],
+            [class*="text-[2.6rem]"],
+            [class*="text-[3.4rem]"]
+        ):not(.material-symbols-outlined),
+        .mobile-standalone :where(
+            .text-xl,
+            .text-2xl,
+            .text-3xl,
+            .text-4xl,
+            .text-5xl,
+            .text-6xl,
+            .text-7xl,
+            .text-8xl,
+            [class*="text-[20px]"],
+            [class*="text-[22px]"],
+            [class*="text-[23px]"],
+            [class*="text-[24px]"],
+            [class*="text-[26px]"],
+            [class*="text-[28px]"],
+            [class*="text-[30px]"],
+            [class*="text-[31px]"],
+            [class*="text-[34px]"],
+            [class*="text-[38px]"],
+            [class*="text-[44px]"],
+            [class*="text-[56px]"],
+            [class*="text-[1.35rem]"],
+            [class*="text-[1.6rem]"],
+            [class*="text-[1.85rem]"],
+            [class*="text-[1.9rem]"],
+            [class*="text-[2rem]"],
+            [class*="text-[2.15rem]"],
+            [class*="text-[2.6rem]"],
+            [class*="text-[3.4rem]"]
+        ):not(.material-symbols-outlined) {
+            font-size: var(--mobile-font-20) !important;
+            line-height: 1.15 !important;
+        }
+
+        .mobile-type-scope .mobile-prose,
+        .mobile-standalone .mobile-prose {
+            font-size: var(--mobile-font-14) !important;
+            line-height: var(--mobile-leading-body) !important;
+        }
+
+        .mobile-type-scope .mobile-prose :where(p, li, ul, ol, blockquote),
+        .mobile-standalone .mobile-prose :where(p, li, ul, ol, blockquote) {
+            font-size: inherit !important;
+            line-height: inherit !important;
+        }
+
+        .mobile-type-scope .mobile-prose :where(h1, h2, h3, h4),
+        .mobile-standalone .mobile-prose :where(h1, h2, h3, h4) {
+            font-size: var(--mobile-font-18) !important;
+            line-height: var(--mobile-leading-title) !important;
+            margin-top: var(--mobile-space-5) !important;
+            margin-bottom: var(--mobile-space-3) !important;
+        }
+
+        .mobile-type-scope .mobile-prose :where(small, figcaption),
+        .mobile-standalone .mobile-prose :where(small, figcaption) {
+            font-size: var(--mobile-font-12) !important;
+            line-height: var(--mobile-leading-meta) !important;
+        }
+
+        .m-kicker,
+        .m-meta,
+        .m-chip,
+        .m-nav-label {
+            font-size: var(--mobile-font-12) !important;
+            line-height: var(--mobile-leading-meta) !important;
+        }
+
+        .m-copy,
+        .m-body,
+        .m-input {
+            font-size: var(--mobile-font-14) !important;
+            line-height: var(--mobile-leading-body) !important;
+        }
+
+        .m-label,
+        .m-btn {
+            font-size: var(--mobile-font-16) !important;
+            line-height: var(--mobile-leading-label) !important;
+        }
+
+        .m-title {
+            font-size: var(--mobile-font-18) !important;
+            line-height: var(--mobile-leading-title) !important;
+        }
+
+        .m-display,
+        .m-price,
+        .m-stat {
+            font-size: var(--mobile-font-20) !important;
+            line-height: 1.1 !important;
+        }
+
+        .m-btn,
+        .m-btn-sm,
+        .m-tab {
+            padding-top: var(--mobile-button-pad-y) !important;
+            padding-bottom: var(--mobile-button-pad-y) !important;
+            min-height: auto !important;
+        }
+
+        .m-btn-sm,
+        .m-tab {
+            font-size: var(--mobile-font-14) !important;
+            line-height: var(--mobile-leading-label) !important;
+        }
     }
 }

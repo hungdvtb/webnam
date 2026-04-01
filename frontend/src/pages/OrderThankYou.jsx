@@ -57,7 +57,7 @@ const OrderThankYou = () => {
         'Đơn hàng của anh chị đã được tiếp nhận. Bên em sẽ sớm gọi lại xác nhận đơn hàng và đóng gói gửi đến mình sớm nhất ạ.';
 
     return (
-        <div className="min-h-screen bg-[#f8f5ef] px-4 py-10 text-[#223860] md:px-6 md:py-14">
+        <div className="mobile-standalone min-h-screen bg-[#f8f5ef] px-4 py-10 text-[#223860] md:px-6 md:py-14">
             <main className="mx-auto w-full max-w-[860px]">
                 <section className="overflow-hidden rounded-[6px] border border-[#dfd6c8] bg-[#fffdfa] shadow-[0_16px_35px_rgba(28,45,77,0.14)]">
                     <div className="relative bg-[linear-gradient(130deg,#2e3a62_0%,#34426f_52%,#2f3c66_100%)] px-6 pb-7 pt-12 text-center md:pb-8">

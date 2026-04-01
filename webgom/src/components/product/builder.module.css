@@ -809,21 +809,30 @@
 }
 
 .grandTotalRow {
+  align-items: center;
   padding-top: 8px;
   border-top: 1px solid rgba(27, 54, 93, 0.1);
   margin-top: 4px;
 }
 
 .grandTotalLabel {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 15px;
   font-weight: 800;
   color: #1b365d;
+  line-height: 1.2;
 }
 
 .grandTotal {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
   font-size: 20px;
   font-weight: 900;
   color: #c5a065;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 /* Legacy slot card styles kept for backward compat */
@@ -1527,11 +1536,11 @@
   }
 
   .mobileStickyCluster {
-    position: relative;
-    z-index: 24;
-    gap: 0.3rem;
+    position: static;
+    z-index: auto;
+    gap: 0.4rem;
     margin-bottom: 0;
-    transition: filter 0.24s ease, transform 0.24s ease;
+    transition: none;
     overflow: visible;
   }
 
@@ -1574,8 +1583,8 @@
   .mobileConfigRailCard {
     display: flex;
     flex-direction: column;
-    gap: 0.32rem;
-    padding: 0.5rem;
+    gap: 0.44rem;
+    padding: 0.58rem;
     border-radius: 16px;
     border: 1px solid rgba(27, 54, 93, 0.08);
     background:
@@ -1586,17 +1595,20 @@
 
   .mobileConfigRailHeader {
     align-items: center;
+    gap: 0.45rem;
   }
 
   .mobileConfigRailTitle {
-    font-size: 0.58rem;
-    letter-spacing: 0.12em;
+    font-size: 14px;
+    line-height: 1.2;
+    letter-spacing: 0.03em;
   }
 
   .mobileConfigRailMeta {
-    padding: 0.18rem 0.4rem;
-    font-size: 0.48rem;
-    letter-spacing: 0.04em;
+    padding: 0.28rem 0.62rem;
+    font-size: 14px;
+    line-height: 1;
+    letter-spacing: 0;
   }
 
   .mobileConfigDropdown {
@@ -1606,19 +1618,22 @@
 
   .mobileConfigDropdownRow {
     display: flex;
-    align-items: center;
-    gap: 0.32rem;
+    align-items: stretch;
+    min-width: 0;
+    gap: 0.4rem;
   }
 
   .mobileConfigDropdownTrigger {
     flex: 1 1 auto;
     min-width: 0;
+    width: 100%;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.4rem;
-    padding: 0.48rem 0.56rem;
-    border-radius: 15px;
+    gap: 0.48rem;
+    min-height: 42px;
+    padding: 0.62rem 0.72rem;
+    border-radius: 14px;
     border: 1px solid rgba(27, 54, 93, 0.1);
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(244, 239, 230, 0.92) 100%);
@@ -1641,16 +1656,13 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 0.08rem;
+    justify-content: center;
+    gap: 0;
     min-width: 0;
   }
 
   .mobileConfigDropdownEyebrow {
-    font-size: 0.46rem;
-    font-weight: 800;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: rgba(27, 54, 93, 0.46);
+    display: none;
   }
 
   .mobileConfigDropdownValue {
@@ -1658,9 +1670,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.8rem;
+    font-size: 14px;
     font-weight: 800;
-    line-height: 1.08;
+    line-height: 1.2;
     color: #1b365d;
   }
 
@@ -1826,59 +1838,73 @@
   .mobileConfigMediaLink {
     flex: 0 0 auto;
     min-width: 0;
-    min-height: 2.18rem;
-    padding: 0.46rem 0.54rem;
-    border-radius: 13px;
-    font-size: 0.58rem;
-    gap: 0.22rem;
+    width: auto;
+    max-width: 7rem;
+    min-height: 42px;
+    padding: 0.58rem 0.72rem;
+    border-radius: 14px;
+    font-size: 13px;
+    gap: 0.28rem;
+    justify-self: auto;
+    justify-content: center;
+    margin-left: 0;
     white-space: nowrap;
     box-shadow: 0 6px 12px rgba(27, 54, 93, 0.06);
   }
 
   .mobileConfigMediaLink :global(.material-symbols-outlined) {
-    font-size: 0.8rem;
+    font-size: 16px;
   }
 
   .mobileConfigMediaLink .configMediaLinkText {
-    font-size: 0.58rem;
+    font-size: 13px;
     letter-spacing: 0.01em;
   }
 
   .mobileConfigSummaryRow {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.18rem;
+    display: block;
     padding-top: 0;
   }
 
   .mobileConfigOfferChip {
     display: inline-flex;
-    align-items: flex-start;
+    flex: 1 1 auto;
+    width: auto;
+    align-items: center;
     justify-content: flex-start;
-    gap: 0.22rem;
+    gap: 0.28rem;
     min-width: 0;
-    align-self: center;
-    max-width: 68%;
-    min-height: 1.48rem;
-    padding: 0.34rem 0.52rem;
-    border-radius: 999px;
-    font-size: 0.6rem;
+    align-self: stretch;
+    max-width: none;
+    min-height: 42px;
+    margin-left: 0;
+    margin-right: 0;
+    padding: 0.42rem 0.5rem;
+    border-radius: 14px;
+    font-size: 11px;
     font-weight: 700;
-    line-height: 1.18;
+    line-height: 1.16;
     letter-spacing: 0.01em;
     white-space: normal;
-    overflow: visible;
-    text-overflow: unset;
+    overflow: hidden;
+    text-overflow: clip;
+    transform: none;
   }
 
   .mobileConfigOfferChip :global(.material-symbols-outlined) {
     flex-shrink: 0;
-    font-size: 0.84rem !important;
+    align-self: center;
+    font-size: 14px !important;
     line-height: 1;
   }
 
   .mobileConfigOfferChip > span:last-child {
     min-width: 0;
+    display: flex;
+    align-items: center;
+    align-self: center;
+    overflow: hidden;
+    line-height: 1.2;
   }
 
   .mobileConfigOfferChipActive {
@@ -1892,25 +1918,27 @@
   }
 
   .mobileConfigCheckoutRow {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 0.32rem;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 0.4rem;
   }
 
   .mobileConfigCheckoutBox {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    display: flex;
+    flex: 0 0 clamp(6.05rem, 27vw, 6.9rem);
     align-items: center;
-    gap: 0.42rem;
-    min-height: 2.74rem;
-    padding: 0.42rem 0.52rem;
-    border-radius: 13px;
+    flex-wrap: nowrap;
+    gap: 0;
+    min-height: 42px;
+    padding: 0.48rem 0.56rem;
+    border-radius: 14px;
     background: rgba(27, 54, 93, 0.04);
     border: 1px solid rgba(27, 54, 93, 0.06);
   }
 
   .mobileConfigCheckoutInfo {
+    width: 100%;
     min-width: 0;
     display: flex;
     flex-direction: column;
@@ -1919,7 +1947,7 @@
   }
 
   .mobileConfigCheckoutLabel {
-    font-size: 0.5rem;
+    font-size: 0.52rem;
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -1929,7 +1957,7 @@
   }
 
   .mobileConfigCheckoutValue {
-    font-size: 0.92rem;
+    font-size: 0.82rem;
     font-weight: 900;
     line-height: 1.08;
     color: #c5a065;
@@ -1940,13 +1968,18 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.26rem;
-    min-height: 2.24rem;
-    padding: 0.48rem 0.74rem;
-    border-radius: 13px;
+    width: auto;
+    flex: 0 0 auto;
+    justify-self: auto;
+    margin-left: 0;
+    gap: 0.28rem;
+    min-height: 42px;
+    min-width: 5.75rem;
+    padding: 0.5rem 0.72rem;
+    border-radius: 14px;
     background: linear-gradient(135deg, #c5a065 0%, #d4b584 100%);
     color: #fff;
-    font-size: 0.62rem;
+    font-size: 13px;
     font-weight: 900;
     letter-spacing: 0.02em;
     white-space: nowrap;
@@ -1954,8 +1987,56 @@
   }
 
   .mobileConfigBuyBtn :global(.material-symbols-outlined) {
-    font-size: 0.88rem !important;
+    font-size: 16px !important;
     line-height: 1;
+  }
+
+  @media (max-width: 380px) {
+    .mobileConfigRailCard {
+      padding: 0.54rem;
+    }
+
+    .mobileConfigDropdownRow,
+    .mobileConfigCheckoutRow {
+      gap: 0.34rem;
+    }
+
+    .mobileConfigDropdownTrigger,
+    .mobileConfigMediaLink,
+    .mobileConfigCheckoutBox,
+    .mobileConfigBuyBtn {
+      min-height: 40px;
+    }
+
+    .mobileConfigMediaLink {
+      max-width: 6.5rem;
+      padding: 0.54rem 0.62rem;
+      font-size: 12px;
+    }
+
+    .mobileConfigMediaLink .configMediaLinkText {
+      font-size: 12px;
+    }
+
+    .mobileConfigCheckoutBox {
+      flex-basis: 5.8rem;
+      padding: 0.44rem 0.48rem;
+    }
+
+    .mobileConfigCheckoutValue {
+      font-size: 0.78rem;
+    }
+
+    .mobileConfigOfferChip {
+      padding: 0.38rem 0.44rem;
+      font-size: 10.5px;
+    }
+
+    .mobileConfigBuyBtn {
+      min-width: 5.35rem;
+      padding: 0.46rem 0.62rem;
+      font-size: 12.5px;
+    }
   }
 
   .topActionMediaLink {
@@ -2191,42 +2272,63 @@
   .tableRow:not(.tableRowMobileCompact) > .colTotal::before { content: 'Thành tiền:'; }
 
   .tableRowMobileCompact {
-    grid-template-columns: 24px 40px minmax(0, 1fr);
-    gap: 0.5rem;
-    padding: 0.55rem 0.7rem;
+    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    column-gap: 0.65rem;
+    row-gap: 0.34rem;
+    padding: 0.65rem 0.7rem;
     align-items: flex-start;
   }
 
-  .tableRowMobileCompact .colStt,
-  .tableRowMobileCompact .colImg {
+  .tableRowMobileCompact .colStt {
+    grid-column: 1;
+    grid-row: 1;
+    justify-content: flex-start;
     align-self: flex-start;
   }
 
+  .tableRowMobileCompact .colImg {
+    grid-column: 1;
+    grid-row: 2;
+    justify-content: flex-start;
+    align-self: flex-start;
+  }
+
+  .tableRowMobileCompact .mobileItemContent,
+  .tableRowRemovedCompact .mobileRemovedContent {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
   .tableRowMobileCompact .sttBadge {
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
     border-radius: 5px;
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .tableRowMobileCompact .tableImgWrap {
-    width: 40px;
-    height: 40px;
-    border-radius: 7px;
+    width: 44px;
+    height: 44px;
+    border-radius: 8px;
   }
 
   .tableRowMobileCompact .colName {
-    gap: 0.14rem;
+    gap: 0.26rem;
+    min-width: 0;
   }
 
   .tableRowMobileCompact .nameRow {
-    gap: 0.4rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.45rem;
     align-items: flex-start;
   }
 
   .tableRowMobileCompact .itemName {
-    font-size: 12px;
-    line-height: 1.25;
+    min-width: 0;
+    font-size: 14px;
+    line-height: 1.32;
     white-space: normal;
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -2242,49 +2344,58 @@
   }
 
   .tableRowMobileCompact .inlineChangeBtn {
-    gap: 2px;
-    padding: 3px 8px;
+    gap: 0.22rem;
+    padding: 4px 8px;
     border-radius: 999px;
-    font-size: 8.5px;
+    font-size: 12px;
     letter-spacing: 0.02em;
-    line-height: 1.05;
+    line-height: 1.1;
+    margin-left: auto;
     margin-top: 0;
+    align-self: flex-start;
+    justify-self: end;
   }
 
   .tableRowMobileCompact .inlineChangeBtn :global(.material-symbols-outlined) {
-    font-size: 11px !important;
+    font-size: 13px !important;
   }
 
   .mobileItemContent {
     display: flex;
     flex-direction: column;
-    gap: 0.34rem;
+    gap: 0.42rem;
+    min-width: 0;
   }
 
   .mobileItemBottom {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 0.45rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    min-width: 0;
   }
 
   .mobilePriceStack {
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 0.16rem;
+    justify-content: center;
+    gap: 0.18rem;
+    min-width: 0;
   }
 
   .mobilePriceLine {
     display: flex;
     align-items: center;
-    gap: 0.28rem;
+    gap: 0.34rem;
     flex-wrap: wrap;
-    line-height: 1.12;
+    line-height: 1.2;
+    min-width: 0;
   }
 
   .mobileMetaLabel {
-    font-size: 10px;
+    font-size: 14px;
     font-weight: 700;
     color: rgba(27, 54, 93, 0.52);
     white-space: nowrap;
@@ -2296,14 +2407,19 @@
   }
 
   .tableRowMobileCompact .lineTotal {
-    font-size: 11.5px;
-    line-height: 1.1;
+    font-size: 14px;
+    line-height: 1.2;
+    white-space: nowrap;
   }
 
   .mobileControlStack {
     display: flex;
     align-items: center;
     gap: 0.35rem;
+    width: auto;
+    max-width: 100%;
+    justify-content: flex-end;
+    margin-left: 0;
     flex-shrink: 0;
   }
 
@@ -2393,13 +2509,81 @@
     font-size: 11px !important;
   }
 
+  @media (max-width: 380px) {
+    .tableRowMobileCompact {
+      column-gap: 0.58rem;
+      padding: 0.62rem 0.64rem;
+    }
+
+    .tableRowMobileCompact .nameRow {
+      gap: 0.34rem;
+    }
+
+    .tableRowMobileCompact .inlineChangeBtn {
+      gap: 0.18rem;
+      padding: 4px 7px;
+    }
+
+    .mobileItemBottom {
+      gap: 0.38rem;
+    }
+
+    .mobilePriceLine {
+      gap: 0.24rem;
+    }
+
+    .mobileControlStack {
+      gap: 0.28rem;
+    }
+  }
+
   .tableFooter {
     flex-direction: column;
     align-items: stretch;
+    gap: 0.8rem;
   }
 
   .footerRight {
     min-width: unset;
+    gap: 0.5rem;
+  }
+
+  .resetBtn {
+    font-size: 14px;
+    line-height: 1.2;
+  }
+
+  .summaryRow {
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .grandTotalRow {
+    align-items: center;
+    flex-wrap: nowrap;
+  }
+
+  .summaryLabelSub,
+  .summarySubtotal,
+  .summaryLabelDiscount,
+  .summaryDiscount,
+  .grandTotalLabel {
+    font-size: 14px;
+    line-height: 1.35;
+  }
+
+  .grandTotalLabel {
+    line-height: 1.25;
+  }
+
+  .grandTotal {
+    line-height: 1;
+  }
+
+  .buyTabBtn {
+    padding: 8px 16px;
+    font-size: 14px;
+    line-height: 1.25;
   }
 
   .slotCard {

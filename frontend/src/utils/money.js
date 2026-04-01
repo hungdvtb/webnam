@@ -148,3 +148,10 @@ export const calculateRoundedImportCostLineTotal = (unitCost, quantity) => {
 
     return normalizedUnitCost * (Number.isFinite(normalizedQuantity) ? normalizedQuantity : 0);
 };
+
+export const calculateGrossProfitTotal = (paymentTotal, costTotal) => {
+    const normalizedPaymentTotal = parseFlexibleMoneyValue(paymentTotal);
+    const normalizedCostTotal = parseFlexibleMoneyValue(costTotal);
+
+    return (normalizedPaymentTotal ?? 0) - (normalizedCostTotal ?? 0);
+};

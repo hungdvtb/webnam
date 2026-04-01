@@ -2,13 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { normalizePhoneHref } from '../../utils/storeLocations';
 
-const actionBaseClass = 'inline-flex min-h-[56px] w-full items-center justify-between gap-3 rounded-[22px] border px-4 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25';
+const actionBaseClass = 'm-btn inline-flex min-h-[56px] w-full items-center justify-between gap-3 rounded-[22px] border px-4 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25';
 
 const buttonTextBlock = (label, helper) => (
-    <span className="min-w-0 flex-1">
-        <span className="block text-sm font-black uppercase tracking-[0.14em]">{label}</span>
+        <span className="min-w-0 flex-1">
+        <span className="m-label block font-black uppercase tracking-[0.14em]">{label}</span>
         {helper ? (
-            <span className="mt-1 block text-xs font-medium normal-case tracking-normal opacity-80">
+            <span className="m-meta mt-1 block font-medium normal-case tracking-normal opacity-80">
                 {helper}
             </span>
         ) : null}
@@ -89,15 +89,15 @@ const StoreLocationCard = ({ store, mode = 'page', highlighted = false, sitePhon
                 <div className="flex flex-col gap-3">
                     <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                            <span className="inline-flex rounded-full bg-primary/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-primary">
+                            <span className="m-chip inline-flex rounded-full bg-primary/10 px-3 py-1 font-black uppercase tracking-[0.22em] text-primary">
                                 Hệ thống cửa hàng
                             </span>
-                            <h3 className="mt-3 text-[1.35rem] font-black leading-tight tracking-tight text-primary">
+                            <h3 className="m-display mt-3 text-[1.35rem] font-black leading-tight tracking-tight text-primary">
                                 {store.name}
                             </h3>
                         </div>
 
-                        <span className="shrink-0 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-bold text-emerald-700">
+                        <span className="m-chip shrink-0 rounded-full bg-emerald-50 px-3 py-1 font-bold text-emerald-700">
                             Đang phục vụ
                         </span>
                     </div>
@@ -195,7 +195,7 @@ const StoreLocationCard = ({ store, mode = 'page', highlighted = false, sitePhon
                             )}
 
                             <div className="min-w-0 flex-1 space-y-2">
-                                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-primary">
+                                <p className="m-kicker text-[11px] font-black uppercase tracking-[0.18em] text-primary">
                                     Thông tin thêm
                                 </p>
                                 <p className="text-sm leading-6 text-stone-700">
@@ -215,7 +215,7 @@ const StoreLocationCard = ({ store, mode = 'page', highlighted = false, sitePhon
                 {mapOpen ? (
                     <div className="overflow-hidden rounded-[24px] border border-stone-200 bg-white">
                         <div className="border-b border-stone-200 px-4 py-3">
-                            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-primary">
+                            <p className="m-kicker text-[11px] font-black uppercase tracking-[0.18em] text-primary">
                                 Bản đồ thu gọn
                             </p>
                             <p className="mt-1 text-sm leading-6 text-stone-500">
@@ -259,14 +259,14 @@ const StoreLocationsEmptyState = ({ sitePhone = '' }) => {
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/8 text-primary">
                 <span className="material-symbols-outlined text-[30px]">storefront</span>
             </div>
-            <h3 className="mt-4 text-xl font-black tracking-tight text-primary">Đang cập nhật danh sách cửa hàng</h3>
-            <p className="mt-2 text-sm leading-6 text-stone-600">
+            <h3 className="m-title mt-4 text-xl font-black tracking-tight text-primary">Đang cập nhật danh sách cửa hàng</h3>
+            <p className="m-copy mt-2 leading-6 text-stone-600">
                 Thông tin showroom sẽ được bổ sung sớm. Nếu cần hỗ trợ ngay, bạn có thể gọi hotline để được hướng dẫn.
             </p>
             {fallbackPhoneHref ? (
                 <a
                     href={fallbackPhoneHref}
-                    className="mt-4 inline-flex min-h-[52px] items-center justify-center rounded-[20px] bg-primary px-5 py-3 text-sm font-black uppercase tracking-[0.14em] text-white transition hover:brightness-95"
+                    className="m-btn mt-4 inline-flex min-h-[52px] items-center justify-center rounded-[20px] bg-primary px-5 py-3 font-black uppercase tracking-[0.14em] text-white transition hover:brightness-95"
                 >
                     Gọi hotline
                 </a>

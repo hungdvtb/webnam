@@ -364,11 +364,11 @@ const SectionHeading = ({ icon, eyebrow, title, action = null }) => (
             </div>
             <div className="min-w-0">
                 {eyebrow ? (
-                    <p className="text-[10px] font-black uppercase tracking-[0.18em] text-stone-500">
+                    <p className="m-kicker text-[10px] font-black uppercase tracking-[0.18em] text-stone-500">
                         {eyebrow}
                     </p>
                 ) : null}
-                <h2 className="mt-1 text-base font-black leading-tight text-stone-900 md:text-lg">
+                <h2 className="m-title mt-1 text-base font-black leading-tight text-stone-900 md:text-lg">
                     {title}
                 </h2>
             </div>
@@ -1186,27 +1186,27 @@ const StorefrontProductDetail = () => {
 
                     <div className="space-y-3.5 px-3 md:px-0 md:space-y-5">
                         <section className="rounded-[28px] border border-[#eadbc5] bg-[#fffaf4] p-4 shadow-[0_18px_38px_-30px_rgba(197,160,101,0.65)] md:hidden">
-                            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/65">
+                            <p className="m-kicker text-[10px] font-black uppercase tracking-[0.18em] text-primary/65">
                                 Giá ưu tiên trên mobile
                             </p>
                             <div className="mt-2 flex items-end gap-3">
-                                <span className="text-[28px] font-black leading-none text-red-600">
+                                <span className="m-price text-[28px] font-black leading-none text-red-600">
                                     {showPriceRange
                                         ? `${formatCurrency(minVariantPrice)} - ${formatCurrency(maxVariantPrice)}`
                                         : formatCurrency(rawCurrentPrice)}
                                 </span>
                                 {!showPriceRange && Number(rawBasePrice || 0) > Number(rawCurrentPrice || 0) ? (
-                                    <span className="pb-1 text-sm font-bold text-stone-400 line-through">
+                                    <span className="m-label pb-1 font-bold text-stone-400 line-through">
                                         {formatCurrency(rawBasePrice)}
                                     </span>
                                 ) : null}
                             </div>
 
-                            <h1 className="mt-3 text-[24px] font-black leading-[1.08] tracking-tight text-stone-900">
+                            <h1 className="m-display mt-3 text-[24px] font-black leading-[1.08] tracking-tight text-stone-900">
                                 {product.name}
                             </h1>
 
-                            <div className={`mt-3 inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-[12px] font-black shadow-sm ${storefrontStatusClass}`}>
+                            <div className={`m-chip mt-3 inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 font-black shadow-sm ${storefrontStatusClass}`}>
                                 <span className="h-2.5 w-2.5 rounded-full bg-current" />
                                 <span>{storefrontStatusLabel}</span>
                             </div>
@@ -1215,16 +1215,16 @@ const StorefrontProductDetail = () => {
                                 {product.category ? (
                                     <Link
                                         to={`/danh-muc/${product.category.slug}`}
-                                        className="rounded-full bg-primary/6 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-primary"
+                                        className="m-chip rounded-full bg-primary/6 px-3 py-1.5 font-black uppercase tracking-[0.16em] text-primary"
                                     >
                                         {product.category.name}
                                     </Link>
                                 ) : null}
-                                <span className="rounded-full bg-white px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-stone-600 shadow-sm">
+                                <span className="m-chip rounded-full bg-white px-3 py-1.5 font-bold uppercase tracking-[0.14em] text-stone-600 shadow-sm">
                                     {productTypeLabel}
                                 </span>
                                 {displayVariant ? (
-                                    <span className="rounded-full bg-amber-50 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-amber-800">
+                                    <span className="m-chip rounded-full bg-amber-50 px-3 py-1.5 font-bold uppercase tracking-[0.14em] text-amber-800">
                                         {getVariantLabel(product.name, displayVariant)}
                                     </span>
                                 ) : null}
@@ -1345,7 +1345,7 @@ const StorefrontProductDetail = () => {
                                         <button
                                             type="button"
                                             onClick={handleViewBundleDetails}
-                                            className="rounded-full bg-primary/6 px-3 py-2 text-[11px] font-black uppercase tracking-[0.14em] text-primary md:hidden"
+                                            className="m-btn-sm rounded-full bg-primary/6 px-3 py-2 font-black uppercase tracking-[0.14em] text-primary md:hidden"
                                         >
                                             Xem thành phần
                                         </button>
@@ -1361,7 +1361,7 @@ const StorefrontProductDetail = () => {
                                                 key={group.title}
                                                 type="button"
                                                 onClick={() => setSelectedBundleOption(group.title)}
-                                                className={`rounded-2xl border px-4 py-3 text-sm font-black transition ${
+                                                className={`m-btn rounded-2xl border px-4 py-3 font-black transition ${
                                                     isSelected
                                                         ? 'border-primary bg-primary text-white shadow-lg'
                                                         : 'border-stone-200 bg-white text-stone-700 hover:border-primary/35 hover:text-primary'
@@ -1410,7 +1410,7 @@ const StorefrontProductDetail = () => {
                                                             type="button"
                                                             disabled={isDisabled}
                                                             onClick={() => handleSelectAttribute(attribute.id, option.value)}
-                                                            className={`rounded-2xl border px-4 py-2.5 text-sm font-bold transition ${
+                                                            className={`m-btn-sm rounded-2xl border px-4 py-2.5 font-bold transition ${
                                                                 isSelected
                                                                     ? 'border-primary bg-primary text-white shadow-md'
                                                                     : isDisabled
@@ -1480,20 +1480,20 @@ const StorefrontProductDetail = () => {
 
                                 <div className="mt-4 grid grid-cols-2 gap-3">
                                     <div className="rounded-2xl bg-stone-50 p-3">
-                                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">Mã SKU</p>
-                                        <p className="mt-2 break-words font-mono text-sm font-bold text-stone-900">{displaySku}</p>
+                                        <p className="m-kicker text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">Mã SKU</p>
+                                        <p className="m-copy mt-2 break-words font-mono font-bold text-stone-900">{displaySku}</p>
                                     </div>
                                     <div className="rounded-2xl bg-stone-50 p-3">
-                                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">Trạng thái</p>
-                                        <p className={`mt-2 text-sm font-bold ${storefrontStatusClass}`}>{storefrontStatusLabel}</p>
+                                        <p className="m-kicker text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">Trạng thái</p>
+                                        <p className={`m-copy mt-2 font-bold ${storefrontStatusClass}`}>{storefrontStatusLabel}</p>
                                     </div>
                                     <div className="rounded-2xl bg-stone-50 p-3">
-                                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">Loại</p>
-                                        <p className="mt-2 text-sm font-bold text-stone-900">{productTypeLabel}</p>
+                                        <p className="m-kicker text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">Loại</p>
+                                        <p className="m-copy mt-2 font-bold text-stone-900">{productTypeLabel}</p>
                                     </div>
                                     <div className="rounded-2xl bg-stone-50 p-3">
-                                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">Danh mục</p>
-                                        <p className="mt-2 text-sm font-bold text-stone-900">{product.category?.name || 'Đang cập nhật'}</p>
+                                        <p className="m-kicker text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">Danh mục</p>
+                                        <p className="m-copy mt-2 font-bold text-stone-900">{product.category?.name || 'Đang cập nhật'}</p>
                                     </div>
                                 </div>
 
@@ -1501,8 +1501,8 @@ const StorefrontProductDetail = () => {
                                     <div className="mt-4 flex flex-wrap gap-2">
                                         {attributeHighlights.map((item, index) => (
                                             <div key={`${item.label}-${index}`} className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2">
-                                                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-stone-400">{item.label}</p>
-                                                <p className="mt-1 text-sm font-bold text-stone-900">{item.value}</p>
+                                                <p className="m-kicker text-[10px] font-black uppercase tracking-[0.16em] text-stone-400">{item.label}</p>
+                                                <p className="m-copy mt-1 font-bold text-stone-900">{item.value}</p>
                                             </div>
                                         ))}
                                     </div>
@@ -1540,12 +1540,12 @@ const StorefrontProductDetail = () => {
                                                 </p>
                                             </div>
                                             <div className="rounded-2xl bg-white px-3 py-2 text-center shadow-sm">
-                                                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-stone-400">
-                                                    SL
-                                                </p>
-                                                <p className="mt-1 text-sm font-black text-primary">
-                                                    x{item.quantity || 1}
-                                                </p>
+                                            <p className="m-kicker text-[10px] font-black uppercase tracking-[0.16em] text-stone-400">
+                                                SL
+                                            </p>
+                                            <p className="m-copy mt-1 font-black text-primary">
+                                                x{item.quantity || 1}
+                                            </p>
                                             </div>
                                         </div>
                                     ))}
@@ -1563,14 +1563,14 @@ const StorefrontProductDetail = () => {
                                     eyebrow="Thành phần bộ"
                                     title={activeBundleGroup.title}
                                     action={(
-                                        <div className="rounded-full bg-primary/6 px-3 py-2 text-right">
-                                            <p className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/70">
-                                                Tổng giá
-                                            </p>
-                                            <p className="mt-0.5 text-sm font-black text-primary">
-                                                {formatCurrency(rawCurrentPrice)}
-                                            </p>
-                                        </div>
+                                            <div className="rounded-full bg-primary/6 px-3 py-2 text-right">
+                                                <p className="m-kicker text-[10px] font-black uppercase tracking-[0.14em] text-primary/70">
+                                                    Tổng giá
+                                                </p>
+                                                <p className="m-copy mt-0.5 font-black text-primary">
+                                                    {formatCurrency(rawCurrentPrice)}
+                                                </p>
+                                            </div>
                                     )}
                                 />
 
@@ -1598,10 +1598,10 @@ const StorefrontProductDetail = () => {
                                                     </p>
                                                 </div>
                                                 <div className="rounded-2xl bg-white px-3 py-2 text-center shadow-sm">
-                                                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-stone-400">
+                                                    <p className="m-kicker text-[10px] font-black uppercase tracking-[0.16em] text-stone-400">
                                                         SL
                                                     </p>
-                                                    <p className="mt-1 text-sm font-black text-primary">
+                                                    <p className="m-copy mt-1 font-black text-primary">
                                                         x{item.quantityPerBundle}
                                                     </p>
                                                 </div>
@@ -1610,10 +1610,10 @@ const StorefrontProductDetail = () => {
                                             {item.itemVariants.length > 0 ? (
                                                 <div className="mt-3 rounded-[20px] bg-white p-3 shadow-sm">
                                                     <div className="flex items-center justify-between gap-3">
-                                                        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-stone-500">
+                                                        <p className="m-kicker text-[11px] font-black uppercase tracking-[0.16em] text-stone-500">
                                                             Chọn phân loại
                                                         </p>
-                                                        <span className={`text-[11px] font-bold ${item.requiresSelection ? 'text-amber-700' : 'text-stone-500'}`}>
+                                                        <span className={`m-meta font-bold ${item.requiresSelection ? 'text-amber-700' : 'text-stone-500'}`}>
                                                             {item.selectedVariant ? getVariantLabel(item.name, item.selectedVariant) : 'Chưa chọn'}
                                                         </span>
                                                     </div>
@@ -1626,7 +1626,7 @@ const StorefrontProductDetail = () => {
                                                                     key={variant.id}
                                                                     type="button"
                                                                     onClick={() => handleSelectBundleVariant(activeBundleGroup.title, item.id, index, variant.id)}
-                                                                    className={`rounded-2xl border px-3.5 py-2 text-sm font-bold transition ${
+                                                                    className={`m-btn-sm rounded-2xl border px-3.5 py-2 font-bold transition ${
                                                                         isSelected
                                                                             ? 'border-primary bg-primary text-white shadow-md'
                                                                             : 'border-stone-200 bg-white text-stone-700 hover:border-primary/35 hover:text-primary'
@@ -1678,7 +1678,7 @@ const StorefrontProductDetail = () => {
 
                             <div className="mt-4 flex items-center justify-between gap-4 rounded-[24px] bg-stone-50 p-4">
                                 <div>
-                                    <p className="text-xs font-black uppercase tracking-[0.16em] text-stone-500">
+                                    <p className="m-kicker text-xs font-black uppercase tracking-[0.16em] text-stone-500">
                                         Số lượng
                                     </p>
                                     <p className="mt-1 text-sm font-medium text-stone-500">
@@ -1697,7 +1697,7 @@ const StorefrontProductDetail = () => {
                                     type="button"
                                     onClick={handleAddToCart}
                                     disabled={mustCompleteSelection}
-                                    className="flex items-center justify-center gap-2 rounded-[24px] border-2 border-primary px-5 py-4 text-sm font-black uppercase tracking-[0.16em] text-primary transition hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+                                    className="m-btn flex items-center justify-center gap-2 rounded-[24px] border-2 border-primary px-5 py-4 font-black uppercase tracking-[0.16em] text-primary transition hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     <span className="material-symbols-outlined text-[20px]">shopping_cart</span>
                                     Thêm vào giỏ
@@ -1706,7 +1706,7 @@ const StorefrontProductDetail = () => {
                                     type="button"
                                     onClick={handleBuyNow}
                                     disabled={mustCompleteSelection}
-                                    className="flex items-center justify-center gap-2 rounded-[24px] bg-primary px-5 py-4 text-sm font-black uppercase tracking-[0.16em] text-white shadow-lg transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
+                                    className="m-btn flex items-center justify-center gap-2 rounded-[24px] bg-primary px-5 py-4 font-black uppercase tracking-[0.16em] text-white shadow-lg transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     <span className="material-symbols-outlined text-[20px]">bolt</span>
                                     Mua ngay
@@ -1764,7 +1764,7 @@ const StorefrontProductDetail = () => {
                                         type="button"
                                         onClick={handleAddToCart}
                                         disabled={mustCompleteSelection}
-                                        className="flex items-center justify-center gap-2 rounded-[24px] border-2 border-primary px-5 py-4 text-sm font-black uppercase tracking-[0.16em] text-primary transition hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+                                        className="m-btn flex items-center justify-center gap-2 rounded-[24px] border-2 border-primary px-5 py-4 font-black uppercase tracking-[0.16em] text-primary transition hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         <span className="material-symbols-outlined text-[20px]">shopping_cart</span>
                                         Thêm vào giỏ
@@ -1773,7 +1773,7 @@ const StorefrontProductDetail = () => {
                                         type="button"
                                         onClick={handleBuyNow}
                                         disabled={mustCompleteSelection}
-                                        className="flex items-center justify-center gap-2 rounded-[24px] bg-primary px-5 py-4 text-sm font-black uppercase tracking-[0.16em] text-white shadow-lg transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
+                                        className="m-btn flex items-center justify-center gap-2 rounded-[24px] bg-primary px-5 py-4 font-black uppercase tracking-[0.16em] text-white shadow-lg transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         <span className="material-symbols-outlined text-[20px]">bolt</span>
                                         Mua ngay
@@ -1814,7 +1814,7 @@ const StorefrontProductDetail = () => {
                                         key={tab.key}
                                         type="button"
                                         onClick={() => setActiveTab(tab.key)}
-                                        className={`shrink-0 rounded-full px-4 py-2.5 text-sm font-black transition ${
+                                        className={`m-tab shrink-0 rounded-full px-4 py-2.5 font-black transition ${
                                             activeTab === tab.key
                                                 ? 'bg-primary text-white shadow-md'
                                                 : 'bg-stone-100 text-stone-600'
@@ -1828,7 +1828,7 @@ const StorefrontProductDetail = () => {
                             <div className="mt-5">
                                 {activeTab === 'description' ? (
                                     <div
-                                        className="prose prose-sm max-w-none text-stone-700 md:prose-base prose-headings:text-stone-900 prose-a:text-primary prose-strong:text-stone-900"
+                                        className="mobile-prose prose prose-sm max-w-none text-stone-700 md:prose-base prose-headings:text-stone-900 prose-a:text-primary prose-strong:text-stone-900"
                                         dangerouslySetInnerHTML={{
                                             __html: product.description || '<p class="text-stone-400 italic">Chưa có mô tả sản phẩm.</p>',
                                         }}
@@ -1907,7 +1907,7 @@ const StorefrontProductDetail = () => {
                                                 className="group flex items-start justify-between gap-3 rounded-[24px] border border-stone-200 bg-stone-50 px-4 py-4 transition hover:border-primary/25 hover:bg-primary/5"
                                             >
                                                 <div className="min-w-0">
-                                                    <p className="text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">
+                                                    <p className="m-kicker text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">
                                                         {item.title || 'Bài viết gợi ý'}
                                                     </p>
                                                     <p className="mt-2 line-clamp-2 text-sm font-black leading-6 text-stone-900">
@@ -1927,7 +1927,7 @@ const StorefrontProductDetail = () => {
                                     className="mt-4 flex items-start justify-between gap-3 rounded-[24px] border border-stone-200 bg-stone-50 px-4 py-4 transition hover:border-primary/25 hover:bg-primary/5"
                                 >
                                     <div>
-                                        <p className="text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">
+                                        <p className="m-kicker text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">
                                             Cẩm nang gốm sứ
                                         </p>
                                         <p className="mt-2 text-sm font-black leading-6 text-stone-900">
@@ -1949,10 +1949,10 @@ const StorefrontProductDetail = () => {
                     <section className="hidden px-4 md:mt-12 md:block md:px-0">
                         <div className="mb-5 flex items-center justify-between gap-3">
                             <div>
-                                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-stone-500">
+                                <p className="m-kicker text-[10px] font-black uppercase tracking-[0.18em] text-stone-500">
                                     Gợi ý mua kèm
                                 </p>
-                                <h2 className="mt-1 text-xl font-black text-stone-900">
+                                <h2 className="m-title mt-1 text-xl font-black text-stone-900">
                                     Sản phẩm liên quan
                                 </h2>
                             </div>
@@ -1994,10 +1994,10 @@ const StorefrontProductDetail = () => {
                 <div className="mx-auto max-w-7xl px-4 pb-[calc(env(safe-area-inset-bottom)+0.85rem)] pt-3">
                     <div className="flex items-end justify-between gap-3">
                         <div className="min-w-0">
-                            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-stone-500">
+                            <p className="m-kicker text-[10px] font-black uppercase tracking-[0.18em] text-stone-500">
                                 {mustChooseVariant ? 'Cần chọn phân loại' : 'Giá đặt nhanh'}
                             </p>
-                            <p className="mt-1 truncate text-lg font-black text-red-600">
+                            <p className="m-price mt-1 truncate text-lg font-black text-red-600">
                                 {showPriceRange
                                     ? `${formatCurrency(minVariantPrice)} - ${formatCurrency(maxVariantPrice)}`
                                     : formatCurrency(rawCurrentPrice)}
@@ -2016,7 +2016,7 @@ const StorefrontProductDetail = () => {
                         <button
                             type="button"
                             onClick={() => setShowLeadForm(true)}
-                            className="flex items-center justify-center gap-2 rounded-[22px] border border-primary px-4 py-3 text-sm font-black uppercase tracking-[0.14em] text-primary"
+                            className="m-btn flex items-center justify-center gap-2 rounded-[22px] border border-primary px-4 py-3 font-black uppercase tracking-[0.14em] text-primary"
                         >
                             <span className="material-symbols-outlined text-[18px]">support_agent</span>
                             Tư vấn
@@ -2025,7 +2025,7 @@ const StorefrontProductDetail = () => {
                             type="button"
                             onClick={handleBuyNow}
                             disabled={mustChooseVariant}
-                            className="flex items-center justify-center gap-2 rounded-[22px] bg-primary px-4 py-3 text-sm font-black uppercase tracking-[0.14em] text-white shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
+                            className="m-btn flex items-center justify-center gap-2 rounded-[22px] bg-primary px-4 py-3 font-black uppercase tracking-[0.14em] text-white shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
                         >
                             <span className="material-symbols-outlined text-[18px]">shopping_bag</span>
                             Mua ngay

@@ -13,7 +13,7 @@ const Layout = () => {
     }, [location.pathname, location.search, location.hash]);
 
     return (
-        <div className="flex flex-col min-h-screen bg-background-light text-umber antialiased selection:bg-primary/20 selection:text-primary">
+        <div className="mobile-type-scope flex min-h-screen flex-col bg-background-light text-umber antialiased selection:bg-primary/20 selection:text-primary">
             <Navbar />
             <main className="flex-grow">
                 <Outlet />

@@ -75,7 +75,7 @@ const AIChatWidget = () => {
     }
 
     return (
-        <div className="fixed bottom-8 right-8 z-[9999]">
+        <div className="mobile-type-scope fixed bottom-8 right-8 z-[9999]">
             {!isOpen && (
                 <button
                     onClick={() => setIsOpen(true)}

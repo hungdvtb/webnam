@@ -1946,7 +1946,7 @@ export default function Header({
             gap: 1px;
             max-width: 100%;
             width: 100%;
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 700;
             line-height: 1.1;
             text-align: center;
@@ -2049,7 +2049,7 @@ export default function Header({
           }
 
           .mobile-bottom-item__label {
-            font-size: 14px;
+            font-size: 13px;
           }
 
           .mobile-bottom-item-order-entry .mobile-bottom-item__label-wrap,

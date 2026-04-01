@@ -46,7 +46,7 @@ const StorefrontHeader = ({ headerConfig, siteInfo }) => {
         <>
             <header className={`fixed left-0 right-0 top-0 z-40 transition-all duration-300 ${scrolled ? 'bg-white/95 shadow-md backdrop-blur-xl' : 'bg-white/80 backdrop-blur-sm'}`}>
                 {noticeText ? (
-                    <div className="flex h-7 items-center justify-center bg-primary px-4 text-center text-[10px] font-black uppercase tracking-[0.16em] text-white">
+                    <div className="m-kicker flex h-7 items-center justify-center bg-primary px-4 text-center font-black uppercase tracking-[0.16em] text-white">
                         {noticeText}
                     </div>
                 ) : null}
@@ -122,9 +122,9 @@ const StorefrontHeader = ({ headerConfig, siteInfo }) => {
                                 onChange={(event) => setSearchQuery(event.target.value)}
                                 placeholder={headerConfig?.searchPlaceholder || 'Bạn cần tìm kiếm sản phẩm gì?'}
                                 autoFocus
-                                className="flex-1 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+                                className="m-input flex-1 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
                             />
-                            <button type="submit" className="rounded-2xl bg-primary px-5 py-3 text-sm font-bold text-white transition-all hover:brightness-90">
+                            <button type="submit" className="m-btn rounded-2xl bg-primary px-5 py-3 font-bold text-white transition-all hover:brightness-90">
                                 Tìm
                             </button>
                         </form>
@@ -223,9 +223,9 @@ const StorefrontFooter = ({ siteInfo, footerConfig }) => (
                         <input
                             type="email"
                             placeholder={footerConfig?.newsletterPlaceholder || 'Email của bạn'}
-                            className="w-full rounded-xl border border-stone-700 bg-stone-800 px-4 py-3 text-sm text-white placeholder:text-stone-500 outline-none focus:border-primary"
+                            className="m-input w-full rounded-xl border border-stone-700 bg-stone-800 px-4 py-3 text-white placeholder:text-stone-500 outline-none focus:border-primary"
                         />
-                        <button type="button" className="rounded-xl bg-primary px-4 text-sm font-bold text-white transition-all hover:brightness-90">
+                        <button type="button" className="m-btn rounded-xl bg-primary px-4 font-bold text-white transition-all hover:brightness-90">
                             Gửi
                         </button>
                     </div>
@@ -265,7 +265,7 @@ const StorefrontMobileBottomNav = ({ siteInfo }) => {
                             <span className={`material-symbols-outlined text-[22px] ${active ? 'text-primary' : 'text-stone-400'}`}>
                                 {item.icon}
                             </span>
-                            <span className="text-[9px] font-black uppercase leading-tight tracking-[0.12em]">
+                            <span className="m-nav-label font-black uppercase leading-tight tracking-[0.12em]">
                                 {item.label}
                             </span>
                         </Link>
@@ -277,7 +277,7 @@ const StorefrontMobileBottomNav = ({ siteInfo }) => {
                     className="flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-2xl px-2 text-center text-stone-500 transition"
                 >
                     <span className="material-symbols-outlined text-[22px] text-stone-400">call</span>
-                    <span className="text-[9px] font-black uppercase leading-tight tracking-[0.12em]">Gọi ngay</span>
+                    <span className="m-nav-label font-black uppercase leading-tight tracking-[0.12em]">Gọi ngay</span>
                 </a>
             </div>
         </nav>
@@ -337,8 +337,8 @@ export const LeadFormModal = ({ show, onClose, product, source = 'website' }) =>
                 <div className="p-6 md:p-8">
                     <div className="mb-6 flex items-center justify-between">
                         <div>
-                            <h3 className="text-lg font-black uppercase text-stone-900">Yêu cầu tư vấn</h3>
-                            <p className="mt-1 text-xs font-medium text-stone-500">Chúng tôi sẽ liên hệ trong 15 phút</p>
+                            <h3 className="m-title text-lg font-black uppercase text-stone-900">Yêu cầu tư vấn</h3>
+                            <p className="m-meta mt-1 font-medium text-stone-500">Chúng tôi sẽ liên hệ trong 15 phút</p>
                         </div>
                         <button type="button" onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-100 text-stone-500">
                             <span className="material-symbols-outlined text-lg">close</span>
@@ -349,8 +349,8 @@ export const LeadFormModal = ({ show, onClose, product, source = 'website' }) =>
                         <div className="mb-5 flex items-center gap-3 rounded-xl bg-stone-50 p-3">
                             {product.main_image ? <img src={product.main_image} alt="" className="h-12 w-12 rounded-lg object-cover" /> : null}
                             <div className="min-w-0 flex-1">
-                                <p className="truncate text-sm font-bold text-stone-800">{product.name}</p>
-                                <p className="text-xs font-black text-primary">{Number(product.current_price || product.price || 0).toLocaleString()}đ</p>
+                                <p className="m-copy truncate font-bold text-stone-800">{product.name}</p>
+                                <p className="m-label font-black text-primary">{Number(product.current_price || product.price || 0).toLocaleString()}đ</p>
                             </div>
                         </div>
                     ) : null}
@@ -360,8 +360,8 @@ export const LeadFormModal = ({ show, onClose, product, source = 'website' }) =>
                             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
                                 <span className="material-symbols-outlined text-3xl text-green-600">check_circle</span>
                             </div>
-                            <p className="font-bold text-stone-800">Gửi thành công!</p>
-                            <p className="mt-1 text-sm text-stone-500">Chúng tôi sẽ liên hệ bạn sớm nhất.</p>
+                            <p className="m-label font-bold text-stone-800">Gửi thành công!</p>
+                            <p className="m-copy mt-1 text-stone-500">Chúng tôi sẽ liên hệ bạn sớm nhất.</p>
                         </div>
                     ) : (
                         <form onSubmit={handleSubmit} className="space-y-4">
@@ -371,7 +371,7 @@ export const LeadFormModal = ({ show, onClose, product, source = 'website' }) =>
                                 value={form.customer_name}
                                 onChange={(event) => setForm((previous) => ({ ...previous, customer_name: event.target.value }))}
                                 placeholder="Nhập họ tên..."
-                                className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+                                className="m-input w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
                             />
                             <input
                                 type="tel"
@@ -379,16 +379,16 @@ export const LeadFormModal = ({ show, onClose, product, source = 'website' }) =>
                                 value={form.phone}
                                 onChange={(event) => setForm((previous) => ({ ...previous, phone: event.target.value }))}
                                 placeholder="0xxx xxx xxx"
-                                className="w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+                                className="m-input w-full rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
                             />
                             <textarea
                                 rows={2}
                                 value={form.message}
                                 onChange={(event) => setForm((previous) => ({ ...previous, message: event.target.value }))}
                                 placeholder="VD: Tôi muốn tư vấn về bộ đồ thờ..."
-                                className="w-full resize-none rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+                                className="m-input w-full resize-none rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 font-medium outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
                             />
-                            <button type="submit" disabled={submitting} className="w-full rounded-xl bg-primary py-3.5 text-sm font-black uppercase tracking-widest text-white shadow-lg transition-all hover:brightness-90 disabled:opacity-50">
+                            <button type="submit" disabled={submitting} className="m-btn w-full rounded-xl bg-primary py-3.5 font-black uppercase tracking-widest text-white shadow-lg transition-all hover:brightness-90 disabled:opacity-50">
                                 {submitting ? 'Đang gửi...' : 'Gửi yêu cầu tư vấn'}
                             </button>
                         </form>
@@ -441,7 +441,7 @@ const StorefrontLayout = () => {
     const hasTopNotice = Boolean((headerConfig?.topNoticeText || '').trim());
 
     return (
-        <div className="min-h-screen bg-white text-stone-900 antialiased selection:bg-primary/20 selection:text-primary">
+        <div className="mobile-type-scope min-h-screen bg-white text-stone-900 antialiased selection:bg-primary/20 selection:text-primary">
             <TrackingScripts />
             <StorefrontHeader siteInfo={siteInfo} headerConfig={headerConfig} />
             <main className={`flex min-h-screen flex-col pb-[82px] ${hasTopNotice ? 'pt-[88px] md:pt-[96px] md:pb-0' : 'pt-[60px] md:pt-[68px] md:pb-0'}`}>

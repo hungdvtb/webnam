@@ -1325,7 +1325,7 @@
 
 .specTitle {
   font-family: var(--font-roboto);
-  font-size: 0.9rem;
+  font-size: 13px;
   font-weight: 700;
   color: #1B365D;
   margin-bottom: 0.75rem;
@@ -3114,10 +3114,11 @@
 
   .bundleView .quantityLabel {
     flex: 0 0 auto;
-    font-size: 0.62rem;
+    font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.11em;
     color: rgba(27, 54, 93, 0.66);
+    line-height: 1.1;
     white-space: nowrap;
   }
 
@@ -3177,15 +3178,16 @@
     align-items: center;
     flex: 0 0 auto;
     min-width: 0;
-    max-width: 7.2rem;
-    padding: 0.26rem 0.45rem;
+    width: fit-content;
+    max-width: 100%;
+    padding: 0.3rem 0.55rem;
     border-radius: 999px;
     border: 1px solid rgba(16, 185, 129, 0.18);
     background: rgba(240, 253, 248, 0.96);
     color: #0f766e;
-    font-size: 0.58rem;
+    font-size: 11px;
     font-weight: 800;
-    line-height: 1.1;
+    line-height: 1.15;
     letter-spacing: 0.03em;
     white-space: nowrap;
   }
@@ -3362,7 +3364,8 @@
     padding-left: 0;
     padding-right: 0;
     padding-bottom: 0.75rem;
-    font-size: 1rem;
+    font-size: 18px;
+    line-height: 1.25;
   }
 
   .tabContent {
@@ -3371,14 +3374,48 @@
   }
 
   .descTitle {
-    font-size: 1.3rem;
+    font-size: 14px;
+    line-height: 1.45;
     margin-bottom: 1rem;
   }
 
   .descBody {
-    font-size: 1rem;
-    line-height: 1.72;
+    font-size: 14px;
+    line-height: 1.65;
     overflow-wrap: anywhere;
+  }
+
+  .descBody :where(
+    p,
+    div,
+    span,
+    a,
+    strong,
+    em,
+    b,
+    i,
+    u,
+    ul,
+    ol,
+    li,
+    blockquote,
+    figcaption,
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6,
+    table,
+    thead,
+    tbody,
+    tfoot,
+    tr,
+    td,
+    th
+  ) {
+    font-size: inherit;
+    line-height: inherit;
   }
 
   .descBody p:last-child {
@@ -3422,16 +3459,18 @@
   }
 
   .relatedTitle {
-    font-size: 1.28rem;
+    font-size: 18px;
+    line-height: 1.25;
   }
 
   .relatedSub {
-    font-size: 0.8rem;
+    font-size: 14px;
     line-height: 1.45;
   }
 
   .viewAll {
-    font-size: 0.82rem;
+    font-size: 14px;
+    line-height: 1.25;
     gap: 0.15rem;
   }
 
@@ -3513,10 +3552,10 @@
   }
 
   .relTitle {
-    font-size: 0.8rem;
+    font-size: 14px;
     line-height: 1.35;
     margin-bottom: 0;
-    min-height: 2.15rem;
+    min-height: 2.4rem;
   }
 
   .relPriceRow {
@@ -3524,8 +3563,13 @@
   }
 
   .relPrice {
-    font-size: 0.96rem;
-    line-height: 1.1;
+    font-size: 14px;
+    line-height: 1.2;
+  }
+
+  .relOldPrice {
+    font-size: 14px;
+    line-height: 1.2;
   }
 
   .relRating {
@@ -3548,7 +3592,8 @@
   }
 
   .relRatingCount {
-    font-size: 0.68rem;
+    font-size: 14px;
+    line-height: 1.2;
     color: rgba(27, 54, 93, 0.5);
   }
 
@@ -4223,7 +4268,7 @@
   .simpleView .specTitle {
     margin-bottom: 0.9rem;
     padding-bottom: 0.7rem;
-    font-size: 12px;
+    font-size: 13px;
     letter-spacing: 0.08em;
   }
 
@@ -4270,7 +4315,7 @@
   }
 
   .specTitle {
-    font-size: 12px;
+    font-size: 13px;
   }
 
   .btnPrimary,

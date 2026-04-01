@@ -17,6 +17,11 @@ import { HTML5Backend } from 'react-dnd-html5-backend';
 import { PRODUCT_TYPE_FORM_META } from '../../config/productTypes';
 import { compressImage, formatBytes } from '../../utils/imageUtils';
 import {
+    copyBundleOptionToTop,
+    createBundleItemEntryId,
+    createBundleOptionId,
+} from '../../utils/bundleOptions';
+import {
     formatRoundedImportCost,
     formatWholeMoneyInput,
     normalizeRoundedImportCostNumber,
@@ -1232,6 +1237,9 @@ const ProductForm = () => {
     const [bundleItemVariants, setBundleItemVariants] = useState({}); // { productId: [variants] }
     const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
     const [showBundleOptionSorter, setShowBundleOptionSorter] = useState(false);
+    const bundleOptionCardRefs = useRef({});
+    const bundleOptionTitleInputRefs = useRef({});
+    const pendingCopiedBundleOptionIdRef = useRef(null);
 
     // Filters for Related Products suggestions
     const [relatedQuery, setRelatedQuery] = useState('');
@@ -1278,6 +1286,24 @@ const ProductForm = () => {
     const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
     const [aiInstruction, setAiInstruction] = useState('');
     const quillRef = useRef(null);
+
+    const registerBundleOptionCardRef = useCallback((optionId, node) => {
+        if (node) {
+            bundleOptionCardRefs.current[optionId] = node;
+            return;
+        }
+
+        delete bundleOptionCardRefs.current[optionId];
+    }, []);
+
+    const registerBundleOptionTitleInputRef = useCallback((optionId, node) => {
+        if (node) {
+            bundleOptionTitleInputRefs.current[optionId] = node;
+            return;
+        }
+
+        delete bundleOptionTitleInputRefs.current[optionId];
+    }, []);
 
     const clearServerValidationErrors = useCallback((prefixes = []) => {
         if (!Array.isArray(prefixes) || prefixes.length === 0) return;
@@ -1531,6 +1557,33 @@ const ProductForm = () => {
         }
     }, [bundleOptions.length, formData.type]);
 
+    useEffect(() => {
+        const copiedOptionId = pendingCopiedBundleOptionIdRef.current;
+        if (!copiedOptionId || typeof window === 'undefined') {
+            return undefined;
+        }
+
+        const rafId = window.requestAnimationFrame(() => {
+            const optionCard = bundleOptionCardRefs.current[copiedOptionId];
+            const optionTitleInput = bundleOptionTitleInputRefs.current[copiedOptionId];
+
+            optionCard?.scrollIntoView({
+                behavior: 'smooth',
+                block: 'start',
+                inline: 'nearest',
+            });
+
+            if (optionTitleInput) {
+                optionTitleInput.focus();
+                optionTitleInput.select();
+            }
+
+            pendingCopiedBundleOptionIdRef.current = null;
+        });
+
+        return () => window.cancelAnimationFrame(rafId);
+    }, [bundleOptions]);
+
     const compositeItemsForPricing = useMemo(() => {
         if (formData.type === 'bundle' && bundleOptions.length > 0) {
             return bundleOptions.flatMap((option) => (
@@ -1589,8 +1642,6 @@ const ProductForm = () => {
 
         return normalizeImportCostValue(primaryValue ?? fallbackValue);
     };
-
-    const createBundleItemEntryId = () => `bundle-item-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
     const getBundleItemProductId = (item) => Number(item?.product_id ?? item?.id ?? 0);
 
@@ -2761,7 +2812,7 @@ const ProductForm = () => {
                         });
                 });
                 setBundleOptions(Object.entries(optionsMap).map(([title, optionData]) => ({
-                    id: Math.random().toString(36).substr(2, 9),
+                    id: createBundleOptionId(),
                     title: title ?? '',
                     post_id: optionData.post_id || '',
                     post_title: optionData.post_title || '',
@@ -3577,7 +3628,7 @@ const ProductForm = () => {
     // --- Bundle Specific Handlers ---
     const handleAddBundleOption = () => {
         setBundleOptions(prev => [{
-            id: Math.random().toString(36).substr(2, 9),
+            id: createBundleOptionId(),
             title: 'Tùy chọn mới',
             post_id: '',
             post_title: '',
@@ -3585,8 +3636,35 @@ const ProductForm = () => {
         }, ...prev]);
     };
 
+    const handleCopyBundleOption = (optionId) => {
+        const { copiedOption, nextOptions } = copyBundleOptionToTop(bundleOptions, optionId, {
+            createOptionId: createBundleOptionId,
+            createEntryId: createBundleItemEntryId,
+        });
+
+        if (!copiedOption) {
+            showToast({ message: 'Không tìm thấy tùy chọn để sao chép.', type: 'error' });
+            return;
+        }
+
+        pendingCopiedBundleOptionIdRef.current = copiedOption.id;
+        setBundleOptions(nextOptions);
+        setShowBundleSearch((prev) => (prev === optionId ? copiedOption.id : prev));
+        setIsSortingBundle((prev) => ({ ...prev, [copiedOption.id]: false }));
+        setBlogSearchQuery((prev) => ({ ...prev, [copiedOption.id]: '' }));
+        setBlogResults((prev) => ({ ...prev, [copiedOption.id]: [] }));
+        setIsSearchingBlog((prev) => ({ ...prev, [copiedOption.id]: false }));
+        showToast({ message: 'Đã nhân bản tùy chọn lên đầu danh sách.', type: 'success' });
+    };
+
     const handleRemoveBundleOption = (optionId) => {
         setBundleOptions(prev => prev.filter(o => o.id !== optionId));
+        setShowBundleSearch((prev) => (prev === optionId ? null : prev));
+        setIsSortingBundle((prev) => {
+            const next = { ...prev };
+            delete next[optionId];
+            return next;
+        });
         setBlogSearchQuery(prev => {
             const next = { ...prev };
             delete next[optionId];
@@ -5605,6 +5683,7 @@ const ProductForm = () => {
                                         bundleOptions.map((option, optIdx) => (
                                             <div 
                                                 key={option.id} 
+                                                ref={(node) => registerBundleOptionCardRef(option.id, node)}
                                                 className={`border border-gold/15 rounded-sm shadow-sm bg-[#fcfaf7]/30 ${showBundleSearch === option.id ? 'relative z-[80]' : 'relative z-10'}`}
                                             >
                                                 <div className="bg-[#f2eddf]/40 px-5 py-3 flex items-center gap-4 border-b border-gold/10 rounded-t-sm">
@@ -5614,6 +5693,7 @@ const ProductForm = () => {
                                                      <div className="flex min-w-0 flex-1 items-center gap-4">
                                                         <div className="min-w-0 flex-1">
                                                             <input
+                                                                ref={(node) => registerBundleOptionTitleInputRef(option.id, node)}
                                                                 type="text"
                                                                 value={option.title ?? ''}
                                                                 onChange={(e) => handleUpdateOptionTitle(option.id, e.target.value)}
@@ -5649,6 +5729,15 @@ const ProductForm = () => {
                                                          >
                                                             <span className="material-symbols-outlined text-[16px]">{isSortingBundle[option.id] ? 'done_all' : 'reorder'}</span>
                                                             {isSortingBundle[option.id] ? 'Xong' : 'Sắp xếp'}
+                                                         </button>
+                                                         <button
+                                                            type="button"
+                                                            onClick={() => handleCopyBundleOption(option.id)}
+                                                            className="flex items-center gap-1.5 rounded-sm bg-primary/5 px-3 py-1.5 text-[11px] font-black uppercase text-primary transition-all hover:bg-primary/10"
+                                                            title="Copy tùy chọn"
+                                                         >
+                                                            <span className="material-symbols-outlined text-[16px]">content_copy</span>
+                                                            Copy tùy chọn
                                                          </button>
                                                          <button
                                                             type="button"

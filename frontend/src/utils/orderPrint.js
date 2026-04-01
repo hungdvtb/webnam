@@ -116,6 +116,9 @@ export const buildOrderPrintDocument = (orders = []) => {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>In đơn hàng</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100..900;1,100..900&display=swap&subset=vietnamese" rel="stylesheet" />
     <style>
         @page {
             size: A4 landscape;
@@ -130,7 +133,7 @@ export const buildOrderPrintDocument = (orders = []) => {
         body {
             margin: 0;
             padding: 0;
-            font-family: Arial, Helvetica, sans-serif;
+            font-family: 'Roboto', sans-serif;
             color: #111827;
             background: #ffffff;
             font-size: 12px;

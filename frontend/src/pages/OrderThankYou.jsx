@@ -27,6 +27,8 @@ const getItemSubtotal = (item) => {
     return subtotal;
 };
 
+const robotoFontStyle = { fontFamily: 'var(--font-roboto)' };
+
 const OrderThankYou = () => {
     const location = useLocation();
     const [searchParams] = useSearchParams();
@@ -66,7 +68,7 @@ const OrderThankYou = () => {
                         </div>
                         <h1
                             className="mt-7 text-4xl font-semibold italic leading-tight text-white md:text-5xl"
-                            style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                            style={robotoFontStyle}
                         >
                             Giao dịch Hoàn tất
                         </h1>
@@ -76,13 +78,13 @@ const OrderThankYou = () => {
                         <div className="mx-auto max-w-[700px] text-center">
                             <h2
                                 className="text-3xl italic leading-tight text-[#1f3560] md:text-[44px]"
-                                style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                                style={robotoFontStyle}
                             >
                                 Cảm ơn anh chị đã tin tưởng đặt hàng em !
                             </h2>
                             <p
                                 className="mt-3 text-[17px] leading-8 text-[#415171] md:text-[20px]"
-                                style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                                style={robotoFontStyle}
                             >
                                 {description}
                             </p>
@@ -92,14 +94,14 @@ const OrderThankYou = () => {
                             <article className="rounded-[5px] border border-[#e6dccd] bg-[#fefdf9] p-5">
                                 <h3
                                     className="flex items-center gap-2 text-[23px] font-medium text-[#223860]"
-                                    style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                                    style={robotoFontStyle}
                                 >
                                     <span className="material-symbols-outlined text-[18px] text-[#c8a356]">receipt_long</span>
                                     Chi tiết Đơn hàng
                                 </h3>
                                 <div
                                     className="mt-3 border-t border-[#ebe2d5] pt-3 text-[18px] text-[#314363]"
-                                    style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                                    style={robotoFontStyle}
                                 >
                                     <div className="flex items-center justify-between py-1.5">
                                         <span>Mã số đơn hàng:</span>
@@ -123,14 +125,14 @@ const OrderThankYou = () => {
                             <article className="rounded-[5px] border border-[#e6dccd] bg-[#fefdf9] p-5">
                                 <h3
                                     className="flex items-center gap-2 text-[23px] font-medium text-[#223860]"
-                                    style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                                    style={robotoFontStyle}
                                 >
                                     <span className="material-symbols-outlined text-[18px] text-[#c8a356]">local_shipping</span>
                                     Thông tin Giao nhận
                                 </h3>
                                 <div
                                     className="mt-3 border-t border-[#ebe2d5] pt-3 text-[18px] leading-7 text-[#314363]"
-                                    style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                                    style={robotoFontStyle}
                                 >
                                     <p className="font-semibold">{customerName}</p>
                                     {customerPhone ? <p>{customerPhone}</p> : null}
@@ -143,7 +145,7 @@ const OrderThankYou = () => {
                         <section className="mt-7">
                             <h3
                                 className="flex items-center gap-2 text-[31px] font-medium text-[#223860]"
-                                style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                                style={robotoFontStyle}
                             >
                                 <span className="material-symbols-outlined text-[18px] text-[#c8a356]">inventory_2</span>
                                 Sản phẩm đã chọn
@@ -177,13 +179,13 @@ const OrderThankYou = () => {
                                                     <div className="min-w-0">
                                                         <p
                                                             className="truncate text-[26px] leading-tight text-[#223860]"
-                                                            style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                                                            style={robotoFontStyle}
                                                         >
                                                             {item.name || 'Sản phẩm trong đơn hàng'}
                                                         </p>
                                                         <p
                                                             className="mt-0.5 text-[16px] text-[#6a7690]"
-                                                            style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                                                            style={robotoFontStyle}
                                                         >
                                                             {meta}
                                                         </p>
@@ -191,7 +193,7 @@ const OrderThankYou = () => {
                                                 </div>
                                                 <div
                                                     className="text-right text-[20px] text-[#223860]"
-                                                    style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                                                    style={robotoFontStyle}
                                                 >
                                                     <p className="font-semibold">{formatCurrency(subtotal)}</p>
                                                     <p className="text-[16px] text-[#6a7690]">Số lượng: {String(quantity).padStart(2, '0')}</p>
@@ -202,7 +204,7 @@ const OrderThankYou = () => {
                                 ) : (
                                     <div
                                         className="py-6 text-center text-[17px] text-[#6f7d97]"
-                                        style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                                        style={robotoFontStyle}
                                     >
                                         Chưa có dữ liệu sản phẩm để hiển thị.
                                     </div>
@@ -214,14 +216,14 @@ const OrderThankYou = () => {
                             <Link
                                 to={continuePath}
                                 className="min-w-[210px] rounded-[4px] border border-[#203b67] bg-[#203b67] px-6 py-2.5 text-center text-[17px] font-semibold uppercase tracking-[0.07em] text-white transition-colors hover:bg-[#2a4a7d]"
-                                style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                                style={robotoFontStyle}
                             >
                                 {continueLabel}
                             </Link>
                             <Link
                                 to={historyPath}
                                 className="min-w-[260px] rounded-[4px] border-2 border-[#c8a356] px-6 py-2.5 text-center text-[17px] font-semibold uppercase tracking-[0.07em] text-[#c8a356] transition-colors hover:bg-[#c8a356] hover:text-white"
-                                style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                                style={robotoFontStyle}
                             >
                                 {historyLabel}
                             </Link>
@@ -230,7 +232,7 @@ const OrderThankYou = () => {
 
                     <footer
                         className="border-t border-[#ede4d8] bg-[#f9f4ea] px-6 py-4 text-center text-[17px] italic text-[#7a869e]"
-                        style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                        style={robotoFontStyle}
                     >
                         Mọi thắc mắc vui lòng liên hệ: <span className="text-[#c8a356]">1900 1234</span> hoặc <span className="text-[#c8a356]">hotro@disangomviet.vn</span>
                     </footer>
@@ -238,7 +240,7 @@ const OrderThankYou = () => {
 
                 <p
                     className="mt-6 text-center text-[14px] text-[#9ca8bd]"
-                    style={{ fontFamily: "'EB Garamond', Georgia, serif" }}
+                    style={robotoFontStyle}
                 >
                     Tổng món: {totalItems}
                 </p>

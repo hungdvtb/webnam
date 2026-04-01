@@ -16,10 +16,10 @@ export default {
           "umber": "#2C2420", // Dark Umber
       },
       fontFamily: {
-          "display": ["Inter", "sans-serif"],
-          "body": ["Inter", "sans-serif"],
-          "ui": ["Inter", "sans-serif"],
-          "sans": ["Inter", "sans-serif"], 
+          "display": ["Roboto", "sans-serif"],
+          "body": ["Roboto", "sans-serif"],
+          "ui": ["Roboto", "sans-serif"],
+          "sans": ["Roboto", "sans-serif"],
       },
       borderRadius: {
           "DEFAULT": "0.125rem", // 2px - Sharp/Stone-like

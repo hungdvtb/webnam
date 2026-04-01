@@ -61,6 +61,23 @@ const getMobileStickyPinnedTop = () => getMobileStickyHeaderHeight() + MOBILE_ST
 const BUNDLE_ITEM_CHANGE_LABEL = 'Đổi kích thước';
 const BUNDLE_ITEM_CHANGE_TITLE = 'Đổi kích thước cho sản phẩm trong bộ';
 
+function DropdownChevron({ className = '', openClassName = '', isOpen = false }) {
+  return (
+    <span className={`${className} ${isOpen ? openClassName : ''}`.trim()} aria-hidden="true">
+      <svg viewBox="0 0 20 20" focusable="false">
+        <path
+          d="M5.25 7.75 10 12.5l4.75-4.75"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </span>
+  );
+}
+
 function BundleActionPopup({
   configName,
   onClose,
@@ -886,9 +903,11 @@ export default function BundleProductView({
               </span>
 
               <span className={builderStyles.mobileConfigDropdownActions}>
-                <span className={`material-symbols-outlined ${builderStyles.mobileConfigDropdownArrow}`}>
-                  {isMobileConfigMenuOpen ? 'expand_less' : 'expand_more'}
-                </span>
+                <DropdownChevron
+                  className={builderStyles.mobileConfigDropdownArrow}
+                  openClassName={builderStyles.mobileConfigDropdownArrowOpen}
+                  isOpen={isMobileConfigMenuOpen}
+                />
               </span>
             </button>
 
@@ -1017,9 +1036,11 @@ export default function BundleProductView({
             <span className={styles.configOptionsMobileTriggerValue}>{selectedConfig}</span>
           </span>
 
-          <span className={`material-symbols-outlined ${styles.configOptionsMobileTriggerArrow}`}>
-            {isMobileHeroConfigMenuOpen ? 'expand_less' : 'expand_more'}
-          </span>
+          <DropdownChevron
+            className={styles.configOptionsMobileTriggerArrow}
+            openClassName={styles.configOptionsMobileTriggerArrowOpen}
+            isOpen={isMobileHeroConfigMenuOpen}
+          />
         </button>
 
         {isMobileHeroConfigMenuOpen ? (

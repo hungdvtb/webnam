@@ -4,7 +4,7 @@
   margin: 0 auto;
   padding: 0 1.5rem 2rem;
   background-color: #f9f5f0;
-  font-family: 'Noto Serif', serif;
+  font-family: var(--font-roboto);
 }
 
 .breadcrumbs {
@@ -42,7 +42,7 @@
 .title {
   margin-bottom: 0.5rem;
   color: #1b365d;
-  font-family: 'Playfair Display', serif;
+  font-family: var(--font-roboto);
   font-size: 2.25rem;
   font-weight: 700;
   line-height: 1.2;
@@ -442,7 +442,7 @@
 }
 
 .emptyStateText {
-  font-family: 'Playfair Display', serif;
+  font-family: var(--font-roboto);
   font-size: 18px;
 }
 

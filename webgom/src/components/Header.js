@@ -433,20 +433,44 @@ export default function Header({
   const submitSearch = (value) => {
     const nextValue = String(value || "").trim();
 
+    setSearchQuery(nextValue);
+    setIsSearchHistoryOpen(false);
+
     if (!nextValue) {
+      router.push("/products");
       return;
     }
 
     saveSearchHistoryEntry(nextValue);
-    setSearchQuery(nextValue);
-    setIsSearchHistoryOpen(false);
     router.push(`/products?search=${encodeURIComponent(nextValue)}`);
   };
 
-  const handleSearch = (event) => {
-    if ((event.type === "keydown" && event.key === "Enter") || event.type === "click") {
-      submitSearch(searchQuery);
+  const handleSearchSubmit = (event) => {
+    event.preventDefault();
+    submitSearch(searchQuery);
+  };
+
+  const handleSearchInputKeyDown = (event) => {
+    if (event.nativeEvent?.isComposing || event.keyCode === 229) {
+      return;
     }
+
+    const normalizedKey = String(event.key || "").toLowerCase();
+    const isSubmitKey =
+      normalizedKey === "enter" ||
+      normalizedKey === "search" ||
+      normalizedKey === "done" ||
+      normalizedKey === "go" ||
+      normalizedKey === "next" ||
+      event.keyCode === 13 ||
+      event.which === 13;
+
+    if (!isSubmitKey) {
+      return;
+    }
+
+    event.preventDefault();
+    submitSearch(event.currentTarget?.value ?? searchQuery);
   };
 
   const handleSearchHistorySelect = (value) => {
@@ -611,21 +635,24 @@ export default function Header({
         )}
 
         <div className="actions-section">
-          <div className="search-bar" ref={searchHistoryRef}>
-            <span className="material-symbols-outlined search-icon" onClick={handleSearch}>
-              search
-            </span>
+          <form className="search-bar" ref={searchHistoryRef} role="search" onSubmit={handleSearchSubmit}>
+            <button type="submit" className="search-icon" aria-label="Tìm kiếm sản phẩm">
+              <span className="material-symbols-outlined">search</span>
+            </button>
             <input
               ref={searchInputRef}
-              type="text"
+              type="search"
               placeholder={resolvedSearchPlaceholder}
               value={searchQuery}
               onChange={handleSearchInputChange}
               onFocus={handleSearchInputFocus}
-              onKeyDown={handleSearch}
+              onKeyDown={handleSearchInputKeyDown}
               onDoubleClick={handleSearchInputDoubleClick}
               onTouchEnd={handleSearchInputTouchEnd}
               className="search-input"
+              enterKeyHint="search"
+              autoComplete="off"
+              spellCheck={false}
             />
             {isMobileViewport && isSearchHistoryOpen && filteredSearchHistory.length > 0 ? (
               <div className="search-history-panel" role="dialog" aria-label="Lịch sử tìm kiếm">
@@ -650,7 +677,7 @@ export default function Header({
                 </div>
               </div>
             ) : null}
-          </div>
+          </form>
 
           <Link
             href="/cart"
@@ -1005,9 +1032,23 @@ export default function Header({
         .search-icon {
           position: absolute;
           left: 12px;
+          top: 50%;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 20px;
+          height: 20px;
+          padding: 0;
+          border: 0;
+          background: transparent;
           color: #94a3b8;
-          font-size: 20px !important;
           cursor: pointer;
+          transform: translateY(-50%);
+        }
+
+        .search-icon .material-symbols-outlined {
+          font-size: 20px !important;
+          line-height: 1;
         }
 
         .search-input {
@@ -1402,6 +1443,9 @@ export default function Header({
 
           .search-icon {
             left: 10px;
+          }
+
+          .search-icon .material-symbols-outlined {
             font-size: 18px !important;
           }
 

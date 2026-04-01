@@ -2,10 +2,24 @@
 @import "./styles/admin.css";
 @config "../tailwind.config.js";
 
+:root {
+    --font-roboto: 'Roboto', sans-serif;
+}
+
 @layer base {
+    html,
     body {
         @apply bg-background-light dark:bg-background-dark text-umber antialiased selection:bg-primary selection:text-white;
-        font-family: 'Inter', sans-serif;
+        font-family: var(--font-roboto);
+    }
+
+    button,
+    input,
+    select,
+    textarea,
+    optgroup,
+    option {
+        font-family: inherit;
     }
 }
 

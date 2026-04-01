@@ -191,7 +191,7 @@ export default async function PolicyPage({ searchParams }) {
         .pol-page {
           background: #f6f7f8;
           min-height: 100vh;
-          font-family: 'EB Garamond', serif;
+          font-family: var(--font-roboto);
         }
 
         .pol-hero {
@@ -213,7 +213,7 @@ export default async function PolicyPage({ searchParams }) {
         }
 
         .pol-hero-title {
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: clamp(2rem, 5vw, 3.2rem);
           font-weight: 700;
           color: white;
@@ -221,7 +221,7 @@ export default async function PolicyPage({ searchParams }) {
         }
 
         .pol-hero-sub {
-          font-family: 'EB Garamond', serif;
+          font-family: var(--font-roboto);
           font-size: 1.1rem;
           color: #cbd5e1;
           font-style: italic;
@@ -277,7 +277,7 @@ export default async function PolicyPage({ searchParams }) {
           font-weight: 500;
           color: #506d95;
           transition: all 0.2s;
-          font-family: 'EB Garamond', serif;
+          font-family: var(--font-roboto);
         }
 
         .pol-nav-item:hover {
@@ -306,7 +306,7 @@ export default async function PolicyPage({ searchParams }) {
         }
 
         .pol-section-title {
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: 1.9rem;
           font-weight: 700;
           color: #0e131b;
@@ -334,7 +334,7 @@ export default async function PolicyPage({ searchParams }) {
         }
 
         .pol-article :where(h2, h3, h4) {
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           color: #1855aa;
           margin-top: 2rem;
           margin-bottom: 0.85rem;
@@ -423,7 +423,7 @@ export default async function PolicyPage({ searchParams }) {
         }
 
         .pol-fallback-title {
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: 1.35rem;
           color: #0e131b;
           margin: 0 0 0.75rem;
@@ -452,7 +452,7 @@ export default async function PolicyPage({ searchParams }) {
         }
 
         .pol-support-title {
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: 1.3rem;
           font-weight: 700;
           margin: 0 0 0.4rem;
@@ -480,7 +480,7 @@ export default async function PolicyPage({ searchParams }) {
           font-weight: 600;
           font-size: 0.9rem;
           transition: all 0.2s;
-          font-family: 'EB Garamond', serif;
+          font-family: var(--font-roboto);
           cursor: pointer;
         }
 

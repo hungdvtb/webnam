@@ -1532,12 +1532,15 @@ const buildImportPrintHtml = ({
 <head>
     <meta charset="UTF-8" />
     <title>Phiếu nhập</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100..900;1,100..900&display=swap&subset=vietnamese" rel="stylesheet" />
     <style>
         @page { size: A4 ${orientation}; margin: 12mm; }
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; }
         body {
-            font-family: Arial, "Helvetica Neue", sans-serif;
+            font-family: 'Roboto', sans-serif;
             color: #16324f;
             background: #ffffff;
         }

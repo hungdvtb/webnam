@@ -20,7 +20,7 @@
     font-weight: 700;
     color: var(--primary);
     margin-bottom: 0.25rem;
-    font-family: 'Playfair Display', serif;
+    font-family: var(--font-roboto);
 }
 
 .pageSubtitle {
@@ -88,7 +88,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-family: 'Playfair Display', serif;
+    font-family: var(--font-roboto);
     font-weight: 700;
     font-size: 0.9rem;
     flex-shrink: 0;
@@ -97,7 +97,7 @@
 .sectionTitle {
     font-size: 1.5rem;
     color: var(--primary);
-    font-family: 'Playfair Display', serif;
+    font-family: var(--font-roboto);
 }
 
 /* ============================
@@ -220,7 +220,7 @@
     padding: 0.75rem 1rem;
     border: 1px solid #94A3B8;
     border-radius: 0;
-    font-family: 'Inter', sans-serif;
+    font-family: var(--font-roboto);
     font-size: 0.95rem;
     background: white;
     color: var(--primary);
@@ -400,7 +400,7 @@
     padding: 1.25rem 2rem;
     border: none;
     border-radius: 8px;
-    font-family: 'Playfair Display', serif;
+    font-family: var(--font-roboto);
     font-weight: 700;
     font-size: 1.25rem;
     letter-spacing: 0.15em;
@@ -471,7 +471,7 @@
     margin-bottom: 1.5rem;
     padding-bottom: 1rem;
     border-bottom: 1px solid #e2e8f0;
-    font-family: 'Playfair Display', serif;
+    font-family: var(--font-roboto);
 }
 
 /* Cart Items in Summary */
@@ -566,7 +566,7 @@
     font-size: 0.95rem;
     font-weight: 700;
     color: var(--primary);
-    font-family: 'Playfair Display', serif;
+    font-family: var(--font-roboto);
     line-height: 1.3;
     padding-right: 1.5rem;
     margin-bottom: 0.2rem;
@@ -628,7 +628,7 @@
     font-weight: 800;
     color: var(--primary);
     font-size: 1rem;
-    font-family: 'EB Garamond', serif;
+    font-family: var(--font-roboto);
     margin-left: auto;
     text-align: right;
 }
@@ -849,7 +849,7 @@
     display: flex;
     justify-content: space-between;
     padding: 0.5rem 0;
-    font-family: 'Inter', sans-serif;
+    font-family: var(--font-roboto);
     font-size: 0.9rem;
     color: var(--primary);
     border-bottom: 1px solid rgba(27,54,93,0.06);
@@ -884,7 +884,7 @@
     font-size: 1.75rem;
     font-weight: 800;
     color: var(--primary);
-    font-family: 'Playfair Display', serif;
+    font-family: var(--font-roboto);
 }
 
 /* Trust Badges */
@@ -1237,7 +1237,7 @@
         font-size: 0.98rem;
         line-height: 1.28;
         color: var(--primary);
-        font-family: 'Playfair Display', serif;
+        font-family: var(--font-roboto);
         display: -webkit-box;
         -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
@@ -1299,7 +1299,7 @@
     .mobileLabel,
     .mobileLineLabel {
         font-size: 0.65rem;
-        font-family: 'Inter', sans-serif;
+        font-family: var(--font-roboto);
         text-transform: uppercase;
         letter-spacing: 0.08em;
         color: #94A3B8;
@@ -1311,7 +1311,7 @@
         line-height: 1.2;
         color: var(--accent-dark);
         font-weight: 700;
-        font-family: 'Inter', sans-serif;
+        font-family: var(--font-roboto);
     }
 
     .mobileQuantityCtrl {
@@ -1341,7 +1341,7 @@
     .mobileQuantityCtrl span {
         min-width: 2.1rem;
         text-align: center;
-        font-family: 'Inter', sans-serif;
+        font-family: var(--font-roboto);
         font-size: 0.9rem;
         font-weight: 700;
         color: var(--primary);
@@ -1360,7 +1360,7 @@
 
     .mobileLinePrice {
         font-size: 1rem;
-        font-family: 'Playfair Display', serif;
+        font-family: var(--font-roboto);
         color: var(--primary);
         font-weight: 700;
         text-align: right;
@@ -1515,7 +1515,7 @@
     .mobileSubQtyCtrl span {
         min-width: 1.75rem;
         text-align: center;
-        font-family: 'Inter', sans-serif;
+        font-family: var(--font-roboto);
         font-size: 0.82rem;
         font-weight: 700;
         color: var(--primary);
@@ -1669,7 +1669,7 @@
 
     .mobileCheckoutLabel {
         font-size: 0.66rem;
-        font-family: 'Inter', sans-serif;
+        font-family: var(--font-roboto);
         text-transform: uppercase;
         letter-spacing: 0.08em;
         font-weight: 700;
@@ -1678,7 +1678,7 @@
 
     .mobileCheckoutPrice {
         font-size: 1.12rem;
-        font-family: 'Playfair Display', serif;
+        font-family: var(--font-roboto);
         line-height: 1.1;
         color: var(--primary);
     }

@@ -105,7 +105,7 @@ const autoOpenSupplementItemOrderTypes = new Set([
     ORDER_TYPE_PARTIAL_DELIVERY,
 ]);
 const quoteCurrencyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
-const quoteCanvasFontFamily = '"Tahoma", "Arial", sans-serif';
+const quoteCanvasFontFamily = '"Roboto", sans-serif';
 let orderFormLineItemSequence = 0;
 const createOrderLineId = (prefix = 'order-item') => {
     orderFormLineItemSequence += 1;
@@ -1303,7 +1303,7 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
     const sheetTitle = orderId ? `Báo giá đơn #${orderId}` : 'Báo giá sản phẩm';
 
     return (
-        <div ref={captureRef} className="w-[1125px] bg-white text-slate-900 shadow-2xl" style={{ fontFamily: '"Times New Roman", serif' }}>
+        <div ref={captureRef} className="w-[1125px] bg-white text-slate-900 shadow-2xl" style={{ fontFamily: 'var(--font-roboto)' }}>
             <div className="border-[2px] border-[#2F1A14]">
                 <div className="grid grid-cols-[250px_minmax(0,1fr)] min-h-[210px]">
                     <div className="border-r border-[#2F1A14] flex items-center justify-center p-6">

@@ -408,7 +408,7 @@
   padding: 0.15rem 0.38rem;
   border-radius: 0.45rem;
   background: rgba(27, 54, 93, 0.06);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-roboto);
   font-size: 0.9em;
 }
 

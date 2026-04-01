@@ -222,7 +222,7 @@ export default async function BlogPostPage({ params }) {
             align-items: center;
             justify-content: center;
             gap: 1rem;
-            font-family: 'EB Garamond', serif;
+            font-family: var(--font-roboto);
             color: #1B365D;
             background: #F9F5F0;
           }
@@ -233,7 +233,7 @@ export default async function BlogPostPage({ params }) {
           }
 
           .bdt-not-found h1 {
-            font-family: 'Playfair Display', serif;
+            font-family: var(--font-roboto);
             font-size: 2rem;
             margin: 0;
           }
@@ -418,7 +418,7 @@ export default async function BlogPostPage({ params }) {
         .bdt-page {
           background: #F9F5F0;
           min-height: 100vh;
-          font-family: 'EB Garamond', serif;
+          font-family: var(--font-roboto);
           color: #1a1a1a;
           padding-bottom: 4rem;
         }
@@ -474,7 +474,7 @@ export default async function BlogPostPage({ params }) {
           background: rgba(255, 255, 255, 0.96);
           box-shadow: 0 8px 20px rgba(27, 54, 93, 0.05);
           color: #1B365D;
-          font-family: var(--font-sans, 'Segoe UI', sans-serif);
+          font-family: var(--font-roboto);
           font-size: 0.84rem;
           font-weight: 700;
           line-height: 1;
@@ -499,7 +499,7 @@ export default async function BlogPostPage({ params }) {
           color: #C5A059;
           font-size: 0.68rem;
           font-weight: 700;
-          font-family: 'EB Garamond', serif;
+          font-family: var(--font-roboto);
           letter-spacing: 0.28em;
           text-transform: uppercase;
         }
@@ -510,7 +510,7 @@ export default async function BlogPostPage({ params }) {
           max-width: 100%;
           margin: 0 auto;
           color: #1B365D;
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: clamp(1.82rem, 7vw, 4rem);
           font-style: italic;
           font-weight: 900;
@@ -532,7 +532,7 @@ export default async function BlogPostPage({ params }) {
           gap: 0.5rem;
           margin-top: 0.85rem;
           color: rgba(27, 54, 93, 0.66);
-          font-family: var(--font-sans, 'Segoe UI', sans-serif);
+          font-family: var(--font-roboto);
           font-size: 0.84rem;
           font-style: italic;
         }
@@ -595,7 +595,7 @@ export default async function BlogPostPage({ params }) {
           padding-top: 0.35rem;
           padding-right: 0.6rem;
           color: #1B365D;
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: 5rem;
           font-weight: 900;
           line-height: 4rem;
@@ -671,7 +671,7 @@ export default async function BlogPostPage({ params }) {
           min-width: 0;
           margin: 3.1rem 0 1.2rem;
           color: #1B365D;
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: 1.8rem;
           font-style: italic;
           font-weight: 700;
@@ -689,7 +689,7 @@ export default async function BlogPostPage({ params }) {
         .bdt-content h3 {
           margin: 2.4rem 0 1rem;
           color: #1B365D;
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: 1.4rem;
           font-weight: 700;
         }
@@ -1030,7 +1030,7 @@ export default async function BlogPostPage({ params }) {
         .bdt-related-title {
           margin: 0 0 1rem;
           color: #1B365D;
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: clamp(1.25rem, 3vw, 1.55rem);
           font-weight: 700;
           letter-spacing: 0.04em;
@@ -1121,7 +1121,7 @@ export default async function BlogPostPage({ params }) {
           flex-wrap: wrap;
           align-items: center;
           gap: 0.4rem 0.55rem;
-          font-family: var(--font-sans, 'Segoe UI', sans-serif);
+          font-family: var(--font-roboto);
           font-size: 0.72rem;
           line-height: 1.2;
           color: #62748a;
@@ -1142,7 +1142,7 @@ export default async function BlogPostPage({ params }) {
         .bdt-related-name {
           margin: 0;
           color: #1B365D;
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: 1.02rem;
           line-height: 1.32;
           display: -webkit-box;
@@ -1155,7 +1155,7 @@ export default async function BlogPostPage({ params }) {
         .bdt-related-date {
           margin: 0;
           color: #62748a;
-          font-family: var(--font-sans, 'Segoe UI', sans-serif);
+          font-family: var(--font-roboto);
           font-size: 0.72rem;
           white-space: nowrap;
         }
@@ -1163,7 +1163,7 @@ export default async function BlogPostPage({ params }) {
         .bdt-related-excerpt {
           margin: 0;
           color: rgba(27, 54, 93, 0.78);
-          font-family: var(--font-sans, 'Segoe UI', sans-serif);
+          font-family: var(--font-roboto);
           font-size: 0.86rem;
           line-height: 1.45;
           display: -webkit-box;
@@ -1184,7 +1184,7 @@ export default async function BlogPostPage({ params }) {
           border: 1px solid rgba(27, 54, 93, 0.1);
           background: rgba(27, 54, 93, 0.04);
           color: #1B365D;
-          font-family: var(--font-sans, 'Segoe UI', sans-serif);
+          font-family: var(--font-roboto);
           font-size: 0.78rem;
           font-weight: 700;
           letter-spacing: 0.02em;

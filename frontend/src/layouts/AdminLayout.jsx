@@ -541,8 +541,8 @@ const AdminLayout = () => {
             </aside>
             )}
 
-            <main className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background-light ${shouldShowSidebar ? 'col-start-2' : 'w-full'}`}>
-                <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'overflow-auto p-0' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
+            <main className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background-light ${shouldShowSidebar ? 'col-start-2' : 'h-full w-full'}`}>
+                <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'h-full overflow-auto p-0' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
                     {(() => {
                         const permNeeded = getCurrentPermId();
                         if (permNeeded && !canAccess(permNeeded)) {

@@ -204,7 +204,7 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
           align-items: flex-start;
           justify-content: center;
           padding: 3rem 1rem 4rem;
-          font-family: 'EB Garamond', serif;
+          font-family: var(--font-roboto);
         }
 
         /* ── Card ── */
@@ -258,7 +258,7 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
         .ty-check-icon .material-symbols-outlined { font-size: 2.4rem; }
         .ty-banner-title {
           color: #fff;
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: clamp(1.6rem, 4vw, 2.4rem);
           font-weight: 700;
           font-style: italic;
@@ -274,7 +274,7 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
         /* Hero text */
         .ty-hero-text { text-align: center; margin-bottom: 2.5rem; }
         .ty-heading {
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: clamp(1.3rem, 3vw, 1.8rem);
           color: #1B365D;
           margin: 0 0 0.75rem;
@@ -301,7 +301,7 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
           overflow: hidden;
         }
         .ty-info-title {
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: 1rem; font-weight: 700; color: #1B365D;
           display: flex; align-items: center; gap: 0.5rem;
           padding: 0.85rem 1.25rem;
@@ -332,7 +332,7 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
         /* Products */
         .ty-products { margin-bottom: 2.5rem; }
         .ty-section-title {
-          font-family: 'Playfair Display', serif;
+          font-family: var(--font-roboto);
           font-size: 1.1rem; font-weight: 700; color: #1B365D;
           display: flex; align-items: center; gap: 0.5rem;
           margin: 0 0 1rem;
@@ -361,7 +361,7 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
         .ty-product-img .material-symbols-outlined { font-size: 1.6rem; color: rgba(197,160,89,0.5); }
         .ty-product-info { flex: 1; min-width: 0; }
         .ty-product-name {
-          font-family: 'Playfair Display', serif; font-size: 0.98rem;
+          font-family: var(--font-roboto); font-size: 0.98rem;
           color: #1B365D; margin: 0 0 0.25rem; font-weight: 600;
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
@@ -380,7 +380,7 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
         }
         .ty-bank-title {
           display: flex; align-items: center; gap: 0.5rem;
-          font-family: 'Playfair Display', serif; font-size: 1.05rem;
+          font-family: var(--font-roboto); font-size: 1.05rem;
           font-weight: 700; color: #1B365D; margin: 0 0 1.25rem;
         }
         .ty-bank-title .material-symbols-outlined { color: #C5A059; }
@@ -403,7 +403,7 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
         }
         .ty-btn {
           padding: 0.85rem 2.5rem;
-          font-family: 'Playfair Display', serif; font-weight: 700;
+          font-family: var(--font-roboto); font-weight: 700;
           font-size: 0.85rem; letter-spacing: 0.12em; text-transform: uppercase;
           cursor: pointer; transition: all 0.2s; text-align: center; border-radius: 2px;
           min-width: 200px;

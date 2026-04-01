@@ -1537,7 +1537,7 @@ const ProductList = () => {
             <style>{`
                 @keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
                 .animate-refresh-spin { animation: refresh-spin 0.8s linear infinite; }
-                .admin-page-container { font-family: 'Inter', sans-serif; display: flex; flex-direction: column; height: 100%; background-color: #F8FAFC; }
+                .admin-page-container { font-family: 'Roboto', sans-serif; display: flex; flex-direction: column; height: 100%; background-color: #F8FAFC; }
                 .admin-header-title { font-size: 15px !important; font-weight: 800 !important; color: #1B365D !important; text-transform: uppercase !important; letter-spacing: 0.1em !important; }
                 .admin-text-13 { font-size: 13px !important; color: #0F172A !important; }
                 .admin-table-header { font-size: 11px !important; font-weight: 900 !important; color: #1B365D !important; text-transform: uppercase !important; letter-spacing: 0.15em !important; background-color: #F0F4F8 !important; }

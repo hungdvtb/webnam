@@ -53,6 +53,32 @@ function formatDate(dateStr) {
   });
 }
 
+function getPostDateValue(value) {
+  const timestamp = Date.parse(String(value || ''));
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getEffectivePostTimestamp(post) {
+  const publishedAt = getPostDateValue(post?.published_at);
+  return publishedAt || getPostDateValue(post?.created_at);
+}
+
+function sortPostsNewestFirst(items = []) {
+  return [...items].sort((left, right) => {
+    const effectiveDiff = getEffectivePostTimestamp(right) - getEffectivePostTimestamp(left);
+    if (effectiveDiff !== 0) return effectiveDiff;
+
+    const createdDiff = getPostDateValue(right?.created_at) - getPostDateValue(left?.created_at);
+    if (createdDiff !== 0) return createdDiff;
+
+    if (getEffectivePostTimestamp(left) > 0 || getEffectivePostTimestamp(right) > 0) {
+      return Number(right?.id || 0) - Number(left?.id || 0);
+    }
+
+    return 0;
+  });
+}
+
 function getPostImage(post) {
   return (
     resolveMediaUrl(post?.image)
@@ -152,7 +178,7 @@ export default async function BlogPage({ searchParams }) {
       ...(activeCategorySlug ? { category_slug: activeCategorySlug } : {}),
     });
 
-    posts = extractPosts(response);
+    posts = sortPostsNewestFirst(extractPosts(response));
     categories = extractCategories(response);
     pagination = extractPagination(response, currentPage);
     apiLoaded = response?.__ok !== false;
@@ -164,7 +190,7 @@ export default async function BlogPage({ searchParams }) {
   }
 
   if (!apiLoaded && !activeCategorySlug && currentPage === 1) {
-    posts = FALLBACK_POSTS;
+    posts = sortPostsNewestFirst(FALLBACK_POSTS);
   }
 
   if (!categories.length) {
@@ -243,8 +269,8 @@ export default async function BlogPage({ searchParams }) {
                   <div className="blog-post-body">
                     <div className="blog-post-meta">
                       <span className="blog-post-category">{categoryName}</span>
-                      {post.created_at ? (
-                        <time className="blog-post-date">{formatDate(post.created_at)}</time>
+                      {post.published_at || post.created_at ? (
+                        <time className="blog-post-date">{formatDate(post.published_at || post.created_at)}</time>
                       ) : null}
                     </div>
 

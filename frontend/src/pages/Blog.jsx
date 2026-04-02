@@ -34,6 +34,30 @@ const formatDate = (value) => {
     });
 };
 
+const getPostDateValue = (value) => {
+    const timestamp = Date.parse(String(value || ''));
+    return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const getEffectivePostTimestamp = (post) => {
+    const publishedAt = getPostDateValue(post?.published_at);
+    return publishedAt || getPostDateValue(post?.created_at);
+};
+
+const sortPostsNewestFirst = (items = []) => [...items].sort((left, right) => {
+    const effectiveDiff = getEffectivePostTimestamp(right) - getEffectivePostTimestamp(left);
+    if (effectiveDiff !== 0) return effectiveDiff;
+
+    const createdDiff = getPostDateValue(right?.created_at) - getPostDateValue(left?.created_at);
+    if (createdDiff !== 0) return createdDiff;
+
+    if (getEffectivePostTimestamp(left) > 0 || getEffectivePostTimestamp(right) > 0) {
+        return Number(right?.id || 0) - Number(left?.id || 0);
+    }
+
+    return 0;
+});
+
 const resolveCategoryLabel = (post, categoryMap) => (
     post?.category?.name
     || categoryMap.get(Number(post?.blog_category_id))
@@ -210,7 +234,7 @@ const Blog = () => {
 
             try {
                 const response = await blogApi.getAll({ per_page: 200 });
-                setPosts(Array.isArray(response.data?.data) ? response.data.data : []);
+                setPosts(sortPostsNewestFirst(Array.isArray(response.data?.data) ? response.data.data : []));
                 setCategories(Array.isArray(response.data?.categories) ? response.data.categories : []);
             } catch (error) {
                 console.error('Error fetching blog posts', error);

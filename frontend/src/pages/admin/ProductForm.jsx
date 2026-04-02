@@ -1139,6 +1139,33 @@ const resolveAdditionalInfoPreviewText = (item) => {
     return truncateAdditionalInfoDisplayText(item?.post_title ?? '');
 };
 
+const getBlogPostDateValue = (value) => {
+    const timestamp = Date.parse(String(value || ''));
+    return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const getBlogPostEffectiveTimestamp = (post) => {
+    const publishedAt = getBlogPostDateValue(post?.published_at);
+    return publishedAt || getBlogPostDateValue(post?.created_at);
+};
+
+const sortBlogPostsNewestFirst = (items = []) => [...items].sort((left, right) => {
+    const systemDiff = Number(Boolean(left?.is_system)) - Number(Boolean(right?.is_system));
+    if (systemDiff !== 0) return systemDiff;
+
+    const effectiveDiff = getBlogPostEffectiveTimestamp(right) - getBlogPostEffectiveTimestamp(left);
+    if (effectiveDiff !== 0) return effectiveDiff;
+
+    const createdDiff = getBlogPostDateValue(right?.created_at) - getBlogPostDateValue(left?.created_at);
+    if (createdDiff !== 0) return createdDiff;
+
+    if (getBlogPostEffectiveTimestamp(left) > 0 || getBlogPostEffectiveTimestamp(right) > 0) {
+        return Number(right?.id || 0) - Number(left?.id || 0);
+    }
+
+    return 0;
+});
+
 const mergeUniqueBlogPosts = (...groups) => {
     const merged = [];
     const seenIds = new Set();
@@ -1152,7 +1179,7 @@ const mergeUniqueBlogPosts = (...groups) => {
         merged.push(post);
     });
 
-    return merged;
+    return sortBlogPostsNewestFirst(merged);
 };
 
 const SKU_MAX_LENGTH = 120;
@@ -2566,7 +2593,7 @@ const ProductForm = () => {
     const fetchBlogPosts = async () => {
         try {
             const response = await blogApi.getAll({ per_page: 200, compact: 1, view: 'picker' });
-            setAllBlogPosts(Array.isArray(response.data.data) ? response.data.data : []);
+            setAllBlogPosts(sortBlogPostsNewestFirst(Array.isArray(response.data.data) ? response.data.data : []));
         } catch (error) {
             console.error("Error fetching blog posts", error);
         }

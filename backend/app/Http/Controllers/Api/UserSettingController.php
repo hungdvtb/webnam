@@ -4,8 +4,11 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\UserSetting;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
+use Throwable;
 
 class UserSettingController extends Controller
 {
@@ -14,7 +17,19 @@ class UserSettingController extends Controller
 
     public function show(Request $request): JsonResponse
     {
-        $userSetting = $this->getOrCreateUserSetting($request);
+        if (!$this->hasUserSettingsTable()) {
+            return response()->json($this->fallbackPayload());
+        }
+
+        try {
+            $userSetting = $this->getOrCreateUserSetting($request);
+        } catch (QueryException $exception) {
+            if ($this->isMissingUserSettingsTableException($exception)) {
+                return response()->json($this->fallbackPayload());
+            }
+
+            throw $exception;
+        }
 
         return response()->json($this->present($userSetting));
     }
@@ -26,7 +41,20 @@ class UserSettingController extends Controller
             'sessionStorage' => 'nullable|array',
         ]);
 
-        $userSetting = $this->getOrCreateUserSetting($request);
+        if (!$this->hasUserSettingsTable()) {
+            return response()->json($this->fallbackPayload($validated));
+        }
+
+        try {
+            $userSetting = $this->getOrCreateUserSetting($request);
+        } catch (QueryException $exception) {
+            if ($this->isMissingUserSettingsTableException($exception)) {
+                return response()->json($this->fallbackPayload($validated));
+            }
+
+            throw $exception;
+        }
+
         $settings = $this->normalizeSettingsPayload($userSetting->settings);
 
         foreach (self::STORAGE_AREAS as $storageArea) {
@@ -143,5 +171,37 @@ class UserSettingController extends Controller
             'sessionStorage' => $settings['sessionStorage'],
             'updated_at' => $userSetting->updated_at?->toISOString(),
         ];
+    }
+
+    protected function fallbackPayload(array $settings = []): array
+    {
+        $normalizedSettings = $this->normalizeSettingsPayload($settings);
+
+        return [
+            'localStorage' => $normalizedSettings['localStorage'],
+            'sessionStorage' => $normalizedSettings['sessionStorage'],
+            'updated_at' => null,
+        ];
+    }
+
+    protected function hasUserSettingsTable(): bool
+    {
+        try {
+            return Schema::hasTable('user_settings');
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    protected function isMissingUserSettingsTableException(QueryException $exception): bool
+    {
+        $message = strtolower($exception->getMessage());
+
+        return str_contains($message, 'user_settings')
+            && (
+                str_contains($message, 'does not exist')
+                || str_contains($message, 'undefined table')
+                || str_contains($message, 'base table or view not found')
+            );
     }
 }

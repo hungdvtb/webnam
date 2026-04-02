@@ -14,6 +14,15 @@ const HeroFallback = () => (
     </div>
 );
 
+const formatPostDate = (value) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    return date.toLocaleDateString('vi-VN');
+};
+
 const PostDetail = () => {
     const { slug } = useParams();
     const [post, setPost] = useState(null);
@@ -81,7 +90,7 @@ const PostDetail = () => {
                     <div className="mx-auto max-w-4xl space-y-4 md:space-y-6">
                         <div className="m-kicker flex items-center gap-4 font-ui font-bold uppercase tracking-[0.5em] text-gold">
                             <div className="h-px w-8 bg-gold"></div>
-                            Cẩm Nang Bát Tràng | {new Date(post.created_at).toLocaleDateString('vi-VN')}
+                            Cẩm Nang Bát Tràng | {formatPostDate(post.published_at || post.created_at) || 'Đang cập nhật'}
                         </div>
                         <h1 className="m-display font-display text-4xl font-extrabold uppercase italic leading-tight text-white drop-shadow-premium lg:text-7xl">
                             {post.title}

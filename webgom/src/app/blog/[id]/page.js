@@ -39,6 +39,32 @@ function formatDate(dateStr, format = 'long') {
   });
 }
 
+function getPostDateValue(value) {
+  const timestamp = Date.parse(String(value || ''));
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getEffectivePostTimestamp(post) {
+  const publishedAt = getPostDateValue(post?.published_at);
+  return publishedAt || getPostDateValue(post?.created_at);
+}
+
+function sortPostsNewestFirst(items = []) {
+  return [...items].sort((left, right) => {
+    const effectiveDiff = getEffectivePostTimestamp(right) - getEffectivePostTimestamp(left);
+    if (effectiveDiff !== 0) return effectiveDiff;
+
+    const createdDiff = getPostDateValue(right?.created_at) - getPostDateValue(left?.created_at);
+    if (createdDiff !== 0) return createdDiff;
+
+    if (getEffectivePostTimestamp(left) > 0 || getEffectivePostTimestamp(right) > 0) {
+      return Number(right?.id || 0) - Number(left?.id || 0);
+    }
+
+    return 0;
+  });
+}
+
 function getPostImage(post) {
   return (
     resolveMediaUrl(post?.image)
@@ -198,7 +224,7 @@ export default async function BlogPostPage({ params }) {
         .filter((category) => category.name && category.slug)
         .filter((category, index, list) => list.findIndex((item) => item.slug === category.slug) === index);
 
-      related = allPosts
+      related = sortPostsNewestFirst(allPosts)
         .filter((item) => String(item.id) !== String(post.id) && String(item.slug || '') !== String(post.slug || slugOrId))
         .slice(0, 3);
     }

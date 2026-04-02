@@ -57,6 +57,33 @@ const formatDate = (value) => {
     return date.toLocaleDateString('vi-VN');
 };
 
+const getDateValue = (value) => {
+    const timestamp = Date.parse(String(value || ''));
+    return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const getEffectivePostTimestamp = (post) => {
+    const publishedAt = getDateValue(post?.published_at);
+    return publishedAt || getDateValue(post?.created_at);
+};
+
+const sortPostsNewestFirst = (items = []) => [...items].sort((left, right) => {
+    const systemDiff = Number(Boolean(left?.is_system)) - Number(Boolean(right?.is_system));
+    if (systemDiff !== 0) return systemDiff;
+
+    const effectiveDiff = getEffectivePostTimestamp(right) - getEffectivePostTimestamp(left);
+    if (effectiveDiff !== 0) return effectiveDiff;
+
+    const createdDiff = getDateValue(right?.created_at) - getDateValue(left?.created_at);
+    if (createdDiff !== 0) return createdDiff;
+
+    if (getEffectivePostTimestamp(left) > 0 || getEffectivePostTimestamp(right) > 0) {
+        return Number(right?.id || 0) - Number(left?.id || 0);
+    }
+
+    return 0;
+});
+
 const extractFilenameFromDisposition = (disposition, fallback) => {
     const raw = String(disposition || '');
     const utf8Match = raw.match(/filename\*=UTF-8''([^;]+)/i);
@@ -98,6 +125,21 @@ const readBlobErrorPayload = async (blob) => {
     } catch {
         return { error: '', errors: [] };
     }
+};
+
+const flattenErrorMessages = (payloadErrors) => {
+    if (Array.isArray(payloadErrors)) {
+        return payloadErrors.filter(Boolean).map((item) => String(item));
+    }
+
+    if (!payloadErrors || typeof payloadErrors !== 'object') {
+        return [];
+    }
+
+    return Object.values(payloadErrors)
+        .flatMap((value) => (Array.isArray(value) ? value : [value]))
+        .filter(Boolean)
+        .map((item) => String(item));
 };
 
 const BlogList = () => {
@@ -180,17 +222,7 @@ const BlogList = () => {
         return count;
     }, [filters]);
 
-    const reorderLocked = useMemo(
-        () => search.trim() !== ''
-            || isTrashView
-            || filters.category_id !== 'all'
-            || filters.uncategorized_only !== 'all'
-            || filters.seo_keyword !== 'all'
-            || filters.is_published !== 'all'
-            || filters.is_starred !== 'all'
-            || filters.is_system !== 'all',
-        [search, isTrashView, filters]
-    );
+    const reorderLocked = true;
 
     const fetchPosts = useCallback(async () => {
         setLoading(true);
@@ -213,7 +245,7 @@ const BlogList = () => {
             const payloadKeywords = Array.isArray(response.data?.seo_keywords) ? response.data.seo_keywords : [];
             const payloadCategories = Array.isArray(response.data?.categories) ? response.data.categories : [];
 
-            setPosts(list);
+            setPosts(sortPostsNewestFirst(list));
             const normalizedManagedKeywords = normalizeKeywords(payloadKeywords);
             setManagedKeywords(normalizedManagedKeywords);
             setKeywords(normalizeKeywords([
@@ -1054,7 +1086,9 @@ const BlogList = () => {
             });
         } catch (error) {
             const payload = error?.response?.data || {};
-            const errors = Array.isArray(payload?.errors) ? payload.errors : [];
+            const errors = !error?.response
+                ? ['KhÃ´ng thá»ƒ gá»­i file lÃªn API. Kháº£ nÄƒng cao server Ä‘ang cháº·n upload lá»›n hoáº·c chÆ°a tráº£ CORS cho request upload.']
+                : flattenErrorMessages(payload?.errors);
             const networkBlockedMessage = !error?.response
                 ? 'Không thể gửi file lên API. Khả năng cao server đang chặn upload lớn hoặc chưa trả CORS cho request upload.'
                 : null;
@@ -1365,7 +1399,7 @@ const BlogList = () => {
                 )}
 
                 {reorderLocked && (
-                    <div className="text-[10px] text-stone/55 italic">Kéo thả sắp xếp bài viết chỉ hoạt động khi không tìm kiếm/bộ lọc.</div>
+                    <div className="text-[10px] text-stone/55 italic">Danh sách bài viết đang tự động sắp theo ngày xuất bản hoặc ngày tạo mới nhất, nên đã tắt kéo thả thủ công.</div>
                 )}
             </div>
 
@@ -1374,7 +1408,7 @@ const BlogList = () => {
                     <thead className="sticky top-0 z-20 bg-[#fcf8f1] border-b border-gold/20">
                         <tr>
                             <th className="w-[44px] py-2"><input type="checkbox" checked={allChecked} onChange={toggleAll} className="h-4 w-4 accent-primary cursor-pointer" /></th>
-                            <th className="w-[52px] text-[10px] uppercase tracking-widest text-primary">Kéo</th>
+                            <th className="w-[52px] text-[10px] uppercase tracking-widest text-primary">Thứ tự</th>
                             <th className="w-[74px] text-[10px] uppercase tracking-widest text-primary">Ảnh</th>
                             <th className="px-2 text-left text-[10px] uppercase tracking-widest text-primary">Bài viết</th>
                             <th className="w-[250px] text-left text-[10px] uppercase tracking-widest text-primary">Danh mục</th>
@@ -1403,8 +1437,8 @@ const BlogList = () => {
                                     />
                                 </td>
                                 <td className="text-center">
-                                    <button type="button" draggable={!reorderLocked && !reorderingPosts} onDragStart={(e) => onPostDragStart(e, post.id)} onDragEnd={onPostDragEnd} className={`h-7 w-7 inline-flex items-center justify-center rounded-sm border ${reorderLocked ? 'border-stone/15 text-stone/25' : 'border-gold/20 text-stone/50 hover:text-primary'}`} title={reorderLocked ? 'Tắt bộ lọc để kéo thả' : 'Kéo thả sắp xếp'}>
-                                        <span className="material-symbols-outlined text-[16px]">drag_indicator</span>
+                                    <button type="button" draggable={!reorderLocked && !reorderingPosts} onDragStart={(e) => onPostDragStart(e, post.id)} onDragEnd={onPostDragEnd} className={`h-7 w-7 inline-flex items-center justify-center rounded-sm border ${reorderLocked ? 'border-stone/15 text-stone/25' : 'border-gold/20 text-stone/50 hover:text-primary'}`} title={reorderLocked ? 'Danh sách đang tự động sắp theo bài mới nhất' : 'Kéo thả sắp xếp'}>
+                                        <span className="material-symbols-outlined text-[16px]">{reorderLocked ? 'schedule' : 'drag_indicator'}</span>
                                     </button>
                                 </td>
                                 <td>

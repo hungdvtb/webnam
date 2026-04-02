@@ -22,6 +22,7 @@ class LeadController extends Controller
 {
     private const NOTIFICATION_SETTINGS_KEY_PREFIX = 'lead_notification_settings_user_';
     private const NOTIFICATION_ITEMS_LIMIT = 12;
+    private const DRAFT_STATUS_CODE = 'don-nhap';
     protected array $draftStatusCache = [];
 
     public function __construct(
@@ -189,10 +190,165 @@ class LeadController extends Controller
 
         if (!array_key_exists($accountId, $this->draftStatusCache)) {
             $this->draftStatusCache[$accountId] = LeadStatus::ensureDefaultsForAccount($accountId)
-                ->firstWhere('code', 'don-nhap');
+                ->firstWhere('code', self::DRAFT_STATUS_CODE);
         }
 
         return $this->draftStatusCache[$accountId];
+    }
+
+    protected function draftComparableAliases(): array
+    {
+        return [
+            'don-nhap',
+            'draft',
+            'checkout-draft',
+            'lead-draft',
+            'draft-lead',
+        ];
+    }
+
+    protected function draftSqlAliases(): array
+    {
+        return [
+            'don-nhap',
+            'don_nhap',
+            'don nhap',
+            'donnhap',
+            'draft',
+            'checkout-draft',
+            'checkout_draft',
+            'checkout draft',
+            'checkoutdraft',
+            'lead-draft',
+            'lead_draft',
+            'lead draft',
+            'leaddraft',
+            'draft-lead',
+            'draft_lead',
+            'draft lead',
+            'draftlead',
+            'đơn nháp',
+        ];
+    }
+
+    protected function normalizeDraftComparable(?string $value): string
+    {
+        return (string) Str::of((string) $value)
+            ->ascii()
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', '-')
+            ->trim('-');
+    }
+
+    protected function matchesDraftAlias(?string $value): bool
+    {
+        $normalized = $this->normalizeDraftComparable($value);
+
+        return $normalized !== '' && in_array($normalized, $this->draftComparableAliases(), true);
+    }
+
+    protected function leadUsesLegacyDraftToken(Lead $lead): bool
+    {
+        return trim((string) ($lead->draft_token ?? '')) !== ''
+            && !$lead->converted_at
+            && !$lead->order_id;
+    }
+
+    protected function applyLowerInCondition(Builder $query, string $column, array $values, bool $or = false): void
+    {
+        if (empty($values)) {
+            return;
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($values), '?'));
+        $sql = "LOWER(COALESCE({$column}, '')) IN ({$placeholders})";
+
+        if ($or) {
+            $query->orWhereRaw($sql, $values);
+            return;
+        }
+
+        $query->whereRaw($sql, $values);
+    }
+
+    protected function applyLowerNotInCondition(Builder $query, string $column, array $values, bool $or = false): void
+    {
+        if (empty($values)) {
+            return;
+        }
+
+        $placeholders = implode(', ', array_fill(0, count($values), '?'));
+        $sql = "LOWER(COALESCE({$column}, '')) NOT IN ({$placeholders})";
+
+        if ($or) {
+            $query->orWhereRaw($sql, $values);
+            return;
+        }
+
+        $query->whereRaw($sql, $values);
+    }
+
+    protected function applyDraftLeadCondition(Builder $query, ?LeadStatus $draftStatus = null): void
+    {
+        $draftStatusId = (int) ($draftStatus?->id ?? 0);
+        $draftAliases = $this->draftSqlAliases();
+
+        $query->where(function (Builder $builder) use ($draftStatusId, $draftAliases) {
+            $builder->where('is_draft', true);
+
+            if ($draftStatusId > 0) {
+                $builder->orWhere('lead_status_id', $draftStatusId);
+            }
+
+            $this->applyLowerInCondition($builder, 'status', $draftAliases, true);
+
+            $builder->orWhereHas('statusConfig', function (Builder $statusQuery) use ($draftAliases) {
+                $this->applyLowerInCondition($statusQuery, 'code', $draftAliases);
+                $this->applyLowerInCondition($statusQuery, 'name', $draftAliases, true);
+            });
+
+            $builder->orWhere(function (Builder $legacyDraftBuilder) {
+                $legacyDraftBuilder->whereNotNull('draft_token')
+                    ->whereNull('converted_at')
+                    ->whereNull('order_id');
+            });
+        });
+    }
+
+    protected function applyNonDraftLeadCondition(Builder $query, ?LeadStatus $draftStatus = null): void
+    {
+        $draftStatusId = (int) ($draftStatus?->id ?? 0);
+        $draftAliases = $this->draftSqlAliases();
+
+        $query->where(function (Builder $builder) use ($draftStatusId, $draftAliases) {
+            $builder->where(function (Builder $draftFlagBuilder) {
+                $draftFlagBuilder->whereNull('is_draft')
+                    ->orWhere('is_draft', false);
+            });
+
+            if ($draftStatusId > 0) {
+                $builder->where(function (Builder $draftStatusBuilder) use ($draftStatusId) {
+                    $draftStatusBuilder->whereNull('lead_status_id')
+                        ->orWhere('lead_status_id', '!=', $draftStatusId);
+                });
+            }
+
+            $builder->where(function (Builder $statusBuilder) use ($draftAliases) {
+                $statusBuilder->whereNull('status');
+                $this->applyLowerNotInCondition($statusBuilder, 'status', $draftAliases, true);
+            });
+
+            $builder->whereDoesntHave('statusConfig', function (Builder $statusQuery) use ($draftAliases) {
+                $this->applyLowerInCondition($statusQuery, 'code', $draftAliases);
+                $this->applyLowerInCondition($statusQuery, 'name', $draftAliases, true);
+            });
+
+            $builder->where(function (Builder $legacyDraftBuilder) {
+                $legacyDraftBuilder->whereNull('draft_token')
+                    ->orWhereNotNull('converted_at')
+                    ->orWhereNotNull('order_id');
+            });
+        });
     }
 
     protected function leadUsesDraftStatus(Lead $lead, ?LeadStatus $draftStatus = null): bool
@@ -207,8 +363,15 @@ class LeadController extends Controller
         }
 
         $statusCode = trim((string) ($lead->statusConfig?->code ?? $lead->status ?? ''));
+        if ($this->matchesDraftAlias($statusCode)) {
+            return true;
+        }
 
-        return $statusCode === 'don-nhap';
+        if ($this->matchesDraftAlias($lead->statusConfig?->name)) {
+            return true;
+        }
+
+        return $this->leadUsesLegacyDraftToken($lead);
     }
 
     protected function resolvedLeadStatus(Lead $lead, ?LeadStatus $draftStatus = null): ?LeadStatus
@@ -230,22 +393,13 @@ class LeadController extends Controller
             return (int) $status === (int) $draftStatus->id;
         }
 
-        return trim((string) $status) === 'don-nhap';
+        return $this->matchesDraftAlias((string) $status);
     }
 
     protected function applyNormalizedStatusFilter(Builder $query, mixed $status, ?LeadStatus $draftStatus = null): void
     {
-        $draftStatusId = (int) ($draftStatus?->id ?? 0);
-
         if ($this->isDraftStatusSelection($status, $draftStatus)) {
-            $query->where(function (Builder $builder) use ($draftStatusId) {
-                $builder->where('is_draft', true)
-                    ->orWhere('status', 'don-nhap');
-
-                if ($draftStatusId > 0) {
-                    $builder->orWhere('lead_status_id', $draftStatusId);
-                }
-            });
+            $this->applyDraftLeadCondition($query, $draftStatus);
 
             return;
         }
@@ -260,22 +414,7 @@ class LeadController extends Controller
                 ->orWhereHas('statusConfig', fn (Builder $statusQuery) => $statusQuery->where('code', $status));
         });
 
-        $query->where(function (Builder $builder) use ($draftStatusId) {
-            $builder->where(function (Builder $draftBuilder) {
-                $draftBuilder->whereNull('is_draft')
-                    ->orWhere('is_draft', false);
-            })->where(function (Builder $statusBuilder) use ($draftStatusId) {
-                $statusBuilder->whereNull('status')
-                    ->orWhere('status', '!=', 'don-nhap');
-
-                if ($draftStatusId > 0) {
-                    $statusBuilder->where(function (Builder $draftStatusBuilder) use ($draftStatusId) {
-                        $draftStatusBuilder->whereNull('lead_status_id')
-                            ->orWhere('lead_status_id', '!=', $draftStatusId);
-                    });
-                }
-            });
-        });
+        $this->applyNonDraftLeadCondition($query, $draftStatus);
     }
 
     protected function repeatMetaFor(array $repeatMetaMap, string $recordType, int $id): array
@@ -509,8 +648,7 @@ class LeadController extends Controller
     {
         $accountId = $this->accountId($request);
         $statuses = LeadStatus::ensureDefaultsForAccount($accountId);
-        $draftStatus = $statuses->firstWhere('code', 'don-nhap');
-        $draftStatusId = (int) ($draftStatus?->id ?? 0);
+        $draftStatus = $statuses->firstWhere('code', self::DRAFT_STATUS_CODE);
         $isTrashView = $request->boolean('trashed');
 
         $query = $this->scopedLeadQuery($request, $isTrashView)
@@ -531,18 +669,15 @@ class LeadController extends Controller
         $leadItems = collect($paginator->items());
         $repeatMetaMap = $this->repeatCustomerPhoneService->buildLeadMeta($leadItems, $accountId);
 
-        $summaryQuery = $this->scopedLeadQuery($request, $isTrashView)
+        $summaryBaseQuery = $this->scopedLeadQuery($request, $isTrashView)
             ->when($isTrashView, fn (Builder $builder) => $builder->onlyTrashed());
-        $this->applyLeadFilters($summaryQuery, $request, false);
-        $summaryRows = $draftStatusId > 0
-            ? $summaryQuery
-                ->selectRaw("CASE WHEN is_draft = true OR status = 'don-nhap' OR lead_status_id = {$draftStatusId} THEN {$draftStatusId} ELSE lead_status_id END as normalized_lead_status_id, count(*) as total")
-                ->groupBy('normalized_lead_status_id')
-                ->pluck('total', 'normalized_lead_status_id')
-            : $summaryQuery
-                ->selectRaw('lead_status_id, count(*) as total')
-                ->groupBy('lead_status_id')
-                ->pluck('total', 'lead_status_id');
+        $this->applyLeadFilters($summaryBaseQuery, $request, false);
+        $statusCounts = $statuses->mapWithKeys(function (LeadStatus $status) use ($summaryBaseQuery, $draftStatus) {
+            $statusQuery = clone $summaryBaseQuery;
+            $this->applyNormalizedStatusFilter($statusQuery, $status->id, $draftStatus);
+
+            return [$status->id => $statusQuery->count()];
+        });
 
         $tags = $this->scopedLeadQuery($request, $isTrashView)
             ->when($isTrashView, fn (Builder $builder) => $builder->onlyTrashed())
@@ -568,7 +703,7 @@ class LeadController extends Controller
                 'sort_order' => $status->sort_order,
                 'is_default' => (bool) $status->is_default,
                 'blocks_order_create' => (bool) $status->blocks_order_create,
-                'count' => (int) ($summaryRows[$status->id] ?? 0),
+                'count' => (int) ($statusCounts[$status->id] ?? 0),
             ])->values(),
             'tags' => $tags,
         ]);

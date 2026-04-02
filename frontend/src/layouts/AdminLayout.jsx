@@ -2,6 +2,7 @@
 import { Link, Outlet, useNavigate, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { INVENTORY_NAV_ITEMS, buildInventoryPath } from '../config/adminInventoryNavigation';
+import useUserSettingsBootstrap from '../hooks/useUserSettingsBootstrap';
 
 
 const SidebarText = ({ isExpanded, className = '', children }) => (
@@ -18,6 +19,7 @@ const SidebarSectionLabel = ({ isExpanded, children }) => (
 
 const AdminLayout = () => {
     const { user, logout, loading } = useAuth();
+    const { ready: settingsReady } = useUserSettingsBootstrap(user);
     const navigate = useNavigate();
     const location = useLocation();
     const isSettingsRoute =
@@ -99,6 +101,17 @@ const AdminLayout = () => {
 
     if (!user) {
         return <Navigate to="/old/login" replace />;
+    }
+
+    if (!settingsReady) {
+        return (
+            <div className="flex items-center justify-center h-screen bg-background-light">
+                <div className="text-center space-y-3">
+                    <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary mx-auto"></div>
+                    <div className="text-primary/60 text-sm font-sans font-semibold">Dang tai cai dat nguoi dung...</div>
+                </div>
+            </div>
+        );
     }
 
     const canAccess = (permId) => {

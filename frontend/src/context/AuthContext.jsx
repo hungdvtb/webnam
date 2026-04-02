@@ -1,5 +1,10 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import { authApi } from '../services/api';
+import {
+    clearSyncedUserSettingsCache,
+    flushUserSettingsSync,
+    stopUserSettingsSync,
+} from '../services/userSettingsSync';
 
 const AuthContext = createContext();
 
@@ -18,6 +23,8 @@ export const AuthProvider = ({ children }) => {
                     console.error("Auth check failed", error);
                     localStorage.removeItem('token');
                     localStorage.removeItem('user');
+                    stopUserSettingsSync();
+                    clearSyncedUserSettingsCache();
                 }
             }
             setLoading(false);
@@ -27,12 +34,15 @@ export const AuthProvider = ({ children }) => {
 
     const logout = async () => {
         try {
+            await flushUserSettingsSync();
             await authApi.logout();
         } catch (error) {
             console.error("Logout error", error);
         } finally {
+            stopUserSettingsSync();
             localStorage.removeItem('token');
             localStorage.removeItem('user');
+            clearSyncedUserSettingsCache();
             setUser(null);
         }
     };

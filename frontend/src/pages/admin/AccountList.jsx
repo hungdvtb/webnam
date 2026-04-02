@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { accountApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
+import { flushUserSettingsSync } from '../../services/userSettingsSync';
 
 const AccountList = () => {
     const { user } = useAuth();
@@ -117,8 +118,9 @@ const AccountList = () => {
         }
     };
 
-    const handleAccess = (id) => {
+    const handleAccess = async (id) => {
         localStorage.setItem('activeAccountId', id);
+        await flushUserSettingsSync();
         window.location.href = '/admin';
     };
 

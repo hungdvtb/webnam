@@ -1,3 +1,12 @@
+<IfModule mod_php.c>
+    php_value upload_max_filesize 128M
+    php_value post_max_size 128M
+    php_value max_input_time 300
+    php_value max_execution_time 300
+</IfModule>
+
+LimitRequestBody 134217728
+
 <IfModule mod_rewrite.c>
     <IfModule mod_negotiation.c>
         Options -MultiViews -Indexes

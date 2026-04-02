@@ -234,10 +234,12 @@ function normalizeCopiedAdditionalInfo(rawValue) {
         return rawValue
             .map((item) => ({
                 title: String(item?.title ?? '').trim(),
+                display_text: String(item?.display_text ?? '').trim(),
                 post_id: item?.post_id ? String(item.post_id).trim() : '',
                 post_title: String(item?.post_title ?? '').trim(),
+                post_slug: String(item?.post_slug ?? '').trim(),
             }))
-            .filter((item) => item.title && item.post_id);
+            .filter((item) => item.post_id);
     }
 
     if (typeof rawValue === 'string' && rawValue.trim() !== '') {
@@ -250,6 +252,35 @@ function normalizeCopiedAdditionalInfo(rawValue) {
     }
 
     return [];
+}
+
+function createEmptyBulkCopySelectionState() {
+    return {
+        specifications: [],
+        additional_info: [],
+    };
+}
+
+function buildBulkCopySpecificationItems(rawValue) {
+    return normalizeCopiedSpecifications(rawValue).map((item, index) => ({
+        ...item,
+        copy_key: `specification-${index}`,
+    }));
+}
+
+function buildBulkCopyAdditionalInfoItems(rawValue) {
+    return normalizeCopiedAdditionalInfo(rawValue).map((item, index) => ({
+        ...item,
+        copy_key: `additional-info-${index}`,
+    }));
+}
+
+function pickBulkCopyItems(items = [], selectedKeys = []) {
+    const selectedKeyLookup = new Set(selectedKeys);
+
+    return items
+        .filter((item) => selectedKeyLookup.has(item.copy_key))
+        .map(({ copy_key, ...payload }) => payload);
 }
 
 function resolveBundleOptionTitle(bundleItem) {
@@ -351,11 +382,12 @@ const ProductList = () => {
     const [bulkCopySourceQuery, setBulkCopySourceQuery] = useState('');
     const [bulkCopySourceResults, setBulkCopySourceResults] = useState([]);
     const [bulkCopySourceProduct, setBulkCopySourceProduct] = useState(null);
-    const [bulkCopyFields, setBulkCopyFields] = useState({
-        specifications: true,
-        additional_info: true,
-    });
+    const [bulkCopySourceItems, setBulkCopySourceItems] = useState(createEmptyBulkCopySelectionState);
+    const [bulkCopySelectedItemKeys, setBulkCopySelectedItemKeys] = useState(createEmptyBulkCopySelectionState);
+    const [bulkCopySourceItemsLoading, setBulkCopySourceItemsLoading] = useState(false);
+    const [bulkCopySourceItemsError, setBulkCopySourceItemsError] = useState('');
     const [submittingBulkCopy, setSubmittingBulkCopy] = useState(false);
+    const bulkCopySourceRequestRef = useRef(0);
     const [duplicateConfirm, setDuplicateConfirm] = useState(null);
     const [submittingDuplicate, setSubmittingDuplicate] = useState(false);
 
@@ -1196,21 +1228,38 @@ const ProductList = () => {
     };
 
     const closeBulkCopyModal = () => {
+        bulkCopySourceRequestRef.current += 1;
         setShowBulkCopyModal(false);
         setBulkCopySourceQuery('');
         setBulkCopySourceResults([]);
         setBulkCopySourceProduct(null);
-        setBulkCopyFields({
-            specifications: true,
-            additional_info: true,
-        });
+        setBulkCopySourceItems(createEmptyBulkCopySelectionState());
+        setBulkCopySelectedItemKeys(createEmptyBulkCopySelectionState());
+        setBulkCopySourceItemsLoading(false);
+        setBulkCopySourceItemsError('');
         setSubmittingBulkCopy(false);
     };
 
-    const toggleBulkCopyField = (field) => {
-        setBulkCopyFields((prev) => ({
+    const toggleBulkCopyItemSelection = (groupKey, itemKey) => {
+        setBulkCopySelectedItemKeys((prev) => {
+            const currentKeys = Array.isArray(prev[groupKey]) ? prev[groupKey] : [];
+            const nextKeys = currentKeys.includes(itemKey)
+                ? currentKeys.filter((key) => key !== itemKey)
+                : [...currentKeys, itemKey];
+
+            return {
+                ...prev,
+                [groupKey]: nextKeys,
+            };
+        });
+    };
+
+    const setBulkCopyGroupSelection = (groupKey, selectAll) => {
+        setBulkCopySelectedItemKeys((prev) => ({
             ...prev,
-            [field]: !prev[field],
+            [groupKey]: selectAll
+                ? (bulkCopySourceItems[groupKey] || []).map((item) => item.copy_key)
+                : [],
         }));
     };
 
@@ -1250,6 +1299,62 @@ const ProductList = () => {
         }
     }, [bulkCopySourceProduct, selectedIds]);
 
+    useEffect(() => {
+        if (bulkCopySourceProduct?.id || !showBulkCopyModal) return;
+
+        bulkCopySourceRequestRef.current += 1;
+        setBulkCopySourceItems(createEmptyBulkCopySelectionState());
+        setBulkCopySelectedItemKeys(createEmptyBulkCopySelectionState());
+        setBulkCopySourceItemsLoading(false);
+        setBulkCopySourceItemsError('');
+    }, [bulkCopySourceProduct, showBulkCopyModal]);
+
+    useEffect(() => {
+        if (!showBulkCopyModal || !bulkCopySourceProduct?.id) return undefined;
+
+        const requestId = bulkCopySourceRequestRef.current + 1;
+        bulkCopySourceRequestRef.current = requestId;
+        let isCurrent = true;
+
+        setBulkCopySourceItemsLoading(true);
+        setBulkCopySourceItemsError('');
+        setBulkCopySourceItems(createEmptyBulkCopySelectionState());
+        setBulkCopySelectedItemKeys(createEmptyBulkCopySelectionState());
+
+        productApi.getOne(bulkCopySourceProduct.id)
+            .then((response) => {
+                if (!isCurrent || bulkCopySourceRequestRef.current !== requestId) return;
+
+                const sourceProduct = response.data || {};
+                const nextSourceItems = {
+                    specifications: buildBulkCopySpecificationItems(sourceProduct.specifications),
+                    additional_info: buildBulkCopyAdditionalInfoItems(sourceProduct.additional_info),
+                };
+
+                setBulkCopySourceItems(nextSourceItems);
+                setBulkCopySelectedItemKeys({
+                    specifications: nextSourceItems.specifications.map((item) => item.copy_key),
+                    additional_info: nextSourceItems.additional_info.map((item) => item.copy_key),
+                });
+            })
+            .catch((error) => {
+                if (!isCurrent || bulkCopySourceRequestRef.current !== requestId) return;
+
+                console.error('Bulk copy source load error:', error);
+                setBulkCopySourceItems(createEmptyBulkCopySelectionState());
+                setBulkCopySelectedItemKeys(createEmptyBulkCopySelectionState());
+                setBulkCopySourceItemsError(error.response?.data?.message || 'Không thể tải dữ liệu chi tiết từ sản phẩm nguồn.');
+            })
+            .finally(() => {
+                if (!isCurrent || bulkCopySourceRequestRef.current !== requestId) return;
+                setBulkCopySourceItemsLoading(false);
+            });
+
+        return () => {
+            isCurrent = false;
+        };
+    }, [bulkCopySourceProduct?.id, showBulkCopyModal]);
+
     const handleBulkCopySubmit = async () => {
         if (!bulkCopySourceProduct?.id) {
             setNotification({ type: 'error', message: 'Hãy chọn sản phẩm nguồn để sao chép.' });
@@ -1257,9 +1362,32 @@ const ProductList = () => {
             return;
         }
 
-        const fieldsToCopy = Object.entries(bulkCopyFields)
-            .filter(([, enabled]) => enabled)
-            .map(([field]) => field);
+        if (bulkCopySourceItemsLoading) {
+            setNotification({ type: 'error', message: 'Dữ liệu sản phẩm nguồn đang được tải, vui lòng thử lại sau giây lát.' });
+            setTimeout(() => setNotification(null), 4000);
+            return;
+        }
+
+        const selectedSpecifications = pickBulkCopyItems(
+            bulkCopySourceItems.specifications,
+            bulkCopySelectedItemKeys.specifications
+        );
+        const selectedAdditionalInfo = pickBulkCopyItems(
+            bulkCopySourceItems.additional_info,
+            bulkCopySelectedItemKeys.additional_info
+        );
+        const fieldsToCopy = [];
+        const basic_info = {};
+
+        if (selectedSpecifications.length > 0) {
+            fieldsToCopy.push('specifications');
+            basic_info.specifications = JSON.stringify(selectedSpecifications);
+        }
+
+        if (selectedAdditionalInfo.length > 0) {
+            fieldsToCopy.push('additional_info');
+            basic_info.additional_info = JSON.stringify(selectedAdditionalInfo);
+        }
 
         if (fieldsToCopy.length === 0) {
             setNotification({ type: 'error', message: 'Hãy chọn ít nhất 1 mục cần sao chép.' });
@@ -1278,34 +1406,26 @@ const ProductList = () => {
         setSubmittingBulkCopy(true);
 
         try {
-            const sourceResponse = await productApi.getOne(bulkCopySourceProduct.id);
-            const sourceProduct = sourceResponse.data || {};
-            const basic_info = {};
-
-            if (bulkCopyFields.specifications) {
-                basic_info.specifications = JSON.stringify(
-                    normalizeCopiedSpecifications(sourceProduct.specifications)
-                );
-            }
-
-            if (bulkCopyFields.additional_info) {
-                basic_info.additional_info = JSON.stringify(
-                    normalizeCopiedAdditionalInfo(sourceProduct.additional_info)
-                );
-            }
-
             const response = await productApi.bulkUpdateAttributes({
                 ids: targetIds,
                 basic_info,
+                merge_fields: fieldsToCopy,
             });
 
             closeBulkCopyModal();
             setSelectedIds([]);
             setLastBulkUpdateLogId(response.data.log_id);
             fetchProducts(pagination.current_page);
+            const copiedLabelParts = [];
+            if (selectedSpecifications.length > 0) {
+                copiedLabelParts.push(`${selectedSpecifications.length} dòng thông số`);
+            }
+            if (selectedAdditionalInfo.length > 0) {
+                copiedLabelParts.push(`${selectedAdditionalInfo.length} mục bổ sung`);
+            }
             setNotification({
                 type: 'success',
-                message: `Đã sao chép ${fieldsToCopy.length} mục từ "${bulkCopySourceProduct.name}" cho ${targetIds.length} sản phẩm.`,
+                message: `Đã sao chép ${copiedLabelParts.join(', ')} từ "${bulkCopySourceProduct.name}" cho ${targetIds.length} sản phẩm.`,
                 action: 'undo',
             });
             setTimeout(() => setNotification(null), 10000);
@@ -1531,6 +1651,100 @@ const ProductList = () => {
     const bulkCopyTargetCount = bulkCopySourceProduct
         ? selectedIds.filter((id) => String(id) !== String(bulkCopySourceProduct.id)).length
         : selectedIds.length;
+    const bulkCopySelectedSpecificationCount = bulkCopySelectedItemKeys.specifications.length;
+    const bulkCopySelectedAdditionalInfoCount = bulkCopySelectedItemKeys.additional_info.length;
+    const bulkCopySelectedItemCount = bulkCopySelectedSpecificationCount + bulkCopySelectedAdditionalInfoCount;
+
+    const renderBulkCopyGroup = (groupKey, options) => {
+        const items = bulkCopySourceItems[groupKey] || [];
+        const selectedKeys = bulkCopySelectedItemKeys[groupKey] || [];
+        const selectedKeyLookup = new Set(selectedKeys);
+        const hasItems = items.length > 0;
+        const allSelected = hasItems && selectedKeys.length === items.length;
+
+        return (
+            <div
+                className={`rounded-sm border transition-all ${
+                    selectedKeys.length > 0
+                        ? 'border-gold/30 bg-gold/[0.04] shadow-sm'
+                        : 'border-primary/10 bg-white'
+                }`}
+            >
+                <div className="flex flex-col gap-3 border-b border-primary/10 px-4 py-3 md:flex-row md:items-start md:justify-between">
+                    <div className="min-w-0">
+                        <div className="text-[13px] font-bold text-primary">{options.title}</div>
+                        <div className="mt-1 text-[11px] text-primary/55">{options.description}</div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${
+                            selectedKeys.length > 0 ? 'bg-gold/10 text-gold' : 'bg-primary/5 text-primary/45'
+                        }`}>
+                            {selectedKeys.length}/{items.length} đã chọn
+                        </span>
+                        <button
+                            type="button"
+                            onClick={() => setBulkCopyGroupSelection(groupKey, true)}
+                            disabled={!hasItems || allSelected}
+                            className="rounded-sm border border-primary/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            Chọn tất cả
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setBulkCopyGroupSelection(groupKey, false)}
+                            disabled={selectedKeys.length === 0}
+                            className="rounded-sm border border-primary/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            Bỏ chọn tất cả
+                        </button>
+                    </div>
+                </div>
+
+                {hasItems ? (
+                    <div className="max-h-[240px] overflow-y-auto custom-scrollbar divide-y divide-primary/8">
+                        {items.map((item, index) => {
+                            const isChecked = selectedKeyLookup.has(item.copy_key);
+                            const primaryText = options.getPrimaryText(item, index);
+                            const secondaryText = options.getSecondaryText(item, index);
+
+                            return (
+                                <label
+                                    key={item.copy_key}
+                                    className={`flex cursor-pointer gap-3 px-4 py-3 transition-colors ${
+                                        isChecked ? 'bg-gold/[0.04]' : 'hover:bg-primary/[0.03]'
+                                    }`}
+                                >
+                                    <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => toggleBulkCopyItemSelection(groupKey, item.copy_key)}
+                                        className="mt-0.5 h-4 w-4 rounded border-primary/30 text-amber-600 focus:ring-amber-500"
+                                    />
+                                    <div className="min-w-0 flex-1">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <p className="break-words text-[13px] font-bold text-primary">{primaryText}</p>
+                                                {secondaryText ? (
+                                                    <p className="mt-1 break-words text-[11px] text-primary/55">{secondaryText}</p>
+                                                ) : null}
+                                            </div>
+                                            <span className="shrink-0 text-[10px] font-black uppercase tracking-[0.14em] text-primary/30">
+                                                #{index + 1}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </label>
+                            );
+                        })}
+                    </div>
+                ) : (
+                    <div className="px-4 py-8 text-center text-[12px] text-stone/45">
+                        {options.emptyText}
+                    </div>
+                )}
+            </div>
+        );
+    };
 
     return (
         <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full">
@@ -3275,46 +3489,65 @@ const ProductList = () => {
                             </section>
 
                             <section className="space-y-3">
-                                <h3 className="text-[14px] font-black text-primary uppercase tracking-widest border-l-4 border-amber-500 pl-2">Mục cần sao chép</h3>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    <button
-                                        type="button"
-                                        onClick={() => toggleBulkCopyField('specifications')}
-                                        className={`rounded-sm border px-4 py-4 text-left transition-all ${bulkCopyFields.specifications ? 'border-gold bg-gold/5 shadow-sm' : 'border-primary/10 bg-white hover:border-primary/20'}`}
-                                    >
-                                        <div className="flex items-center justify-between gap-3">
-                                            <div>
-                                                <div className="text-[13px] font-bold text-primary">Bảng thông số kỹ thuật</div>
-                                                <div className="mt-1 text-[11px] text-primary/55">Copy toàn bộ danh sách thông số từ sản phẩm nguồn.</div>
-                                            </div>
-                                            <span className={`material-symbols-outlined text-[20px] ${bulkCopyFields.specifications ? 'text-gold' : 'text-primary/20'}`}>
-                                                {bulkCopyFields.specifications ? 'check_circle' : 'radio_button_unchecked'}
-                                            </span>
-                                        </div>
-                                    </button>
-
-                                    <button
-                                        type="button"
-                                        onClick={() => toggleBulkCopyField('additional_info')}
-                                        className={`rounded-sm border px-4 py-4 text-left transition-all ${bulkCopyFields.additional_info ? 'border-gold bg-gold/5 shadow-sm' : 'border-primary/10 bg-white hover:border-primary/20'}`}
-                                    >
-                                        <div className="flex items-center justify-between gap-3">
-                                            <div>
-                                                <div className="text-[13px] font-bold text-primary">Thông tin bổ sung</div>
-                                                <div className="mt-1 text-[11px] text-primary/55">Copy các mục liên kết bài viết từ sản phẩm nguồn.</div>
-                                            </div>
-                                            <span className={`material-symbols-outlined text-[20px] ${bulkCopyFields.additional_info ? 'text-gold' : 'text-primary/20'}`}>
-                                                {bulkCopyFields.additional_info ? 'check_circle' : 'radio_button_unchecked'}
-                                            </span>
-                                        </div>
-                                    </button>
+                                <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+                                    <div>
+                                        <h3 className="text-[14px] font-black text-primary uppercase tracking-widest border-l-4 border-amber-500 pl-2">Mục cần sao chép</h3>
+                                        <p className="mt-2 text-[12px] text-primary/60">
+                                            Sau khi chọn sản phẩm nguồn, hệ thống hiển thị từng dòng chi tiết để bạn tick chọn. Mặc định các mục hiện có sẽ được chọn sẵn.
+                                        </p>
+                                    </div>
+                                    <div className="rounded-sm bg-primary/[0.04] px-3 py-2 text-[11px] text-primary/60">
+                                        Đã chọn <strong>{bulkCopySelectedItemCount}</strong> mục để sao chép.
+                                    </div>
                                 </div>
+
+                                {!bulkCopySourceProduct ? (
+                                    <div className="rounded-sm border border-dashed border-primary/15 bg-primary/[0.03] px-4 py-5 text-[12px] text-primary/60">
+                                        Chọn 1 sản phẩm nguồn để tải danh sách các dòng trong Bảng thông số kỹ thuật và Thông tin bổ sung.
+                                    </div>
+                                ) : bulkCopySourceItemsLoading ? (
+                                    <div className="rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-8 text-center text-[12px] text-primary/60">
+                                        <div className="flex items-center justify-center gap-2 text-primary">
+                                            <span className="material-symbols-outlined animate-spin text-[18px]">sync</span>
+                                            Đang tải dữ liệu chi tiết từ sản phẩm nguồn...
+                                        </div>
+                                    </div>
+                                ) : bulkCopySourceItemsError ? (
+                                    <div className="rounded-sm border border-brick/20 bg-brick/5 px-4 py-4 text-[12px] text-brick">
+                                        {bulkCopySourceItemsError}
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3">
+                                        {renderBulkCopyGroup('specifications', {
+                                            title: 'Bảng thông số kỹ thuật',
+                                            description: 'Các dòng có cùng nhãn sẽ được cập nhật theo dữ liệu nguồn, các dòng khác ở sản phẩm đích sẽ được giữ nguyên.',
+                                            emptyText: 'Sản phẩm nguồn chưa có dòng thông số nào để sao chép.',
+                                            getPrimaryText: (item, index) => item.label || `Dòng thông số ${index + 1}`,
+                                            getSecondaryText: (item) => item.value || '',
+                                        })}
+
+                                        {renderBulkCopyGroup('additional_info', {
+                                            title: 'Thông tin bổ sung',
+                                            description: 'Các mục trùng bài viết liên kết sẽ được cập nhật, mục chưa có sẽ được thêm mới mà không làm mất mục khác.',
+                                            emptyText: 'Sản phẩm nguồn chưa có mục thông tin bổ sung nào để sao chép.',
+                                            getPrimaryText: (item, index) => item.title || item.post_title || item.display_text || `Mục bổ sung ${index + 1}`,
+                                            getSecondaryText: (item) => {
+                                                const metaParts = [];
+                                                if (item.display_text) metaParts.push(item.display_text);
+                                                if (item.post_title) metaParts.push(`Bài viết: ${item.post_title}`);
+                                                if (item.post_slug) metaParts.push(`/${item.post_slug}`);
+                                                if (item.post_id) metaParts.push(`ID ${item.post_id}`);
+                                                return metaParts.join(' • ');
+                                            },
+                                        })}
+                                    </div>
+                                )}
                             </section>
                         </div>
 
                         <div className="mt-6 pt-4 border-t border-primary/10 flex flex-col md:flex-row md:items-center md:justify-between gap-3 shrink-0">
                             <p className="text-[12px] text-primary/60">
-                                Sẽ áp dụng cho <strong>{bulkCopyTargetCount}</strong> sản phẩm đích.
+                                Sẽ áp dụng cho <strong>{bulkCopyTargetCount}</strong> sản phẩm đích. Hiện đang chọn <strong>{bulkCopySelectedSpecificationCount}</strong> dòng thông số và <strong>{bulkCopySelectedAdditionalInfoCount}</strong> mục bổ sung.
                             </p>
                             <div className="flex justify-end gap-3">
                                 <button
@@ -3326,7 +3559,7 @@ const ProductList = () => {
                                 <button
                                     onClick={handleBulkCopySubmit}
                                     className="px-6 py-2 bg-amber-600 text-white rounded-sm font-bold text-[13px] hover:bg-amber-700 flex items-center gap-2"
-                                    disabled={submittingBulkCopy}
+                                    disabled={submittingBulkCopy || bulkCopySourceItemsLoading || !bulkCopySourceProduct || bulkCopySelectedItemCount === 0}
                                 >
                                     {submittingBulkCopy ? <span className="material-symbols-outlined animate-spin text-[16px]">sync</span> : <span className="material-symbols-outlined text-[16px]">conversion_path</span>}
                                     Sao chép cho {bulkCopyTargetCount} SP

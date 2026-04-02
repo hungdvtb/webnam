@@ -52,6 +52,8 @@ Route::post('/shipments/carriers/viettel-post/webhook', [\App\Http\Controllers\A
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AuthController::class , 'user']);
     Route::post('/logout', [AuthController::class , 'logout']);
+    Route::get('/user-settings', [\App\Http\Controllers\Api\UserSettingController::class, 'show']);
+    Route::patch('/user-settings', [\App\Http\Controllers\Api\UserSettingController::class, 'update']);
 
     // Cart routes
     Route::get('/cart', [CartController::class , 'index']);

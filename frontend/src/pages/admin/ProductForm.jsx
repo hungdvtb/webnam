@@ -34,6 +34,19 @@ const ItemType = {
     BUNDLE_ITEM: 'bundle_item',
 };
 
+const EDIT_IMAGE_UPLOAD_BATCH_SIZE = 2;
+
+const chunkItems = (items = [], size = 1) => {
+    const normalizedSize = Math.max(1, Number(size) || 1);
+    const chunks = [];
+
+    for (let index = 0; index < items.length; index += normalizedSize) {
+        chunks.push(items.slice(index, index + normalizedSize));
+    }
+
+    return chunks;
+};
+
 const AI_INSTRUCTION_SUGGESTIONS = [
     'Viết ngắn gọn hơn, súc tích hơn.',
     'Trình bày theo bố cục chuẩn: mở bài, chất liệu, ý nghĩa, bài trí.',
@@ -1055,12 +1068,92 @@ const normalizeAdditionalInfoRows = (rows = []) => (
         ? rows
             .map((item) => ({
                 title: String(item?.title ?? '').trim(),
+                display_text: String(item?.display_text ?? '').trim(),
                 post_id: item?.post_id ? String(item.post_id).trim() : '',
                 post_title: String(item?.post_title ?? '').trim(),
+                post_slug: String(item?.post_slug ?? '').trim(),
             }))
-            .filter((item) => item.title && item.post_id)
+            .filter((item) => item.post_id)
         : []
 );
+
+const ADDITIONAL_INFO_DISPLAY_LIMIT = 72;
+
+const createAdditionalInfoRowId = () => (
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? `additional-info-${crypto.randomUUID()}`
+        : `additional-info-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+);
+
+const createAdditionalInfoRow = (item = {}) => ({
+    row_id: item?.row_id || createAdditionalInfoRowId(),
+    title: String(item?.title ?? ''),
+    display_text: String(item?.display_text ?? ''),
+    post_id: item?.post_id ? String(item.post_id) : '',
+    post_title: String(item?.post_title ?? ''),
+    post_slug: String(item?.post_slug ?? ''),
+});
+
+const hydrateAdditionalInfoRows = (rows = []) => (
+    Array.isArray(rows)
+        ? rows.map((item) => createAdditionalInfoRow(item))
+        : []
+);
+
+const normalizeSearchText = (value) => (
+    String(value ?? '')
+        .toLocaleLowerCase('vi')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/đ/g, 'd')
+        .replace(/\s+/g, ' ')
+        .trim()
+);
+
+const truncateAdditionalInfoDisplayText = (value, maxLength = ADDITIONAL_INFO_DISPLAY_LIMIT) => {
+    const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
+
+    if (!normalized) {
+        return '';
+    }
+
+    if (normalized.length <= maxLength) {
+        return normalized;
+    }
+
+    const sliced = normalized.slice(0, Math.max(1, maxLength - 3)).trim();
+    const lastSpace = sliced.lastIndexOf(' ');
+    const safeSlice = lastSpace >= Math.floor(maxLength * 0.6)
+        ? sliced.slice(0, lastSpace).trim()
+        : sliced;
+
+    return `${safeSlice.replace(/[.,;:!?-]+$/, '')}...`;
+};
+
+const resolveAdditionalInfoPreviewText = (item) => {
+    const manualText = String(item?.display_text ?? '').trim();
+    if (manualText) {
+        return manualText;
+    }
+
+    return truncateAdditionalInfoDisplayText(item?.post_title ?? '');
+};
+
+const mergeUniqueBlogPosts = (...groups) => {
+    const merged = [];
+    const seenIds = new Set();
+
+    groups.flat().forEach((post) => {
+        if (!post?.id || seenIds.has(post.id)) {
+            return;
+        }
+
+        seenIds.add(post.id);
+        merged.push(post);
+    });
+
+    return merged;
+};
 
 const SKU_MAX_LENGTH = 120;
 
@@ -1203,7 +1296,7 @@ const ProductForm = () => {
         custom_attributes: {},
         video_url: '',
         slug: '',
-        additional_info: [], // [{title, post_id, post_title}]
+        additional_info: [], // [{row_id, title, display_text, post_id, post_title, post_slug}]
         bundle_title: '',
         site_domain_id: ''
     });
@@ -1240,6 +1333,7 @@ const ProductForm = () => {
     const bundleOptionCardRefs = useRef({});
     const bundleOptionTitleInputRefs = useRef({});
     const pendingCopiedBundleOptionIdRef = useRef(null);
+    const blogSearchRequestRef = useRef({});
 
     // Filters for Related Products suggestions
     const [relatedQuery, setRelatedQuery] = useState('');
@@ -2471,27 +2565,65 @@ const ProductForm = () => {
 
     const fetchBlogPosts = async () => {
         try {
-            const response = await blogApi.getAll({ per_page: 50 });
-            setAllBlogPosts(response.data.data || []);
+            const response = await blogApi.getAll({ per_page: 200, compact: 1, view: 'picker' });
+            setAllBlogPosts(Array.isArray(response.data.data) ? response.data.data : []);
         } catch (error) {
             console.error("Error fetching blog posts", error);
         }
     };
 
-    const searchBlogPosts = async (index, query) => {
-        if (!query || query.trim().length < 2) {
-            setBlogResults(prev => ({ ...prev, [index]: [] }));
+    const searchBlogPosts = async (searchKey, query) => {
+        const trimmedQuery = String(query || '').trim();
+        if (!trimmedQuery || trimmedQuery.length < 2) {
+            blogSearchRequestRef.current[searchKey] = (blogSearchRequestRef.current[searchKey] || 0) + 1;
+            setBlogResults(prev => ({ ...prev, [searchKey]: [] }));
+            setIsSearchingBlog(prev => ({ ...prev, [searchKey]: false }));
             return;
         }
 
-        setIsSearchingBlog(prev => ({ ...prev, [index]: true }));
+        const normalizedQuery = normalizeSearchText(trimmedQuery);
+        const localMatches = allBlogPosts
+            .filter((post) => {
+                const haystack = normalizeSearchText([
+                    post?.title,
+                    post?.slug,
+                    post?.excerpt,
+                ].filter(Boolean).join(' '));
+
+                return haystack.includes(normalizedQuery);
+            })
+            .slice(0, 10);
+
+        const requestId = (blogSearchRequestRef.current[searchKey] || 0) + 1;
+        blogSearchRequestRef.current[searchKey] = requestId;
+
+        setBlogResults(prev => ({ ...prev, [searchKey]: localMatches }));
+        setIsSearchingBlog(prev => ({ ...prev, [searchKey]: true }));
         try {
-            const response = await blogApi.getAll({ search: query, per_page: 10 });
-            setBlogResults(prev => ({ ...prev, [index]: response.data.data || [] }));
+            const response = await blogApi.getAll({
+                search: trimmedQuery,
+                per_page: 20,
+                compact: 1,
+                view: 'picker',
+            });
+            const remoteResults = Array.isArray(response.data.data) ? response.data.data : [];
+
+            setAllBlogPosts(prev => mergeUniqueBlogPosts(prev, remoteResults));
+
+            if (blogSearchRequestRef.current[searchKey] !== requestId) {
+                return;
+            }
+
+            setBlogResults(prev => ({
+                ...prev,
+                [searchKey]: mergeUniqueBlogPosts(localMatches, remoteResults),
+            }));
         } catch (error) {
             console.error("Error searching blog posts", error);
         } finally {
-            setIsSearchingBlog(prev => ({ ...prev, [index]: false }));
+            if (blogSearchRequestRef.current[searchKey] === requestId) {
+                setIsSearchingBlog(prev => ({ ...prev, [searchKey]: false }));
+            }
         }
     };
 
@@ -2755,11 +2887,7 @@ const ProductForm = () => {
                             return [];
                         }
 
-                        return parsed.map((info) => ({
-                            title: info?.title ?? '',
-                            post_id: info?.post_id ?? '',
-                            post_title: info?.post_title ?? '',
-                        }));
+                        return hydrateAdditionalInfoRows(parsed);
                     } catch (e) { return []; }
                 })(),
                 bundle_title: data.bundle_title || '',
@@ -2945,24 +3073,29 @@ const ProductForm = () => {
     }, [images]);
 
     const handleImageUpload = async (e) => {
-        const rawFiles = Array.from(e.target.files);
+        const rawFiles = Array.from(e.target.files || []);
+        e.target.value = '';
         if (rawFiles.length === 0) return;
 
         // Immediately add to list with skeleton/optimizing status
+        const placeholderPrefix = `opt_${Date.now()}`;
         const newPlaceholders = rawFiles.map((f, i) => ({
-            id: `opt_${Date.now()}_${i}`,
+            id: `${placeholderPrefix}_${i}`,
             image_url: URL.createObjectURL(f),
             file: f,
             optimizing: true,
             is_primary: false
         }));
+        const placeholderIds = new Set(newPlaceholders.map((img) => img.id));
         setImages(prev => [...prev, ...newPlaceholders]);
 
         try {
-            const processedImages = await Promise.all(newPlaceholders.map(async (placeholder) => {
+            const processedImages = [];
+
+            for (const placeholder of newPlaceholders) {
                 const optimizedFile = await compressImage(placeholder.file);
-                return { ...placeholder, file: optimizedFile, optimizing: false };
-            }));
+                processedImages.push({ ...placeholder, file: optimizedFile, optimizing: false });
+            }
 
             // Final check on primary
             const hasPrimary = images.some(img => img.is_primary);
@@ -2973,23 +3106,55 @@ const ProductForm = () => {
 
             if (!isEdit) {
                 setImages(prev => {
-                    const filtered = prev.filter(img => !img.id.toString().startsWith('opt_'));
+                    const filtered = prev.filter(img => !placeholderIds.has(img.id));
                     return [...filtered, ...finalImages];
                 });
             } else {
-                const formDataToUpload = new FormData();
-                finalImages.forEach(img => formDataToUpload.append('images[]', img.file));
-                const response = await productImageApi.upload(id, formDataToUpload);
+                let uploadedCount = 0;
 
-                setImages(prev => {
-                    const filtered = prev.filter(img => !img.id.toString().startsWith('opt_'));
-                    return [...filtered, ...response.data];
-                });
+                for (const batch of chunkItems(finalImages, EDIT_IMAGE_UPLOAD_BATCH_SIZE)) {
+                    const formDataToUpload = new FormData();
+                    batch.forEach(img => formDataToUpload.append('images[]', img.file));
+
+                    const response = await productImageApi.upload(id, formDataToUpload);
+                    const uploadedImages = Array.isArray(response.data) ? response.data : [];
+                    const batchIds = new Set(batch.map((img) => img.id));
+
+                    uploadedCount += uploadedImages.length;
+                    setImages(prev => {
+                        const filtered = prev.filter(img => !batchIds.has(img.id));
+                        return [...filtered, ...uploadedImages];
+                    });
+
+                    batch.forEach((img) => {
+                        if (img.image_url?.startsWith('blob:')) {
+                            URL.revokeObjectURL(img.image_url);
+                        }
+                    });
+                }
+
+                if (finalImages.length > EDIT_IMAGE_UPLOAD_BATCH_SIZE) {
+                    showToast({
+                        message: `Da tai ${uploadedCount} anh theo tung dot nho de tranh loi server.`,
+                        type: 'success',
+                    });
+                }
             }
         } catch (error) {
             console.error("Lỗi tối ưu/tải ảnh:", error);
-            alert("Lỗi tối ưu hoặc tải ảnh. Vui lòng thử lại.");
-            setImages(prev => prev.filter(img => !img.id.toString().startsWith('opt_')));
+            setImages(prev => prev.filter(img => !placeholderIds.has(img.id)));
+            newPlaceholders.forEach((img) => {
+                if (img.image_url?.startsWith('blob:')) {
+                    URL.revokeObjectURL(img.image_url);
+                }
+            });
+
+            const errorMessage = error?.response?.data?.message
+                || (isEdit
+                    ? 'Loi tai anh. He thong da chia anh thanh tung dot nho, vui long thu lai.'
+                    : 'Loi toi uu anh. Vui long thu lai.');
+
+            showToast({ message: errorMessage, type: 'error' });
         }
     };
 
@@ -3068,22 +3233,42 @@ const ProductForm = () => {
     const addAdditionalInfoRow = () => {
         setFormData(prev => ({
             ...prev,
-            additional_info: [...prev.additional_info, { title: '', post_id: '', post_title: '' }]
+            additional_info: [...prev.additional_info, createAdditionalInfoRow()]
         }));
     };
 
-    const removeAdditionalInfoRow = (index) => {
+    const removeAdditionalInfoRow = (rowId) => {
         setFormData(prev => ({
             ...prev,
-            additional_info: prev.additional_info.filter((_, i) => i !== index)
+            additional_info: prev.additional_info.filter((item) => item.row_id !== rowId)
         }));
+
+        setBlogSearchQuery((prev) => {
+            const next = { ...prev };
+            delete next[rowId];
+            return next;
+        });
+        setBlogResults((prev) => {
+            const next = { ...prev };
+            delete next[rowId];
+            return next;
+        });
+        setIsSearchingBlog((prev) => {
+            const next = { ...prev };
+            delete next[rowId];
+            return next;
+        });
+        delete blogSearchRequestRef.current[rowId];
     };
 
-    const updateAdditionalInfoRow = (index, field, value, extra = {}) => {
+    const updateAdditionalInfoRow = (rowId, field, value, extra = {}) => {
         setFormData(prev => {
-            const newInfo = [...prev.additional_info];
-            newInfo[index] = { ...newInfo[index], [field]: value, ...extra };
-            return { ...prev, additional_info: newInfo };
+            const nextInfo = prev.additional_info.map((item) => (
+                item.row_id === rowId
+                    ? { ...item, [field]: value, ...extra }
+                    : item
+            ));
+            return { ...prev, additional_info: nextInfo };
         });
     };
 
@@ -3120,7 +3305,7 @@ const ProductForm = () => {
                 }).filter(Boolean);
             } else if (type === 'additional_info') {
                 toPaste = data.map(item => {
-                    if (item.title || item.post_title) {
+                    if (item.title || item.display_text || item.post_title) {
                         success++;
                         return { label: item.title || 'Thông tin', value: item.post_title || '' };
                     }
@@ -3145,9 +3330,17 @@ const ProductForm = () => {
             showToast('Không có thông tin bổ sung nào để copy', 'warning');
             return;
         }
+        const clipboardData = formData.additional_info.map((item) => ({
+            title: String(item?.title ?? ''),
+            display_text: String(item?.display_text ?? ''),
+            post_id: item?.post_id ? String(item.post_id) : '',
+            post_title: String(item?.post_title ?? ''),
+            post_slug: String(item?.post_slug ?? ''),
+        }));
+
         localStorage.setItem('product_form_clipboard', JSON.stringify({
             type: 'additional_info',
-            data: formData.additional_info
+            data: clipboardData
         }));
         showToast('Đã copy bảng thông tin bổ sung', 'success');
     };
@@ -3168,8 +3361,18 @@ const ProductForm = () => {
 
             if (type === 'additional_info') {
                 toPaste = data.map(item => {
-                    if (item.title || item.post_title || item.post_id) { success++; return { ...item }; }
-                    fail++; return null;
+                    if (item?.title || item?.display_text || item?.post_title || item?.post_id) {
+                        success++;
+                        return createAdditionalInfoRow({
+                            title: item?.title || '',
+                            display_text: item?.display_text || '',
+                            post_id: item?.post_id || '',
+                            post_title: item?.post_title || '',
+                            post_slug: item?.post_slug || '',
+                        });
+                    }
+                    fail++;
+                    return null;
                 }).filter(Boolean);
             } else if (type === 'specifications') {
                 toPaste = data.map(item => {
@@ -3182,7 +3385,16 @@ const ProductForm = () => {
             }
 
             if (toPaste.length > 0) {
-                setFormData(prev => ({ ...prev, additional_info: [...prev.additional_info, ...toPaste] }));
+                const normalizedRows = hydrateAdditionalInfoRows(
+                    toPaste.map((item) => ({
+                        title: item?.title || item?.label || '',
+                        display_text: item?.display_text || (!item?.post_id ? (item?.post_title || item?.value || '') : ''),
+                        post_id: item?.post_id || '',
+                        post_title: item?.post_title || '',
+                        post_slug: item?.post_slug || '',
+                    }))
+                );
+                setFormData(prev => ({ ...prev, additional_info: [...prev.additional_info, ...normalizedRows] }));
                 const msg = type === 'additional_info' ? `Đã dán ${success} mục thông tin` : `Đã dán chéo ${success} mục từ Bảng thông số`;
                 showToast(msg + (fail > 0 ? `, bỏ qua ${fail} dòng lỗi` : ''), 'success');
             } else {
@@ -4821,8 +5033,135 @@ const ProductForm = () => {
                                             </button>
                                         </div>
                                     </div>
-                                    <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1">
+                                    <div className="space-y-3 overflow-visible pr-1 pb-24">
                                         {formData.additional_info.map((info, idx) => (
+                                            (() => {
+                                                const rowId = info.row_id || `additional-info-${idx}`;
+                                                const searchValue = blogSearchQuery[rowId] || '';
+                                                const searchResults = blogResults[rowId] || [];
+                                                const previewText = resolveAdditionalInfoPreviewText(info);
+                                                const showNoResults = !info.post_id && searchValue.trim().length >= 2 && !isSearchingBlog[rowId] && searchResults.length === 0;
+                                                const hasOpenSearchDropdown = !info.post_id && (searchResults.length > 0 || showNoResults);
+
+                                                return (
+                                                    <div key={rowId} className={`relative flex gap-2 items-start group animate-fade-in-up ${hasOpenSearchDropdown ? 'z-[140]' : 'z-0'}`} style={{ animationDelay: `${idx * 0.05}s` }}>
+                                                        <div className="flex-1 rounded-sm border border-stone/15 bg-white p-2 shadow-sm transition-all hover:border-primary/30">
+                                                            <div className="grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.05fr)_minmax(0,1.15fr)]">
+                                                                <div className="rounded-sm border border-stone/10 bg-stone/[0.02] px-3 py-2">
+                                                                    <p className="text-[9px] font-black uppercase tracking-[0.16em] text-stone/35">Nhãn mục</p>
+                                                                    <input
+                                                                        placeholder="VD: Hướng dẫn lựa chọn"
+                                                                        className="mt-1 w-full bg-transparent border-none p-0 text-[13px] font-bold text-primary placeholder:font-normal placeholder:text-stone/30 focus:outline-none focus:ring-0"
+                                                                        value={info.title ?? ''}
+                                                                        onChange={(e) => updateAdditionalInfoRow(rowId, 'title', e.target.value)}
+                                                                    />
+                                                                </div>
+
+                                                                <div className="rounded-sm border border-stone/10 bg-stone/[0.02] px-3 py-2">
+                                                                    <p className="text-[9px] font-black uppercase tracking-[0.16em] text-stone/35">Text hiển thị</p>
+                                                                    <input
+                                                                        placeholder="Để trống sẽ tự rút gọn tiêu đề bài viết"
+                                                                        className="mt-1 w-full bg-transparent border-none p-0 text-[13px] font-bold text-primary placeholder:font-normal placeholder:text-stone/30 focus:outline-none focus:ring-0"
+                                                                        value={info.display_text ?? ''}
+                                                                        onChange={(e) => updateAdditionalInfoRow(rowId, 'display_text', e.target.value)}
+                                                                    />
+                                                                    <p className="mt-1 text-[10px] text-stone/45" title={previewText || undefined}>
+                                                                        {info.display_text
+                                                                            ? 'Frontend sẽ ưu tiên text này.'
+                                                                            : previewText
+                                                                                ? `Tự động rút gọn: ${previewText}`
+                                                                                : 'Chọn bài viết để xem text fallback tự động.'}
+                                                                    </p>
+                                                                </div>
+
+                                                                <div className="relative rounded-sm border border-stone/10 bg-stone/[0.02] px-3 py-2">
+                                                                    <p className="text-[9px] font-black uppercase tracking-[0.16em] text-stone/35">Bài viết liên kết</p>
+                                                                    {info.post_id ? (
+                                                                        <div className="mt-1 flex items-start gap-2">
+                                                                            <div className="min-w-0 flex-1">
+                                                                                <p className="truncate text-[12px] font-bold text-gold" title={info.post_title || `Bài viết #${info.post_id}`}>
+                                                                                    {info.post_title || `Bài viết #${info.post_id}`}
+                                                                                </p>
+                                                                                {previewText ? (
+                                                                                    <p className="mt-1 truncate text-[10px] text-stone/45" title={previewText}>
+                                                                                        Hiển thị: {previewText}
+                                                                                    </p>
+                                                                                ) : null}
+                                                                            </div>
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => updateAdditionalInfoRow(rowId, 'post_id', '', { post_title: '', post_slug: '' })}
+                                                                                className="mt-0.5 shrink-0 text-stone/40 transition-colors hover:text-brick"
+                                                                                title="Bỏ liên kết bài viết"
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[16px]">cancel</span>
+                                                                            </button>
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="relative mt-1">
+                                                                            <div className="flex items-center gap-2 rounded-sm bg-white px-2.5 py-2 shadow-inner">
+                                                                                <span className="material-symbols-outlined text-[16px] text-stone/25">search</span>
+                                                                                <input
+                                                                                    placeholder="Tìm bài viết trên web..."
+                                                                                    className="w-full bg-transparent border-none p-0 text-[12px] text-primary placeholder:text-stone/35 focus:outline-none focus:ring-0"
+                                                                                    value={searchValue}
+                                                                                    onChange={(e) => {
+                                                                                        const q = e.target.value;
+                                                                                        setBlogSearchQuery(prev => ({ ...prev, [rowId]: q }));
+                                                                                        searchBlogPosts(rowId, q);
+                                                                                    }}
+                                                                                />
+                                                                                {isSearchingBlog[rowId] ? (
+                                                                                    <span className="material-symbols-outlined text-[12px] animate-spin text-gold">refresh</span>
+                                                                                ) : null}
+                                                                            </div>
+
+                                                                            {searchResults.length > 0 ? (
+                                                                                <div className="absolute left-0 right-0 top-full z-[100] mt-1 max-h-[220px] overflow-y-auto rounded-sm border border-stone/15 bg-white shadow-xl custom-scrollbar">
+                                                                                    {searchResults.map((post) => (
+                                                                                        <button
+                                                                                            key={post.id}
+                                                                                            type="button"
+                                                                                            onClick={() => {
+                                                                                                updateAdditionalInfoRow(rowId, 'post_id', String(post.id), {
+                                                                                                    post_title: post.title || '',
+                                                                                                    post_slug: post.slug || '',
+                                                                                                });
+                                                                                                setBlogSearchQuery(prev => ({ ...prev, [rowId]: '' }));
+                                                                                                setBlogResults(prev => ({ ...prev, [rowId]: [] }));
+                                                                                            }}
+                                                                                            className="block w-full border-b border-stone/5 px-3 py-2 text-left transition-colors last:border-0 hover:bg-gold/5"
+                                                                                        >
+                                                                                            <p className="text-[11px] font-bold leading-tight text-primary">{post.title}</p>
+                                                                                            {post.slug ? (
+                                                                                                <p className="mt-0.5 truncate text-[10px] text-stone/40">/{post.slug}</p>
+                                                                                            ) : null}
+                                                                                        </button>
+                                                                                    ))}
+                                                                                </div>
+                                                                            ) : null}
+
+                                                                            {showNoResults ? (
+                                                                                <div className="absolute left-0 right-0 top-full z-[90] mt-1 rounded-sm border border-stone/15 bg-white px-3 py-2 text-[11px] text-stone/55 shadow-lg">
+                                                                                    Không tìm thấy bài viết phù hợp.
+                                                                                </div>
+                                                                            ) : null}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => removeAdditionalInfoRow(rowId)}
+                                                            className="size-8 bg-brick/5 text-brick rounded-sm flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-brick hover:text-white transition-all shadow-sm shrink-0"
+                                                            title="Xóa dòng"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[16px]">close</span>
+                                                        </button>
+                                                    </div>
+                                                );
+                                            })() /*
                                             <div key={idx} className="flex gap-2 items-start group animate-fade-in-up" style={{ animationDelay: `${idx * 0.05}s` }}>
                                                 <div className="flex-1 grid grid-cols-2 gap-2 border border-stone/15 rounded-sm p-1.5 bg-white shadow-sm transition-all hover:border-primary/30">
                                                     <input 
@@ -4832,7 +5171,7 @@ const ProductForm = () => {
                                                         onChange={(e) => updateAdditionalInfoRow(idx, 'title', e.target.value)}
                                                     />
                                                     
-                                                    {/* Blog Post Selector */}
+                                                    Blog Post Selector
                                                     <div className="relative">
                                                         <div className="flex items-center gap-2 px-2 py-0.5 min-h-[28px]">
                                                             {info.post_id ? (
@@ -4894,7 +5233,7 @@ const ProductForm = () => {
                                                 >
                                                     <span className="material-symbols-outlined text-[16px]">close</span>
                                                 </button>
-                                            </div>
+                                            */
                                         ))}
                                         {formData.additional_info.length === 0 && (
                                             <div className="py-8 border-2 border-dashed border-stone/10 rounded-sm flex flex-col items-center justify-center text-stone/30">

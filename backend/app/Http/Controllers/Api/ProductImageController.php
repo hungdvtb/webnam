@@ -16,6 +16,8 @@ class ProductImageController extends Controller
      */
     public function store(Request $request, $productId)
     {
+        @set_time_limit(120);
+
         $request->validate([
             'images' => 'required',
             'images.*' => 'image|mimes:jpeg,png,jpg,gif,webp|max:5120', // 5MB max each
@@ -23,30 +25,30 @@ class ProductImageController extends Controller
 
         $product = Product::findOrFail($productId);
         $uploadedImages = [];
+        $disk = 's3';
+        $nextSortOrder = (int) $product->images()->count();
+        $shouldMarkPrimary = $nextSortOrder === 0;
 
         if($request->hasFile('images')) {
             foreach ($request->file('images') as $file) {
-                // Use Storage::disk() as requested
-                $disk = 's3';
                 $path = Storage::disk($disk)->put('products', $file, 'public');
                 
                 // Construct Clean S3 URL
                 $baseUrl = rtrim(config('filesystems.disks.s3.url'), '/');
                 $url = $baseUrl . '/' . ltrim($path, '/');
 
-                // Check if this is the first image, if so set as default primary
-                $isPrimary = $product->images()->count() === 0;
-
                 $image = ProductImage::create([
                     'product_id' => $productId,
                     'image_url' => $url,
                     'file_name' => $file->getClientOriginalName(),
                     'file_size' => $file->getSize(),
-                    'is_primary' => $isPrimary,
-                    'sort_order' => $product->images()->count()
+                    'is_primary' => $shouldMarkPrimary,
+                    'sort_order' => $nextSortOrder,
                 ]);
 
                 $uploadedImages[] = $image;
+                $shouldMarkPrimary = false;
+                $nextSortOrder++;
             }
         }
 
@@ -212,4 +214,3 @@ class ProductImageController extends Controller
         ]);
     }
 }
-

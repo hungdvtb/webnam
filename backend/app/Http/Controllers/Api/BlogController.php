@@ -37,6 +37,8 @@ class BlogController extends Controller
         $authenticatedUser = $this->resolveAuthenticatedBlogUser($request);
         $baseQuery = Post::query();
         $isTrashView = (bool) $authenticatedUser && $this->normalizeFlag($request->query('trashed', false));
+        $isCompactView = $this->normalizeFlag($request->query('compact', false))
+            || Str::lower(trim((string) $request->query('view', ''))) === 'picker';
 
         if ($isTrashView) {
             $baseQuery->onlyTrashed();
@@ -48,6 +50,24 @@ class BlogController extends Controller
 
         if ($this->hasBlogCategorySupport()) {
             $query->with(['category:id,account_id,name,slug,sort_order']);
+        }
+
+        if ($isCompactView) {
+            $query->select([
+                'id',
+                'account_id',
+                'blog_category_id',
+                'title',
+                'slug',
+                'excerpt',
+                'is_system',
+                'is_published',
+                'published_at',
+                'sort_order',
+                'created_at',
+                'updated_at',
+                'deleted_at',
+            ]);
         }
 
         // Public visitors only see visible non-system posts.
@@ -116,9 +136,7 @@ class BlogController extends Controller
         $defaultPerPage = $authenticatedUser ? 200 : 9;
         $perPage = min(max((int) $request->query('per_page', $defaultPerPage), 1), 1000);
 
-        if ($this->hasSystemPostSupport()) {
-            $query->orderByDesc('is_system');
-        }
+        $this->orderSystemPostsLast($query);
 
         if ($isTrashView) {
             $posts = $query
@@ -134,6 +152,11 @@ class BlogController extends Controller
         }
 
         $payload = $posts->toArray();
+
+        if ($isCompactView) {
+            return response()->json($payload);
+        }
+
         $payload['seo_keywords'] = $this->seoKeywordCollection($accountId, $baseQuery);
         $payload['categories'] = $this->blogCategoryCollection($accountId, $baseQuery);
 
@@ -619,7 +642,6 @@ class BlogController extends Controller
         $validated['is_starred'] = array_key_exists('is_starred', $validated)
             ? (bool) $validated['is_starred']
             : false;
-        $validated['sort_order'] = $validated['sort_order'] ?? $this->nextSortOrder($accountId);
         $validated['slug'] = $this->buildUniqueSlug(
             $validated['slug'] ?? $validated['title'],
             $accountId
@@ -628,7 +650,20 @@ class BlogController extends Controller
             $validated['is_system'] = false;
         }
 
-        $post = Post::create($validated)->load('category');
+        $post = DB::transaction(function () use ($accountId, $validated) {
+            $payload = $validated;
+            $sortOrderProvided = array_key_exists('sort_order', $payload) && $payload['sort_order'] !== null;
+
+            if ($sortOrderProvided) {
+                $payload['sort_order'] = max((int) $payload['sort_order'], 1);
+            } elseif ($payload['is_system'] ?? false) {
+                $payload['sort_order'] = $this->nextSortOrder($accountId);
+            } else {
+                $payload['sort_order'] = $this->reserveTopSortOrderForNewRegularPost($accountId);
+            }
+
+            return Post::create($payload);
+        })->load('category');
         $this->ensureSeoKeywordExists($accountId, $validated['seo_keyword']);
 
         return response()->json($post, 201);
@@ -982,9 +1017,7 @@ class BlogController extends Controller
         $providedIds = array_values(array_unique(array_map('intval', $validated['ids'])));
 
         $currentPostsQuery = Post::where('account_id', $accountId);
-        if ($this->hasSystemPostSupport()) {
-            $currentPostsQuery->orderByDesc('is_system');
-        }
+        $this->orderSystemPostsLast($currentPostsQuery);
 
         $currentPosts = $currentPostsQuery
             ->orderBy('sort_order')
@@ -1029,10 +1062,10 @@ class BlogController extends Controller
         ));
 
         $finalOrder = array_merge(
-            $providedSystemIds,
-            $remainingSystemIds,
             $providedRegularIds,
-            $remainingRegularIds
+            $remainingRegularIds,
+            $providedSystemIds,
+            $remainingSystemIds
         );
 
         DB::transaction(function () use ($finalOrder) {
@@ -1046,6 +1079,10 @@ class BlogController extends Controller
 
     public function exportBundle(Request $request)
     {
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(300);
+        }
+
         $validated = $request->validate([
             'ids' => 'nullable|array',
             'ids.*' => 'integer',
@@ -1065,9 +1102,7 @@ class BlogController extends Controller
             $query->whereIn('id', $ids);
         }
 
-        if ($this->hasSystemPostSupport()) {
-            $query->orderByDesc('is_system');
-        }
+        $this->orderSystemPostsLast($query);
 
         $posts = $query
             ->orderBy('sort_order')
@@ -1097,6 +1132,10 @@ class BlogController extends Controller
 
     public function importBundle(Request $request)
     {
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(300);
+        }
+
         $validated = $request->validate([
             'file' => 'required|file|mimes:zip|max:102400',
         ]);
@@ -1181,6 +1220,41 @@ class BlogController extends Controller
     private function nextSortOrder(int $accountId): int
     {
         return (int) Post::where('account_id', $accountId)->max('sort_order') + 1;
+    }
+
+    private function reserveTopSortOrderForNewRegularPost(int $accountId): int
+    {
+        $regularPostsQuery = Post::where('account_id', $accountId);
+
+        if ($this->hasSystemPostSupport()) {
+            $regularPostsQuery->where(function (Builder $query) {
+                $query->whereNull('is_system')
+                    ->orWhere('is_system', false);
+            });
+        }
+
+        $regularIds = $regularPostsQuery
+            ->orderBy('sort_order')
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        foreach ($regularIds as $index => $postId) {
+            Post::whereKey($postId)->update(['sort_order' => $index + 2]);
+        }
+
+        return 1;
+    }
+
+    private function orderSystemPostsLast(Builder $query): void
+    {
+        if (!$this->hasSystemPostSupport()) {
+            return;
+        }
+
+        $query->orderByRaw('CASE WHEN COALESCE(posts.is_system, false) THEN 1 ELSE 0 END');
     }
 
     private function normalizeKeyword(?string $keyword): ?string

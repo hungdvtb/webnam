@@ -1025,6 +1025,15 @@ const BlogList = () => {
             return;
         }
 
+        if (file.size > 100 * 1024 * 1024) {
+            showModal({
+                title: 'Tệp quá lớn',
+                content: 'Gói import vượt quá 100MB. Hãy giảm dung lượng file ZIP trước khi tải lên.',
+                type: 'warning',
+            });
+            return;
+        }
+
         const formData = new FormData();
         formData.append('file', file);
 
@@ -1046,6 +1055,9 @@ const BlogList = () => {
         } catch (error) {
             const payload = error?.response?.data || {};
             const errors = Array.isArray(payload?.errors) ? payload.errors : [];
+            const networkBlockedMessage = !error?.response
+                ? 'Không thể gửi file lên API. Khả năng cao server đang chặn upload lớn hoặc chưa trả CORS cho request upload.'
+                : null;
             setImportResult({
                 total_rows: 0,
                 created: 0,

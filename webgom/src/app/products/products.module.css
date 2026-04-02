@@ -501,7 +501,7 @@
   position: relative;
   display: block;
   width: 100%;
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 1 / 1.08;
   overflow: hidden;
   border-bottom: 1px solid rgba(27, 54, 93, 0.05);
   background: #f0f0f0;
@@ -535,16 +535,7 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  padding: 0.9rem;
-}
-
-.productCategory {
-  margin-bottom: 0.25rem;
-  color: rgba(27, 54, 93, 0.45);
-  font-size: 0.58rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  padding: 0.78rem 0.8rem 0.82rem;
 }
 
 .productName {
@@ -675,15 +666,11 @@
   }
 
   .imageWrapper {
-    aspect-ratio: 1 / 1.04;
+    aspect-ratio: 1 / 1.1;
   }
 
   .productInfo {
-    padding: 0.72rem 0.74rem 0.78rem;
-  }
-
-  .productCategory {
-    margin-bottom: 0.16rem;
+    padding: 0.68rem 0.72rem 0.76rem;
   }
 
   .productName {
@@ -906,18 +893,11 @@
   }
 
   .imageWrapper {
-    aspect-ratio: 1 / 1.1;
+    aspect-ratio: 1 / 1.18;
   }
 
   .productInfo {
-    padding: 0.6rem 0.6rem 0.64rem;
-  }
-
-  .productCategory {
-    margin-bottom: 0.22rem;
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    text-transform: none;
+    padding: 0.54rem 0.58rem 0.62rem;
   }
 
   .productName {
@@ -996,11 +976,11 @@
   }
 
   .imageWrapper {
-    aspect-ratio: 1 / 1.16;
+    aspect-ratio: 1 / 1.24;
   }
 
   .productInfo {
-    padding: 0.5rem 0.5rem 0.54rem;
+    padding: 0.46rem 0.5rem 0.56rem;
   }
 
   .productName {

@@ -8,7 +8,6 @@ import { flyToCart } from '@/utils/flyToCart';
 import { resolveImageObjectUrl } from '@/lib/media';
 
 const FALLBACK_PRODUCT_IMAGE = '/logo-dai-thanh.png';
-const FALLBACK_CATEGORY_NAME = 'Gốm Sứ';
 const FALLBACK_PRODUCT_ALT = 'Sản phẩm gốm sứ';
 
 export default function InfiniteProductListLayout2({ initialData }) {
@@ -36,8 +35,6 @@ export default function InfiniteProductListLayout2({ initialData }) {
             </div>
 
             <div className={styles.cardBody}>
-              <span className={styles.categoryTag}>{product.category?.name || FALLBACK_CATEGORY_NAME}</span>
-
               <Link href={`/product/${product.slug || product.id}`} className={styles.productLink}>
                 <h3 className={styles.productName}>{product.name}</h3>
               </Link>

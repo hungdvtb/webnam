@@ -99,14 +99,17 @@ const normalizeAdditionalInfo = (rawValue) => {
     return parsed
         .map((item) => {
             const source = typeof item === 'object' && item !== null ? item : {};
+            const displayText = String(source.display_text || '').trim();
+            const postTitle = String(source.post_title || '').trim();
             return {
                 title: String(source.title || '').trim(),
+                display_text: displayText || postTitle,
                 post_id: source.post_id ? Number(source.post_id) : null,
-                post_title: String(source.post_title || '').trim(),
+                post_title: displayText || postTitle,
                 post_slug: String(source.post_slug || '').trim(),
             };
         })
-        .filter((item) => item.title || item.post_title || item.post_id);
+        .filter((item) => item.post_id && (item.display_text || item.post_title || item.title));
 };
 
 const parseSpecificationLines = (rawValue) => {
@@ -1884,6 +1887,7 @@ const StorefrontProductDetail = () => {
                             </div>
                         </section>
 
+                        {knowledgeItems.length > 0 ? (
                         <section className="rounded-[30px] border border-stone-200/80 bg-white p-5 shadow-[0_18px_40px_-34px_rgba(27,54,93,0.42)]">
                             <SectionHeading
                                 icon="menu_book"
@@ -1910,7 +1914,7 @@ const StorefrontProductDetail = () => {
                                                     <p className="m-kicker text-[10px] font-black uppercase tracking-[0.18em] text-stone-400">
                                                         {item.title || 'Bài viết gợi ý'}
                                                     </p>
-                                                    <p className="mt-2 line-clamp-2 text-sm font-black leading-6 text-stone-900">
+                                                    <p className="mt-2 line-clamp-2 text-sm font-black leading-6 text-stone-900" title={item.post_title || item.display_text || item.title || undefined}>
                                                         {item.post_title || item.title || 'Xem bài viết liên quan'}
                                                     </p>
                                                 </div>
@@ -1938,6 +1942,7 @@ const StorefrontProductDetail = () => {
                                 </Link>
                             )}
                         </section>
+                        ) : null}
                     </div>
                 </div>
 

@@ -521,9 +521,7 @@ export const blogApi = {
     exportBundle: (data = {}) => api.post('/blog/export-bundle', data, {
         responseType: 'blob',
     }),
-    importBundle: (formData) => api.post('/blog/import-bundle', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-    }),
+    importBundle: (formData) => api.post('/blog/import-bundle', formData),
 };
 
 export const invoiceApi = {
@@ -560,6 +558,11 @@ export const authApi = {
     register: (data) => api.post('/register', data),
     logout: () => api.post('/logout'),
     getUser: () => api.get('/user'),
+};
+
+export const userSettingsApi = {
+    get: () => api.get('/user-settings'),
+    update: (data) => api.patch('/user-settings', data),
 };
 
 export const cartApi = {

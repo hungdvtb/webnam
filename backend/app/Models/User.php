@@ -53,4 +53,9 @@ class User extends Authenticatable
     {
         return $this->belongsToMany(Account::class)->withPivot('role')->withTimestamps();
     }
+
+    public function userSetting()
+    {
+        return $this->hasOne(UserSetting::class);
+    }
 }

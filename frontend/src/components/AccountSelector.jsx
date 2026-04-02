@@ -1,9 +1,20 @@
 import React from 'react';
 import { accountApi } from '../services/api';
+import { flushUserSettingsSync } from '../services/userSettingsSync';
 
 const AccountSelector = ({ user }) => {
     const [accounts, setAccounts] = React.useState([]);
     const [activeId, setActiveId] = React.useState(localStorage.getItem('activeAccountId') || 'all');
+
+    const commitActiveAccount = React.useCallback(async (nextId, shouldReload = false) => {
+        localStorage.setItem('activeAccountId', nextId);
+        setActiveId(nextId);
+
+        if (shouldReload) {
+            await flushUserSettingsSync();
+            window.location.reload();
+        }
+    }, []);
 
     React.useEffect(() => {
         const cachedAccounts = sessionStorage.getItem('accounts_list');
@@ -12,9 +23,7 @@ const AccountSelector = ({ user }) => {
             setAccounts(parsedAccounts);
             if ((activeId === 'all' || !activeId) && parsedAccounts.length > 0) {
                 const firstId = parsedAccounts[0].id;
-                localStorage.setItem('activeAccountId', firstId);
-                setActiveId(firstId);
-                if (activeId === 'all') window.location.reload();
+                void commitActiveAccount(firstId, activeId === 'all');
             }
         } else {
             accountApi.getAll().then(res => {
@@ -22,19 +31,15 @@ const AccountSelector = ({ user }) => {
                 setAccounts(res.data);
                 if ((activeId === 'all' || !activeId) && res.data.length > 0) {
                     const firstId = res.data[0].id;
-                    localStorage.setItem('activeAccountId', firstId);
-                    setActiveId(firstId);
-                    if (activeId === 'all') window.location.reload();
+                    void commitActiveAccount(firstId, activeId === 'all');
                 }
             }).catch(console.error);
         }
-    }, [activeId]);
+    }, [activeId, commitActiveAccount]);
 
-    const handleAccountChange = (e) => {
+    const handleAccountChange = async (e) => {
         const newId = e.target.value;
-        localStorage.setItem('activeAccountId', newId);
-        setActiveId(newId);
-        window.location.reload();
+        await commitActiveAccount(newId, true);
     };
 
     return (

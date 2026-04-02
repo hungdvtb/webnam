@@ -12,6 +12,7 @@ use App\Services\Leads\LeadCaptureService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class StorefrontController extends Controller
 {
@@ -62,6 +63,83 @@ class StorefrontController extends Controller
                 $join->on("{$alias}.product_id", '=', 'products.id');
             })
             ->select('products.*');
+    }
+
+    protected function normalizeStorefrontAdditionalInfoPayload($rawValue): array
+    {
+        if ($rawValue === null || $rawValue === '' || $rawValue === []) {
+            return [];
+        }
+
+        if (is_string($rawValue)) {
+            $decoded = json_decode($rawValue, true);
+            $rawValue = json_last_error() === JSON_ERROR_NONE ? $decoded : [];
+        }
+
+        if (!is_array($rawValue)) {
+            return [];
+        }
+
+        return collect($rawValue)
+            ->map(function ($item) {
+                if (is_object($item)) {
+                    $item = (array) $item;
+                }
+
+                if (!is_array($item)) {
+                    return null;
+                }
+
+                $postId = filled($item['post_id'] ?? null) && is_numeric($item['post_id'])
+                    ? (int) $item['post_id']
+                    : null;
+
+                return [
+                    'title' => trim((string) ($item['title'] ?? '')),
+                    'display_text' => trim((string) ($item['display_text'] ?? '')),
+                    'post_id' => $postId,
+                    'post_title' => trim((string) ($item['post_title'] ?? '')),
+                    'post_slug' => trim((string) ($item['post_slug'] ?? '')),
+                ];
+            })
+            ->filter(fn ($item) => is_array($item) && !empty($item['post_id']))
+            ->values()
+            ->all();
+    }
+
+    protected function truncateAdditionalInfoDisplayText(string $value, int $maxLength = 72): string
+    {
+        $normalized = trim((string) preg_replace('/\s+/u', ' ', $value));
+
+        if ($normalized === '') {
+            return '';
+        }
+
+        if (mb_strlen($normalized) <= $maxLength) {
+            return $normalized;
+        }
+
+        $truncated = trim(mb_substr($normalized, 0, max(1, $maxLength - 1)));
+        $lastSpace = mb_strrpos($truncated, ' ');
+
+        if ($lastSpace !== false && $lastSpace >= (int) floor($maxLength * 0.6)) {
+            $truncated = trim(mb_substr($truncated, 0, $lastSpace));
+        }
+
+        return rtrim($truncated, " \t\n\r\0\x0B,.;:-") . '...';
+    }
+
+    protected function resolveAdditionalInfoDisplayText(array $item, ?Post $linkedPost): string
+    {
+        $manualDisplayText = trim((string) ($item['display_text'] ?? ''));
+
+        if ($manualDisplayText !== '') {
+            return $manualDisplayText;
+        }
+
+        $postTitle = trim((string) ($linkedPost?->title ?? ($item['post_title'] ?? '')));
+
+        return $this->truncateAdditionalInfoDisplayText($postTitle);
     }
 
     protected function mapStorefrontImages(Product $product): array
@@ -315,22 +393,9 @@ class StorefrontController extends Controller
             $product = $query->where('id', $slugOrId)->firstOrFail();
         }
 
-        $rawAdditionalInfo = $product->additional_info;
-        if (is_string($rawAdditionalInfo)) {
-            $decodedAdditionalInfo = json_decode($rawAdditionalInfo, true);
-            $rawAdditionalInfo = json_last_error() === JSON_ERROR_NONE ? $decodedAdditionalInfo : [];
-        }
-
-        $additionalInfoItems = collect(is_array($rawAdditionalInfo) ? $rawAdditionalInfo : [])
-            ->map(function ($item) {
-                if (is_object($item)) {
-                    $item = (array) $item;
-                }
-
-                return is_array($item) ? $item : null;
-            })
-            ->filter()
-            ->values();
+        $additionalInfoItems = collect(
+            $this->normalizeStorefrontAdditionalInfoPayload($product->additional_info)
+        );
 
         $bundleOptionPostIds = $product->type === 'bundle'
             ? $product->bundleItems
@@ -382,13 +447,23 @@ class StorefrontController extends Controller
                 $postId = filled($item['post_id'] ?? null) ? (int) $item['post_id'] : null;
                 $linkedPost = $postId ? $linkedPosts->get($postId) : null;
 
+                if (!$linkedPost) {
+                    return null;
+                }
+
+                $displayText = $this->resolveAdditionalInfoDisplayText($item, $linkedPost);
+                if ($displayText === '') {
+                    return null;
+                }
+
                 return [
                     'title' => trim((string) ($item['title'] ?? '')),
-                    'post_id' => $postId,
-                    'post_title' => $linkedPost?->title ?? trim((string) ($item['post_title'] ?? '')),
-                    'post_slug' => $linkedPost?->slug,
+                    'display_text' => $displayText,
+                    'post_id' => (int) $linkedPost->id,
+                    'post_title' => trim((string) $linkedPost->title),
+                    'post_slug' => trim((string) $linkedPost->slug),
                 ];
-            })->filter(fn ($item) => filled($item['title']) || filled($item['post_title']) || filled($item['post_id']))->values(),
+            })->filter()->values(),
             'weight' => $product->weight,
             'stock_quantity' => $product->stock_quantity,
             'is_featured' => $product->is_featured,
@@ -805,4 +880,3 @@ class StorefrontController extends Controller
         return $tree;
     }
 }
-

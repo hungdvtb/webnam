@@ -9,7 +9,7 @@ import LeadAttributionTracker from "@/components/common/LeadAttributionTracker";
 
 const DEFAULT_TOP_NOTICE = "MIỄN PHÍ VẬN CHUYỂN TOÀN QUỐC CHO ĐƠN HÀNG TỪ 500.000Đ";
 const DEFAULT_BRAND_TEXT = "GỐM ĐẠI THÀNH";
-const DEFAULT_SEARCH_PLACEHOLDER = "Bạn cần tìm kiếm sản phẩm gì?";
+const DEFAULT_SEARCH_PLACEHOLDER = "Bạn cần tìm sản phẩm gì?";
 const DEFAULT_FOOTER_DESCRIPTION = "Gìn giữ tinh hoa đất Việt qua từng nét vẽ, mảng men và những tác phẩm gốm sứ thủ công độc bản.";
 
 const DEFAULT_FOOTER_GROUPS = [

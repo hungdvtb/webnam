@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\Post;
 use App\Models\Product;
 use App\Models\Supplier;
 use App\Models\User;
@@ -18,6 +19,10 @@ class ProductBulkStructuredFieldsTest extends TestCase
     public function test_bulk_update_attributes_can_copy_structured_sections_and_undo_them(): void
     {
         $account = $this->authenticate();
+        $legacyGuidePost = $this->createPost($account, 'Huong dan cu');
+        $legacyCarePost = $this->createPost($account, 'Bao quan cu');
+        $guidePost = $this->createPost($account, 'Huong dan moi');
+        $warrantyPost = $this->createPost($account, 'Bao hanh moi');
 
         $firstProduct = $this->createProduct($account, [
             'name' => 'Bo am tra men lam',
@@ -25,7 +30,7 @@ class ProductBulkStructuredFieldsTest extends TestCase
                 ['label' => 'Chieu cao', 'value' => '18cm'],
             ], JSON_UNESCAPED_UNICODE),
             'additional_info' => json_encode([
-                ['title' => 'Huong dan', 'post_id' => 101, 'post_title' => 'Huong dan cu'],
+                ['title' => 'Huong dan', 'post_id' => $legacyGuidePost->id, 'post_title' => 'Huong dan cu'],
             ], JSON_UNESCAPED_UNICODE),
         ]);
 
@@ -35,7 +40,7 @@ class ProductBulkStructuredFieldsTest extends TestCase
                 ['label' => 'Duong kinh', 'value' => '14cm'],
             ], JSON_UNESCAPED_UNICODE),
             'additional_info' => json_encode([
-                ['title' => 'Bao quan', 'post_id' => 202, 'post_title' => 'Bao quan cu'],
+                ['title' => 'Bao quan', 'post_id' => $legacyCarePost->id, 'post_title' => 'Bao quan cu'],
             ], JSON_UNESCAPED_UNICODE),
         ]);
 
@@ -45,8 +50,8 @@ class ProductBulkStructuredFieldsTest extends TestCase
         ];
 
         $copiedAdditionalInfo = [
-            ['title' => 'Huong dan su dung', 'post_id' => 301, 'post_title' => 'Huong dan moi'],
-            ['title' => 'Chinh sach bao hanh', 'post_id' => 302, 'post_title' => 'Bao hanh moi'],
+            ['title' => 'Huong dan su dung', 'display_text' => '', 'post_id' => $guidePost->id, 'post_title' => 'Huong dan moi', 'post_slug' => ''],
+            ['title' => 'Chinh sach bao hanh', 'display_text' => '', 'post_id' => $warrantyPost->id, 'post_title' => 'Bao hanh moi', 'post_slug' => ''],
         ];
 
         $response = $this
@@ -89,10 +94,128 @@ class ProductBulkStructuredFieldsTest extends TestCase
             ['label' => 'Duong kinh', 'value' => '14cm'],
         ], json_decode((string) $secondProduct->specifications, true));
         $this->assertSame([
-            ['title' => 'Huong dan', 'post_id' => 101, 'post_title' => 'Huong dan cu'],
+            ['title' => 'Huong dan', 'post_id' => $legacyGuidePost->id, 'post_title' => 'Huong dan cu'],
         ], json_decode((string) $firstProduct->additional_info, true));
         $this->assertSame([
-            ['title' => 'Bao quan', 'post_id' => 202, 'post_title' => 'Bao quan cu'],
+            ['title' => 'Bao quan', 'post_id' => $legacyCarePost->id, 'post_title' => 'Bao quan cu'],
+        ], json_decode((string) $secondProduct->additional_info, true));
+    }
+
+    public function test_bulk_update_attributes_can_merge_selected_structured_items_without_overwriting_other_rows(): void
+    {
+        $account = $this->authenticate();
+        $legacyGuidePost = $this->createPost($account, 'Huong dan cu');
+        $legacyCarePost = $this->createPost($account, 'Bao quan cu');
+        $newGuidePost = $this->createPost($account, 'Huong dan moi');
+
+        $firstProduct = $this->createProduct($account, [
+            'name' => 'Bo do tho 1',
+            'specifications' => json_encode([
+                ['label' => 'Chieu cao', 'value' => '18cm'],
+                ['label' => 'Chat lieu', 'value' => 'Su cao cap'],
+            ], JSON_UNESCAPED_UNICODE),
+            'additional_info' => json_encode([
+                ['title' => 'Huong dan', 'post_id' => $legacyGuidePost->id, 'post_title' => 'Huong dan cu'],
+            ], JSON_UNESCAPED_UNICODE),
+        ]);
+
+        $secondProduct = $this->createProduct($account, [
+            'name' => 'Bo do tho 2',
+            'specifications' => json_encode([
+                ['label' => 'Duong kinh', 'value' => '14cm'],
+                ['label' => 'Mau sac', 'value' => 'Trang'],
+            ], JSON_UNESCAPED_UNICODE),
+            'additional_info' => json_encode([
+                ['title' => 'Bao quan', 'post_id' => $legacyCarePost->id, 'post_title' => 'Bao quan cu'],
+                ['title' => 'Huong dan su dung', 'post_id' => $newGuidePost->id, 'post_title' => 'Huong dan cu'],
+            ], JSON_UNESCAPED_UNICODE),
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->post('/api/products/bulk-update-attributes', [
+                'ids' => [$firstProduct->id, $secondProduct->id],
+                'merge_fields' => ['specifications', 'additional_info'],
+                'basic_info' => [
+                    'specifications' => json_encode([
+                        ['label' => 'Chieu cao', 'value' => '20cm'],
+                        ['label' => 'Mau sac', 'value' => 'Xanh ngoc'],
+                    ], JSON_UNESCAPED_UNICODE),
+                    'additional_info' => json_encode([
+                        [
+                            'title' => 'Huong dan su dung',
+                            'display_text' => 'Xem chi tiet',
+                            'post_id' => $newGuidePost->id,
+                            'post_title' => 'Huong dan moi',
+                            'post_slug' => 'huong-dan-moi',
+                        ],
+                    ], JSON_UNESCAPED_UNICODE),
+                ],
+            ]);
+
+        $response->assertOk();
+
+        $logId = (int) $response->json('log_id');
+
+        $firstProduct->refresh();
+        $secondProduct->refresh();
+
+        $this->assertSame([
+            ['label' => 'Chieu cao', 'value' => '20cm'],
+            ['label' => 'Chat lieu', 'value' => 'Su cao cap'],
+            ['label' => 'Mau sac', 'value' => 'Xanh ngoc'],
+        ], json_decode((string) $firstProduct->specifications, true));
+        $this->assertSame([
+            ['label' => 'Duong kinh', 'value' => '14cm'],
+            ['label' => 'Mau sac', 'value' => 'Xanh ngoc'],
+            ['label' => 'Chieu cao', 'value' => '20cm'],
+        ], json_decode((string) $secondProduct->specifications, true));
+        $this->assertSame([
+            ['title' => 'Huong dan', 'post_id' => $legacyGuidePost->id, 'post_title' => 'Huong dan cu'],
+            [
+                'title' => 'Huong dan su dung',
+                'display_text' => 'Xem chi tiet',
+                'post_id' => $newGuidePost->id,
+                'post_title' => 'Huong dan moi',
+                'post_slug' => 'huong-dan-moi',
+            ],
+        ], json_decode((string) $firstProduct->additional_info, true));
+        $this->assertSame([
+            ['title' => 'Bao quan', 'post_id' => $legacyCarePost->id, 'post_title' => 'Bao quan cu'],
+            [
+                'title' => 'Huong dan su dung',
+                'display_text' => 'Xem chi tiet',
+                'post_id' => $newGuidePost->id,
+                'post_title' => 'Huong dan moi',
+                'post_slug' => 'huong-dan-moi',
+            ],
+        ], json_decode((string) $secondProduct->additional_info, true));
+
+        $undoResponse = $this
+            ->withHeaders($this->headers($account))
+            ->post('/api/products/bulk-update-undo', [
+                'log_id' => $logId,
+            ]);
+
+        $undoResponse->assertOk();
+
+        $firstProduct->refresh();
+        $secondProduct->refresh();
+
+        $this->assertSame([
+            ['label' => 'Chieu cao', 'value' => '18cm'],
+            ['label' => 'Chat lieu', 'value' => 'Su cao cap'],
+        ], json_decode((string) $firstProduct->specifications, true));
+        $this->assertSame([
+            ['label' => 'Duong kinh', 'value' => '14cm'],
+            ['label' => 'Mau sac', 'value' => 'Trang'],
+        ], json_decode((string) $secondProduct->specifications, true));
+        $this->assertSame([
+            ['title' => 'Huong dan', 'post_id' => $legacyGuidePost->id, 'post_title' => 'Huong dan cu'],
+        ], json_decode((string) $firstProduct->additional_info, true));
+        $this->assertSame([
+            ['title' => 'Bao quan', 'post_id' => $legacyCarePost->id, 'post_title' => 'Bao quan cu'],
+            ['title' => 'Huong dan su dung', 'post_id' => $newGuidePost->id, 'post_title' => 'Huong dan cu'],
         ], json_decode((string) $secondProduct->additional_info, true));
     }
 
@@ -229,6 +352,18 @@ class ProductBulkStructuredFieldsTest extends TestCase
             'name' => $name,
             'code' => $code,
             'status' => true,
+        ]);
+    }
+
+    private function createPost(Account $account, string $title): Post
+    {
+        return Post::query()->create([
+            'account_id' => $account->id,
+            'title' => $title,
+            'slug' => Str::slug($title) . '-' . Str::lower(Str::random(5)),
+            'content' => 'Noi dung bai viet',
+            'excerpt' => 'Tom tat bai viet',
+            'is_published' => true,
         ]);
     }
 }

@@ -582,31 +582,31 @@ export default async function BlogPostPage({ params }) {
 
         .bdt-excerpt-dropcap {
           display: flow-root;
-          margin-bottom: 2.4rem;
+          margin-bottom: 1rem;
           color: rgba(27, 54, 93, 0.9);
-          font-size: 1.2rem;
-          line-height: 1.85;
+          font-size: 1rem;
+          line-height: 1.65;
           overflow-wrap: anywhere;
           word-break: break-word;
         }
 
         .bdt-excerpt-dropcap::first-letter {
-          float: left;
-          padding-top: 0.35rem;
-          padding-right: 0.6rem;
-          color: #1B365D;
-          font-family: var(--font-roboto);
-          font-size: 5rem;
-          font-weight: 900;
-          line-height: 4rem;
+          float: none;
+          padding-top: 0;
+          padding-right: 0;
+          color: inherit;
+          font-family: inherit;
+          font-size: inherit;
+          font-weight: inherit;
+          line-height: inherit;
         }
 
         .bdt-content {
           width: 100%;
           min-width: 0;
           color: rgba(27, 54, 93, 0.92);
-          font-size: 1.1rem;
-          line-height: 1.9;
+          font-size: 1rem;
+          line-height: 1.65;
           overflow-wrap: anywhere;
           word-break: break-word;
           word-wrap: break-word;
@@ -660,60 +660,61 @@ export default async function BlogPostPage({ params }) {
         }
 
         .bdt-content p {
-          margin: 0 0 1.35rem;
+          margin: 0 0 0.8rem;
         }
 
         .bdt-content h2 {
           display: flex;
           align-items: flex-start;
           flex-wrap: wrap;
-          gap: 1rem;
+          gap: 0.7rem;
           min-width: 0;
-          margin: 3.1rem 0 1.2rem;
+          margin: 1.4rem 0 0.65rem;
           color: #1B365D;
           font-family: var(--font-roboto);
-          font-size: 1.8rem;
-          font-style: italic;
+          font-size: 1.125rem;
+          font-style: normal;
           font-weight: 700;
-          line-height: 1.32;
+          line-height: 1.5;
         }
 
         .bdt-content h2::after {
           content: '';
           flex: 1;
-          min-width: min(140px, 100%);
+          min-width: min(96px, 100%);
           height: 1px;
           background: rgba(197, 160, 89, 0.35);
         }
 
         .bdt-content h3 {
-          margin: 2.4rem 0 1rem;
+          margin: 1.1rem 0 0.5rem;
           color: #1B365D;
           font-family: var(--font-roboto);
-          font-size: 1.4rem;
+          font-size: 1.125rem;
           font-weight: 700;
+          line-height: 1.5;
         }
 
         .bdt-content blockquote {
-          margin: 2.2rem 0;
-          padding: 1.45rem 0;
+          margin: 1.2rem 0;
+          padding: 0.9rem 0;
           border-top: 1px solid rgba(197, 160, 89, 0.4);
           border-bottom: 1px solid rgba(197, 160, 89, 0.4);
           color: #1B365D;
-          font-size: 1.38rem;
+          font-size: 1rem;
           font-style: italic;
-          line-height: 1.6;
+          line-height: 1.65;
           text-align: center;
         }
 
         .bdt-content ul,
         .bdt-content ol {
-          margin: 1.25rem 0;
+          margin: 0.85rem 0;
           padding-left: 1.5rem;
         }
 
         .bdt-content li {
-          margin-bottom: 0.5rem;
+          margin-bottom: 0.35rem;
         }
 
         .bdt-content table {
@@ -742,11 +743,11 @@ export default async function BlogPostPage({ params }) {
 
         .bdt-content .bdt-inline-media,
         .bdt-content .bdt-embedded-video {
-          margin: clamp(1.7rem, 3vw, 2.4rem) 0;
-          padding: clamp(0.38rem, 1vw, 0.6rem);
-          border-radius: 1.25rem;
+          margin: clamp(1rem, 2.2vw, 1.4rem) 0;
+          padding: clamp(0.32rem, 0.8vw, 0.5rem);
+          border-radius: 1rem;
           background: linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(241, 234, 223, 0.92));
-          box-shadow: 0 16px 36px rgba(27, 54, 93, 0.08);
+          box-shadow: 0 12px 28px rgba(27, 54, 93, 0.07);
         }
 
         .bdt-content .bdt-inline-media-frame,
@@ -805,31 +806,31 @@ export default async function BlogPostPage({ params }) {
         }
 
         .bdt-content figure {
-          margin: 2rem 0;
+          margin: 1.2rem 0;
         }
 
         .bdt-content figcaption {
-          margin-top: 0.55rem;
+          margin-top: 0.45rem;
           color: rgba(27, 54, 93, 0.65);
-          font-size: 0.85rem;
+          font-size: 0.82rem;
           font-style: italic;
           text-align: center;
         }
 
         .bdt-content .bdt-media-gallery {
-          margin: clamp(1.9rem, 3vw, 2.6rem) 0;
-          padding: clamp(0.6rem, 1vw, 0.75rem);
-          border-radius: 1.45rem;
+          margin: clamp(1.15rem, 2.3vw, 1.6rem) 0;
+          padding: clamp(0.45rem, 0.9vw, 0.6rem);
+          border-radius: 1.15rem;
           background: linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(241, 234, 223, 0.92));
-          box-shadow: 0 18px 38px rgba(27, 54, 93, 0.09);
+          box-shadow: 0 14px 30px rgba(27, 54, 93, 0.08);
         }
 
         .bdt-content :where(.bdt-inline-media, .bdt-embedded-video, .bdt-media-gallery) + :where(h2, h3, h4, p, ul, ol, blockquote, figure) {
-          margin-top: clamp(1.05rem, 2.2vw, 1.45rem);
+          margin-top: clamp(0.8rem, 1.8vw, 1rem);
         }
 
         .bdt-content :where(h2, h3, h4, p, ul, ol, blockquote, figure) + :where(.bdt-inline-media, .bdt-embedded-video, .bdt-media-gallery) {
-          margin-top: clamp(1.05rem, 2.2vw, 1.45rem);
+          margin-top: clamp(0.8rem, 1.8vw, 1rem);
         }
 
         .bdt-content .bdt-media-gallery-main {
@@ -878,8 +879,8 @@ export default async function BlogPostPage({ params }) {
 
         .bdt-content .bdt-media-gallery-thumbs {
           display: flex;
-          gap: 0.8rem;
-          margin-top: 0.9rem;
+          gap: 0.65rem;
+          margin-top: 0.7rem;
           padding-bottom: 0.15rem;
           overflow-x: auto;
           -webkit-overflow-scrolling: touch;
@@ -965,17 +966,17 @@ export default async function BlogPostPage({ params }) {
           position: relative;
           max-width: 100%;
           overflow: visible;
-          margin: 2.5rem 0;
-          padding: 2rem;
-          border-left: 6px solid #1B365D;
+          margin: 1.4rem 0;
+          padding: 1.25rem;
+          border-left: 5px solid #1B365D;
           background: rgba(27, 54, 93, 0.05);
         }
 
         .bdt-content .grid-2 {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 1rem;
-          margin: 2rem 0;
+          gap: 0.8rem;
+          margin: 1.2rem 0;
         }
 
         .bdt-tags {
@@ -1257,8 +1258,8 @@ export default async function BlogPostPage({ params }) {
           }
 
           .bdt-excerpt-dropcap::first-letter {
-            font-size: 4rem;
-            line-height: 3.1rem;
+            font-size: inherit;
+            line-height: inherit;
           }
         }
 
@@ -1308,13 +1309,13 @@ export default async function BlogPostPage({ params }) {
           }
 
           .bdt-content {
-            font-size: 1.03rem;
-            line-height: 1.82;
+            font-size: 1rem;
+            line-height: 1.65;
           }
 
           .bdt-content h2 {
             display: block;
-            font-size: 1.55rem;
+            font-size: 1.125rem;
           }
 
           .bdt-content h2::after {
@@ -1322,12 +1323,12 @@ export default async function BlogPostPage({ params }) {
           }
 
           .bdt-content h3 {
-            font-size: 1.28rem;
+            font-size: 1.125rem;
           }
 
           .bdt-content blockquote {
-            padding: 1.15rem 0;
-            font-size: 1.16rem;
+            padding: 0.8rem 0;
+            font-size: 1rem;
             text-align: left;
           }
 
@@ -1337,7 +1338,7 @@ export default async function BlogPostPage({ params }) {
           }
 
           .bdt-content .highlight-section {
-            padding: 1.25rem;
+            padding: 1rem;
           }
 
           .bdt-content .bdt-media-gallery {
@@ -1361,7 +1362,7 @@ export default async function BlogPostPage({ params }) {
 
           .bdt-content .bdt-inline-media,
           .bdt-content .bdt-embedded-video {
-            margin: 1.45rem 0 1.8rem;
+            margin: 1rem 0 1.2rem;
             border-radius: 1rem;
           }
 

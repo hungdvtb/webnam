@@ -312,7 +312,7 @@
 
 .imageArea {
   position: relative;
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 1 / 1.08;
   overflow: hidden;
   background: #f9f5f0;
 }
@@ -352,17 +352,8 @@
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 0.35rem;
-  padding: 1.25rem;
-}
-
-.categoryTag {
-  color: #c5a059;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  gap: 0.24rem;
+  padding: 1.1rem 1.15rem 1.15rem;
 }
 
 .productLink {
@@ -372,6 +363,7 @@
 
 .productName {
   margin: 0;
+  min-height: calc(1.35em * 2);
   overflow: hidden;
   color: #1b365d;
   font-size: 1.125rem;
@@ -680,7 +672,7 @@
   }
 
   .imageArea {
-    aspect-ratio: 1 / 1.03;
+    aspect-ratio: 1 / 1.12;
   }
 
   .badge {
@@ -692,14 +684,8 @@
   }
 
   .cardBody {
-    gap: 0.28rem;
-    padding: 0.72rem;
-  }
-
-  .categoryTag {
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    text-transform: none;
+    gap: 0.18rem;
+    padding: 0.64rem 0.68rem 0.72rem;
   }
 
   .productName {
@@ -843,7 +829,7 @@
   }
 
   .imageArea {
-    aspect-ratio: 1 / 1.02;
+    aspect-ratio: 1 / 1.16;
   }
 
   .badge {
@@ -854,12 +840,8 @@
   }
 
   .cardBody {
-    gap: 0.24rem;
-    padding: 0.62rem;
-  }
-
-  .categoryTag {
-    font-size: 11px;
+    gap: 0.16rem;
+    padding: 0.58rem 0.6rem 0.66rem;
   }
 
   .productName {

@@ -865,6 +865,7 @@ class BlogBundleService
         }
 
         $normalizedPath = rawurldecode(trim((string) $pathCandidate));
+        $normalizedRelativePath = ltrim(str_replace('\\', '/', $normalizedPath), '/');
 
         if (Str::startsWith($normalizedPath, '/storage/')) {
             return storage_path('app/public/' . ltrim(Str::after($normalizedPath, '/storage/'), '/'));
@@ -872,6 +873,27 @@ class BlogBundleService
 
         if (Str::startsWith($normalizedPath, 'storage/')) {
             return storage_path('app/public/' . ltrim(Str::after($normalizedPath, 'storage/'), '/'));
+        }
+
+        if ($normalizedRelativePath !== '') {
+            if (Str::startsWith($normalizedRelativePath, 'uploads/')) {
+                $storageAssetPath = storage_path('app/public/' . $normalizedRelativePath);
+                if (is_file($storageAssetPath)) {
+                    return $storageAssetPath;
+                }
+
+                $publicAssetPath = public_path($normalizedRelativePath);
+                if (is_file($publicAssetPath)) {
+                    return $publicAssetPath;
+                }
+
+                return $storageAssetPath;
+            }
+
+            $publicAssetPath = public_path($normalizedRelativePath);
+            if (is_file($publicAssetPath)) {
+                return $publicAssetPath;
+            }
         }
 
         if (preg_match('/^[A-Za-z]:\\\\/', $normalizedPath) === 1 && is_file($normalizedPath)) {

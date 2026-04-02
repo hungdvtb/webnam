@@ -3824,6 +3824,319 @@ class ProductController extends Controller
         return $normalized;
     }
 
+    protected function normalizeAdditionalInfoItem($item, string $attribute = 'additional_info'): ?array
+    {
+        if (is_object($item)) {
+            $item = (array) $item;
+        }
+
+        if (!is_array($item)) {
+            throw ValidationException::withMessages([
+                $attribute => ['Du lieu "Thong tin bo sung" khong hop le.'],
+            ]);
+        }
+
+        $rawPostId = $item['post_id'] ?? null;
+        if (filled($rawPostId) && !is_numeric($rawPostId)) {
+            throw ValidationException::withMessages([
+                $attribute => ['Bai viet lien ket khong hop le.'],
+            ]);
+        }
+
+        $postId = filled($rawPostId) ? (int) $rawPostId : null;
+
+        return [
+            'title' => trim((string) ($item['title'] ?? '')),
+            'display_text' => trim((string) ($item['display_text'] ?? '')),
+            'post_id' => $postId,
+            'post_title' => trim((string) ($item['post_title'] ?? '')),
+            'post_slug' => trim((string) ($item['post_slug'] ?? '')),
+        ];
+    }
+
+    protected function normalizeAdditionalInfoPayload($rawValue, string $attribute = 'additional_info'): array
+    {
+        if ($rawValue === null || $rawValue === '' || $rawValue === []) {
+            return [];
+        }
+
+        if (is_string($rawValue)) {
+            $decoded = json_decode($rawValue, true);
+
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                throw ValidationException::withMessages([
+                    $attribute => ['Du lieu "Thong tin bo sung" khong dung dinh dang JSON.'],
+                ]);
+            }
+
+            $rawValue = $decoded;
+        }
+
+        if (!is_array($rawValue)) {
+            throw ValidationException::withMessages([
+                $attribute => ['Du lieu "Thong tin bo sung" khong hop le.'],
+            ]);
+        }
+
+        return collect($rawValue)
+            ->map(fn ($item) => $this->normalizeAdditionalInfoItem($item, $attribute))
+            ->filter(fn ($item) => !empty($item['post_id']))
+            ->values()
+            ->all();
+    }
+
+    protected function validateAdditionalInfoPostOwnership(array $items, Request $request, string $attribute = 'additional_info'): void
+    {
+        $postIds = collect($items)
+            ->pluck('post_id')
+            ->filter()
+            ->map(fn ($postId) => (int) $postId)
+            ->unique()
+            ->values();
+
+        if ($postIds->isEmpty()) {
+            return;
+        }
+
+        $query = Post::query()->whereIn('id', $postIds->all());
+        $accountId = (int) $request->header('X-Account-Id');
+
+        if ($accountId > 0) {
+            $query->where('account_id', $accountId);
+        }
+
+        $resolvedIds = $query
+            ->pluck('id')
+            ->map(fn ($postId) => (int) $postId)
+            ->unique()
+            ->values();
+
+        if ($resolvedIds->count() !== $postIds->count()) {
+            throw ValidationException::withMessages([
+                $attribute => ['Bai viet lien ket khong hop le hoac khong thuoc tai khoan hien tai.'],
+            ]);
+        }
+    }
+
+    protected function prepareAdditionalInfoForPersistence(Request $request, array &$payload, string $requestKey = 'additional_info', string $attribute = 'additional_info'): void
+    {
+        if (!$request->exists($requestKey) && !array_key_exists($requestKey, $payload)) {
+            return;
+        }
+
+        $rawValue = array_key_exists($requestKey, $payload)
+            ? $payload[$requestKey]
+            : $request->input($requestKey);
+
+        $normalized = $this->normalizeAdditionalInfoPayload($rawValue, $attribute);
+        $this->validateAdditionalInfoPostOwnership($normalized, $request, $attribute);
+
+        $payload[$requestKey] = !empty($normalized)
+            ? json_encode($normalized, JSON_UNESCAPED_UNICODE)
+            : null;
+    }
+
+    protected function normalizeSpecificationItem($item, string $attribute = 'specifications'): ?array
+    {
+        if (is_object($item)) {
+            $item = (array) $item;
+        }
+
+        if (!is_array($item)) {
+            throw ValidationException::withMessages([
+                $attribute => ['Du lieu "Bang thong so ky thuat" khong hop le.'],
+            ]);
+        }
+
+        return [
+            'label' => trim((string) ($item['label'] ?? '')),
+            'value' => trim((string) ($item['value'] ?? '')),
+        ];
+    }
+
+    protected function normalizeSpecificationsPayload(
+        $rawValue,
+        string $attribute = 'specifications',
+        bool $allowLegacyText = true
+    ): array {
+        if ($rawValue === null || $rawValue === '' || $rawValue === []) {
+            return [];
+        }
+
+        if (is_string($rawValue)) {
+            $trimmed = trim($rawValue);
+
+            if ($trimmed === '') {
+                return [];
+            }
+
+            $decoded = json_decode($trimmed, true);
+
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $rawValue = $decoded;
+            } elseif ($allowLegacyText) {
+                return collect(preg_split('/\r\n|\r|\n/u', $trimmed) ?: [])
+                    ->map(function ($line) use ($attribute) {
+                        $line = trim((string) $line);
+
+                        if ($line === '') {
+                            return null;
+                        }
+
+                        [$labelPart, $valuePart] = array_pad(explode(':', $line, 2), 2, '');
+
+                        return $this->normalizeSpecificationItem([
+                            'label' => $labelPart,
+                            'value' => $valuePart,
+                        ], $attribute);
+                    })
+                    ->filter(fn ($item) => !empty($item['label']) || !empty($item['value']))
+                    ->values()
+                    ->all();
+            } else {
+                throw ValidationException::withMessages([
+                    $attribute => ['Du lieu "Bang thong so ky thuat" khong dung dinh dang JSON.'],
+                ]);
+            }
+        }
+
+        if (!is_array($rawValue)) {
+            throw ValidationException::withMessages([
+                $attribute => ['Du lieu "Bang thong so ky thuat" khong hop le.'],
+            ]);
+        }
+
+        return collect($rawValue)
+            ->map(fn ($item) => $this->normalizeSpecificationItem($item, $attribute))
+            ->filter(fn ($item) => !empty($item['label']) || !empty($item['value']))
+            ->values()
+            ->all();
+    }
+
+    protected function parsePersistedSpecificationsPayload($rawValue): array
+    {
+        try {
+            return $this->normalizeSpecificationsPayload($rawValue, 'specifications', true);
+        } catch (ValidationException $exception) {
+            return [];
+        }
+    }
+
+    protected function parsePersistedAdditionalInfoPayload($rawValue): array
+    {
+        try {
+            return $this->normalizeAdditionalInfoPayload($rawValue, 'additional_info');
+        } catch (ValidationException $exception) {
+            return [];
+        }
+    }
+
+    protected function normalizeStructuredMergeKey($value): string
+    {
+        return (string) Str::of((string) $value)
+            ->ascii()
+            ->lower()
+            ->replaceMatches('/\s+/u', ' ')
+            ->trim();
+    }
+
+    protected function resolveSpecificationMergeKey(array $item): string
+    {
+        $labelKey = $this->normalizeStructuredMergeKey($item['label'] ?? '');
+
+        if ($labelKey !== '') {
+            return 'label:' . $labelKey;
+        }
+
+        $valueKey = $this->normalizeStructuredMergeKey($item['value'] ?? '');
+
+        return $valueKey !== '' ? 'value:' . $valueKey : '';
+    }
+
+    protected function mergeSpecificationsPayload($rawExistingValue, array $incomingItems): ?string
+    {
+        $merged = $this->parsePersistedSpecificationsPayload($rawExistingValue);
+        $indexByKey = [];
+
+        foreach ($merged as $index => $item) {
+            $mergeKey = $this->resolveSpecificationMergeKey($item);
+
+            if ($mergeKey !== '' && !array_key_exists($mergeKey, $indexByKey)) {
+                $indexByKey[$mergeKey] = $index;
+            }
+        }
+
+        foreach ($incomingItems as $item) {
+            $mergeKey = $this->resolveSpecificationMergeKey($item);
+
+            if ($mergeKey !== '' && array_key_exists($mergeKey, $indexByKey)) {
+                $merged[$indexByKey[$mergeKey]] = $item;
+                continue;
+            }
+
+            $merged[] = $item;
+
+            if ($mergeKey !== '') {
+                $indexByKey[$mergeKey] = array_key_last($merged);
+            }
+        }
+
+        return !empty($merged)
+            ? json_encode(array_values($merged), JSON_UNESCAPED_UNICODE)
+            : null;
+    }
+
+    protected function resolveAdditionalInfoMergeKey(array $item): string
+    {
+        $postId = isset($item['post_id']) ? (int) $item['post_id'] : 0;
+
+        if ($postId > 0) {
+            return 'post:' . $postId;
+        }
+
+        $titleKey = $this->normalizeStructuredMergeKey($item['title'] ?? '');
+        $displayKey = $this->normalizeStructuredMergeKey($item['display_text'] ?? '');
+
+        if ($titleKey === '' && $displayKey === '') {
+            return '';
+        }
+
+        return 'fallback:' . $titleKey . '|' . $displayKey;
+    }
+
+    protected function mergeAdditionalInfoPayload($rawExistingValue, array $incomingItems): ?string
+    {
+        $merged = $this->parsePersistedAdditionalInfoPayload($rawExistingValue);
+        $indexByKey = [];
+
+        foreach ($merged as $index => $item) {
+            $mergeKey = $this->resolveAdditionalInfoMergeKey($item);
+
+            if ($mergeKey !== '' && !array_key_exists($mergeKey, $indexByKey)) {
+                $indexByKey[$mergeKey] = $index;
+            }
+        }
+
+        foreach ($incomingItems as $item) {
+            $mergeKey = $this->resolveAdditionalInfoMergeKey($item);
+
+            if ($mergeKey !== '' && array_key_exists($mergeKey, $indexByKey)) {
+                $merged[$indexByKey[$mergeKey]] = $item;
+                continue;
+            }
+
+            $merged[] = $item;
+
+            if ($mergeKey !== '') {
+                $indexByKey[$mergeKey] = array_key_last($merged);
+            }
+        }
+
+        return !empty($merged)
+            ? json_encode(array_values($merged), JSON_UNESCAPED_UNICODE)
+            : null;
+    }
+
 
     /**
      * Store a newly created resource in storage.
@@ -3856,6 +4169,7 @@ class ProductController extends Controller
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
             'specifications' => 'nullable|string',
+            'additional_info' => 'nullable',
             'status' => 'nullable|boolean',
             'video_url' => 'nullable|string|max:2048',
             'slug' => 'nullable|string|max:255|unique:products,slug',
@@ -3901,6 +4215,7 @@ class ProductController extends Controller
         ]);
         $this->applyLegacyExpectedCostAlias($request, $validated);
         $this->applyCompositeAutoPrice($request, $validated);
+        $this->prepareAdditionalInfoForPersistence($request, $validated);
 
         $validated['slug'] = $this->productSkuService->generateUniqueSlug(
             !empty($validated['slug']) ? $validated['slug'] : $validated['name']
@@ -4495,6 +4810,7 @@ class ProductController extends Controller
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
             'specifications' => 'nullable|string',
+            'additional_info' => 'nullable',
             'video_url' => 'nullable|string|max:2048',
             'slug' => 'nullable|string|max:255|unique:products,slug,' . $id,
             'bundle_title' => 'nullable|string|max:255',
@@ -4538,6 +4854,7 @@ class ProductController extends Controller
         ]);
         $this->applyLegacyExpectedCostAlias($request, $validated);
         $this->applyCompositeAutoPrice($request, $validated, $product);
+        $this->prepareAdditionalInfoForPersistence($request, $validated);
 
         $incomingSupplierIds = $request->has('supplier_ids') || $request->has('supplier_id') || $request->boolean('clear_supplier_ids');
         $supplierIds = $incomingSupplierIds
@@ -5297,15 +5614,52 @@ class ProductController extends Controller
             'basic_info.cost_price' => 'nullable|numeric|min:0',
             'basic_info.expected_cost' => 'nullable|numeric|min:0',
             'basic_info.specifications' => 'nullable|string',
-            'basic_info.additional_info' => 'nullable|string',
+            'basic_info.additional_info' => 'nullable',
             'basic_info.supplier_id' => ['nullable', $this->supplierExistsRule($request)],
             'basic_info.supplier_ids' => 'nullable|array',
             'basic_info.supplier_ids.*' => ['nullable', $this->supplierExistsRule($request)],
+            'merge_fields' => 'nullable|array',
+            'merge_fields.*' => 'in:specifications,additional_info',
             'attributes' => 'nullable|array',
         ]);
 
         $ids = $request->input('ids');
         $basicInfo = $request->input('basic_info', []);
+        $mergeFields = collect($request->input('merge_fields', []))
+            ->map(fn ($field) => trim((string) $field))
+            ->filter()
+            ->intersect(['specifications', 'additional_info'])
+            ->values()
+            ->all();
+        $mergeFieldLookup = array_fill_keys($mergeFields, true);
+        $structuredMergePayloads = [];
+
+        if (array_key_exists('specifications', $basicInfo) && isset($mergeFieldLookup['specifications'])) {
+            $normalizedSpecifications = $this->normalizeSpecificationsPayload(
+                $basicInfo['specifications'] ?? $request->input('basic_info.specifications'),
+                'basic_info.specifications'
+            );
+
+            $structuredMergePayloads['specifications'] = $normalizedSpecifications;
+            $basicInfo['specifications'] = !empty($normalizedSpecifications)
+                ? json_encode($normalizedSpecifications, JSON_UNESCAPED_UNICODE)
+                : null;
+        }
+
+        if ($request->exists('basic_info.additional_info') || array_key_exists('additional_info', $basicInfo)) {
+            $normalizedAdditionalInfo = $this->normalizeAdditionalInfoPayload(
+                $basicInfo['additional_info'] ?? $request->input('basic_info.additional_info'),
+                'basic_info.additional_info'
+            );
+            $this->validateAdditionalInfoPostOwnership($normalizedAdditionalInfo, $request, 'basic_info.additional_info');
+            if (isset($mergeFieldLookup['additional_info'])) {
+                $structuredMergePayloads['additional_info'] = $normalizedAdditionalInfo;
+            }
+            $basicInfo['additional_info'] = !empty($normalizedAdditionalInfo)
+                ? json_encode($normalizedAdditionalInfo, JSON_UNESCAPED_UNICODE)
+                : null;
+        }
+
         if (!array_key_exists('expected_cost', $basicInfo) && array_key_exists('cost_price', $basicInfo)) {
             $basicInfo['expected_cost'] = $basicInfo['cost_price'];
         }
@@ -5382,6 +5736,13 @@ class ProductController extends Controller
                 $toUpdate = [];
                 foreach ($basicUpdateFields as $field) {
                     if (array_key_exists($field, $basicInfo) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
+                        if (isset($mergeFieldLookup[$field]) && isset($structuredMergePayloads[$field])) {
+                            $toUpdate[$field] = $field === 'specifications'
+                                ? $this->mergeSpecificationsPayload($product->specifications, $structuredMergePayloads[$field])
+                                : $this->mergeAdditionalInfoPayload($product->additional_info, $structuredMergePayloads[$field]);
+                            continue;
+                        }
+
                         $toUpdate[$field] = $basicInfo[$field];
                     }
                 }

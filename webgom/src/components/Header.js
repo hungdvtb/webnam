@@ -7,7 +7,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCart } from "@/context/CartContext";
 
 const DEFAULT_BRAND_TITLE = "G\u1ed1m \u0110\u1ea1i Th\u00e0nh";
-const DEFAULT_SEARCH_PLACEHOLDER = "B\u1ea1n c\u1ea7n t\u00ecm ki\u1ebfm s\u1ea3n ph\u1ea9m g\u00ec?";
+const DEFAULT_SEARCH_PLACEHOLDER = "B\u1ea1n c\u1ea7n t\u00ecm s\u1ea3n ph\u1ea9m g\u00ec?";
 const DEFAULT_NAV_ITEMS = [
   { id: "header-default-products", title: "S\u1ea3n ph\u1ea9m", url: "/products" },
   { id: "header-default-about", title: "V\u1ec1 ch\u00fang t\u00f4i", url: "/about" },
@@ -80,6 +80,16 @@ const normalizeBrandTitle = (value = "") => {
   if (!trimmed) return DEFAULT_BRAND_TITLE;
 
   return toComparableText(trimmed) === "gom dai thanh" ? DEFAULT_BRAND_TITLE : trimmed;
+};
+
+const normalizeSearchPlaceholder = (value = "") => {
+  const trimmed = String(value || "").trim();
+
+  if (!trimmed) return DEFAULT_SEARCH_PLACEHOLDER;
+
+  return toComparableText(trimmed) === "ban can tim kiem san pham gi?"
+    ? DEFAULT_SEARCH_PLACEHOLDER
+    : trimmed;
 };
 
 const toUpperNavLabel = (value = "") => String(value || "").toLocaleUpperCase("vi-VN");
@@ -239,8 +249,7 @@ export default function Header({
 
   const resolvedBrandTitle = normalizeBrandTitle(brandText);
   const resolvedLogoUrl = String(logoUrl || "").trim() || "/logo-dai-thanh.png";
-  const resolvedSearchPlaceholder =
-    String(searchPlaceholder || "").trim() || DEFAULT_SEARCH_PLACEHOLDER;
+  const resolvedSearchPlaceholder = normalizeSearchPlaceholder(searchPlaceholder);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1075,9 +1084,18 @@ export default function Header({
           padding: 6px 16px 6px 36px;
           width: clamp(190px, 18vw, 250px);
           font-size: 13px;
+          appearance: none;
+          -webkit-appearance: none;
           outline: none;
           transition: width 0.3s ease, background-color 0.3s ease;
           min-width: 0;
+        }
+
+        .search-input::placeholder {
+          color: #94a3b8;
+          opacity: 1;
+          font-size: inherit;
+          line-height: inherit;
         }
 
         .search-input:focus {
@@ -1348,14 +1366,30 @@ export default function Header({
           .search-bar {
             flex: 1 1 auto;
             min-width: 0;
+            min-height: 40px;
+            height: 40px;
           }
 
-          .search-input {
-            width: 100%;
+          .search-icon {
+            left: 12px;
+            width: 18px;
+            height: 18px;
           }
 
+          .search-icon .material-symbols-outlined {
+            font-size: 18px !important;
+          }
+
+          .search-input,
           .search-input:focus {
             width: 100%;
+            min-width: 0;
+            height: 40px;
+            min-height: 40px;
+            padding: 0 14px 0 40px;
+            border-radius: 999px;
+            font-size: 14px;
+            line-height: 1.2;
           }
 
           .cart-subtitle {
@@ -1398,8 +1432,10 @@ export default function Header({
           .search-input:focus {
             width: 100%;
             min-width: 0;
-            font-size: 12px;
-            padding: 6px 14px 6px 34px;
+            height: 40px;
+            min-height: 40px;
+            padding: 0 14px 0 40px;
+            font-size: 14px;
           }
 
           .cart-text {
@@ -1455,11 +1491,11 @@ export default function Header({
 
           .search-input,
           .search-input:focus {
-            padding: 6px 12px 6px 32px;
+            padding: 0 12px 0 38px;
           }
 
           .search-icon {
-            left: 10px;
+            left: 12px;
           }
 
           .search-icon .material-symbols-outlined {
@@ -1531,8 +1567,8 @@ export default function Header({
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 0.75rem;
-            padding-bottom: 12px;
+            gap: 10px;
+            padding-bottom: 10px;
             border-bottom: 1px solid rgba(226, 232, 240, 0.9);
           }
 
@@ -1550,8 +1586,8 @@ export default function Header({
           }
 
           .mobile-products-sheet__close {
-            width: 32px;
-            height: 32px;
+            width: 34px;
+            height: 34px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -1570,19 +1606,19 @@ export default function Header({
           .mobile-products-sheet__list {
             display: flex;
             flex-direction: column;
-            gap: 8px;
-            margin-top: 12px;
+            gap: 6px;
+            margin-top: 10px;
             overflow: visible;
           }
 
           .mobile-products-link {
             width: 100%;
-            min-height: 48px;
+            min-height: 46px;
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 11px 13px;
+            justify-content: flex-start;
+            gap: 12px;
+            padding: 10px 12px;
             border-radius: 14px;
             border: 1px solid rgba(226, 232, 240, 0.95);
             background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
@@ -1629,9 +1665,10 @@ export default function Header({
           .mobile-products-link__name {
             min-width: 0;
             flex: 1;
-            font-size: 12.5px;
+            padding-right: 4px;
+            font-size: 14px;
             font-weight: 700;
-            line-height: 1.35;
+            line-height: 1.3;
             white-space: normal;
             overflow-wrap: anywhere;
           }
@@ -1640,15 +1677,18 @@ export default function Header({
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            min-width: 26px;
-            height: 24px;
+            margin-left: auto;
+            min-width: 30px;
+            height: 26px;
             padding: 0 8px;
             border-radius: 999px;
             border: 1px solid rgba(197, 160, 89, 0.18);
             background: #f8f3e9;
             color: #946d26;
-            font-size: 10px;
+            font-size: 12px;
             font-weight: 800;
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
             flex-shrink: 0;
             box-shadow: inset 0 -1px 0 rgba(148, 109, 38, 0.08);
           }
@@ -1659,6 +1699,7 @@ export default function Header({
             display: inline-flex;
             align-items: center;
             justify-content: center;
+            margin-left: auto;
             border-radius: 999px;
             background: rgba(197, 160, 89, 0.12);
             color: #946d26;
@@ -2034,20 +2075,21 @@ export default function Header({
           }
 
           .mobile-products-link {
-            min-height: 44px;
-            padding: 10px 12px;
+            min-height: 46px;
+            padding: 10px 11px;
             border-radius: 13px;
           }
 
           .mobile-products-link__name {
-            font-size: 11.6px;
+            font-size: 14px;
+            line-height: 1.28;
           }
 
           .mobile-products-link__count {
-            min-width: 24px;
-            height: 22px;
+            min-width: 28px;
+            height: 24px;
             padding: 0 7px;
-            font-size: 9.5px;
+            font-size: 12px;
           }
 
           .mobile-products-link__arrow {

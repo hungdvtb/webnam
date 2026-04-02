@@ -521,7 +521,9 @@ export const blogApi = {
     exportBundle: (data = {}) => api.post('/blog/export-bundle', data, {
         responseType: 'blob',
     }),
-    importBundle: (formData) => api.post('/blog/import-bundle', formData),
+    importBundle: (formData) => api.post('/blog/import-bundle', formData, {
+        headers: { 'Content-Type': undefined },
+    }),
 };
 
 export const invoiceApi = {

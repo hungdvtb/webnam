@@ -137,19 +137,9 @@ class BlogController extends Controller
         $perPage = min(max((int) $request->query('per_page', $defaultPerPage), 1), 1000);
 
         $this->orderSystemPostsLast($query);
+        $this->orderPostsByLatestTimestamp($query, $isTrashView);
 
-        if ($isTrashView) {
-            $posts = $query
-                ->orderByDesc('deleted_at')
-                ->orderByDesc('updated_at')
-                ->orderByDesc('created_at')
-                ->paginate($perPage);
-        } else {
-            $posts = $query
-                ->orderBy('sort_order')
-                ->orderByDesc('created_at')
-                ->paginate($perPage);
-        }
+        $posts = $query->paginate($perPage);
 
         $payload = $posts->toArray();
 
@@ -1137,7 +1127,22 @@ class BlogController extends Controller
         }
 
         $validated = $request->validate([
-            'file' => 'required|file|mimes:zip|max:102400',
+            'file' => [
+                'required',
+                'file',
+                'max:102400',
+                function ($attribute, $value, $fail) {
+                    if (!$value instanceof \Illuminate\Http\UploadedFile) {
+                        $fail('File upload không hợp lệ.');
+                        return;
+                    }
+                    $extension = strtolower(trim($value->getClientOriginalExtension()));
+                    $allowedExtensions = ['zip'];
+                    if (!in_array($extension, $allowedExtensions, true)) {
+                        $fail('File phải là định dạng ZIP (.zip).');
+                    }
+                },
+            ],
         ]);
 
         $accountId = $this->resolveBlogAccountId($request);
@@ -1255,6 +1260,18 @@ class BlogController extends Controller
         }
 
         $query->orderByRaw('CASE WHEN COALESCE(posts.is_system, false) THEN 1 ELSE 0 END');
+    }
+
+    private function orderPostsByLatestTimestamp(Builder $query, bool $isTrashView = false): void
+    {
+        $query
+            ->orderByRaw('COALESCE(posts.published_at, posts.created_at) DESC')
+            ->orderByDesc('posts.created_at')
+            ->orderByDesc('posts.id');
+
+        if ($isTrashView) {
+            $query->orderByDesc('posts.deleted_at');
+        }
     }
 
     private function normalizeKeyword(?string $keyword): ?string

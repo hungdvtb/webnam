@@ -415,21 +415,21 @@ class BlogBundleService
                 $content = '';
             } else {
                 $content = (string) file_get_contents($contentAbsolutePath);
-                if (trim($content) === '') {
-                    $errors[] = sprintf('Dong %d co file noi dung rong.', $rowNumber);
-                }
+                // Empty content is allowed — the post may simply have no body yet.
             }
 
             try {
+                $validationAssetCache = [];
+
                 if ($featuredImageRef !== '') {
-                    $this->importAssetReference($featuredImageRef, $bundleRoot, 'validate', [], false);
+                    $this->importAssetReference($featuredImageRef, $bundleRoot, 'validate', $validationAssetCache, false);
                 }
 
                 if ($content !== '') {
                     BlogMediaGallerySupport::rewriteAssetReferences(
                         $content,
-                        function (string $reference) use ($bundleRoot): string {
-                            return $this->importAssetReference($reference, $bundleRoot, 'validate', [], false);
+                        function (string $reference) use ($bundleRoot, &$validationAssetCache): string {
+                            return $this->importAssetReference($reference, $bundleRoot, 'validate', $validationAssetCache, false);
                         }
                     );
                 }
@@ -513,18 +513,13 @@ class BlogBundleService
                     continue;
                 }
 
-                if ($existingPost->trashed()) {
-                    $preparedRow['existing_post'] = $existingPost;
-                    continue;
-                }
-
-                if ($preparedRow['is_system'] && $existingPost->is_system) {
+                if ((bool) $preparedRow['is_system'] === (bool) $existingPost->is_system) {
                     $preparedRow['existing_post'] = $existingPost;
                     continue;
                 }
 
                 $errors[] = sprintf(
-                    'Dong %d bi trung slug "%s" voi du lieu hien co tren he thong.',
+                    'Dong %d bi trung slug "%s" voi du lieu hien co tren he thong nhung khac loai bai viet.',
                     $preparedRow['row_number'],
                     $preparedRow['slug']
                 );

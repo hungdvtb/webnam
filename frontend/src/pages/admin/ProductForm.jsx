@@ -7664,6 +7664,7 @@ const ProductForm = () => {
                     </div>
                 )}
                 {bundleItemQuickSorter.optionId && activeBundleItemQuickSorterOption && (
+                    <DndProvider backend={HTML5Backend}>
                     <div className="fixed inset-0 z-[105] flex items-center justify-center p-4">
                         <motion.div
                             initial={{ opacity: 0 }}
@@ -7784,6 +7785,7 @@ const ProductForm = () => {
                             </div>
                         </motion.div>
                     </div>
+                    </DndProvider>
                 )}
             </AnimatePresence>
 

@@ -7,7 +7,7 @@ use App\Models\Account;
 use App\Models\BlogCategory;
 use App\Models\Post;
 use App\Models\PostSeoKeyword;
-use App\Services\BlogBundleService;
+use App\Services\BlogExcelService;
 use App\Services\BlogMediaGallerySupport;
 use App\Services\BlogSystemPostService;
 use DOMDocument;
@@ -21,7 +21,6 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
 use Throwable;
-use ZipArchive;
 
 class BlogController extends Controller
 {
@@ -1067,7 +1066,7 @@ class BlogController extends Controller
         return response()->json(['message' => 'Posts reordered successfully']);
     }
 
-    public function exportBundle(Request $request)
+    public function exportExcel(Request $request)
     {
         if (function_exists('set_time_limit')) {
             @set_time_limit(300);
@@ -1100,27 +1099,27 @@ class BlogController extends Controller
             ->get();
 
         if ($posts->isEmpty()) {
-            return response()->json(['error' => 'No posts found for export.'], 422);
+            return response()->json(['error' => 'Không tìm thấy bài viết để xuất.'], 422);
         }
 
         try {
-            $bundle = app(BlogBundleService::class)->export($accountId, $posts->all());
-            return response()->download($bundle['path'], $bundle['filename'])->deleteFileAfterSend(true);
+            $excel = app(BlogExcelService::class)->export($accountId, $posts->all());
+            return response()->download($excel['path'], $excel['filename'])->deleteFileAfterSend(true);
         } catch (ValidationException $exception) {
             $errors = $this->flattenValidationErrors($exception);
             return response()->json([
-                'error' => $errors[0] ?? 'Blog export failed.',
+                'error' => $errors[0] ?? 'Export bài viết thất bại.',
                 'errors' => $errors,
             ], 422);
         } catch (Throwable $exception) {
             return response()->json([
-                'error' => 'Blog export failed.',
+                'error' => 'Export bài viết thất bại.',
                 'detail' => $exception->getMessage(),
             ], 500);
         }
     }
 
-    public function importBundle(Request $request)
+    public function importExcel(Request $request)
     {
         if (function_exists('set_time_limit')) {
             @set_time_limit(300);
@@ -1130,16 +1129,15 @@ class BlogController extends Controller
             'file' => [
                 'required',
                 'file',
-                'max:102400',
+                'max:51200', // 50 MB
                 function ($attribute, $value, $fail) {
                     if (!$value instanceof \Illuminate\Http\UploadedFile) {
                         $fail('File upload không hợp lệ.');
                         return;
                     }
                     $extension = strtolower(trim($value->getClientOriginalExtension()));
-                    $allowedExtensions = ['zip'];
-                    if (!in_array($extension, $allowedExtensions, true)) {
-                        $fail('File phải là định dạng ZIP (.zip).');
+                    if ($extension !== 'xlsx') {
+                        $fail('File phải là định dạng Excel (.xlsx).');
                     }
                 },
             ],
@@ -1151,26 +1149,25 @@ class BlogController extends Controller
         }
 
         try {
-            $result = app(BlogBundleService::class)->import($accountId, $validated['file']);
+            $result = app(BlogExcelService::class)->import($accountId, $validated['file']);
 
             return response()->json([
-                'message' => 'Import completed.',
-                'total_rows' => $result['total_rows'] ?? 0,
-                'created' => $result['created'] ?? 0,
-                'updated' => $result['updated'] ?? 0,
+                'message'            => 'Import hoàn tất.',
+                'total_rows'         => $result['total_rows']         ?? 0,
+                'created'            => $result['created']            ?? 0,
+                'updated'            => $result['updated']            ?? 0,
                 'categories_created' => $result['categories_created'] ?? 0,
-                'assets_imported' => $result['assets_imported'] ?? 0,
-                'errors' => $result['errors'] ?? [],
+                'errors'             => $result['errors']             ?? [],
             ], 201);
         } catch (ValidationException $exception) {
             $errors = $this->flattenValidationErrors($exception);
             return response()->json([
-                'error' => $errors[0] ?? 'Import failed.',
+                'error'  => $errors[0] ?? 'Import thất bại.',
                 'errors' => $errors,
             ], 422);
         } catch (Throwable $exception) {
             return response()->json([
-                'error' => 'Import failed.',
+                'error'  => 'Import thất bại.',
                 'detail' => $exception->getMessage(),
             ], 500);
         }

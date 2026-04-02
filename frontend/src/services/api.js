@@ -518,12 +518,10 @@ export const blogApi = {
     bulkRestore: (ids) => api.post('/blog/bulk-restore', { ids }),
     bulkForceDelete: (ids) => api.post('/blog/bulk-force-delete', { ids }),
     reorder: (ids) => api.post('/blog/reorder', { ids }),
-    exportBundle: (data = {}) => api.post('/blog/export-bundle', data, {
+    exportExcel: (data = {}) => api.post('/blog/export-excel', data, {
         responseType: 'blob',
     }),
-    importBundle: (formData) => api.post('/blog/import-bundle', formData, {
-        headers: { 'Content-Type': undefined },
-    }),
+    importExcel: (formData) => api.post('/blog/import-excel', formData, multipartConfig(formData)),
 };
 
 export const invoiceApi = {

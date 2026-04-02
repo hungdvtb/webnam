@@ -387,8 +387,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/blog/categories/reorder', [\App\Http\Controllers\Api\BlogController::class , 'reorderCategories']);
     Route::post('/blog', [\App\Http\Controllers\Api\BlogController::class , 'store']);
     Route::post('/blog/reorder', [\App\Http\Controllers\Api\BlogController::class , 'reorder']);
-    Route::post('/blog/export-bundle', [\App\Http\Controllers\Api\BlogController::class , 'exportBundle']);
-    Route::post('/blog/import-bundle', [\App\Http\Controllers\Api\BlogController::class , 'importBundle']);
+Route::post('/blog/export-excel', [\App\Http\Controllers\Api\BlogController::class , 'exportExcel']);
+Route::post('/blog/import-excel', [\App\Http\Controllers\Api\BlogController::class , 'importExcel']);
     Route::post('/blog/bulk-delete', [\App\Http\Controllers\Api\BlogController::class , 'bulkDelete']);
     Route::post('/blog/bulk-restore', [\App\Http\Controllers\Api\BlogController::class , 'bulkRestore']);
     Route::post('/blog/bulk-force-delete', [\App\Http\Controllers\Api\BlogController::class , 'bulkForceDelete']);

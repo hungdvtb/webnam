@@ -463,6 +463,169 @@ const DraggableBundleOptionRow = ({
     );
 };
 
+const DraggableBundleItemSorterRow = ({
+    optionId,
+    index,
+    item,
+    itemCount,
+    positionValue,
+    moveBundleItemQuickSorterItem,
+    onPositionChange,
+    onPositionCommit,
+    onMoveUp,
+    onMoveDown,
+    formatNumberOutput,
+}) => {
+    const ref = useRef(null);
+    const entryKey = getBundleItemEntryKey(item);
+    const isFirst = index === 0;
+    const isLast = index === itemCount - 1;
+
+    const [, drop] = useDrop({
+        accept: `bundle_item_quick_sort_${optionId}`,
+        hover(draggedItem, monitor) {
+            if (!ref.current) return;
+            const dragIndex = draggedItem.index;
+            const hoverIndex = index;
+            if (dragIndex === hoverIndex) return;
+
+            const hoverBoundingRect = ref.current?.getBoundingClientRect();
+            const hoverMiddleY = (hoverBoundingRect.bottom - hoverBoundingRect.top) / 2;
+            const clientOffset = monitor.getClientOffset();
+            if (!clientOffset) return;
+            const hoverClientY = clientOffset.y - hoverBoundingRect.top;
+
+            if (dragIndex < hoverIndex && hoverClientY < hoverMiddleY) return;
+            if (dragIndex > hoverIndex && hoverClientY > hoverMiddleY) return;
+
+            moveBundleItemQuickSorterItem(dragIndex, hoverIndex);
+            draggedItem.index = hoverIndex;
+        },
+    });
+
+    const [{ isDragging }, drag] = useDrag({
+        type: `bundle_item_quick_sort_${optionId}`,
+        item: () => ({ id: entryKey, index }),
+        canDrag: itemCount > 1,
+        collect: (monitor) => ({
+            isDragging: monitor.isDragging(),
+        }),
+    });
+
+    drag(drop(ref));
+
+    const quantity = Math.max(1, Number(item?.quantity) || 1);
+    const displayVariantLabel = String(item?.variant_label || '').trim();
+
+    return (
+        <div
+            ref={ref}
+            className={`grid grid-cols-[88px_minmax(0,1fr)_132px_104px] border-b border-stone/10 transition-colors ${isDragging ? 'bg-gold/5 opacity-50' : 'bg-white hover:bg-gold/[0.03]'}`}
+        >
+            <div className="flex items-center justify-center gap-2 border-r border-stone/10 px-3 py-3">
+                <span className={`material-symbols-outlined text-[18px] ${itemCount > 1 ? 'cursor-move text-stone/45' : 'text-stone/20'}`}>
+                    reorder
+                </span>
+                <span className="flex h-7 w-7 items-center justify-center rounded-full border border-gold/15 bg-gold/5 text-[11px] font-black text-primary">
+                    {index + 1}
+                </span>
+            </div>
+
+            <div className="border-r border-stone/10 px-4 py-3">
+                <div className="flex min-w-0 items-center gap-3">
+                    <img
+                        src={item?.image_url || 'https://placehold.co/100'}
+                        alt=""
+                        className="h-11 w-11 shrink-0 rounded-sm border border-stone/10 bg-white object-cover shadow-sm"
+                    />
+                    <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <p className="truncate text-[13px] font-black text-primary" title={item?.name || ''}>
+                                {item?.name || 'Sản phẩm bundle'}
+                            </p>
+                            {item?.is_default ? (
+                                <span className="inline-flex rounded-full border border-primary/10 bg-primary/[0.06] px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-primary">
+                                    Default
+                                </span>
+                            ) : null}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px]">
+                            <span className="rounded-full border border-gold/10 bg-gold/[0.08] px-2 py-0.5 font-mono font-black uppercase text-gold">
+                                {item?.sku || 'NO-SKU'}
+                            </span>
+                            {displayVariantLabel ? (
+                                <span className="truncate rounded-full border border-stone/10 bg-stone/5 px-2 py-0.5 font-semibold text-stone/60" title={displayVariantLabel}>
+                                    {displayVariantLabel}
+                                </span>
+                            ) : null}
+                            <span className="rounded-full border border-stone/10 bg-white px-2 py-0.5 font-semibold text-stone/55">
+                                SL {quantity}
+                            </span>
+                            <span className="rounded-full border border-brick/10 bg-brick/[0.06] px-2 py-0.5 font-black text-brick">
+                                {formatNumberOutput(item?.price || 0)}₫
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="border-r border-stone/10 px-4 py-3">
+                <div className="mx-auto flex w-fit items-center gap-2 rounded-full border border-gold/15 bg-white px-3 py-1 shadow-sm">
+                    <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={positionValue}
+                        onChange={(event) => onPositionChange(entryKey, event.target.value)}
+                        onBlur={(event) => onPositionCommit(entryKey, event.target.value)}
+                        onFocus={(event) => event.target.select()}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                                event.preventDefault();
+                                onPositionCommit(entryKey, event.currentTarget.value);
+                                event.currentTarget.blur();
+                            }
+                            if (event.key === 'Escape') {
+                                event.preventDefault();
+                                onPositionCommit(entryKey, index + 1);
+                                event.currentTarget.blur();
+                            }
+                        }}
+                        className="w-12 border-none bg-transparent p-0 text-center text-[12px] font-black text-primary focus:ring-0"
+                        aria-label={`Vị trí của ${item?.name || 'sản phẩm bundle'}`}
+                    />
+                    <span className="text-[10px] font-black uppercase tracking-[0.12em] text-stone/35">
+                        / {itemCount}
+                    </span>
+                </div>
+            </div>
+
+            <div className="px-4 py-3">
+                <div className="flex items-center justify-center gap-2">
+                    <button
+                        type="button"
+                        onClick={onMoveUp}
+                        disabled={isFirst}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-stone/15 text-stone/45 transition-all hover:border-primary/25 hover:text-primary disabled:cursor-not-allowed disabled:opacity-30"
+                        title="Di chuyển lên"
+                    >
+                        <span className="material-symbols-outlined text-[16px]">keyboard_arrow_up</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onMoveDown}
+                        disabled={isLast}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-stone/15 text-stone/45 transition-all hover:border-primary/25 hover:text-primary disabled:cursor-not-allowed disabled:opacity-30"
+                        title="Di chuyển xuống"
+                    >
+                        <span className="material-symbols-outlined text-[16px]">keyboard_arrow_down</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const BundleOptionPostSelector = ({
     option,
     blogSearchQuery,
@@ -691,6 +854,12 @@ const moveListItem = (items, fromIndex, toIndex) => {
     next.splice(toIndex, 0, moved);
     return next;
 };
+
+const getBundleItemEntryKey = (item) => String(item?.entry_id ?? item?.id ?? '');
+
+const buildBundleItemSorterPositionDrafts = (items = []) => Object.fromEntries(
+    (Array.isArray(items) ? items : []).map((item, index) => [getBundleItemEntryKey(item), String(index + 1)])
+);
 
 const createConvertVariantEntryId = () => `convert-variant-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 const createConvertVariantDraft = (overrides = {}) => ({
@@ -1357,6 +1526,11 @@ const ProductForm = () => {
     const [bundleItemVariants, setBundleItemVariants] = useState({}); // { productId: [variants] }
     const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
     const [showBundleOptionSorter, setShowBundleOptionSorter] = useState(false);
+    const [bundleItemQuickSorter, setBundleItemQuickSorter] = useState({
+        optionId: null,
+        items: [],
+        positionDrafts: {},
+    });
     const bundleOptionCardRefs = useRef({});
     const bundleOptionTitleInputRefs = useRef({});
     const pendingCopiedBundleOptionIdRef = useRef(null);
@@ -1379,6 +1553,21 @@ const ProductForm = () => {
     const draftInventoryUnitDefaultId = useMemo(() => (
         String((inventoryUnitsDraft.find((unit) => unit.is_default) || inventoryUnitsDraft[0] || {}).id || '')
     ), [inventoryUnitsDraft]);
+
+    const activeBundleItemQuickSorterOption = useMemo(() => (
+        bundleOptions.find((option) => option.id === bundleItemQuickSorter.optionId) || null
+    ), [bundleItemQuickSorter.optionId, bundleOptions]);
+
+    const bundleItemQuickSorterHasChanges = useMemo(() => {
+        if (!activeBundleItemQuickSorterOption) {
+            return false;
+        }
+
+        return !areOrderedIdsEqual(
+            (Array.isArray(activeBundleItemQuickSorterOption.items) ? activeBundleItemQuickSorterOption.items : []).map(getBundleItemEntryKey),
+            (Array.isArray(bundleItemQuickSorter.items) ? bundleItemQuickSorter.items : []).map(getBundleItemEntryKey)
+        );
+    }, [activeBundleItemQuickSorterOption, bundleItemQuickSorter.items]);
 
     const inventoryUnitOrderChanged = useMemo(() => {
         if (!inventoryUnitsDraft.length) return false;
@@ -1677,6 +1866,40 @@ const ProductForm = () => {
             setShowBundleOptionSorter(false);
         }
     }, [bundleOptions.length, formData.type]);
+
+    useEffect(() => {
+        if (!bundleItemQuickSorter.optionId) {
+            return;
+        }
+
+        const hasActiveOption = bundleOptions.some((option) => option.id === bundleItemQuickSorter.optionId);
+        if (formData.type !== 'bundle' || !hasActiveOption) {
+            setBundleItemQuickSorter({
+                optionId: null,
+                items: [],
+                positionDrafts: {},
+            });
+        }
+    }, [bundleItemQuickSorter.optionId, bundleOptions, formData.type]);
+
+    useEffect(() => {
+        if (!bundleItemQuickSorter.optionId || typeof window === 'undefined') {
+            return undefined;
+        }
+
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                setBundleItemQuickSorter({
+                    optionId: null,
+                    items: [],
+                    positionDrafts: {},
+                });
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [bundleItemQuickSorter.optionId]);
 
     useEffect(() => {
         const copiedOptionId = pendingCopiedBundleOptionIdRef.current;
@@ -3896,6 +4119,50 @@ const ProductForm = () => {
         showToast({ message: 'Đã nhân bản tùy chọn lên đầu danh sách.', type: 'success' });
     };
 
+    const closeBundleItemQuickSorter = useCallback(() => {
+        setBundleItemQuickSorter({
+            optionId: null,
+            items: [],
+            positionDrafts: {},
+        });
+    }, []);
+
+    const updateBundleItemQuickSorterItems = useCallback((nextItemsOrUpdater) => {
+        setBundleItemQuickSorter((prev) => {
+            const nextItems = typeof nextItemsOrUpdater === 'function'
+                ? nextItemsOrUpdater(prev.items)
+                : nextItemsOrUpdater;
+            const normalizedItems = Array.isArray(nextItems) ? nextItems : [];
+
+            return {
+                ...prev,
+                items: normalizedItems,
+                positionDrafts: buildBundleItemSorterPositionDrafts(normalizedItems),
+            };
+        });
+    }, []);
+
+    const openBundleItemQuickSorter = useCallback((optionId) => {
+        const targetOption = bundleOptions.find((option) => option.id === optionId);
+        if (!targetOption) {
+            return;
+        }
+
+        const draftItems = Array.isArray(targetOption.items)
+            ? targetOption.items.map((item) => ({ ...item }))
+            : [];
+
+        setIsSortingBundle((prev) => ({
+            ...prev,
+            [optionId]: false,
+        }));
+        setBundleItemQuickSorter({
+            optionId,
+            items: draftItems,
+            positionDrafts: buildBundleItemSorterPositionDrafts(draftItems),
+        });
+    }, [bundleOptions]);
+
     const handleRemoveBundleOption = (optionId) => {
         setBundleOptions(prev => prev.filter(o => o.id !== optionId));
         setShowBundleSearch((prev) => (prev === optionId ? null : prev));
@@ -4076,6 +4343,76 @@ const ProductForm = () => {
             [optionId]: !prev[optionId]
         }));
     };
+
+    const moveBundleItemQuickSorterItem = useCallback((dragIndex, hoverIndex) => {
+        updateBundleItemQuickSorterItems((prevItems) => moveListItem(prevItems, dragIndex, hoverIndex));
+    }, [updateBundleItemQuickSorterItems]);
+
+    const moveBundleItemQuickSorterItemByOffset = useCallback((index, offset) => {
+        moveBundleItemQuickSorterItem(index, index + offset);
+    }, [moveBundleItemQuickSorterItem]);
+
+    const handleBundleItemQuickSorterPositionChange = useCallback((entryId, value) => {
+        const sanitizedValue = String(value ?? '').replace(/[^0-9]/g, '');
+        setBundleItemQuickSorter((prev) => ({
+            ...prev,
+            positionDrafts: {
+                ...prev.positionDrafts,
+                [entryId]: sanitizedValue,
+            },
+        }));
+    }, []);
+
+    const handleBundleItemQuickSorterPositionCommit = useCallback((entryId, value) => {
+        updateBundleItemQuickSorterItems((prevItems) => {
+            const currentIndex = prevItems.findIndex((item) => getBundleItemEntryKey(item) === entryId);
+            if (currentIndex < 0 || prevItems.length === 0) {
+                return prevItems;
+            }
+
+            const parsedPosition = Number.parseInt(String(value ?? '').trim(), 10);
+            if (!Number.isFinite(parsedPosition)) {
+                return prevItems;
+            }
+
+            const targetIndex = Math.max(0, Math.min(prevItems.length - 1, parsedPosition - 1));
+            return moveListItem(prevItems, currentIndex, targetIndex);
+        });
+    }, [updateBundleItemQuickSorterItems]);
+
+    const handleSaveBundleItemQuickSorter = useCallback(() => {
+        if (!bundleItemQuickSorter.optionId) {
+            return;
+        }
+
+        const orderedEntryIds = (Array.isArray(bundleItemQuickSorter.items) ? bundleItemQuickSorter.items : [])
+            .map(getBundleItemEntryKey)
+            .filter(Boolean);
+
+        setBundleOptions((prev) => prev.map((option) => {
+            if (option.id !== bundleItemQuickSorter.optionId) {
+                return option;
+            }
+
+            const liveItems = Array.isArray(option.items) ? option.items : [];
+            const liveItemsByEntryId = new Map(
+                liveItems.map((item) => [getBundleItemEntryKey(item), item])
+            );
+            const orderedEntryIdSet = new Set(orderedEntryIds);
+            const orderedItems = orderedEntryIds
+                .map((entryId) => liveItemsByEntryId.get(entryId))
+                .filter(Boolean);
+            const remainingItems = liveItems.filter((item) => !orderedEntryIdSet.has(getBundleItemEntryKey(item)));
+
+            return {
+                ...option,
+                items: [...orderedItems, ...remainingItems],
+            };
+        }));
+
+        closeBundleItemQuickSorter();
+        showToast({ message: 'Đã cập nhật thứ tự sản phẩm trong tùy chọn.', type: 'success' });
+    }, [bundleItemQuickSorter.items, bundleItemQuickSorter.optionId, closeBundleItemQuickSorter, showToast]);
 
     const handleRefreshBundlePrices = async () => {
         if (bundleOptions.length === 0) {
@@ -6090,19 +6427,32 @@ const ProductForm = () => {
                                                          <button
                                                             type="button"
                                                             onClick={() => toggleBundleSorting(option.id)}
-                                                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-[11px] font-black uppercase transition-all ${isSortingBundle[option.id] ? 'bg-amber-500 text-white shadow-premium' : 'bg-gold/10 text-gold hover:bg-gold/20'}`}
+                                                            aria-label={isSortingBundle[option.id] ? 'Hoàn tất sắp xếp' : 'Sắp xếp thứ tự sản phẩm'}
+                                                            className={`inline-flex h-10 w-10 items-center justify-center rounded-sm text-[0px] transition-all ${isSortingBundle[option.id] ? 'bg-amber-500 text-white shadow-premium' : 'bg-gold/10 text-gold hover:bg-gold/20'}`}
                                                             title="Sắp xếp thứ tự sản phẩm"
                                                          >
-                                                            <span className="material-symbols-outlined text-[16px]">{isSortingBundle[option.id] ? 'done_all' : 'reorder'}</span>
+                                                            <span className="material-symbols-outlined text-[18px]">{isSortingBundle[option.id] ? 'done_all' : 'reorder'}</span>
                                                             {isSortingBundle[option.id] ? 'Xong' : 'Sắp xếp'}
                                                          </button>
                                                          <button
                                                             type="button"
+                                                            onClick={() => openBundleItemQuickSorter(option.id)}
+                                                            disabled={(option.items || []).length === 0}
+                                                            aria-label={bundleItemQuickSorter.optionId === option.id ? 'Đang mở sắp xếp nhanh' : 'Sắp xếp nhanh'}
+                                                            className={`inline-flex h-10 w-10 items-center justify-center rounded-sm text-[0px] transition-all ${bundleItemQuickSorter.optionId === option.id ? 'bg-primary text-white shadow-premium' : 'bg-primary/5 text-primary hover:bg-primary/10'} disabled:cursor-not-allowed disabled:bg-stone/5 disabled:text-stone/35`}
+                                                            title="Sáº¯p xáº¿p nhanh toÃ n bá»™ sáº£n pháº©m trong tÃ¹y chá»n"
+                                                         >
+                                                            <span className="material-symbols-outlined text-[18px]">format_list_numbered</span>
+                                                            {bundleItemQuickSorter.optionId === option.id ? 'Äang má»Ÿ' : 'Sáº¯p xáº¿p nhanh'}
+                                                         </button>
+                                                         <button
+                                                            type="button"
                                                             onClick={() => handleCopyBundleOption(option.id)}
-                                                            className="flex items-center gap-1.5 rounded-sm bg-primary/5 px-3 py-1.5 text-[11px] font-black uppercase text-primary transition-all hover:bg-primary/10"
+                                                            aria-label="Copy tùy chọn"
+                                                            className="inline-flex h-10 w-10 items-center justify-center rounded-sm bg-primary/5 text-[0px] text-primary transition-all hover:bg-primary/10"
                                                             title="Copy tùy chọn"
                                                          >
-                                                            <span className="material-symbols-outlined text-[16px]">content_copy</span>
+                                                            <span className="material-symbols-outlined text-[18px]">content_copy</span>
                                                             Copy tùy chọn
                                                          </button>
                                                          <button
@@ -7307,6 +7657,128 @@ const ProductForm = () => {
                                             {isSavingInventoryUnitOrder ? 'hourglass_top' : 'save'}
                                         </span>
                                         {isSavingInventoryUnitOrder ? 'Đang lưu' : 'Lưu thứ tự'}
+                                    </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+                {bundleItemQuickSorter.optionId && activeBundleItemQuickSorterOption && (
+                    <div className="fixed inset-0 z-[105] flex items-center justify-center p-4">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={closeBundleItemQuickSorter}
+                            className="absolute inset-0 bg-primary/45 backdrop-blur-sm"
+                        />
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.97, y: 18 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.97, y: 18 }}
+                            className="relative flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-sm bg-white shadow-premium-lg"
+                        >
+                            <div className="flex items-start justify-between gap-4 border-b border-gold/10 bg-[#fcfaf7] px-6 py-5">
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-3">
+                                        <span className="material-symbols-outlined rounded-full bg-primary/[0.06] p-2 text-primary">format_list_numbered</span>
+                                        <div>
+                                            <h3 className="text-[16px] font-black uppercase tracking-tight text-primary">
+                                                Sắp xếp nhanh sản phẩm trong tùy chọn
+                                            </h3>
+                                            <p className="mt-1 text-[12px] text-stone/55">
+                                                Kéo thả nhanh hoặc nhập số vị trí trực tiếp. Chỉ khi bấm lưu thì thứ tự mới áp dụng vào tùy chọn này.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={closeBundleItemQuickSorter}
+                                    className="text-stone/35 transition-colors hover:text-brick"
+                                    title="Đóng bảng sắp xếp nhanh"
+                                >
+                                    <span className="material-symbols-outlined">close</span>
+                                </button>
+                            </div>
+
+                            <div className="space-y-4 overflow-auto px-6 py-5 custom-scrollbar">
+                                <div className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-gold/15 bg-gold/[0.03] px-4 py-3">
+                                    <div className="min-w-0">
+                                        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-gold">
+                                            {activeBundleItemQuickSorterOption.title || 'Tùy chọn bundle'}
+                                        </p>
+                                        <p className="mt-1 text-[12px] text-stone/55">
+                                            Danh sách dài sẽ thao tác nhanh hơn trong khung này. Dữ liệu về biến thể, số lượng và mặc định vẫn được giữ nguyên.
+                                        </p>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="inline-flex rounded-full border border-primary/10 bg-white px-3 py-1 text-[11px] font-black text-primary shadow-sm">
+                                            {(bundleItemQuickSorter.items || []).length} sản phẩm
+                                        </span>
+                                        <span className="inline-flex rounded-full border border-brick/10 bg-brick/[0.06] px-3 py-1 text-[11px] font-black text-brick shadow-sm">
+                                            {formatNumberOutput(calculateBundleOptionSubtotal({ items: bundleItemQuickSorter.items }))}₫
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div className="overflow-hidden rounded-sm border border-stone/10">
+                                    <div className="grid grid-cols-[88px_minmax(0,1fr)_132px_104px] border-b border-stone/10 bg-[#f7f4ec] text-[10px] font-black uppercase tracking-[0.18em] text-stone/55">
+                                        <div className="border-r border-stone/10 px-4 py-3 text-center">Vị trí</div>
+                                        <div className="border-r border-stone/10 px-4 py-3">Sản phẩm</div>
+                                        <div className="border-r border-stone/10 px-4 py-3 text-center">Nhập số</div>
+                                        <div className="px-4 py-3 text-center">Di chuyển</div>
+                                    </div>
+
+                                    {bundleItemQuickSorter.items.length === 0 ? (
+                                        <div className="flex flex-col items-center justify-center gap-2 bg-white px-6 py-16 text-center">
+                                            <span className="material-symbols-outlined text-[42px] text-stone/20">inventory_2</span>
+                                            <p className="text-[13px] font-black uppercase tracking-[0.16em] text-stone/35">Tùy chọn này chưa có sản phẩm</p>
+                                            <p className="text-[12px] text-stone/45">Thêm sản phẩm ở bảng chính rồi mở lại sắp xếp nhanh để chỉnh thứ tự.</p>
+                                        </div>
+                                    ) : (
+                                        <div className="max-h-[62vh] overflow-auto custom-scrollbar">
+                                            {bundleItemQuickSorter.items.map((item, index) => (
+                                                <DraggableBundleItemSorterRow
+                                                    key={getBundleItemEntryKey(item)}
+                                                    optionId={bundleItemQuickSorter.optionId}
+                                                    index={index}
+                                                    item={item}
+                                                    itemCount={bundleItemQuickSorter.items.length}
+                                                    positionValue={bundleItemQuickSorter.positionDrafts[getBundleItemEntryKey(item)] ?? String(index + 1)}
+                                                    moveBundleItemQuickSorterItem={moveBundleItemQuickSorterItem}
+                                                    onPositionChange={handleBundleItemQuickSorterPositionChange}
+                                                    onPositionCommit={handleBundleItemQuickSorterPositionCommit}
+                                                    onMoveUp={() => moveBundleItemQuickSorterItemByOffset(index, -1)}
+                                                    onMoveDown={() => moveBundleItemQuickSorterItemByOffset(index, 1)}
+                                                    formatNumberOutput={formatNumberOutput}
+                                                />
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stone/10 bg-stone/5 px-6 py-4">
+                                <p className="text-[11px] text-stone/55">
+                                    Thứ tự ngoài bảng chỉ cập nhật khi bạn bấm <span className="font-black text-primary">Lưu thứ tự</span>.
+                                </p>
+                                <div className="flex flex-wrap items-center gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={closeBundleItemQuickSorter}
+                                        className="px-5 py-2 text-[11px] font-bold uppercase tracking-widest text-stone transition-all hover:text-primary"
+                                    >
+                                        Hủy
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleSaveBundleItemQuickSorter}
+                                        disabled={!bundleItemQuickSorterHasChanges}
+                                        className="inline-flex items-center gap-2 rounded-sm bg-primary px-5 py-2 text-[11px] font-black uppercase tracking-[0.16em] text-white transition-all hover:bg-umber disabled:cursor-not-allowed disabled:bg-stone/30"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">save</span>
+                                        Lưu thứ tự
                                     </button>
                                 </div>
                             </div>

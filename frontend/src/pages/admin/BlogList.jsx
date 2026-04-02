@@ -1020,12 +1020,12 @@ const BlogList = () => {
         importInputRef.current?.click?.();
     };
 
-    const handleExportBundle = async (ids = [], fallbackName = 'blog-export.zip') => {
+    const handleExportExcel = async (ids = [], fallbackName = 'blog-export-all.xlsx') => {
         setExportingBundle(true);
 
         try {
             const payload = ids.length > 0 ? { ids } : {};
-            const response = await blogApi.exportBundle(payload);
+            const response = await blogApi.exportExcel(payload);
             const filename = extractFilenameFromDisposition(
                 response.headers?.['content-disposition'],
                 fallbackName
@@ -1034,8 +1034,8 @@ const BlogList = () => {
             downloadBlob(response.data, filename);
             showToast({
                 message: ids.length > 0
-                    ? `Đã tải gói export cho ${ids.length} bài viết.`
-                    : 'Đã tải gói export toàn bộ bài viết.',
+                    ? `Đã tải file Excel cho ${ids.length} bài viết.`
+                    : 'Đã tải file Excel toàn bộ bài viết.',
                 type: 'success',
             });
         } catch (error) {
@@ -1049,7 +1049,7 @@ const BlogList = () => {
         }
     };
 
-    const handleImportBundleChange = async (event) => {
+    const handleImportExcelChange = async (event) => {
         const file = event.target.files?.[0] || null;
         event.target.value = '';
 
@@ -1057,10 +1057,10 @@ const BlogList = () => {
             return;
         }
 
-        if (file.size > 100 * 1024 * 1024) {
+        if (file.size > 50 * 1024 * 1024) {
             showModal({
                 title: 'Tệp quá lớn',
-                content: 'Gói import vượt quá 100MB. Hãy giảm dung lượng file ZIP trước khi tải lên.',
+                content: 'File Excel vượt quá 50MB. Hãy giảm bớt số bài hoặc rút ngắn nội dung trước khi tải lên.',
                 type: 'warning',
             });
             return;
@@ -1071,7 +1071,7 @@ const BlogList = () => {
 
         setImportingBundle(true);
         try {
-            const response = await blogApi.importBundle(formData);
+            const response = await blogApi.importExcel(formData);
             const payload = response.data || {};
             setImportResult(payload);
             setSelected(new Set());
@@ -1081,35 +1081,30 @@ const BlogList = () => {
             await loadKeywords();
             showModal({
                 title: 'Import thành công',
-                content: `Đã import ${payload.created ?? 0} bài mới và cập nhật ${payload.updated ?? 0} bài hệ thống.`,
+                content: `Đã import ${payload.created ?? 0} bài mới và cập nhật ${payload.updated ?? 0} bài.`,
                 type: 'success',
             });
         } catch (error) {
             const payload = error?.response?.data || {};
-            const errors = !error?.response
-                ? ['KhÃ´ng thá»ƒ gá»­i file lÃªn API. Kháº£ nÄƒng cao server Ä‘ang cháº·n upload lá»›n hoáº·c chÆ°a tráº£ CORS cho request upload.']
-                : flattenErrorMessages(payload?.errors);
-            const networkBlockedMessage = !error?.response
-                ? 'Không thể gửi file lên API. Khả năng cao server đang chặn upload lớn hoặc chưa trả CORS cho request upload.'
-                : null;
+            const errors = error?.response
+                ? flattenErrorMessages(payload?.errors)
+                : ['Không thể gửi file lên API. Khả năng cao server đang chặn upload lớn hoặc chưa trả CORS cho request upload.'];
             setImportResult({
                 total_rows: 0,
                 created: 0,
                 updated: 0,
                 categories_created: 0,
-                assets_imported: 0,
                 errors,
             });
             showModal({
                 title: 'Lỗi import',
-                content: payload?.error || errors[0] || 'Không thể import gói Excel lúc này.',
+                content: payload?.error || errors[0] || 'Không thể import file Excel lúc này.',
                 type: 'error',
             });
         } finally {
             setImportingBundle(false);
         }
     };
-
     const toggleTrashView = () => {
         setSelected(new Set());
         setShowFilterPanel(false);
@@ -1121,8 +1116,8 @@ const BlogList = () => {
             <input
                 ref={importInputRef}
                 type="file"
-                accept=".zip"
-                onChange={handleImportBundleChange}
+                accept=".xlsx"
+                onChange={handleImportExcelChange}
                 className="hidden"
             />
             <div className="flex items-center justify-between gap-3">
@@ -1133,12 +1128,12 @@ const BlogList = () => {
                 <div className="flex items-center gap-2">
                     <button
                         type="button"
-                        onClick={() => handleExportBundle([], 'blog-export-all.zip')}
+                        onClick={() => handleExportExcel([], 'blog-export-all.xlsx')}
                         disabled={exportingBundle || importingBundle || isTrashView}
                         className="h-9 px-4 bg-white border border-gold/25 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center disabled:opacity-60"
-                        title={isTrashView ? 'Quay lại danh sách bài viết để xuất' : 'Xuất toàn bộ bài viết'}
+                        title={isTrashView ? 'Quay lại danh sách bài viết để xuất' : 'Xuất toàn bộ bài viết ra Excel'}
                     >
-                        {exportingBundle ? 'Đang xuất...' : 'Xuất tất cả'}
+                        {exportingBundle ? 'Đang xuất...' : 'Xuất Excel'}
                     </button>
                     <button
                         type="button"
@@ -1146,7 +1141,7 @@ const BlogList = () => {
                         disabled={importingBundle || exportingBundle}
                         className="h-9 px-4 bg-white border border-gold/25 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center disabled:opacity-60"
                     >
-                        {importingBundle ? 'Đang import...' : 'Nhập gói Excel'}
+                        {importingBundle ? 'Đang import...' : 'Nhập Excel'}
                     </button>
                     <Link to="/admin/blog/new" className="h-9 px-4 bg-brick text-white hover:bg-umber rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center">Tạo bài mới</Link>
                 </div>
@@ -1338,7 +1333,6 @@ const BlogList = () => {
                             <span>Tạo mới: {importResult.created ?? 0}</span>
                             <span>Cập nhật: {importResult.updated ?? 0}</span>
                             <span>Danh mục mới: {importResult.categories_created ?? 0}</span>
-                            <span>Ảnh đã nạp: {importResult.assets_imported ?? 0}</span>
                         </div>
                         {Array.isArray(importResult.errors) && importResult.errors.length > 0 && (
                             <div className="space-y-1">
@@ -1368,7 +1362,7 @@ const BlogList = () => {
 
                         <button
                             type="button"
-                            onClick={() => handleExportBundle(Array.from(selected), `blog-export-${selectedCount}-posts.zip`)}
+                            onClick={() => handleExportExcel(Array.from(selected), `blog-export-${selectedCount}-posts.xlsx`)}
                             disabled={busy || exportingBundle || importingBundle}
                             className="h-8 px-3 bg-white border border-primary/25 text-primary rounded-sm text-[10px] font-bold uppercase tracking-widest hover:bg-primary/5 disabled:opacity-60"
                         >
@@ -1514,7 +1508,7 @@ const BlogList = () => {
                                                 <button type="button" onClick={() => openOnWeb(post)} className="h-8 px-2.5 border border-gold/20 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest">Xem ngoài web</button>
                                                 <button
                                                     type="button"
-                                                    onClick={() => handleExportBundle([post.id], `blog-export-${post.slug || post.id}.zip`)}
+                                                    onClick={() => handleExportExcel([post.id], `blog-export-${post.slug || post.id}.xlsx`)}
                                                     disabled={exportingBundle || importingBundle}
                                                     className="h-8 px-2.5 border border-gold/20 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest disabled:opacity-60"
                                                 >

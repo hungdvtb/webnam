@@ -6,6 +6,7 @@ use App\Models\Account;
 use App\Models\Attribute;
 use App\Models\AttributeOption;
 use App\Models\Category;
+use App\Models\Post;
 use App\Models\Product;
 use App\Models\ProductAttributeValue;
 use App\Models\ProductImage;
@@ -297,6 +298,110 @@ class ProductExcelImportExportTest extends TestCase
         $this->assertStringContainsString('"option_title":"Màu men"', (string) $bundleRow[3]);
         $this->assertStringContainsString('"variant_sku":"OPTION-001-RED"', (string) $bundleRow[3]);
         $this->assertStringContainsString('"quantity":2', (string) $bundleRow[3]);
+    }
+
+    public function test_product_export_excel_can_include_child_names_for_content_writing(): void
+    {
+        $account = $this->createAccount();
+        $headers = ['X-Account-Id' => (string) $account->id];
+
+        $configurableParent = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'configurable',
+            'name' => 'San pham co bien the',
+            'slug' => 'san-pham-co-bien-the',
+            'sku' => 'CFG-CONTENT-001',
+            'price' => 0,
+            'status' => true,
+        ]);
+
+        $variantA = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'simple',
+            'name' => 'Bien the xanh',
+            'slug' => 'bien-the-xanh',
+            'sku' => 'CFG-CONTENT-001-GREEN',
+            'price' => 100000,
+            'status' => true,
+        ]);
+
+        $variantB = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'simple',
+            'name' => 'Bien the do',
+            'slug' => 'bien-the-do',
+            'sku' => 'CFG-CONTENT-001-RED',
+            'price' => 110000,
+            'status' => true,
+        ]);
+
+        $configurableParent->linkedProducts()->attach($variantA->id, [
+            'link_type' => 'super_link',
+            'position' => 0,
+        ]);
+        $configurableParent->linkedProducts()->attach($variantB->id, [
+            'link_type' => 'super_link',
+            'position' => 1,
+        ]);
+
+        $bundle = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'bundle',
+            'name' => 'Bo combo co bien the',
+            'slug' => 'bo-combo-co-bien-the',
+            'sku' => 'BUNDLE-CONTENT-001',
+            'price' => 0,
+            'status' => true,
+        ]);
+
+        $simpleChild = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'simple',
+            'name' => 'Bat huong men lam',
+            'slug' => 'bat-huong-men-lam',
+            'sku' => 'BOWL-CONTENT-001',
+            'price' => 450000,
+            'status' => true,
+        ]);
+
+        $bundle->bundleItems()->attach($simpleChild->id, [
+            'link_type' => 'bundle',
+            'position' => 0,
+            'quantity' => 1,
+            'is_required' => true,
+        ]);
+
+        $bundle->bundleItems()->attach($configurableParent->id, [
+            'link_type' => 'bundle',
+            'position' => 1,
+            'quantity' => 1,
+            'is_required' => true,
+            'variant_id' => $variantB->id,
+            'price' => 110000,
+        ]);
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['*']);
+
+        $response = $this
+            ->withHeaders($headers)
+            ->get('/api/products/export?columns=sku,child_names')
+            ->assertOk();
+
+        $tempPath = tempnam(sys_get_temp_dir(), 'product_export_child_names_');
+        file_put_contents($tempPath, $response->getContent());
+        $rows = SimpleXlsx::readRows($tempPath);
+        @unlink($tempPath);
+
+        $dataRows = collect(array_slice($rows, 1))
+            ->mapWithKeys(fn (array $row) => [(string) ($row[0] ?? '') => $row]);
+
+        $configurableRow = $dataRows->get('CFG-CONTENT-001');
+        $bundleRow = $dataRows->get('BUNDLE-CONTENT-001');
+
+        $this->assertNotNull($configurableRow);
+        $this->assertNotNull($bundleRow);
+        $this->assertSame('Bien the xanh | Bien the do', $configurableRow[1]);
+        $this->assertSame('Bat huong men lam | Bien the do', $bundleRow[1]);
     }
 
     public function test_product_import_excel_auto_creates_missing_categories_attributes_values_images_and_variants(): void
@@ -618,6 +723,264 @@ class ProductExcelImportExportTest extends TestCase
         $this->assertSame('seo,round-trip', $rows[1][6]);
         $this->assertSame('2kg', $rows[1][7]);
         $this->assertSame('shop.example.test', $rows[1][8]);
+    }
+
+    public function test_product_import_excel_can_ignore_unknown_domains_and_remap_additional_info_posts(): void
+    {
+        $account = $this->createAccount();
+        $headers = ['X-Account-Id' => (string) $account->id];
+
+        $localPost = Post::query()->create([
+            'account_id' => $account->id,
+            'title' => 'Huong dan local',
+            'slug' => 'huong-dan-local',
+            'content' => 'Noi dung bai viet local',
+            'is_published' => true,
+            'published_at' => now(),
+        ]);
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['*']);
+
+        $additionalInfoPayload = json_encode([
+            [
+                'title' => 'Bao hanh',
+                'display_text' => 'Xem huong dan local',
+                'post_id' => 999999,
+                'post_title' => 'Bai viet cu',
+                'post_slug' => 'huong-dan-local',
+            ],
+            [
+                'title' => 'Cham soc',
+                'display_text' => 'Can cap nhat lai bai viet sau khi import',
+                'post_id' => 999998,
+                'post_title' => 'Bai viet chua co tren local',
+                'post_slug' => 'bai-viet-chua-co',
+            ],
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $binary = SimpleXlsx::buildWorkbook([[
+            'name' => 'SanPham',
+            'rows' => [
+                ['Mã SP', 'Tên sản phẩm', 'Giá bán', 'Thông tin bổ sung', 'Domain'],
+                ['ROUND-TRIP-LOCAL-001', 'San pham tu web cu', 2999000, $additionalInfoPayload, 'shop.example.test'],
+            ],
+        ]]);
+
+        $file = UploadedFile::fake()->createWithContent('products-roundtrip-portable.xlsx', $binary);
+
+        $response = $this
+            ->withHeaders($headers)
+            ->post('/api/products/import', ['file' => $file])
+            ->assertOk()
+            ->json();
+
+        $product = Product::query()->where('sku', 'ROUND-TRIP-LOCAL-001')->first();
+
+        $this->assertNotNull($product);
+        $this->assertSame(1, (int) ($response['summary']['created'] ?? 0));
+        $this->assertSame(0, (int) ($response['summary']['failed'] ?? 0));
+        $this->assertSame(2999000.0, (float) $product->price);
+        $this->assertNull($product->special_price);
+        $this->assertNull($product->site_domain_id);
+
+        $additionalInfo = json_decode((string) $product->additional_info, true);
+
+        $this->assertCount(2, $additionalInfo);
+        $this->assertSame($localPost->id, $additionalInfo[0]['post_id']);
+        $this->assertSame('huong-dan-local', $additionalInfo[0]['post_slug']);
+        $this->assertSame('Huong dan local', $additionalInfo[0]['post_title']);
+        $this->assertNull($additionalInfo[1]['post_id']);
+        $this->assertSame('Cham soc', $additionalInfo[1]['title']);
+        $this->assertSame('Can cap nhat lai bai viet sau khi import', $additionalInfo[1]['display_text']);
+        $this->assertSame('bai-viet-chua-co', $additionalInfo[1]['post_slug']);
+    }
+
+    public function test_product_import_excel_maps_gia_ban_to_special_price_when_gia_column_is_present(): void
+    {
+        $account = $this->createAccount();
+        $headers = ['X-Account-Id' => (string) $account->id];
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['*']);
+
+        $binary = SimpleXlsx::buildWorkbook([[
+            'name' => 'SanPham',
+            'rows' => [
+                ['Mã SP', 'Tên sản phẩm', 'Giá', 'Giá bán'],
+                ['ROUND-TRIP-LOCAL-002', 'San pham co gia khuyen mai', 3200000, 2999000],
+            ],
+        ]]);
+
+        $file = UploadedFile::fake()->createWithContent('products-price-roundtrip.xlsx', $binary);
+
+        $response = $this
+            ->withHeaders($headers)
+            ->post('/api/products/import', ['file' => $file])
+            ->assertOk()
+            ->json();
+
+        $product = Product::query()->where('sku', 'ROUND-TRIP-LOCAL-002')->first();
+
+        $this->assertNotNull($product);
+        $this->assertSame(1, (int) ($response['summary']['created'] ?? 0));
+        $this->assertSame(0, (int) ($response['summary']['failed'] ?? 0));
+        $this->assertSame(3200000.0, (float) $product->price);
+        $this->assertSame(2999000.0, (float) $product->special_price);
+    }
+
+    public function test_product_import_excel_can_create_bundle_and_grouped_products_with_component_data(): void
+    {
+        $account = $this->createAccount();
+        $headers = ['X-Account-Id' => (string) $account->id];
+
+        $simpleChild = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'simple',
+            'name' => 'Bat huong local',
+            'slug' => 'bat-huong-local',
+            'sku' => 'BOWL-LOCAL-001',
+            'price' => 450000,
+            'expected_cost' => 320000,
+            'stock_quantity' => 12,
+            'status' => true,
+        ]);
+
+        $configurableChild = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'configurable',
+            'name' => 'Tuy chon mau men local',
+            'slug' => 'tuy-chon-mau-men-local',
+            'sku' => 'OPTION-LOCAL-001',
+            'price' => 0,
+            'status' => true,
+        ]);
+
+        $selectedVariant = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'simple',
+            'name' => 'Tuy chon mau men local - do',
+            'slug' => 'tuy-chon-mau-men-local-do',
+            'sku' => 'OPTION-LOCAL-001-RED',
+            'price' => 150000,
+            'expected_cost' => 90000,
+            'stock_quantity' => 8,
+            'status' => true,
+        ]);
+
+        $configurableChild->linkedProducts()->attach($selectedVariant->id, [
+            'link_type' => 'super_link',
+            'position' => 0,
+        ]);
+
+        $optionPost = Post::query()->create([
+            'account_id' => $account->id,
+            'title' => 'Lua chon mau men',
+            'slug' => 'lua-chon-mau-men',
+            'content' => 'Noi dung bai viet lua chon mau men',
+            'is_published' => true,
+            'published_at' => now(),
+        ]);
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['*']);
+
+        $bundleComponentData = json_encode([
+            [
+                'sku' => $simpleChild->sku,
+                'quantity' => 1,
+                'is_required' => true,
+            ],
+            [
+                'sku' => $configurableChild->sku,
+                'variant_sku' => $selectedVariant->sku,
+                'quantity' => 2,
+                'is_required' => false,
+                'is_default' => true,
+                'price' => 150000,
+                'cost_price' => 90000,
+                'option_title' => 'Mau men',
+                'option_post_slug' => $optionPost->slug,
+            ],
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $groupedComponentData = json_encode([
+            [
+                'sku' => $simpleChild->sku,
+                'quantity' => 2,
+                'is_required' => true,
+            ],
+            [
+                'variant_sku' => $selectedVariant->sku,
+                'quantity' => 3,
+                'is_required' => true,
+                'price' => 150000,
+                'cost_price' => 90000,
+            ],
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $binary = SimpleXlsx::buildWorkbook([[
+            'name' => 'SanPham',
+            'rows' => [
+                ['sku', 'name', 'type', 'bundle_title', 'component_data'],
+                ['BUNDLE-LOCAL-NEW-001', 'Bo combo local moi', 'bundle', 'Lua chon mau men', $bundleComponentData],
+                ['GROUPED-LOCAL-NEW-001', 'Nhom san pham local moi', 'grouped', '', $groupedComponentData],
+            ],
+        ]]);
+
+        $file = UploadedFile::fake()->createWithContent('products-composite-create.xlsx', $binary);
+
+        $response = $this
+            ->withHeaders($headers)
+            ->post('/api/products/import', ['file' => $file])
+            ->assertOk()
+            ->json();
+
+        $bundle = Product::query()
+            ->with('bundleItems')
+            ->where('sku', 'BUNDLE-LOCAL-NEW-001')
+            ->first();
+
+        $grouped = Product::query()
+            ->with('groupedItems')
+            ->where('sku', 'GROUPED-LOCAL-NEW-001')
+            ->first();
+
+        $this->assertNotNull($bundle);
+        $this->assertNotNull($grouped);
+        $this->assertSame(2, (int) ($response['summary']['created'] ?? 0));
+        $this->assertSame(0, (int) ($response['summary']['failed'] ?? 0));
+        $this->assertEmpty($response['errors'] ?? []);
+
+        $this->assertSame('bundle', $bundle->type);
+        $this->assertSame('sum', $bundle->price_type);
+        $this->assertSame(750000.0, (float) $bundle->price);
+        $this->assertSame('Lua chon mau men', $bundle->bundle_title);
+        $this->assertCount(2, $bundle->bundleItems);
+
+        $bundleSimpleItem = $bundle->bundleItems->firstWhere('sku', $simpleChild->sku);
+        $bundleVariantItem = $bundle->bundleItems->firstWhere('sku', $configurableChild->sku);
+
+        $this->assertNotNull($bundleSimpleItem);
+        $this->assertNotNull($bundleVariantItem);
+        $this->assertSame(1, (int) $bundleSimpleItem->pivot->quantity);
+        $this->assertSame(2, (int) $bundleVariantItem->pivot->quantity);
+        $this->assertSame($selectedVariant->id, (int) $bundleVariantItem->pivot->variant_id);
+        $this->assertSame($optionPost->id, (int) $bundleVariantItem->pivot->option_post_id);
+        $this->assertSame(150000.0, (float) $bundleVariantItem->pivot->price);
+        $this->assertTrue((bool) $bundleVariantItem->pivot->is_default);
+
+        $this->assertSame('grouped', $grouped->type);
+        $this->assertSame('sum', $grouped->price_type);
+        $this->assertSame(1350000.0, (float) $grouped->price);
+        $this->assertCount(2, $grouped->groupedItems);
+
+        $groupedSimpleItem = $grouped->groupedItems->firstWhere('sku', $simpleChild->sku);
+        $groupedVariantItem = $grouped->groupedItems->firstWhere('sku', $configurableChild->sku);
+
+        $this->assertNotNull($groupedSimpleItem);
+        $this->assertNotNull($groupedVariantItem);
+        $this->assertSame(2, (int) $groupedSimpleItem->pivot->quantity);
+        $this->assertSame(3, (int) $groupedVariantItem->pivot->quantity);
+        $this->assertSame($selectedVariant->id, (int) $groupedVariantItem->pivot->variant_id);
+        $this->assertSame(150000.0, (float) $groupedVariantItem->pivot->price);
     }
 
     public function test_product_export_and_import_accept_relative_image_paths_for_round_trip(): void

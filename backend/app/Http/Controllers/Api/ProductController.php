@@ -66,6 +66,7 @@ class ProductController extends Controller
             'seo',
             'video_url',
             'bundle_title',
+            'component_data',
             'domain',
             'attributes',
             'images',
@@ -241,6 +242,8 @@ class ProductController extends Controller
             $rawMetaKeywords = trim($this->importCellValue($row, $headerMap, 'meta_keywords'));
             $rawWeight = trim($this->importCellValue($row, $headerMap, 'weight'));
             $rawBundleTitle = trim($this->importCellValue($row, $headerMap, 'bundle_title'));
+            $rawChildSkus = trim($this->importCellValue($row, $headerMap, 'child_skus'));
+            $rawComponentData = trim($this->importCellValue($row, $headerMap, 'component_data'));
             $rawAttributes = trim($this->importCellValue($row, $headerMap, 'attributes'));
             $rawPrimaryImageUrl = trim($this->importCellValue($row, $headerMap, 'primary_image_url'));
             $rawGalleryImageUrls = trim($this->importCellValue($row, $headerMap, 'gallery_image_urls'));
@@ -278,6 +281,7 @@ class ProductController extends Controller
                     'attributes' => [],
                     'images' => ['provided' => false, 'clear' => false, 'primary' => null, 'gallery' => []],
                     'variants' => ['provided' => false, 'items' => []],
+                    'composite' => ['provided' => false, 'clear' => false, 'items' => []],
                 ];
                 continue;
             }
@@ -286,6 +290,10 @@ class ProductController extends Controller
             $variantPayload = $shouldImportVariants
                 ? $this->parseImportedVariantData($rawVariantData, $rowNumber, $rowErrors)
                 : ['provided' => false, 'items' => []];
+            $shouldImportCompositeItems = $this->shouldImportSelectedProductField($importOptions, 'component_data');
+            $compositePayload = $shouldImportCompositeItems
+                ? $this->parseImportedCompositeDataV2($rawComponentData, $rawChildSkus, $rowNumber, $rowErrors)
+                : ['provided' => false, 'clear' => false, 'items' => []];
 
             $resolvedType = $existingProduct?->type ?: 'simple';
             $typeProvided = false;
@@ -459,12 +467,8 @@ class ProductController extends Controller
                     $fields['additional_info'] = null;
                 } else {
                     try {
-                        $normalizedAdditionalInfo = $this->normalizeAdditionalInfoPayload(
+                        $normalizedAdditionalInfo = $this->normalizeImportedAdditionalInfoPayload(
                             $rawAdditionalInfo,
-                            'import.additional_info'
-                        );
-                        $this->validateAdditionalInfoPostOwnership(
-                            $normalizedAdditionalInfo,
                             $request,
                             'import.additional_info'
                         );
@@ -562,6 +566,7 @@ class ProductController extends Controller
                 'attributes' => $attributePayloads,
                 'images' => $imagePayload,
                 'variants' => $variantPayload,
+                'composite' => $compositePayload,
             ];
         }
 
@@ -573,6 +578,8 @@ class ProductController extends Controller
         $accountId = (int) $request->header('X-Account-Id');
         $categoryQuery = Category::query();
         $attributeQuery = Attribute::query()->where('entity_type', 'product');
+        $productQuery = Product::query();
+        $postQuery = Post::query();
 
         if ($accountId > 0) {
             $categoryQuery->where(function (Builder $builder) use ($accountId) {
@@ -585,7 +592,16 @@ class ProductController extends Controller
                     ->where('account_id', $accountId)
                     ->orWhereNull('account_id');
             });
+            $productQuery->where(function (Builder $builder) use ($accountId) {
+                $builder
+                    ->where('account_id', $accountId)
+                    ->orWhereNull('account_id');
+            });
+            $postQuery->where('account_id', $accountId);
         }
+
+        $products = $productQuery->get(['id', 'account_id', 'type', 'name', 'sku', 'slug']);
+        $posts = $postQuery->get(['id', 'account_id', 'title', 'slug']);
 
         return [
             'account_id' => $accountId > 0 ? $accountId : null,
@@ -595,7 +611,57 @@ class ProductController extends Controller
             'attributes' => $this->buildAttributeImportLookup(
                 $attributeQuery->get(['id', 'account_id', 'name', 'code', 'frontend_type', 'is_variant', 'status'])
             ),
+            'products' => $this->buildProductImportLookup($products),
+            'variant_parents' => $this->buildVariantParentImportLookup($products),
+            'posts' => $this->buildPostImportLookup($posts),
             'site_domains' => $this->buildSiteDomainImportLookup($this->resolveScopedSiteDomains($request)),
+        ];
+    }
+
+    private function buildProductImportLookup(Collection $products): array
+    {
+        return [
+            'by_id' => $products->keyBy(fn (Product $product) => (int) $product->id),
+            'by_sku' => $products
+                ->filter(fn (Product $product) => filled($product->sku))
+                ->keyBy(fn (Product $product) => $this->normalizeImportLookupValue((string) $product->sku)),
+            'by_slug' => $products
+                ->filter(fn (Product $product) => filled($product->slug))
+                ->keyBy(fn (Product $product) => $this->normalizeImportLookupValue((string) $product->slug)),
+        ];
+    }
+
+    private function buildVariantParentImportLookup(Collection $products): array
+    {
+        $productIds = $products
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->values()
+            ->all();
+
+        if (empty($productIds)) {
+            return [];
+        }
+
+        return DB::table('product_links')
+            ->where('link_type', 'super_link')
+            ->whereIn('product_id', $productIds)
+            ->whereIn('linked_product_id', $productIds)
+            ->get(['product_id', 'linked_product_id'])
+            ->mapWithKeys(fn ($link) => [
+                (int) $link->linked_product_id => (int) $link->product_id,
+            ])
+            ->all();
+    }
+
+    private function buildPostImportLookup(Collection $posts): array
+    {
+        return [
+            'by_id' => $posts->keyBy(fn (Post $post) => (int) $post->id),
+            'by_slug' => $posts
+                ->filter(fn (Post $post) => filled($post->slug))
+                ->keyBy(fn (Post $post) => $this->normalizeImportLookupValue((string) $post->slug)),
         ];
     }
 
@@ -1096,6 +1162,151 @@ class ProductController extends Controller
         return ['provided' => true, 'items' => $items];
     }
 
+    private function parseImportedCompositeDataV2(string $componentValue, string $childSkusValue, int $rowNumber, array &$errors): array
+    {
+        $componentTrimmed = trim($componentValue);
+        $childSkusTrimmed = trim($childSkusValue);
+
+        if ($componentTrimmed === '' && $childSkusTrimmed === '') {
+            return ['provided' => false, 'clear' => false, 'items' => []];
+        }
+
+        if ($componentTrimmed !== '') {
+            if ($this->isImportNullishValue($componentTrimmed)) {
+                return ['provided' => true, 'clear' => true, 'items' => []];
+            }
+
+            $decoded = $this->decodeSpreadsheetJsonValue($componentTrimmed);
+            if (!is_array($decoded) || !array_is_list($decoded)) {
+                $errors[] = $this->importError($rowNumber, 'Thành phần bundle/grouped', 'Cột Thành phần bundle/grouped phải là JSON array hợp lệ.');
+                return ['provided' => true, 'clear' => false, 'items' => []];
+            }
+
+            $items = [];
+
+            foreach ($decoded as $item) {
+                if (!is_array($item)) {
+                    $errors[] = $this->importError($rowNumber, 'Thành phần bundle/grouped', 'Mỗi thành phần bundle/grouped phải là object JSON hợp lệ.');
+                    continue;
+                }
+
+                $quantity = $item['quantity'] ?? 1;
+                if (!is_numeric($quantity) || (int) round((float) $quantity) < 1) {
+                    $errors[] = $this->importError($rowNumber, 'Thành phần bundle/grouped', 'Số lượng của từng thành phần phải là số nguyên lớn hơn hoặc bằng 1.');
+                    continue;
+                }
+
+                $isRequired = $this->normalizeImportedCompositeBooleanValue($item['is_required'] ?? true);
+                if ($isRequired === null) {
+                    $errors[] = $this->importError($rowNumber, 'Thành phần bundle/grouped', 'Trường is_required của từng thành phần phải là true/false hoặc 1/0.');
+                    continue;
+                }
+
+                $isDefault = $this->normalizeImportedCompositeBooleanValue($item['is_default'] ?? false);
+                if ($isDefault === null) {
+                    $errors[] = $this->importError($rowNumber, 'Thành phần bundle/grouped', 'Trường is_default của từng thành phần phải là true/false hoặc 1/0.');
+                    continue;
+                }
+
+                if (($item['price'] ?? null) !== null && $item['price'] !== '' && !is_numeric($item['price'])) {
+                    $errors[] = $this->importError($rowNumber, 'Thành phần bundle/grouped', 'Giá của từng thành phần phải là số hợp lệ.');
+                    continue;
+                }
+
+                $costPrice = $item['cost_price'] ?? $item['expected_cost'] ?? null;
+                if ($costPrice !== null && $costPrice !== '' && !is_numeric($costPrice)) {
+                    $errors[] = $this->importError($rowNumber, 'Thành phần bundle/grouped', 'Giá nhập của từng thành phần phải là số hợp lệ.');
+                    continue;
+                }
+
+                $productId = is_numeric($item['product_id'] ?? null) ? (int) $item['product_id'] : null;
+                $variantId = is_numeric($item['variant_id'] ?? null) ? (int) $item['variant_id'] : null;
+                $optionPostId = is_numeric($item['option_post_id'] ?? null) ? (int) $item['option_post_id'] : null;
+                $sku = trim((string) ($item['sku'] ?? ''));
+                $slug = trim((string) ($item['slug'] ?? ''));
+                $variantSku = trim((string) ($item['variant_sku'] ?? ''));
+
+                if ($productId === null && $sku === '' && $slug === '' && $variantSku === '') {
+                    $errors[] = $this->importError($rowNumber, 'Thành phần bundle/grouped', 'Mỗi thành phần phải có ít nhất product_id, sku, slug hoặc variant_sku để nhận diện sản phẩm.');
+                    continue;
+                }
+
+                $items[] = [
+                    'product_id' => $productId,
+                    'sku' => $sku,
+                    'slug' => $slug,
+                    'quantity' => (int) round((float) $quantity),
+                    'is_required' => $isRequired,
+                    'price' => ($item['price'] ?? null) !== null && $item['price'] !== '' ? (float) $item['price'] : null,
+                    'cost_price' => $costPrice !== null && $costPrice !== '' ? (float) $costPrice : null,
+                    'variant_id' => $variantId,
+                    'variant_sku' => $variantSku,
+                    'option_title' => trim((string) ($item['option_title'] ?? '')),
+                    'option_post_id' => $optionPostId,
+                    'option_post_slug' => trim((string) ($item['option_post_slug'] ?? '')),
+                    'is_default' => $isDefault,
+                ];
+            }
+
+            return [
+                'provided' => true,
+                'clear' => empty($items),
+                'items' => $items,
+            ];
+        }
+
+        if ($this->isImportNullishValue($childSkusTrimmed)) {
+            return ['provided' => true, 'clear' => true, 'items' => []];
+        }
+
+        $items = collect($this->splitImportListTokens($childSkusTrimmed))
+            ->map(fn (string $token) => [
+                'product_id' => null,
+                'sku' => '',
+                'slug' => '',
+                'quantity' => 1,
+                'is_required' => true,
+                'price' => null,
+                'cost_price' => null,
+                'variant_id' => null,
+                'variant_sku' => trim($token),
+                'option_title' => '',
+                'option_post_id' => null,
+                'option_post_slug' => '',
+                'is_default' => false,
+            ])
+            ->values()
+            ->all();
+
+        return [
+            'provided' => true,
+            'clear' => empty($items),
+            'items' => $items,
+        ];
+    }
+
+    private function normalizeImportedCompositeBooleanValue(mixed $value): ?bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return ((float) $value) !== 0.0;
+        }
+
+        $trimmed = trim((string) $value);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        return match ($this->normalizeImportLookupValue($trimmed)) {
+            '1', 'true', 'yes', 'co', 'required', 'default' => true,
+            '0', 'false', 'no', 'khong', 'optional' => false,
+            default => null,
+        };
+    }
+
     private function parseImportedProductTypeV2(
         string $value,
         ?string $existingType,
@@ -1113,12 +1324,12 @@ class ProductController extends Controller
         }
 
         $normalized = match ($this->normalizeImportLookupValue($trimmed)) {
-            'simple', 'don_gian' => 'simple',
+            'simple', 'don_gian', 'san_pham_don' => 'simple',
             'virtual', 'ao' => 'virtual',
             'downloadable', 'tai_xuong' => 'downloadable',
-            'configurable', 'co_bien_the' => 'configurable',
-            'grouped', 'nhom' => 'grouped',
-            'bundle' => 'bundle',
+            'configurable', 'co_bien_the', 'san_pham_co_bien_the' => 'configurable',
+            'grouped', 'nhom', 'nhom_san_pham' => 'grouped',
+            'bundle', 'bo_combo', 'combo', 'bo' => 'bundle',
             default => null,
         };
 
@@ -1132,8 +1343,12 @@ class ProductController extends Controller
             return [$existingType, false];
         }
 
+        if ($existingType === null && in_array($normalized, ['grouped', 'bundle'], true)) {
+            return [$normalized, true];
+        }
+
         if ($existingType === null && !in_array($normalized, ['simple', 'virtual', 'downloadable', 'configurable'], true)) {
-            $errors[] = $this->importError($rowNumber, 'Loại sản phẩm', 'Tạo mới qua Excel chỉ hỗ trợ simple, virtual, downloadable hoặc configurable.');
+            $errors[] = $this->importError($rowNumber, 'Loại sản phẩm', 'Tạo mới qua Excel chỉ hỗ trợ simple, virtual, downloadable, configurable, grouped hoặc bundle.');
             return [$hasVariants ? 'configurable' : 'simple', false];
         }
 
@@ -1160,6 +1375,7 @@ class ProductController extends Controller
             'variants_updated' => 0,
             'errors' => $initialErrors,
         ];
+        $pendingCompositeSyncs = [];
 
         foreach ($records as $record) {
             DB::beginTransaction();
@@ -1176,6 +1392,9 @@ class ProductController extends Controller
                 }
 
                 DB::commit();
+                if (!empty($result['composite_sync'])) {
+                    $pendingCompositeSyncs[] = $result['composite_sync'];
+                }
 
                 if (($result['status'] ?? '') === 'created') {
                     $summary['created']++;
@@ -1193,6 +1412,40 @@ class ProductController extends Controller
                 $summary['errors'][] = $this->importError(
                     (int) ($record['row_number'] ?? 0),
                     'Dòng dữ liệu',
+                    $exception->getMessage()
+                );
+            }
+        }
+
+        foreach ($pendingCompositeSyncs as $pendingCompositeSync) {
+            DB::beginTransaction();
+
+            try {
+                $context = $this->makeProductImportContextV2($request);
+                $product = Product::query()->findOrFail((int) ($pendingCompositeSync['product_id'] ?? 0));
+                $compositeErrors = $this->syncImportedCompositeItemsToProductV2(
+                    $product,
+                    (array) ($pendingCompositeSync['payload'] ?? []),
+                    $context['products'] ?? ['by_id' => collect(), 'by_sku' => collect(), 'by_slug' => collect()],
+                    $context['variant_parents'] ?? [],
+                    $context['posts'] ?? ['by_id' => collect(), 'by_slug' => collect()],
+                    (int) ($pendingCompositeSync['row_number'] ?? 0)
+                );
+
+                if (!empty($compositeErrors)) {
+                    DB::rollBack();
+                    $summary['failed']++;
+                    $summary['errors'] = array_merge($summary['errors'], $compositeErrors);
+                    continue;
+                }
+
+                DB::commit();
+            } catch (Throwable $exception) {
+                DB::rollBack();
+                $summary['failed']++;
+                $summary['errors'][] = $this->importError(
+                    (int) ($pendingCompositeSync['row_number'] ?? 0),
+                    'Thành phần bundle/grouped',
                     $exception->getMessage()
                 );
             }
@@ -1235,6 +1488,7 @@ class ProductController extends Controller
         $attributePayloads = $record['attributes'] ?? [];
         $imagePayload = $record['images'] ?? ['provided' => false, 'clear' => false, 'primary' => null, 'gallery' => []];
         $variantPayload = $record['variants'] ?? ['provided' => false, 'items' => []];
+        $compositePayload = $record['composite'] ?? ['provided' => false, 'clear' => false, 'items' => []];
 
         [$categoryIds, $categoryErrors] = $this->resolveOrCreateCategoryIdsV2(
             $categoryPayload,
@@ -1259,7 +1513,8 @@ class ProductController extends Controller
             || !empty($domainPayload['provided'])
             || !empty($attributePayloads)
             || !empty($imagePayload['provided'])
-            || !empty($variantPayload['provided']);
+            || !empty($variantPayload['provided'])
+            || !empty($compositePayload['provided']);
 
         if (!empty($record['existing_id'])) {
             $product = Product::query()
@@ -1318,11 +1573,24 @@ class ProductController extends Controller
                 $errors = array_merge($errors, $this->syncImportedVariantsToProductV2($product, $variantPayload, $context['attributes'], $rowNumber, $summary));
             }
 
-            return ['status' => 'updated', 'errors' => $errors];
+            return [
+                'status' => 'updated',
+                'errors' => $errors,
+                'composite_sync' => !empty($compositePayload['provided'])
+                    ? [
+                        'product_id' => (int) $product->id,
+                        'row_number' => $rowNumber,
+                        'payload' => $compositePayload,
+                    ]
+                    : null,
+            ];
         }
 
         $name = trim((string) ($fields['name'] ?? ''));
         $type = (string) ($record['type'] ?? 'simple');
+        $shouldAutoCalculateCompositePrice = !array_key_exists('price', $fields)
+            && !empty($compositePayload['provided'])
+            && in_array($type, ['grouped', 'bundle'], true);
         $sku = array_key_exists('sku', $fields)
             ? $this->productSkuService->ensureUniqueSku($fields['sku'], $name)
             : $this->productSkuService->ensureUniqueSku(null, $name);
@@ -1335,6 +1603,7 @@ class ProductController extends Controller
             'sku' => $sku,
             'slug' => $this->productSkuService->generateUniqueSlug($slugSeed),
             'price' => $fields['price'] ?? 0,
+            'price_type' => $shouldAutoCalculateCompositePrice ? 'sum' : 'fixed',
             'special_price' => $fields['special_price'] ?? null,
             'expected_cost' => $fields['expected_cost'] ?? null,
             'stock_quantity' => $fields['stock_quantity'] ?? 0,
@@ -1374,7 +1643,17 @@ class ProductController extends Controller
             $errors = array_merge($errors, $this->syncImportedVariantsToProductV2($product, $variantPayload, $context['attributes'], $rowNumber, $summary));
         }
 
-        return ['status' => 'created', 'errors' => $errors];
+        return [
+            'status' => 'created',
+            'errors' => $errors,
+            'composite_sync' => !empty($compositePayload['provided'])
+                ? [
+                    'product_id' => (int) $product->id,
+                    'row_number' => $rowNumber,
+                    'payload' => $compositePayload,
+                ]
+                : null,
+        ];
     }
 
     private function resolveOrCreateCategoryIdsV2(
@@ -1968,6 +2247,252 @@ class ProductController extends Controller
         }
 
         return $errors;
+    }
+
+    private function syncImportedCompositeItemsToProductV2(
+        Product $product,
+        array $compositePayload,
+        array $productLookup,
+        array $variantParentLookup,
+        array $postLookup,
+        int $rowNumber
+    ): array {
+        if (empty($compositePayload['provided'])) {
+            return [];
+        }
+
+        if (!in_array($product->type, ['grouped', 'bundle'], true)) {
+            if (empty($compositePayload['clear']) && !empty($compositePayload['items'])) {
+                return [$this->importError($rowNumber, 'Thành phần bundle/grouped', 'Cột Thành phần bundle/grouped chỉ áp dụng cho sản phẩm bundle hoặc grouped.')];
+            }
+
+            return [];
+        }
+
+        $resolvedItems = [];
+        $errors = [];
+
+        foreach ((array) ($compositePayload['items'] ?? []) as $index => $item) {
+            $resolved = $this->resolveImportedCompositeItemV2(
+                (array) $item,
+                $productLookup,
+                $variantParentLookup,
+                $postLookup,
+                $rowNumber,
+                $index
+            );
+
+            if (!empty($resolved['errors'])) {
+                $errors = array_merge($errors, $resolved['errors']);
+                continue;
+            }
+
+            if (!empty($resolved['item'])) {
+                $resolvedItems[] = $resolved['item'];
+            }
+        }
+
+        if (!empty($errors)) {
+            return $errors;
+        }
+
+        if (!empty($resolvedItems)) {
+            try {
+                $this->validateGroupedOrBundleItemVariants($resolvedItems);
+            } catch (ValidationException $exception) {
+                return collect($exception->errors())
+                    ->flatten()
+                    ->filter()
+                    ->map(fn ($message) => $this->importError($rowNumber, 'Thành phần bundle/grouped', (string) $message))
+                    ->values()
+                    ->all();
+            }
+        }
+
+        if ($product->type === 'bundle') {
+            $product->bundleItems()->detach();
+        } else {
+            $product->groupedItems()->detach();
+        }
+
+        foreach ($resolvedItems as $index => $item) {
+            $pivotData = [
+                'quantity' => $item['quantity'],
+                'is_required' => $item['is_required'],
+                'link_type' => $product->type === 'bundle' ? 'bundle' : 'grouped',
+                'position' => $index,
+                'option_title' => $item['option_title'] ?? null,
+                'option_post_id' => $item['option_post_id'] ?? null,
+                'is_default' => $item['is_default'] ?? false,
+                'variant_id' => $item['variant_id'] ?? null,
+                'price' => $item['price'] ?? null,
+                'cost_price' => $item['cost_price'] ?? null,
+            ];
+
+            if ($product->type === 'bundle') {
+                $product->bundleItems()->attach($item['id'], $pivotData);
+            } else {
+                $product->groupedItems()->attach($item['id'], $pivotData);
+            }
+        }
+
+        $this->syncCompositeAutoPrice($product);
+
+        return [];
+    }
+
+    private function resolveImportedCompositeItemV2(
+        array $item,
+        array $productLookup,
+        array $variantParentLookup,
+        array $postLookup,
+        int $rowNumber,
+        int $index
+    ): array {
+        $product = $this->findImportedProductReferenceV2(
+            $productLookup,
+            isset($item['product_id']) && is_numeric($item['product_id']) ? (int) $item['product_id'] : null,
+            trim((string) ($item['sku'] ?? '')),
+            trim((string) ($item['slug'] ?? ''))
+        );
+        $variant = null;
+        $variantSku = trim((string) ($item['variant_sku'] ?? ''));
+        $variantId = isset($item['variant_id']) && is_numeric($item['variant_id']) ? (int) $item['variant_id'] : null;
+
+        if ($product instanceof Product) {
+            $possibleParentId = $variantParentLookup[(int) $product->id] ?? null;
+            if ($possibleParentId !== null && ($variantSku === '' && $variantId === null)) {
+                $variant = $product;
+                $product = $productLookup['by_id']->get((int) $possibleParentId);
+            }
+        }
+
+        if (!$product && ($variantSku !== '' || $variantId !== null)) {
+            $variantCandidate = $this->findImportedProductReferenceV2($productLookup, $variantId, $variantSku, '');
+            if ($variantCandidate instanceof Product) {
+                $parentId = $variantParentLookup[(int) $variantCandidate->id] ?? null;
+                if ($parentId !== null) {
+                    $variant = $variantCandidate;
+                    $product = $productLookup['by_id']->get((int) $parentId);
+                } else {
+                    $product = $variantCandidate;
+                }
+            }
+        }
+
+        if (!$product instanceof Product) {
+            return [
+                'item' => null,
+                'errors' => [
+                    $this->importError(
+                        $rowNumber,
+                        'Thành phần bundle/grouped',
+                        sprintf('Không tìm thấy sản phẩm thành phần ở mục #%d theo SKU, slug hoặc ID đã nhập.', $index + 1)
+                    ),
+                ],
+            ];
+        }
+
+        if ($product->type === 'configurable') {
+            if (!$variant instanceof Product) {
+                $variant = $this->findImportedProductReferenceV2($productLookup, $variantId, $variantSku, '');
+            }
+
+            if (!$variant instanceof Product) {
+                return [
+                    'item' => null,
+                    'errors' => [
+                        $this->importError(
+                            $rowNumber,
+                            'Thành phần bundle/grouped',
+                            sprintf('Sản phẩm configurable ở mục #%d cần có variant_sku hoặc variant_id hợp lệ.', $index + 1)
+                        ),
+                    ],
+                ];
+            }
+
+            $parentId = $variantParentLookup[(int) $variant->id] ?? null;
+            if ((int) $parentId !== (int) $product->id) {
+                return [
+                    'item' => null,
+                    'errors' => [
+                        $this->importError(
+                            $rowNumber,
+                            'Thành phần bundle/grouped',
+                            sprintf('Biến thể ở mục #%d không thuộc sản phẩm configurable đã chọn.', $index + 1)
+                        ),
+                    ],
+                ];
+            }
+        } else {
+            $variant = null;
+        }
+
+        $optionPost = $this->findImportedPostReferenceV2(
+            $postLookup,
+            isset($item['option_post_id']) && is_numeric($item['option_post_id']) ? (int) $item['option_post_id'] : null,
+            trim((string) ($item['option_post_slug'] ?? ''))
+        );
+
+        return [
+            'item' => [
+                'id' => (int) $product->id,
+                'quantity' => max(1, (int) ($item['quantity'] ?? 1)),
+                'is_required' => array_key_exists('is_required', $item) ? (bool) $item['is_required'] : true,
+                'variant_id' => $variant instanceof Product ? (int) $variant->id : null,
+                'option_title' => trim((string) ($item['option_title'] ?? '')) !== '' ? trim((string) $item['option_title']) : null,
+                'option_post_id' => $optionPost instanceof Post ? (int) $optionPost->id : null,
+                'is_default' => !empty($item['is_default']),
+                'price' => array_key_exists('price', $item) && $item['price'] !== null ? (float) $item['price'] : null,
+                'cost_price' => array_key_exists('cost_price', $item) && $item['cost_price'] !== null ? (float) $item['cost_price'] : null,
+            ],
+            'errors' => [],
+        ];
+    }
+
+    private function findImportedProductReferenceV2(array $lookup, ?int $productId, string $sku = '', string $slug = ''): ?Product
+    {
+        if ($sku !== '') {
+            $matchedBySku = $lookup['by_sku']->get($this->normalizeImportLookupValue($sku));
+            if ($matchedBySku instanceof Product) {
+                return $matchedBySku;
+            }
+        }
+
+        if ($slug !== '') {
+            $matchedBySlug = $lookup['by_slug']->get($this->normalizeImportLookupValue($slug));
+            if ($matchedBySlug instanceof Product) {
+                return $matchedBySlug;
+            }
+        }
+
+        if ($productId !== null && $productId > 0) {
+            $matchedById = $lookup['by_id']->get($productId);
+            if ($matchedById instanceof Product) {
+                return $matchedById;
+            }
+        }
+
+        return null;
+    }
+
+    private function findImportedPostReferenceV2(array $lookup, ?int $postId, string $slug = ''): ?Post
+    {
+        if ($slug !== '') {
+            $matchedBySlug = $lookup['by_slug']->get($this->normalizeImportLookupValue($slug));
+            if ($matchedBySlug instanceof Post) {
+                return $matchedBySlug;
+            }
+        }
+
+        if ($postId !== null && $postId > 0) {
+            $matchedById = $lookup['by_id']->get($postId);
+            if ($matchedById instanceof Post) {
+                return $matchedById;
+            }
+        }
+
+        return null;
     }
     protected function supplierExistsRule(Request $request)
     {
@@ -4716,6 +5241,8 @@ class ProductController extends Controller
             'Video URL',
             'Thông số kỹ thuật',
             'Tiêu đề bundle',
+            'Mã SP con',
+            'Thành phần bundle/grouped',
             'Thuộc tính',
             'Ảnh đại diện',
             'Thư viện ảnh',
@@ -4732,7 +5259,7 @@ class ProductController extends Controller
                 '#slug sản phẩm',
                 '#https://ten-mien/san-pham/slug-hoac-id',
                 '#Tên sản phẩm',
-                '#simple / virtual / downloadable / configurable',
+                '#simple / virtual / downloadable / configurable / grouped / bundle',
                 '#CODE:ma-danh-muc hoặc ID:12 hoặc NAME:Tên danh mục',
                 '#0',
                 '#0',
@@ -4750,6 +5277,8 @@ class ProductController extends Controller
                 '#https://youtube.com/watch?v=...',
                 '#JSON [{"label":"Chất liệu","value":"Gốm"}] hoặc từng dòng Label: Value',
                 '#Tiêu đề bundle nếu cần',
+                '#SKU con ngăn cách bởi |, dùng nhanh cho bundle/grouped',
+                '#JSON [{"sku":"BOWL-001","quantity":1},{"sku":"OPTION-001","variant_sku":"OPTION-001-RED","quantity":2,"price":150000,"option_title":"Mau men","option_post_slug":"lua-chon-mau-men"}]',
                 '#JSON {"CODE:mau-sac":"Đỏ","NAME:Chất liệu":["Gốm","Men lam"]} hoặc Mau sac=Do | Chat lieu=Gom',
                 '#https://cdn.example.com/products/main.jpg',
                 '#https://cdn.example.com/products/1.jpg | https://cdn.example.com/products/2.jpg',
@@ -4761,7 +5290,7 @@ class ProductController extends Controller
                 '#Có thể sửa slug hoặc sửa cột Link sản phẩm',
                 '#Nếu có cả slug và link, hệ thống ưu tiên slug',
                 '#Bắt buộc khi tạo mới',
-                '#Tạo mới hỗ trợ simple/virtual/downloadable/configurable',
+                '#Tạo mới hỗ trợ simple/virtual/downloadable/configurable/grouped/bundle',
                 '#Dùng NULL để xóa danh mục',
                 '#Giá mặc định 0 khi tạo mới',
                 '#Để trống nếu chưa có giá bán ưu đãi',
@@ -4780,6 +5309,8 @@ class ProductController extends Controller
                 '#Dùng NULL để xóa video',
                 '#Dùng NULL để xóa thông số kỹ thuật',
                 '#Dùng NULL để xóa tiêu đề bundle',
+                '#Dùng cho bundle/grouped khi chỉ cần danh sách SKU. Nếu có cả component_data thì component_data được ưu tiên.',
+                '#Dùng cho bundle/grouped để khai báo chi tiết số lượng, biến thể, giá, bài viết tùy chọn...',
                 '#Hệ thống tự tạo thuộc tính / giá trị còn thiếu. Dữ liệu JSON sẽ giữ được mảng giá trị.',
                 '#Link online hợp lệ sẽ được gán làm ảnh đại diện. Dùng NULL để xóa toàn bộ ảnh.',
                 '#Cột này chỉ chứa ảnh phụ / gallery. Hệ thống tự gộp với ảnh đại diện khi import.',
@@ -4820,6 +5351,7 @@ class ProductController extends Controller
             'video_url',
             'bundle_title',
             'child_skus',
+            'child_names',
             'component_data',
             'domain',
             'attributes',
@@ -4872,6 +5404,7 @@ class ProductController extends Controller
             'weight' => 'Khối lượng',
             'video_url' => 'Video URL',
             'child_skus' => 'Mã SP con',
+            'child_names' => 'Tên biến thể / thành phần',
             'component_data' => 'Thành phần bundle/grouped',
             'bundle_title' => 'Tiêu đề bundle',
             'domain' => 'Domain',
@@ -4976,6 +5509,7 @@ class ProductController extends Controller
     {
         $labels = [
             'child_skus' => 'Mã SP con',
+            'child_names' => 'Tên biến thể / thành phần',
             'component_data' => 'Thành phần bundle/grouped',
             'id' => 'ID',
             'sku' => 'Mã SP',
@@ -5161,6 +5695,7 @@ class ProductController extends Controller
             'video_url' => (string) ($product['video_url'] ?? ''),
             'bundle_title' => (string) ($product['bundle_title'] ?? ''),
             'child_skus' => $this->resolveProductChildSkuExportValue($product, $selectedVariantMap),
+            'child_names' => $this->resolveProductChildNameExportValue($product, $selectedVariantMap),
             'component_data' => $this->resolveProductCompositeExportData($product, $selectedVariantMap),
             'domain' => $this->resolveProductExportDomain($product, $domains),
             'attributes' => $this->resolveProductExportAttributes($product, $attributeMap),
@@ -5456,6 +5991,43 @@ class ProductController extends Controller
             ->implode(' | ');
     }
 
+    private function resolveProductChildNameExportValue(array $product, array $selectedVariantMap = []): string
+    {
+        $type = (string) ($product['type'] ?? '');
+
+        if ($type === 'configurable') {
+            return collect($product['variations'] ?? [])
+                ->pluck('name')
+                ->map(fn ($name) => trim((string) $name))
+                ->filter()
+                ->unique()
+                ->values()
+                ->implode(' | ');
+        }
+
+        if (!in_array($type, ['grouped', 'bundle'], true)) {
+            return '';
+        }
+
+        $relationKey = $type === 'bundle' ? 'bundle_items' : 'grouped_items';
+
+        return collect($product[$relationKey] ?? [])
+            ->map(function (array $item) use ($selectedVariantMap) {
+                $variantId = data_get($item, 'pivot.variant_id');
+                $variantId = is_numeric($variantId) ? (int) $variantId : 0;
+
+                if ($variantId > 0 && !empty($selectedVariantMap[$variantId]['name'])) {
+                    return trim((string) $selectedVariantMap[$variantId]['name']);
+                }
+
+                return trim((string) ($item['name'] ?? ''));
+            })
+            ->filter()
+            ->unique()
+            ->values()
+            ->implode(' | ');
+    }
+
     private function resolveProductCompositeExportData(array $product, array $selectedVariantMap = []): string
     {
         $type = (string) ($product['type'] ?? '');
@@ -5678,7 +6250,7 @@ class ProductController extends Controller
             'name' => ['ten_san_pham', 'ten_sp', 'name'],
             'type' => ['loai_san_pham', 'loai_hinh', 'type'],
             'category' => ['danh_muc', 'category'],
-            'price' => ['gia', 'gia_ban', 'price'],
+            'price' => ['gia', 'price'],
             'special_price' => ['gia_ban_uu_dai', 'gia_khuyen_mai', 'special_price', 'sale_price'],
             'expected_cost' => ['gia_du_kien', 'gia_nhap_du_kien', 'expected_cost', 'cost_price'],
             'stock_quantity' => ['ton_kho', 'so_luong_ton', 'stock_quantity'],
@@ -5695,17 +6267,35 @@ class ProductController extends Controller
             'meta_keywords' => ['seo_keywords', 'meta_keywords'],
             'weight' => ['khoi_luong', 'weight'],
             'bundle_title' => ['tieu_de_bundle', 'bundle_title'],
+            'child_skus' => ['ma_sp_con', 'child_skus', 'sku_con'],
+            'component_data' => ['thanh_phan_bundle_grouped', 'component_data', 'grouped_items', 'bundle_items'],
             'attributes' => ['thuoc_tinh', 'attributes', 'custom_attributes'],
             'primary_image_url' => ['anh_dai_dien', 'anh_chinh', 'main_image', 'primary_image', 'primary_image_url'],
             'gallery_image_urls' => ['thu_vien_anh', 'gallery_images', 'gallery_image_urls', 'anh_thu_vien'],
             'variant_data' => ['bien_the', 'variants', 'variant_data', 'du_lieu_bien_the'],
         ];
 
+        $normalizedHeaders = array_map(
+            fn ($cellValue) => $this->normalizeImportHeader((string) $cellValue),
+            $headerRow
+        );
+        $hasExplicitRegularPriceHeader = !empty(array_intersect($normalizedHeaders, ['gia', 'price']));
         $headerMap = [];
 
-        foreach ($headerRow as $index => $cellValue) {
-            $normalized = $this->normalizeImportHeader((string) $cellValue);
+        foreach ($normalizedHeaders as $index => $normalized) {
             if ($normalized === '') {
+                continue;
+            }
+
+            // Legacy templates used "Gia ban" for the base price, while newer export files
+            // use "Gia" for base price and "Gia ban" for sale price. Support both layouts.
+            if ($normalized === 'gia_ban') {
+                $targetField = $hasExplicitRegularPriceHeader ? 'special_price' : 'price';
+
+                if (!isset($headerMap[$targetField])) {
+                    $headerMap[$targetField] = $index;
+                }
+
                 continue;
             }
 
@@ -6203,6 +6793,10 @@ class ProductController extends Controller
             if ($siteDomain) {
                 return (int) $siteDomain->id;
             }
+
+            if ($mode === null) {
+                return null;
+            }
         }
 
         $errors[] = $this->importError($rowNumber, 'Domain', 'Không tìm thấy domain phù hợp trong hệ thống.');
@@ -6236,12 +6830,12 @@ class ProductController extends Controller
         }
 
         $normalized = match ($this->normalizeImportLookupValue($trimmed)) {
-            'simple', 'don_gian' => 'simple',
+            'simple', 'don_gian', 'san_pham_don' => 'simple',
             'virtual', 'ao' => 'virtual',
             'downloadable', 'tai_xuong' => 'downloadable',
-            'configurable', 'co_bien_the' => 'configurable',
-            'grouped', 'nhom' => 'grouped',
-            'bundle' => 'bundle',
+            'configurable', 'co_bien_the', 'san_pham_co_bien_the' => 'configurable',
+            'grouped', 'nhom', 'nhom_san_pham' => 'grouped',
+            'bundle', 'bo_combo', 'combo', 'bo' => 'bundle',
             default => null,
         };
 
@@ -6249,7 +6843,7 @@ class ProductController extends Controller
             $errors[] = $this->importError(
                 $rowNumber,
                 'Loại sản phẩm',
-                'Loại sản phẩm chỉ hỗ trợ simple, virtual hoặc downloadable khi import.'
+                'Loại sản phẩm chỉ hỗ trợ simple, virtual, downloadable, configurable, grouped hoặc bundle khi import.'
             );
             return [$existingType ?: 'simple', false];
         }
@@ -6263,11 +6857,15 @@ class ProductController extends Controller
             return [$existingType, false];
         }
 
+        if ($existingType === null && in_array($normalized, ['configurable', 'grouped', 'bundle'], true)) {
+            return [$normalized, true];
+        }
+
         if ($existingType === null && !in_array($normalized, ['simple', 'virtual', 'downloadable'], true)) {
             $errors[] = $this->importError(
                 $rowNumber,
                 'Loại sản phẩm',
-                'Tạo mới qua Excel hiện chỉ hỗ trợ simple, virtual hoặc downloadable.'
+                'Tạo mới qua Excel hiện hỗ trợ simple, virtual, downloadable, configurable, grouped hoặc bundle.'
             );
             return ['simple', false];
         }
@@ -6614,7 +7212,99 @@ class ProductController extends Controller
 
         return collect($rawValue)
             ->map(fn ($item) => $this->normalizeAdditionalInfoItem($item, $attribute))
-            ->filter(fn ($item) => !empty($item['post_id']))
+            ->filter(fn ($item) => $this->hasMeaningfulAdditionalInfoItem($item))
+            ->values()
+            ->all();
+    }
+
+    protected function hasMeaningfulAdditionalInfoItem(?array $item): bool
+    {
+        if (!is_array($item)) {
+            return false;
+        }
+
+        if (!empty($item['post_id'])) {
+            return true;
+        }
+
+        foreach (['title', 'display_text', 'post_title', 'post_slug'] as $field) {
+            if (filled($item[$field] ?? null)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected function normalizeImportedAdditionalInfoPayload(
+        $rawValue,
+        Request $request,
+        string $attribute = 'additional_info'
+    ): array {
+        $items = $this->normalizeAdditionalInfoPayload($rawValue, $attribute);
+
+        if (empty($items)) {
+            return [];
+        }
+
+        $accountId = (int) $request->header('X-Account-Id');
+        $postIds = collect($items)
+            ->pluck('post_id')
+            ->filter()
+            ->map(fn ($postId) => (int) $postId)
+            ->unique()
+            ->values()
+            ->all();
+        $postSlugs = collect($items)
+            ->map(fn (array $item) => trim((string) ($item['post_slug'] ?? '')))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $postsById = Post::query()
+            ->when($accountId > 0, fn (Builder $query) => $query->where('account_id', $accountId))
+            ->whereIn('id', $postIds)
+            ->get(['id', 'title', 'slug'])
+            ->keyBy(fn (Post $post) => (int) $post->id);
+        $postsBySlug = Post::query()
+            ->when($accountId > 0, fn (Builder $query) => $query->where('account_id', $accountId))
+            ->whereIn('slug', $postSlugs)
+            ->get(['id', 'title', 'slug'])
+            ->keyBy(fn (Post $post) => $this->normalizeImportLookupValue((string) $post->slug));
+
+        return collect($items)
+            ->map(function (array $item) use ($postsById, $postsBySlug) {
+                $postId = filled($item['post_id'] ?? null) ? (int) $item['post_id'] : null;
+
+                if ($postId && $postsById->has($postId)) {
+                    $matchedPost = $postsById->get($postId);
+                    $item['post_id'] = (int) $matchedPost->id;
+                    $item['post_title'] = trim((string) ($item['post_title'] ?? '')) !== ''
+                        ? $item['post_title']
+                        : trim((string) $matchedPost->title);
+                    $item['post_slug'] = trim((string) ($item['post_slug'] ?? '')) !== ''
+                        ? $item['post_slug']
+                        : trim((string) $matchedPost->slug);
+
+                    return $item;
+                }
+
+                $normalizedPostSlug = $this->normalizeImportLookupValue((string) ($item['post_slug'] ?? ''));
+                if ($normalizedPostSlug !== '' && $postsBySlug->has($normalizedPostSlug)) {
+                    $matchedPost = $postsBySlug->get($normalizedPostSlug);
+                    $item['post_id'] = (int) $matchedPost->id;
+                    $item['post_title'] = trim((string) $matchedPost->title);
+                    $item['post_slug'] = trim((string) $matchedPost->slug);
+
+                    return $item;
+                }
+
+                $item['post_id'] = null;
+
+                return $item;
+            })
+            ->filter(fn (array $item) => $this->hasMeaningfulAdditionalInfoItem($item))
             ->values()
             ->all();
     }

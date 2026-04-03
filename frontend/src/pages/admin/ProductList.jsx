@@ -83,6 +83,8 @@ const DEFAULT_COLUMNS = [
 
 const DEFAULT_SORT_CONFIG = { key: 'created_at', direction: 'desc', phase: 1 };
 const DEFAULT_EXPORT_COLUMN_IDS = ['name', 'product_link'];
+const CONTENT_ONLY_EXPORT_COLUMN_IDS = ['sku', 'name', 'child_names', 'description', 'specifications'];
+const CONTENT_ONLY_IMPORT_FIELD_IDS = ['description', 'specifications'];
 const EXPORT_EXCLUDED_COLUMN_IDS = new Set(['actions', 'images']);
 const DEFAULT_IMPORT_MODE = 'replace_all';
 const DEFAULT_IMPORT_MISSING_PRODUCT_ACTION = 'create';
@@ -102,6 +104,7 @@ const EXTRA_EXPORT_FIELDS = [
     { id: 'video_url', label: 'Video URL' },
     { id: 'bundle_title', label: 'Tiêu đề bundle' },
     { id: 'child_skus', label: 'Mã SP con' },
+    { id: 'child_names', label: 'Tên biến thể / thành phần' },
     { id: 'component_data', label: 'Thành phần bundle/grouped' },
     { id: 'attributes', label: 'Thuộc tính' },
     { id: 'primary_image_url', label: 'Ảnh đại diện' },
@@ -128,6 +131,7 @@ const IMPORT_BASE_FIELD_OPTIONS = [
     { id: 'weight', label: 'Khối lượng', description: 'Cập nhật trọng lượng hoặc quy cách đóng gói.' },
     { id: 'video_url', label: 'Video URL', description: 'Cập nhật liên kết video sản phẩm.' },
     { id: 'bundle_title', label: 'Tiêu đề bundle', description: 'Cập nhật tiêu đề bundle nếu có.' },
+    { id: 'component_data', label: 'Thành phần bundle/grouped', description: 'Cập nhật danh sách thành phần cho bộ/combo hoặc nhóm sản phẩm.' },
     { id: 'domain', label: 'Domain', description: 'Cập nhật domain gắn với sản phẩm.' },
     { id: 'is_featured', label: 'Nổi bật', description: 'Cập nhật cờ sản phẩm nổi bật.' },
     { id: 'is_new', label: 'Mới', description: 'Cập nhật cờ sản phẩm mới.' },
@@ -1011,6 +1015,12 @@ const ProductList = () => {
         setShowExportModal(true);
     };
 
+    const applyContentOnlyExportPreset = () => {
+        setExportColumnIds(
+            CONTENT_ONLY_EXPORT_COLUMN_IDS.filter((id) => exportFieldOptions.some((option) => option.id === id))
+        );
+    };
+
     const toggleExportColumn = (columnId) => {
         setExportColumnIds((prev) => (
             prev.includes(columnId)
@@ -1064,6 +1074,14 @@ const ProductList = () => {
     const handleImportModeChange = (nextMode) => {
         setImportMode(nextMode);
         setImportMissingProductAction(nextMode === 'update_selected_fields' ? 'skip' : 'create');
+    };
+
+    const applyContentOnlyImportPreset = () => {
+        setImportMode('update_selected_fields');
+        setImportMissingProductAction('skip');
+        setImportUpdateFieldIds(
+            CONTENT_ONLY_IMPORT_FIELD_IDS.filter((id) => importFieldOptions.some((option) => option.id === id))
+        );
     };
 
     const toggleImportUpdateField = (fieldId) => {
@@ -1140,9 +1158,23 @@ const ProductList = () => {
             fetchProducts(pagination.current_page, filters, sortConfig, pagination.per_page);
         } catch (error) {
             console.error('Product import error:', error);
-            const importErrors = Array.isArray(error?.response?.data?.errors)
-                ? error.response.data.errors
-                : [];
+            console.error('Product import response data:', error?.response?.data);
+            const rawImportErrors = error?.response?.data?.errors;
+            const importErrors = Array.isArray(rawImportErrors)
+                ? rawImportErrors
+                : rawImportErrors && typeof rawImportErrors === 'object'
+                    ? Object.entries(rawImportErrors).flatMap(([column, messages]) => {
+                        const normalizedMessages = Array.isArray(messages) ? messages : [messages];
+
+                        return normalizedMessages
+                            .filter(Boolean)
+                            .map((item) => ({
+                                row: '-',
+                                column,
+                                message: typeof item === 'string' ? item : 'Lỗi import không xác định.',
+                            }));
+                    })
+                    : [];
             const message = error?.response?.data?.message || 'KhÃ´ng thá»ƒ import file Excel sáº£n pháº©m.';
 
             if (importErrors.length > 0) {
@@ -2049,6 +2081,29 @@ const ProductList = () => {
                             <div className="mt-1 text-[13px] font-bold text-primary break-all">{pendingImportFile?.name || 'Chưa có file'}</div>
                         </div>
 
+                        <div className="mt-4 rounded-sm border border-primary/10 p-4">
+                            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                <div>
+                                    <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Preset tiện dùng</div>
+                                    <p className="mt-2 text-[13px] leading-5 text-primary/65">
+                                        Dùng preset này khi bạn chỉ cần đưa file sang local để viết nội dung rồi import ngược lại web.
+                                        Hệ thống sẽ chỉ cập nhật <strong>Mô tả</strong> và <strong>Thông số kỹ thuật</strong>, đồng thời bỏ qua dòng không khớp sản phẩm hiện có.
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={applyContentOnlyImportPreset}
+                                    className="shrink-0 rounded-sm border border-primary/20 px-4 py-2 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                >
+                                    Áp dụng preset: Nội dung web
+                                </button>
+                            </div>
+                            <div className="mt-3 rounded-sm bg-primary/[0.03] px-3 py-2 text-[12px] text-primary/70">
+                                File import cho preset này nên chỉ giữ các cột: <strong>SKU</strong>, <strong>Tên sản phẩm</strong>, <strong>Mô tả</strong>, <strong>Thông số kỹ thuật</strong>.
+                                Nếu file đang có thêm cột <strong>Tên biến thể / thành phần</strong> để tham chiếu nội dung thì vẫn an toàn, backend sẽ tự bỏ qua cột này khi import.
+                            </div>
+                        </div>
+
                         <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
                             {[
                                 {
@@ -2216,7 +2271,7 @@ const ProductList = () => {
                                     Xuất sản phẩm ra Excel
                                 </h2>
                                 <p className="mt-2 text-[13px] text-primary/65">
-                                    Chọn đúng các cột cần tải. Với nhu cầu làm web, bạn có thể chỉ bật <strong>Tên sản phẩm</strong> và <strong>Link SP</strong>.
+                                    Chọn đúng các cột cần tải. Nếu mục tiêu là viết nội dung hàng loạt rồi import ngược lại web, hãy dùng preset <strong>Nội dung web</strong>.
                                 </p>
                             </div>
                             <button
@@ -2227,6 +2282,25 @@ const ProductList = () => {
                             >
                                 <span className="material-symbols-outlined">close</span>
                             </button>
+                        </div>
+
+                        <div className="mt-4 rounded-sm border border-primary/10 p-4">
+                            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                <div>
+                                    <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Preset tiện dùng</div>
+                                    <p className="mt-2 text-[13px] leading-5 text-primary/65">
+                                        Preset này sẽ chỉ xuất các cột phục vụ biên tập nội dung: <strong>SKU</strong>, <strong>Tên sản phẩm</strong>,
+                                        <strong> Tên biến thể / thành phần</strong>, <strong>Mô tả</strong> và <strong>Thông số kỹ thuật</strong>.
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={applyContentOnlyExportPreset}
+                                    className="shrink-0 rounded-sm border border-primary/20 px-4 py-2 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                >
+                                    Chọn preset: Nội dung web
+                                </button>
+                            </div>
                         </div>
 
                         <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -2243,6 +2317,13 @@ const ProductList = () => {
                                 className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
                             >
                                 Chọn nhanh: Tên + Link
+                            </button>
+                            <button
+                                type="button"
+                                onClick={applyContentOnlyExportPreset}
+                                className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
+                            >
+                                Chọn nhanh: Nội dung web
                             </button>
                             <button
                                 type="button"

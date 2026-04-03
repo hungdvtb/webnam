@@ -6,14 +6,9 @@ import { HTML5Backend } from 'react-dnd-html5-backend';
 import { Tree, getDescendants, isAncestor } from '@minoru/react-dnd-treeview';
 import { useUI } from '../../context/UIContext';
 import CategoryProductSortModal from '../../components/admin/CategoryProductSortModal';
+import { resolveEntityImageUrl } from '../../utils/mediaUrl';
 
-const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelected, onSelect, isCheckable, isChecked, onCheck, isDropTarget }) => {
-    /*
-    
-    
-        .join(', ') || 'Không có';
-
-    */
+const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelected, onSelect, isChecked, onCheck, isDropTarget }) => {
     return (
         <div 
             style={{ paddingLeft: depth * 24 }} 
@@ -144,7 +139,40 @@ const INITIAL_FORM_DATA = {
     filterable_attribute_ids: [],
 };
 
-const resolveCategoryAssetUrl = (value) => {
+const DEFAULT_IMPORT_MODE = 'replace_all';
+const CATEGORY_IMPORT_FIELD_OPTIONS = [
+    {
+        id: 'name',
+        label: 'Ten danh muc',
+        description: 'Cap nhat ten danh muc.',
+    },
+    {
+        id: 'description',
+        label: 'Mo ta',
+        description: 'Cap nhat mo ta danh muc.',
+    },
+    {
+        id: 'tree',
+        label: 'Cay danh muc',
+        description: 'Cap nhat danh muc cha va thu tu trong cay.',
+    },
+    {
+        id: 'banner',
+        label: 'Anh banner',
+        description: 'Cap nhat link anh banner va dong bo ve kho online.',
+    },
+    {
+        id: 'logo',
+        label: 'Anh nho',
+        description: 'Cap nhat link anh nho va dong bo ve kho online.',
+    },
+];
+
+const resolveCategoryAssetUrl = (value, preferred = 'medium') => {
+    if (value && typeof value === 'object') {
+        return resolveEntityImageUrl(value, preferred, '');
+    }
+
     if (!value || typeof value !== 'string') {
         return null;
     }
@@ -357,6 +385,11 @@ const CategoryList = () => {
     const [isExportingExcel, setIsExportingExcel] = useState(false);
     const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
     const [isImportingExcel, setIsImportingExcel] = useState(false);
+    const [showImportConfigModal, setShowImportConfigModal] = useState(false);
+    const [pendingImportFile, setPendingImportFile] = useState(null);
+    const [importMode, setImportMode] = useState(DEFAULT_IMPORT_MODE);
+    const [importUpdateFieldIds, setImportUpdateFieldIds] = useState([]);
+    const isSelectiveImport = importMode === 'update_selected_fields';
 
     // Close dropdowns on outside click
     useEffect(() => {
@@ -746,8 +779,8 @@ const CategoryList = () => {
 
     const handleEdit = (node) => {
         const cat = node.data;
-        const bannerUrl = resolveCategoryAssetUrl(cat.banner_path);
-        const logoUrl = resolveCategoryAssetUrl(cat.logo_path);
+            const bannerUrl = resolveCategoryAssetUrl(cat.banner_image || cat.banner_path, 'medium');
+            const logoUrl = resolveCategoryAssetUrl(cat.logo_image || cat.logo_path, 'thumbnail');
 
         setFormData({
             id: cat.id,
@@ -848,8 +881,17 @@ const CategoryList = () => {
     const handleDownloadExcel = async () => {
         setIsExportingExcel(true);
         try {
-            const response = await categoryApi.downloadExcel();
+            const response = await categoryApi.downloadExcel(
+                selectedIds.size > 0 ? { ids: Array.from(selectedIds) } : undefined
+            );
             downloadBlobResponse(response, 'danh-muc-san-pham.xlsx');
+            if (selectedIds.size > 0) {
+                showToast({
+                    message: `Da xuat ${selectedIds.size} danh muc da chon kem cay lien quan.`,
+                    type: 'success',
+                    duration: 2500,
+                });
+            }
         } catch (error) {
             console.error('Category export error:', error);
             showModal({
@@ -867,7 +909,42 @@ const CategoryList = () => {
         importInputRef.current?.click();
     };
 
-    const handleImportFileChange = async (event) => {
+    const resetImportConfig = () => {
+        setPendingImportFile(null);
+        setImportMode(DEFAULT_IMPORT_MODE);
+        setImportUpdateFieldIds([]);
+        setShowImportConfigModal(false);
+    };
+
+    const closeImportConfigModal = () => {
+        if (isImportingExcel) return;
+        resetImportConfig();
+    };
+
+    const handleImportModeChange = (nextMode) => {
+        setImportMode(nextMode);
+        if (nextMode !== 'update_selected_fields') {
+            setImportUpdateFieldIds([]);
+        }
+    };
+
+    const toggleImportUpdateField = (fieldId) => {
+        setImportUpdateFieldIds((prev) => (
+            prev.includes(fieldId)
+                ? prev.filter((id) => id !== fieldId)
+                : [...prev, fieldId]
+        ));
+    };
+
+    const handleSelectAllImportFields = () => {
+        setImportUpdateFieldIds(CATEGORY_IMPORT_FIELD_OPTIONS.map((option) => option.id));
+    };
+
+    const handleClearImportFields = () => {
+        setImportUpdateFieldIds([]);
+    };
+
+    const handleImportFileChange = (event) => {
         const file = event.target.files?.[0];
         event.target.value = '';
 
@@ -875,17 +952,43 @@ const CategoryList = () => {
             return;
         }
 
+        setPendingImportFile(file);
+        setImportMode(DEFAULT_IMPORT_MODE);
+        setImportUpdateFieldIds([]);
+        setShowImportConfigModal(true);
+    };
+
+    const handleSubmitImportExcel = async () => {
+        if (!pendingImportFile) {
+            return;
+        }
+
+        if (isSelectiveImport && importUpdateFieldIds.length === 0) {
+            showModal({
+                title: 'Thieu truong cap nhat',
+                content: 'Hay chon it nhat 1 truong can cap nhat truoc khi import.',
+                type: 'warning',
+            });
+            return;
+        }
+
         const data = new FormData();
-        data.append('file', file);
+        data.append('file', pendingImportFile);
+        data.append('mode', importMode);
+
+        if (isSelectiveImport) {
+            importUpdateFieldIds.forEach((fieldId) => data.append('update_fields[]', fieldId));
+        }
 
         setIsImportingExcel(true);
         try {
             const response = await categoryApi.importExcel(data);
             showToast({
-                message: response?.data?.message || 'Import Excel thành công.',
+                message: response?.data?.message || 'Import Excel thÃ nh cÃ´ng.',
                 type: 'success',
                 duration: 3500,
             });
+            resetImportConfig();
             await fetchCategories();
         } catch (error) {
             console.error('Category import error:', error);
@@ -894,10 +997,10 @@ const CategoryList = () => {
                 : [];
 
             showModal({
-                title: 'Import Excel thất bại',
+                title: 'Import Excel tháº¥t báº¡i',
                 content: importErrors.length > 0
                     ? buildImportErrorHtml(importErrors)
-                    : (error?.response?.data?.message || 'Không thể import file Excel.'),
+                    : (error?.response?.data?.message || 'KhÃ´ng thá»ƒ import file Excel.'),
                 type: 'error',
             });
         } finally {
@@ -905,7 +1008,7 @@ const CategoryList = () => {
         }
     };
 
-    if (loading) return <div className="p-8 text-center text-stone">Đang tải danh sách...</div>;
+    if (loading) return <div className="p-8 text-center text-stone">Dang tai danh sach...</div>;
 
     return (
         <DndProvider backend={HTML5Backend}>
@@ -964,6 +1067,156 @@ const CategoryList = () => {
                         onChange={handleImportFileChange}
                     />
 
+                    {showImportConfigModal && (
+                        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/60 p-4" onClick={closeImportConfigModal}>
+                            <div
+                                className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-sm bg-white p-6 shadow-2xl"
+                                onClick={(event) => event.stopPropagation()}
+                            >
+                                <div className="flex items-start justify-between gap-4 border-b border-primary/10 pb-4">
+                                    <div>
+                                        <h2 className="flex items-center gap-2 text-lg font-bold text-primary">
+                                            <span className="material-symbols-outlined">upload_file</span>
+                                            Import Excel danh muc
+                                        </h2>
+                                        <p className="mt-2 text-[13px] text-primary/65">
+                                            Chon che do import va xac dinh dung cac truong duoc phep cap nhat tu file Excel.
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={closeImportConfigModal}
+                                        className="text-gray-500 hover:text-brick disabled:opacity-40"
+                                        disabled={isImportingExcel}
+                                    >
+                                        <span className="material-symbols-outlined">close</span>
+                                    </button>
+                                </div>
+
+                                <div className="mt-4 rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-3">
+                                    <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">File da chon</div>
+                                    <div className="mt-1 break-all text-[13px] font-bold text-primary">{pendingImportFile?.name || 'Chua co file'}</div>
+                                </div>
+
+                                <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                                    {[
+                                        {
+                                            value: 'replace_all',
+                                            label: 'Import day du',
+                                            description: 'Doi chieu lai ten, mo ta, cay danh muc va anh theo file export/import.',
+                                        },
+                                        {
+                                            value: 'update_selected_fields',
+                                            label: 'Cap nhat 1 phan',
+                                            description: 'Chi cac truong duoc tick moi duoc cap nhat. Cac truong khac giu nguyen.',
+                                        },
+                                    ].map((option) => {
+                                        const checked = importMode === option.value;
+
+                                        return (
+                                            <button
+                                                key={option.value}
+                                                type="button"
+                                                onClick={() => handleImportModeChange(option.value)}
+                                                className={`rounded-sm border px-4 py-4 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
+                                            >
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div>
+                                                        <div className="text-[14px] font-bold text-primary">{option.label}</div>
+                                                        <div className="mt-1 text-[12px] leading-5 text-primary/60">{option.description}</div>
+                                                    </div>
+                                                    <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
+                                                        {checked ? 'check_circle' : 'radio_button_unchecked'}
+                                                    </span>
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+
+                                {isSelectiveImport ? (
+                                    <>
+                                        <div className="mt-4 flex flex-wrap items-center gap-3">
+                                            <button
+                                                type="button"
+                                                onClick={handleSelectAllImportFields}
+                                                className="rounded-sm border border-primary/20 px-3 py-1.5 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                            >
+                                                Chon tat ca
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={handleClearImportFields}
+                                                className="rounded-sm border border-primary/20 px-3 py-1.5 text-[12px] font-bold text-brick hover:bg-brick/5"
+                                            >
+                                                Bo chon tat ca
+                                            </button>
+                                            <p className="text-[12px] text-primary/60">
+                                                Dang chon <strong>{importUpdateFieldIds.length}</strong> truong cap nhat.
+                                            </p>
+                                        </div>
+
+                                        <div className="mt-4 grid max-h-[320px] grid-cols-1 gap-3 overflow-y-auto pr-1 custom-scrollbar sm:grid-cols-2">
+                                            {CATEGORY_IMPORT_FIELD_OPTIONS.map((option) => {
+                                                const checked = importUpdateFieldIds.includes(option.id);
+
+                                                return (
+                                                    <button
+                                                        key={option.id}
+                                                        type="button"
+                                                        onClick={() => toggleImportUpdateField(option.id)}
+                                                        className={`rounded-sm border px-4 py-3 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
+                                                    >
+                                                        <div className="flex items-start justify-between gap-3">
+                                                            <div className="min-w-0">
+                                                                <div className="text-[13px] font-bold text-primary">{option.label}</div>
+                                                                <div className="mt-1 text-[11px] leading-5 text-primary/55">{option.description}</div>
+                                                            </div>
+                                                            <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
+                                                                {checked ? 'check_circle' : 'radio_button_unchecked'}
+                                                            </span>
+                                                        </div>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="mt-4 rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-3 text-[13px] text-primary/70">
+                                        He thong se dung file Excel de khoi phuc lai ten, mo ta, cay danh muc va anh theo dung du lieu co trong file.
+                                    </div>
+                                )}
+
+                                <div className="mt-6 flex flex-col gap-3 border-t border-primary/10 pt-4 md:flex-row md:items-center md:justify-between">
+                                    <p className="text-[12px] text-primary/60">
+                                        Ma danh muc duoc dung de nhan dien danh muc da ton tai. Anh import se duoc dong bo ve kho online cua he thong.
+                                    </p>
+                                    <div className="flex justify-end gap-3">
+                                        <button
+                                            type="button"
+                                            onClick={closeImportConfigModal}
+                                            className="rounded-sm border border-primary/20 px-4 py-2 text-[13px] font-bold text-primary hover:bg-primary/5"
+                                            disabled={isImportingExcel}
+                                        >
+                                            Huy
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleSubmitImportExcel}
+                                            className="flex items-center gap-2 rounded-sm bg-primary px-6 py-2 text-[13px] font-bold text-white hover:bg-primary/90 disabled:opacity-60"
+                                            disabled={isImportingExcel || !pendingImportFile || (isSelectiveImport && importUpdateFieldIds.length === 0)}
+                                        >
+                                            <span className={`material-symbols-outlined text-[16px] ${isImportingExcel ? 'animate-spin' : ''}`}>
+                                                {isImportingExcel ? 'sync' : 'upload_file'}
+                                            </span>
+                                            Bat dau import
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Toolbar */}
                     <div className="bg-white border border-gold/10 p-2 shadow-sm rounded-sm flex items-center justify-between">
                         <div className="flex gap-1.5 items-center w-full max-w-3xl">
@@ -1014,7 +1267,7 @@ const CategoryList = () => {
                             <button
                                 onClick={handleDownloadExcel}
                                 className={`bg-white border border-gold/20 p-1.5 hover:border-gold/40 hover:text-primary transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 shadow-sm ${isExportingExcel ? 'text-primary' : 'text-stone'}`}
-                                title="Xuáº¥t Excel"
+                                title={selectedIds.size > 0 ? `Xuáº¥t ${selectedIds.size} danh má»¥c Ä‘Ã£ chá»n` : 'Xuáº¥t Excel'}
                                 disabled={isExportingExcel}
                             >
                                 <span className={`material-symbols-outlined text-[18px] ${isExportingExcel ? 'animate-spin' : ''}`}>

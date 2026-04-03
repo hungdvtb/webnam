@@ -7,19 +7,71 @@ use App\Models\Account;
 use App\Models\Attribute;
 use App\Models\Category;
 use App\Models\SiteDomain;
+use App\Services\MediaService;
 use App\Support\SimpleXlsx;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
 class CategoryController extends Controller
 {
+    public function __construct(
+        protected MediaService $mediaService
+    ) {
+    }
+
+    private function categoryImportSelectableFieldIds(): array
+    {
+        return [
+            'name',
+            'description',
+            'tree',
+            'banner',
+            'logo',
+        ];
+    }
+
+    private function resolveCategoryImportOptions(Request $request): array
+    {
+        $mode = trim((string) $request->input('mode', 'replace_all')) === 'update_selected_fields'
+            ? 'update_selected_fields'
+            : 'replace_all';
+
+        $allowedFields = array_fill_keys($this->categoryImportSelectableFieldIds(), true);
+        $selectedFields = [];
+
+        foreach ((array) $request->input('update_fields', []) as $rawField) {
+            $field = trim((string) $rawField);
+
+            if ($field !== '' && isset($allowedFields[$field])) {
+                $selectedFields[$field] = true;
+            }
+        }
+
+        return [
+            'mode' => $mode,
+            'is_selective_update' => $mode === 'update_selected_fields',
+            'selected_fields' => $selectedFields,
+        ];
+    }
+
+    private function shouldApplyCategoryImportField(array $importOptions, string $field, bool $isExisting): bool
+    {
+        return !$isExisting
+            || !$importOptions['is_selective_update']
+            || !empty($importOptions['selected_fields'][$field]);
+    }
+
     public function index()
     {
-        $categories = Category::withCount('products')
+        $categories = Category::with(['bannerMediaAsset', 'logoMediaAsset'])
+            ->withCount('products')
             ->orderBy('order')
             ->orderBy('id')
             ->get();
@@ -41,27 +93,32 @@ class CategoryController extends Controller
 
         $parentId = $this->resolveValidatedParentId($request->input('parent_id'));
 
-        $bannerPath = null;
-        if ($request->hasFile('banner')) {
-            $bannerPath = $request->file('banner')->store('category_banners', 'public');
-        }
-
-        $logoPath = null;
-        if ($request->hasFile('logo')) {
-            $logoPath = $request->file('logo')->store('category_logos', 'public');
-        }
-
         $normalizedCode = Category::normalizeCode($request->input('code'));
 
         try {
+            $bannerAsset = $request->hasFile('banner')
+                ? $this->mediaService->uploadImage($request->file('banner'), [
+                    'collection' => 'category-banners',
+                    'source' => 'category-form-upload',
+                ])
+                : null;
+            $logoAsset = $request->hasFile('logo')
+                ? $this->mediaService->uploadImage($request->file('logo'), [
+                    'collection' => 'category-logos',
+                    'source' => 'category-form-upload',
+                ])
+                : null;
+
             $category = Category::create([
                 'name' => $request->name,
                 'code' => $normalizedCode ? Category::buildUniqueCode($normalizedCode) : Category::buildUniqueCode($request->name),
                 'slug' => Category::buildUniqueSlug($request->name),
                 'parent_id' => $parentId,
                 'description' => $request->description,
-                'banner_path' => $bannerPath,
-                'logo_path' => $logoPath,
+                'banner_path' => $bannerAsset ? $this->mediaService->buildAssetUrl($bannerAsset, 'large') : null,
+                'banner_media_asset_id' => $bannerAsset?->id,
+                'logo_path' => $logoAsset ? $this->mediaService->buildAssetUrl($logoAsset, 'large') : null,
+                'logo_media_asset_id' => $logoAsset?->id,
                 'status' => $request->status ?? 1,
                 'order' => Category::where('parent_id', $parentId)->max('order') + 1,
                 'display_layout' => 'layout_1',
@@ -74,12 +131,12 @@ class CategoryController extends Controller
             return response()->json(['error' => $exception->getMessage()], 500);
         }
 
-        return response()->json($category, 201);
+        return response()->json($category->load(['bannerMediaAsset', 'logoMediaAsset']), 201);
     }
 
     public function show($id)
     {
-        $category = Category::with(['children', 'products'])->findOrFail($id);
+        $category = Category::with(['children.bannerMediaAsset', 'children.logoMediaAsset', 'products', 'bannerMediaAsset', 'logoMediaAsset'])->findOrFail($id);
 
         return response()->json($category);
     }
@@ -93,6 +150,8 @@ class CategoryController extends Controller
         ]);
 
         $category = Category::findOrFail($id);
+        $previousBannerAssetId = $category->banner_media_asset_id;
+        $previousLogoAssetId = $category->logo_media_asset_id;
 
         $validator = \Validator::make($request->all(), [
             'name' => 'sometimes|required|string|max:255',
@@ -118,15 +177,17 @@ class CategoryController extends Controller
         }
 
         if ($request->hasFile('banner')) {
-            $category->banner_path = $request->file('banner')->store('category_banners', 'public');
+            $this->replaceCategoryMediaAsset($category, 'banner', $request->file('banner'));
         } elseif ($request->input('remove_banner') === 'true') {
             $category->banner_path = null;
+            $category->banner_media_asset_id = null;
         }
 
         if ($request->hasFile('logo')) {
-            $category->logo_path = $request->file('logo')->store('category_logos', 'public');
+            $this->replaceCategoryMediaAsset($category, 'logo', $request->file('logo'));
         } elseif ($request->input('remove_logo') === 'true') {
             $category->logo_path = null;
+            $category->logo_media_asset_id = null;
         }
 
         if ($request->has('parent_id')) {
@@ -154,7 +215,15 @@ class CategoryController extends Controller
             return response()->json(['error' => $exception->getMessage()], 500);
         }
 
-        return response()->json($category);
+        if ($request->input('remove_banner') === 'true' && $previousBannerAssetId) {
+            $this->mediaService->deleteAsset($previousBannerAssetId);
+        }
+
+        if ($request->input('remove_logo') === 'true' && $previousLogoAssetId) {
+            $this->mediaService->deleteAsset($previousLogoAssetId);
+        }
+
+        return response()->json($category->load(['bannerMediaAsset', 'logoMediaAsset']));
     }
 
     public function destroy($id)
@@ -252,9 +321,13 @@ class CategoryController extends Controller
         );
     }
 
-    public function exportExcel()
+    public function exportExcel(Request $request)
     {
-        $categories = Category::query()
+        $request->validate([
+            'ids' => 'nullable',
+        ]);
+
+        $allCategories = Category::query()
             ->orderBy('order')
             ->orderBy('id')
             ->get([
@@ -269,11 +342,12 @@ class CategoryController extends Controller
                 'order',
                 'display_layout',
                 'filterable_attribute_ids',
+                'banner_path',
+                'logo_path',
             ]);
 
-        $attributes = Attribute::query()
-            ->where('entity_type', 'product')
-            ->get(['id', 'name', 'code']);
+        $requestedIds = $this->normalizeCategoryExportIds($request->input('ids'));
+        $categories = $this->filterCategoriesForExport($allCategories, $requestedIds);
 
         return $this->xlsxDownloadResponse(
             'danh-muc-san-pham-' . now()->format('Ymd-His') . '.xlsx',
@@ -281,7 +355,7 @@ class CategoryController extends Controller
                 'name' => 'DanhMucSanPham',
                 'rows' => array_merge(
                     [$this->categoryExportHeaders()],
-                    $this->buildCategoryExportRows($categories, $attributes)
+                    $this->buildCategoryExportRows($categories)
                 ),
             ]]
         );
@@ -291,7 +365,22 @@ class CategoryController extends Controller
     {
         $request->validate([
             'file' => 'required|file|mimes:xlsx|max:10240',
+            'mode' => 'nullable|string|in:replace_all,update_selected_fields',
+            'update_fields' => 'nullable|array',
+            'update_fields.*' => 'nullable|string|max:60',
         ]);
+
+        $importOptions = $this->resolveCategoryImportOptions($request);
+        if ($importOptions['is_selective_update'] && empty($importOptions['selected_fields'])) {
+            return response()->json([
+                'message' => 'Vui long chon it nhat 1 truong can cap nhat truoc khi import.',
+                'errors' => [[
+                    'row' => 1,
+                    'column' => 'Truong cap nhat',
+                    'message' => 'Chua co truong nao duoc chon de cap nhat.',
+                ]],
+            ], 422);
+        }
 
         try {
             $rows = SimpleXlsx::readRows($request->file('file')->getRealPath());
@@ -306,7 +395,7 @@ class CategoryController extends Controller
             ], 422);
         }
 
-        [$records, $errors] = $this->validateCategoryImportRows($rows);
+        [$records, $errors] = $this->validateCategoryImportRows($rows, $importOptions);
 
         if (!empty($errors)) {
             return response()->json([
@@ -315,13 +404,25 @@ class CategoryController extends Controller
             ], 422);
         }
 
-        $summary = DB::transaction(fn () => $this->applyCategoryImport($records));
+        try {
+            $summary = DB::transaction(fn () => $this->applyCategoryImport($records, $importOptions));
+        } catch (Throwable $exception) {
+            return response()->json([
+                'message' => 'Import danh muc that bai. ' . $exception->getMessage(),
+                'errors' => [[
+                    'row' => 0,
+                    'column' => 'Du lieu',
+                    'message' => $exception->getMessage(),
+                ]],
+            ], 422);
+        }
 
         return response()->json([
             'message' => sprintf(
-                'Import thanh cong: %d them moi, %d cap nhat.',
+                'Import thanh cong: %d them moi, %d cap nhat, %d anh dong bo.',
                 $summary['created'],
-                $summary['updated']
+                $summary['updated'],
+                $summary['images_imported'] ?? 0
             ),
             'summary' => $summary,
         ]);
@@ -438,22 +539,18 @@ class CategoryController extends Controller
     {
         return [
             'Ma danh muc',
-            'ID',
             'Ten danh muc',
+            'Mo ta',
             'Danh muc cha',
-            'Thu tu hien thi',
-            'Giao dien',
-            'Bo loc thuoc tinh',
-            'Trang thai hien thi',
-            'Ghi chu',
+            'Thu tu trong cay',
+            'Link anh banner',
+            'Link anh nho',
         ];
     }
 
     private function categoryExportHeaders(): array
     {
-        return array_merge($this->categoryImportHeaders(), [
-            'Link danh muc',
-        ]);
+        return $this->categoryImportHeaders();
     }
 
     private function categoryTemplateRows(): array
@@ -461,52 +558,309 @@ class CategoryController extends Controller
         return [
             [
                 '#vd-do-tho-bat-trang',
-                '#de-trong-khi-them-moi',
                 '#Ten danh muc',
+                '#Mo ta danh muc',
                 '#CODE:ma-cha hoac ID:12 hoac NAME:Ten danh muc cha',
                 '#0',
-                '#layout_1',
-                '#duong-kinh, loai-men',
-                '#1 hoac 0',
-                '#Dong bat dau bang # se duoc bo qua khi import',
+                '#https://cdn.example.com/category/banner.jpg',
+                '#https://cdn.example.com/category/logo.jpg',
             ],
             [
                 '#chi-dan',
-                '',
-                '#Can giu duy nhat cot Ma danh muc neu muon cap nhat bang ma',
-                '#De trong cot Danh muc cha neu muon dua ve cap goc',
-                '#Neu de trong cot Thu tu, he thong se giu hoac noi tiep thu tu hien tai',
-                '#layout_1 (co dinh)',
-                '#Nhan theo ma thuoc tinh hoac ten thuoc tinh',
-                '#1',
-                '#File mau nay co the tai ve, dien du lieu roi import lai',
+                '#Ten danh muc bat buoc khi tao moi hoac khi cap nhat truong ten',
+                '#De trong = xoa mo ta khi import day du. Nhap NULL/deletE/CLEAR de xoa trong update mode',
+                '#De trong = dua ve cap goc khi import day du hoac khi chon cap nhat cay',
+                '#Thu tu trong nhom anh em. Neu bo trong, he thong giu thu tu cu hoac noi tiep',
+                '#Chi nhan URL http/https. Import se luu lai ve kho anh online cua he thong',
+                '#De trong = bo qua khi update 1 phan. Nhap NULL/deletE/CLEAR de xoa anh',
             ],
         ];
     }
 
-    private function buildCategoryExportRows(Collection $categories, Collection $attributes): array
+    private function buildCategoryExportRows(Collection $categories): array
     {
-        $attributesById = $attributes->keyBy(fn ($attribute) => (int) $attribute->id);
         $categoriesById = $categories->keyBy(fn ($category) => (int) $category->id);
-        $domainsByAccountId = $this->buildCategoryDomainLookup($categories);
 
-        return array_map(function (Category $category) use ($attributesById, $categoriesById, $domainsByAccountId) {
+        return array_map(function (Category $category) use ($categoriesById) {
             /** @var Category|null $parent */
             $parent = $category->parent_id ? $categoriesById->get((int) $category->parent_id) : null;
 
             return [
                 $category->resolvedCode(),
-                (int) $category->id,
                 $category->name,
+                $category->description ?? '',
                 $parent ? ('CODE:' . $parent->resolvedCode()) : '',
                 (int) ($category->order ?? 0),
-                'layout_1',
-                $this->formatCategoryAttributeTokens((array) ($category->filterable_attribute_ids ?? []), $attributesById),
-                (int) ($category->status ?? 1),
-                $category->description ?? '',
-                $this->buildCategoryPublicUrl($category, $domainsByAccountId),
+                $this->resolveCategoryAssetPublicUrl($category->banner_path),
+                $this->resolveCategoryAssetPublicUrl($category->logo_path),
             ];
         }, $this->orderedCategoriesForExport($categories));
+    }
+
+    private function normalizeCategoryExportIds($value): array
+    {
+        $items = $value;
+
+        if (is_string($items)) {
+            $items = preg_split('/[\s,;|]+/', $items) ?: [];
+        }
+
+        return collect((array) $items)
+            ->map(fn ($item) => is_numeric($item) ? (int) $item : null)
+            ->filter(fn ($item) => $item !== null && $item > 0)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function filterCategoriesForExport(Collection $categories, array $requestedIds): Collection
+    {
+        if (empty($requestedIds)) {
+            return $categories;
+        }
+
+        $categoriesById = $categories->keyBy(fn (Category $category) => (int) $category->id);
+        $childrenByParent = $categories->groupBy(fn (Category $category) => $category->parent_id ? (int) $category->parent_id : 0);
+        $includedIds = [];
+
+        $includeAncestors = function (int $categoryId) use (&$includeAncestors, &$includedIds, $categoriesById): void {
+            $category = $categoriesById->get($categoryId);
+            if (!$category) {
+                return;
+            }
+
+            $includedIds[$categoryId] = true;
+
+            if ($category->parent_id) {
+                $includeAncestors((int) $category->parent_id);
+            }
+        };
+
+        $includeDescendants = function (int $parentId) use (&$includeDescendants, &$includedIds, $childrenByParent): void {
+            foreach ($childrenByParent->get($parentId, collect()) as $child) {
+                $childId = (int) $child->id;
+
+                if (isset($includedIds[$childId])) {
+                    continue;
+                }
+
+                $includedIds[$childId] = true;
+                $includeDescendants($childId);
+            }
+        };
+
+        foreach ($requestedIds as $requestedId) {
+            $includeAncestors((int) $requestedId);
+            $includeDescendants((int) $requestedId);
+        }
+
+        return $categories
+            ->filter(fn (Category $category) => isset($includedIds[(int) $category->id]))
+            ->values();
+    }
+
+    private function parseCategoryNullableImportCell(string $value, bool $clearWhenBlank): array
+    {
+        $trimmed = trim($value);
+
+        if ($trimmed === '') {
+            return $clearWhenBlank
+                ? ['provided' => true, 'clear' => true, 'value' => null]
+                : ['provided' => false, 'clear' => false, 'value' => null];
+        }
+
+        if ($this->isCategoryImportNullishValue($trimmed)) {
+            return ['provided' => true, 'clear' => true, 'value' => null];
+        }
+
+        return ['provided' => true, 'clear' => false, 'value' => $trimmed];
+    }
+
+    private function isCategoryImportNullishValue(string $value): bool
+    {
+        return in_array(
+            $this->normalizeLookupValue($value),
+            ['null', 'none', 'clear', 'delete', 'xoa', '__clear__'],
+            true
+        );
+    }
+
+    private function isValidImportedImageUrl(string $value): bool
+    {
+        return filter_var($value, FILTER_VALIDATE_URL) !== false
+            && preg_match('#^https?://#i', $value) === 1;
+    }
+
+    private function categoryAssetDisk(): string
+    {
+        $publicDriver = (string) config('filesystems.disks.public.driver', 'local');
+
+        if ($publicDriver !== '' && $publicDriver !== 'local') {
+            return 'public';
+        }
+
+        return filled(config('filesystems.disks.s3.bucket'))
+            ? 's3'
+            : 'public';
+    }
+
+    private function storeUploadedCategoryAsset(UploadedFile $file, string $directory): string
+    {
+        $disk = $this->categoryAssetDisk();
+        $path = Storage::disk($disk)->putFile($directory, $file, ['visibility' => 'public']);
+
+        if (!$path) {
+            throw new \RuntimeException('Khong the luu anh danh muc len kho online.');
+        }
+
+        return $this->buildAbsoluteStorageUrl($disk, $path);
+    }
+
+    private function importCategoryAssetFromUrl(string $sourceUrl, ?string $currentValue, string $directory): array
+    {
+        $normalizedSourceUrl = trim($sourceUrl);
+        $disk = $this->categoryAssetDisk();
+        $currentManagedUrl = $this->resolveCategoryAssetPublicUrl($currentValue);
+
+        if ($currentManagedUrl !== '' && $this->normalizeComparableUrl($currentManagedUrl) === $this->normalizeComparableUrl($normalizedSourceUrl)) {
+            return [
+                'url' => $currentManagedUrl,
+                'stored' => false,
+            ];
+        }
+
+        $existingManagedPath = $this->extractManagedCategoryAssetPath($normalizedSourceUrl, $disk);
+        if ($existingManagedPath !== null) {
+            return [
+                'url' => $this->buildAbsoluteStorageUrl($disk, $existingManagedPath),
+                'stored' => false,
+            ];
+        }
+
+        $response = Http::timeout(30)
+            ->withHeaders(['Accept' => 'image/*,*/*;q=0.8'])
+            ->get($normalizedSourceUrl);
+
+        if (!$response->successful()) {
+            throw new \RuntimeException('Khong the tai anh tu link online: ' . $normalizedSourceUrl);
+        }
+
+        $contentType = trim((string) $response->header('Content-Type', ''));
+        if ($contentType !== '' && !str_starts_with(Str::lower($contentType), 'image/')) {
+            throw new \RuntimeException('Link anh khong tra ve du lieu hinh anh hop le: ' . $normalizedSourceUrl);
+        }
+
+        $extension = $this->guessCategoryAssetExtension($normalizedSourceUrl, $contentType);
+        $path = trim($directory, '/') . '/' . Str::uuid()->toString() . '.' . $extension;
+        $stored = Storage::disk($disk)->put($path, $response->body(), [
+            'visibility' => 'public',
+            'ContentType' => $contentType !== '' ? $contentType : null,
+        ]);
+
+        if (!$stored) {
+            throw new \RuntimeException('Khong the luu anh da import vao kho online.');
+        }
+
+        return [
+            'url' => $this->buildAbsoluteStorageUrl($disk, $path),
+            'stored' => true,
+        ];
+    }
+
+    private function guessCategoryAssetExtension(string $url, string $contentType): string
+    {
+        $extensionFromContentType = match (Str::lower(trim($contentType))) {
+            'image/jpeg', 'image/jpg' => 'jpg',
+            'image/png' => 'png',
+            'image/webp' => 'webp',
+            'image/gif' => 'gif',
+            'image/avif' => 'avif',
+            'image/svg+xml' => 'svg',
+            default => null,
+        };
+
+        if ($extensionFromContentType !== null) {
+            return $extensionFromContentType;
+        }
+
+        $path = parse_url($url, PHP_URL_PATH) ?: $url;
+        $extension = Str::lower((string) pathinfo((string) $path, PATHINFO_EXTENSION));
+
+        return in_array($extension, ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'svg'], true)
+            ? ($extension === 'jpeg' ? 'jpg' : $extension)
+            : 'jpg';
+    }
+
+    private function resolveCategoryAssetPublicUrl(?string $value): string
+    {
+        $rawValue = trim((string) $value);
+
+        if ($rawValue === '') {
+            return '';
+        }
+
+        if (preg_match('#^https?://#i', $rawValue) === 1) {
+            return $rawValue;
+        }
+
+        $path = preg_replace('#^/?storage/#i', '', $rawValue) ?? $rawValue;
+
+        return $this->buildAbsoluteStorageUrl($this->categoryAssetDisk(), ltrim($path, '/'));
+    }
+
+    private function buildAbsoluteStorageUrl(string $disk, string $path): string
+    {
+        $url = Storage::disk($disk)->url($path);
+
+        if (preg_match('#^https?://#i', $url) === 1) {
+            return $url;
+        }
+
+        if (str_starts_with($url, '//')) {
+            return 'https:' . $url;
+        }
+
+        $baseUrl = rtrim((string) (request()?->getSchemeAndHttpHost() ?: config('app.url', '')), '/');
+
+        return $baseUrl !== '' && str_starts_with($url, '/')
+            ? $baseUrl . $url
+            : $url;
+    }
+
+    private function extractManagedCategoryAssetPath(?string $value, string $disk): ?string
+    {
+        $rawValue = trim((string) $value);
+
+        if ($rawValue === '') {
+            return null;
+        }
+
+        if (preg_match('#^https?://#i', $rawValue) !== 1) {
+            return ltrim((string) preg_replace('#^/?storage/#i', '', $rawValue), '/');
+        }
+
+        $diskBaseUrls = array_filter([
+            rtrim($this->buildAbsoluteStorageUrl($disk, ''), '/'),
+            rtrim((string) config('filesystems.disks.public.url', ''), '/'),
+        ]);
+
+        foreach ($diskBaseUrls as $baseUrl) {
+            if ($baseUrl !== '' && str_starts_with($rawValue, $baseUrl . '/')) {
+                return ltrim(substr($rawValue, strlen($baseUrl)), '/');
+            }
+        }
+
+        $path = parse_url($rawValue, PHP_URL_PATH);
+        if (is_string($path) && preg_match('#/storage/(.+)$#i', $path, $matches) === 1) {
+            return ltrim($matches[1], '/');
+        }
+
+        return null;
+    }
+
+    private function normalizeComparableUrl(string $value): string
+    {
+        return Str::lower(rtrim(trim($value), '/'));
     }
 
     private function buildCategoryDomainLookup(Collection $categories): array
@@ -637,7 +991,7 @@ class CategoryController extends Controller
         return $ordered;
     }
 
-    private function validateCategoryImportRows(array $rows): array
+    private function validateCategoryImportRows(array $rows, array $importOptions): array
     {
         if (empty($rows)) {
             return [[], [[
@@ -650,11 +1004,11 @@ class CategoryController extends Controller
         $headerMap = $this->resolveCategoryImportHeaderMap($rows[0] ?? []);
         $errors = [];
 
-        if (!isset($headerMap['name'])) {
+        if (!isset($headerMap['code']) && !isset($headerMap['name']) && !isset($headerMap['id'])) {
             $errors[] = [
                 'row' => 1,
-                'column' => 'Ten danh muc',
-                'message' => 'Khong tim thay cot Ten danh muc trong file import.',
+                'column' => 'Ma danh muc',
+                'message' => 'File import can co it nhat mot cot dinh danh (Ma danh muc hoac ID) hoac cot Ten danh muc.',
             ];
 
             return [[], $errors];
@@ -667,6 +1021,8 @@ class CategoryController extends Controller
             'slug',
             'parent_id',
             'description',
+            'banner_path',
+            'logo_path',
             'status',
             'order',
             'display_layout',
@@ -680,11 +1036,6 @@ class CategoryController extends Controller
             $existingByCode[$category->resolvedCode()] = $category;
         }
 
-        $attributes = Attribute::query()
-            ->where('entity_type', 'product')
-            ->get(['id', 'name', 'code']);
-
-        $attributeMaps = $this->buildAttributeLookupMaps($attributes);
         $records = [];
         $duplicateCandidates = [];
 
@@ -730,12 +1081,16 @@ class CategoryController extends Controller
             $existingCategory = $existingByIdMatch ?? $existingByCodeMatch;
 
             $name = trim($this->importCellValue($row, $headerMap, 'name'));
-            if ($name === '') {
+            $nameIsRequired = !$existingCategory
+                || !$importOptions['is_selective_update']
+                || !empty($importOptions['selected_fields']['name']);
+
+            if ($nameIsRequired && $name === '') {
                 $rowErrors[] = $this->importError($rowNumber, 'Ten danh muc', 'Ten danh muc khong duoc de trong.');
             }
 
             $resolvedCode = $normalizedCode
-                ?? ($existingCategory ? $existingCategory->resolvedCode() : Category::buildUniqueCode($name ?: 'danh-muc'));
+                ?? ($existingCategory ? $existingCategory->resolvedCode() : ($name !== '' ? Category::buildUniqueCode($name) : null));
 
             if ($resolvedCode !== null) {
                 $duplicateCandidates[] = [
@@ -745,35 +1100,55 @@ class CategoryController extends Controller
                 ];
             }
 
-            [$layout, $layoutError] = $this->parseImportedLayout(
-                $this->importCellValue($row, $headerMap, 'layout'),
-                $existingCategory?->display_layout
-            );
-            if ($layoutError !== null) {
-                $rowErrors[] = $this->importError($rowNumber, 'Giao dien', $layoutError);
-            }
-
-            [$status, $statusError] = $this->parseImportedStatus(
-                $this->importCellValue($row, $headerMap, 'status'),
-                $existingCategory ? (int) $existingCategory->status : null
-            );
-            if ($statusError !== null) {
-                $rowErrors[] = $this->importError($rowNumber, 'Trang thai hien thi', $statusError);
+            if ($resolvedCode === null) {
+                $rowErrors[] = $this->importError($rowNumber, 'Ma danh muc', 'Khong the xac dinh ma danh muc cho dong nay.');
             }
 
             [$sortOrder, $sortOrderError] = $this->parseImportedSortOrder(
-                $this->importCellValue($row, $headerMap, 'sort_order')
+                $this->importCellValue($row, $headerMap, 'tree_order')
             );
             if ($sortOrderError !== null) {
-                $rowErrors[] = $this->importError($rowNumber, 'Thu tu hien thi', $sortOrderError);
+                $rowErrors[] = $this->importError($rowNumber, 'Thu tu trong cay', $sortOrderError);
             }
 
-            [$filterIds, $filterErrors] = $this->parseImportedAttributeTokens(
-                $this->importCellValue($row, $headerMap, 'filters'),
-                $attributeMaps,
-                $rowNumber
-            );
-            $rowErrors = array_merge($rowErrors, $filterErrors);
+            $treeModeActive = !$existingCategory
+                || !$importOptions['is_selective_update']
+                || !empty($importOptions['selected_fields']['tree']);
+            $descriptionClearWhenBlank = !$existingCategory || !$importOptions['is_selective_update'];
+            $imageClearWhenBlank = !$existingCategory || !$importOptions['is_selective_update'];
+
+            $parentPayload = isset($headerMap['parent'])
+                ? $this->parseCategoryNullableImportCell(
+                    $this->importCellValue($row, $headerMap, 'parent'),
+                    $treeModeActive
+                )
+                : ['provided' => false, 'clear' => false, 'value' => null];
+            $descriptionPayload = isset($headerMap['description'])
+                ? $this->parseCategoryNullableImportCell(
+                    $this->importCellValue($row, $headerMap, 'description'),
+                    $descriptionClearWhenBlank
+                )
+                : ['provided' => false, 'clear' => false, 'value' => null];
+            $bannerPayload = isset($headerMap['banner_url'])
+                ? $this->parseCategoryNullableImportCell(
+                    $this->importCellValue($row, $headerMap, 'banner_url'),
+                    $imageClearWhenBlank
+                )
+                : ['provided' => false, 'clear' => false, 'value' => null];
+            $logoPayload = isset($headerMap['logo_url'])
+                ? $this->parseCategoryNullableImportCell(
+                    $this->importCellValue($row, $headerMap, 'logo_url'),
+                    $imageClearWhenBlank
+                )
+                : ['provided' => false, 'clear' => false, 'value' => null];
+
+            if (!empty($bannerPayload['provided']) && empty($bannerPayload['clear']) && !$this->isValidImportedImageUrl((string) $bannerPayload['value'])) {
+                $rowErrors[] = $this->importError($rowNumber, 'Link anh banner', 'Link anh banner phai la URL http/https hop le.');
+            }
+
+            if (!empty($logoPayload['provided']) && empty($logoPayload['clear']) && !$this->isValidImportedImageUrl((string) $logoPayload['value'])) {
+                $rowErrors[] = $this->importError($rowNumber, 'Link anh nho', 'Link anh nho phai la URL http/https hop le.');
+            }
 
             if (!empty($rowErrors)) {
                 $errors = array_merge($errors, $rowErrors);
@@ -788,12 +1163,12 @@ class CategoryController extends Controller
                 'existing_order' => $existingCategory ? (int) ($existingCategory->order ?? 0) : null,
                 'code' => $resolvedCode,
                 'name' => $name,
-                'parent_ref' => trim($this->importCellValue($row, $headerMap, 'parent')),
+                'parent_ref' => !empty($parentPayload['clear']) ? '' : trim((string) ($parentPayload['value'] ?? '')),
+                'parent_payload' => $parentPayload,
                 'order' => $sortOrder,
-                'layout' => $layout,
-                'status' => $status,
-                'description' => trim($this->importCellValue($row, $headerMap, 'description')),
-                'filterable_attribute_ids' => $filterIds,
+                'description_payload' => $descriptionPayload,
+                'banner_payload' => $bannerPayload,
+                'logo_payload' => $logoPayload,
             ];
         }
 
@@ -866,11 +1241,12 @@ class CategoryController extends Controller
         return [empty($errors) ? $records : [], $errors];
     }
 
-    private function applyCategoryImport(array $records): array
+    private function applyCategoryImport(array $records, array $importOptions): array
     {
         $persistedByKey = [];
         $created = 0;
         $updated = 0;
+        $imagesImported = 0;
 
         foreach ($records as $record) {
             $category = $record['existing_id']
@@ -879,17 +1255,81 @@ class CategoryController extends Controller
 
             $isExisting = $category->exists;
 
-            $category->name = $record['name'];
-            $category->code = $record['code'];
-            $category->slug = Category::buildUniqueSlug($record['name'], $record['existing_id']);
-            $category->description = $record['description'] !== '' ? $record['description'] : null;
-            $category->status = $record['status'];
-            $category->display_layout = 'layout_1';
-            $category->filterable_attribute_ids = $record['filterable_attribute_ids'];
-
             if (!$isExisting) {
+                $category->code = Category::buildUniqueCode($record['code'] ?: $record['name']);
+                $category->status = 1;
+                $category->display_layout = 'layout_1';
+                $category->filterable_attribute_ids = [];
                 $category->parent_id = null;
                 $category->order = 0;
+            } elseif (!filled($category->code) && !empty($record['code'])) {
+                $category->code = Category::buildUniqueCode($record['code'], (int) $category->id);
+            }
+
+            if ($this->shouldApplyCategoryImportField($importOptions, 'name', $isExisting)) {
+                $category->name = $record['name'];
+                $category->slug = Category::buildUniqueSlug($record['name'], $record['existing_id']);
+            } elseif (!$isExisting) {
+                $category->name = $record['name'];
+                $category->slug = Category::buildUniqueSlug($record['name']);
+            }
+
+            if (!empty($record['description_payload']['provided']) && $this->shouldApplyCategoryImportField($importOptions, 'description', $isExisting)) {
+                $category->description = !empty($record['description_payload']['clear'])
+                    ? null
+                    : trim((string) ($record['description_payload']['value'] ?? ''));
+            }
+
+            if (!empty($record['banner_payload']['provided']) && $this->shouldApplyCategoryImportField($importOptions, 'banner', $isExisting)) {
+                if (!empty($record['banner_payload']['clear'])) {
+                    if ($category->banner_media_asset_id) {
+                        $this->mediaService->deleteAsset($category->banner_media_asset_id);
+                    }
+                    $category->banner_path = null;
+                    $category->banner_media_asset_id = null;
+                } else {
+                    $previousAssetId = $category->banner_media_asset_id;
+                    $bannerAsset = $this->mediaService->importFromReference((string) $record['banner_payload']['value'], [
+                        'collection' => 'category-banners',
+                        'source' => 'category-import',
+                    ]);
+
+                    if ($bannerAsset) {
+                        $category->banner_media_asset_id = $bannerAsset->id;
+                        $category->banner_path = $this->mediaService->buildAssetUrl($bannerAsset, 'large');
+                        $imagesImported++;
+
+                        if ($previousAssetId && $previousAssetId !== $bannerAsset->id) {
+                            $this->mediaService->deleteAsset($previousAssetId);
+                        }
+                    }
+                }
+            }
+
+            if (!empty($record['logo_payload']['provided']) && $this->shouldApplyCategoryImportField($importOptions, 'logo', $isExisting)) {
+                if (!empty($record['logo_payload']['clear'])) {
+                    if ($category->logo_media_asset_id) {
+                        $this->mediaService->deleteAsset($category->logo_media_asset_id);
+                    }
+                    $category->logo_path = null;
+                    $category->logo_media_asset_id = null;
+                } else {
+                    $previousAssetId = $category->logo_media_asset_id;
+                    $logoAsset = $this->mediaService->importFromReference((string) $record['logo_payload']['value'], [
+                        'collection' => 'category-logos',
+                        'source' => 'category-import',
+                    ]);
+
+                    if ($logoAsset) {
+                        $category->logo_media_asset_id = $logoAsset->id;
+                        $category->logo_path = $this->mediaService->buildAssetUrl($logoAsset, 'large');
+                        $imagesImported++;
+
+                        if ($previousAssetId && $previousAssetId !== $logoAsset->id) {
+                            $this->mediaService->deleteAsset($previousAssetId);
+                        }
+                    }
+                }
             }
 
             $category->save();
@@ -906,6 +1346,12 @@ class CategoryController extends Controller
 
         foreach ($records as $record) {
             $category = $persistedByKey[$record['record_key']];
+            $shouldApplyTree = $this->shouldApplyCategoryImportField($importOptions, 'tree', $record['existing_id'] !== null);
+
+            if (!$shouldApplyTree) {
+                continue;
+            }
+
             $parentId = $this->resolveImportedParentId($record['resolved_parent'] ?? null, $persistedByKey);
             $orderKey = $this->parentGroupKey($parentId);
             $desiredOrder = $record['order'];
@@ -935,6 +1381,7 @@ class CategoryController extends Controller
             'created' => $created,
             'updated' => $updated,
             'processed' => $created + $updated,
+            'images_imported' => $imagesImported,
         ];
     }
 
@@ -945,11 +1392,10 @@ class CategoryController extends Controller
             'id' => ['id', 'category_id'],
             'name' => ['ten_danh_muc', 'name', 'category_name'],
             'parent' => ['danh_muc_cha', 'parent', 'parent_ref', 'parent_category'],
-            'sort_order' => ['thu_tu_hien_thi', 'sort_order', 'order'],
-            'layout' => ['giao_dien', 'display_layout', 'layout'],
-            'filters' => ['bo_loc_thuoc_tinh', 'filterable_attributes', 'attributes', 'filters'],
-            'status' => ['trang_thai_hien_thi', 'status', 'hien_thi'],
-            'description' => ['ghi_chu', 'mo_ta', 'description', 'note'],
+            'tree_order' => ['thu_tu_trong_cay', 'thu_tu_hien_thi', 'tree_order', 'sort_order', 'order'],
+            'description' => ['mo_ta', 'description', 'ghi_chu', 'note'],
+            'banner_url' => ['link_anh_banner', 'anh_banner', 'banner', 'banner_url', 'banner_link'],
+            'logo_url' => ['link_anh_nho', 'anh_nho', 'logo', 'logo_url', 'logo_link', 'small_image'],
         ];
 
         $resolved = [];
@@ -1417,6 +1863,26 @@ class CategoryController extends Controller
             })
             ->filter()
             ->implode(', ');
+    }
+
+    private function replaceCategoryMediaAsset(Category $category, string $type, UploadedFile $file): void
+    {
+        $collection = $type === 'logo' ? 'category-logos' : 'category-banners';
+        $foreignKey = $type === 'logo' ? 'logo_media_asset_id' : 'banner_media_asset_id';
+        $urlField = $type === 'logo' ? 'logo_path' : 'banner_path';
+        $previousAssetId = (int) ($category->{$foreignKey} ?? 0);
+
+        $asset = $this->mediaService->uploadImage($file, [
+            'collection' => $collection,
+            'source' => 'category-form-upload',
+        ]);
+
+        $category->{$foreignKey} = $asset->id;
+        $category->{$urlField} = $this->mediaService->buildAssetUrl($asset, 'large');
+
+        if ($previousAssetId > 0 && $previousAssetId !== $asset->id) {
+            $this->mediaService->deleteAsset($previousAssetId);
+        }
     }
 
     private function normalizeFilterableAttributeIds($value): ?array

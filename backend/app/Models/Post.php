@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\MediaService;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Str;
@@ -19,6 +20,7 @@ class Post extends Model
         'content',
         'excerpt',
         'featured_image',
+        'featured_media_asset_id',
         'is_system',
         'is_published',
         'is_starred',
@@ -30,8 +32,13 @@ class Post extends Model
         'search_text',
     ];
 
+    protected $appends = [
+        'featured_image_media',
+    ];
+
     protected $casts = [
         'blog_category_id' => 'integer',
+        'featured_media_asset_id' => 'integer',
         'is_system' => 'boolean',
         'is_published' => 'boolean',
         'is_starred' => 'boolean',
@@ -57,6 +64,12 @@ class Post extends Model
                 $post->content
             );
         });
+
+        static::forceDeleted(function (Post $post): void {
+            if ($post->featured_media_asset_id) {
+                app(MediaService::class)->deleteAsset($post->featured_media_asset_id);
+            }
+        });
     }
 
     public function scopePublished($query)
@@ -76,6 +89,25 @@ class Post extends Model
     public function category()
     {
         return $this->belongsTo(BlogCategory::class, 'blog_category_id');
+    }
+
+    public function featuredMediaAsset()
+    {
+        return $this->belongsTo(MediaAsset::class, 'featured_media_asset_id');
+    }
+
+    public function getFeaturedImageAttribute($value): ?string
+    {
+        if ($this->relationLoaded('featuredMediaAsset') && $this->featuredMediaAsset) {
+            return app(MediaService::class)->buildAssetUrl($this->featuredMediaAsset, 'large');
+        }
+
+        return app(MediaService::class)->normalizeLegacyUrl($value);
+    }
+
+    public function getFeaturedImageMediaAttribute(): ?array
+    {
+        return app(MediaService::class)->buildAssetPayload($this->featuredMediaAsset, $this->getRawOriginal('featured_image'));
     }
 
     public static function buildSearchText(

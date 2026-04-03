@@ -62,26 +62,30 @@ class Product extends Model
 
     public function getMainImageAttribute()
     {
-        // Try eager loaded primary image first
         $image = $this->images->where('is_primary', true)->first() ?: $this->images->sortBy('sort_order')->first();
-        
-        if (!$image) return null;
-        
-        $url = $image->image_url;
-        // If it's a relative path, we might need a full URL, but better to let frontend handle it or provide a consistent field
-        return $url;
+
+        return $image?->large_url ?: $image?->image_url;
     }
 
     public function getPrimaryImageAttribute()
     {
         $image = $this->images->where('is_primary', true)->first() ?: $this->images->sortBy('sort_order')->first();
-        if (!$image) return null;
-        
+        if (!$image) {
+            return null;
+        }
+
         return [
             'id' => $image->id,
-            'url' => $image->image_url,
-            'path' => $image->image_url, // For compatibility with frontend expecting .path
-            'is_primary' => $image->is_primary
+            'url' => $image->large_url ?: $image->image_url,
+            'path' => $image->large_url ?: $image->image_url,
+            'image_url' => $image->image_url,
+            'thumbnail_url' => $image->thumbnail_url,
+            'medium_url' => $image->medium_url,
+            'large_url' => $image->large_url,
+            'width' => $image->width,
+            'height' => $image->height,
+            'srcset' => $image->srcset,
+            'is_primary' => $image->is_primary,
         ];
     }
 
@@ -190,6 +194,7 @@ class Product extends Model
     public function images()
     {
         return $this->hasMany(ProductImage::class)
+            ->with('mediaAsset')
             ->orderByDesc('is_primary')
             ->orderBy('sort_order')
             ->orderBy('id');

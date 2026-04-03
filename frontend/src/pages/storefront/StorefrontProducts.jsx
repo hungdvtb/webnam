@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useSearchParams, useParams, useOutletContext } from 'react-router-dom';
 import api from '../../services/api';
 import { LeadFormModal } from '../../layouts/StorefrontLayout';
+import { resolveEntityImageUrl } from '../../utils/mediaUrl';
 
 const DEFAULT_SORT_OPTIONS = [
     { value: 'newest', label: 'Mới nhất' },
@@ -44,13 +45,7 @@ const normalizeImageUrl = (value) => {
 };
 
 const resolveProductImage = (product) => {
-    const candidates = [
-        product?.main_image,
-        product?.primary_image?.url,
-        product?.primary_image?.path,
-    ];
-
-    return candidates.map(normalizeImageUrl).find(Boolean) || FALLBACK_PRODUCT_IMAGE;
+    return resolveEntityImageUrl(product, 'medium', FALLBACK_PRODUCT_IMAGE) || FALLBACK_PRODUCT_IMAGE;
 };
 
 const findCategoryBySlug = (categories = [], slug) => {

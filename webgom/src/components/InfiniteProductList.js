@@ -21,7 +21,7 @@ export default function InfiniteProductList({ initialData }) {
           <div key={product.id} className={styles.productCard}>
             <Link href={`/product/${product.slug || product.id}`} className={styles.imageWrapper}>
               <Image
-                src={resolveImageObjectUrl(product.primary_image, FALLBACK_PRODUCT_IMAGE)}
+                src={resolveImageObjectUrl(product.primary_image, 'medium', FALLBACK_PRODUCT_IMAGE)}
                 alt={product.name || FALLBACK_PRODUCT_ALT}
                 fill
                 sizes="(max-width: 359px) 100vw, (max-width: 767px) 50vw, (max-width: 1200px) 33vw, 25vw"

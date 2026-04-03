@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { getWebProducts, getWebCategories, getWebCategory } from '@/lib/api';
-import config from '@/lib/config';
 import styles from './products.module.css';
 import styles2 from './layout2.module.css';
 import InfiniteProductList from '@/components/InfiniteProductList';
@@ -9,6 +8,7 @@ import InfiniteProductListLayout2 from '@/components/InfiniteProductListLayout2'
 import CategoryDropdown from '@/components/CategoryDropdown';
 import SortSelect from '@/components/SortSelect';
 import AttributeFiltersDropdown from '@/components/AttributeFiltersDropdown';
+import { resolveMediaUrl } from '@/lib/media';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -211,10 +211,7 @@ export default async function ProductsPage({ searchParams }) {
   let bannerUrl = '/banner-store.png';
 
   if (categoryInfo?.banner_path) {
-    const path = categoryInfo.banner_path.startsWith('/')
-      ? categoryInfo.banner_path.substring(1)
-      : categoryInfo.banner_path;
-    bannerUrl = `${config.storageUrl}/${path}`;
+    bannerUrl = resolveMediaUrl(categoryInfo.banner_path) || bannerUrl;
   }
 
   const categoryTitle = searchQuery

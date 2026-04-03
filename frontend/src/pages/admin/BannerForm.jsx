@@ -1,120 +1,181 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { cmsApi } from '../../services/api';
+import React, { useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { aiApi, cmsApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 import useAiAvailability from '../../hooks/useAiAvailability';
+import { resolveEntityImageUrl, resolveMediaUrl } from '../../utils/mediaUrl';
+
+const createInitialBannerState = () => ({
+    account_id: localStorage.getItem('activeAccountId') || '',
+    title: '',
+    subtitle: '',
+    image_url: '',
+    image: null,
+    link_url: '',
+    button_text: '',
+    sort_order: 0,
+    is_active: true,
+});
 
 const BannerForm = () => {
     const { id } = useParams();
-    const isEdit = !!id;
+    const isEdit = Boolean(id);
     const navigate = useNavigate();
     const { showModal } = useUI();
     const { available: aiAvailable, disabledReason } = useAiAvailability();
-    const [loading, setLoading] = useState(false);
+
+    const [loading, setLoading] = useState(isEdit);
     const [saving, setSaving] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
-    const [banner, setBanner] = useState({
-        account_id: localStorage.getItem('activeAccountId') || '',
-        title: '',
-        subtitle: '',
-        image_url: '',
-        link_url: '',
-        button_text: '',
-        sort_order: 0,
-        is_active: true
-    });
+    const [previewUrl, setPreviewUrl] = useState('');
+    const [banner, setBanner] = useState(createInitialBannerState);
+
+    useEffect(() => {
+        if (!isEdit) {
+            return;
+        }
+
+        let cancelled = false;
+
+        cmsApi.banners.getOne(id)
+            .then((response) => {
+                if (cancelled) {
+                    return;
+                }
+
+                setBanner({
+                    ...createInitialBannerState(),
+                    ...response.data,
+                    image: null,
+                });
+                setPreviewUrl(resolveEntityImageUrl(response.data, 'large'));
+            })
+            .catch(() => {
+                showModal({
+                    title: 'Lá»—i',
+                    content: 'KhÃ´ng thá»ƒ táº£i thÃ´ng tin banner.',
+                    type: 'error',
+                });
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setLoading(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [id, isEdit, showModal]);
+
+    useEffect(() => () => {
+        if (previewUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(previewUrl);
+        }
+    }, [previewUrl]);
 
     const handleAIGenerate = async () => {
         if (!aiAvailable) {
-            showModal({ title: 'AI chưa sẵn sàng', content: disabledReason, type: 'warning' });
+            showModal({ title: 'AI chÆ°a sáºµn sÃ ng', content: disabledReason, type: 'warning' });
             return;
         }
+
         setAiGenerating(true);
+
         try {
-            const prompt = `Hãy viết một tiêu đề (Title) và phụ đề (Subtitle) cực kỳ sang trọng, cuốn hút và mang đậm chất nghệ thuật gốm sứ Bát Tràng cho một Banner quảng cáo trên trang chủ. 
-            Yêu cầu:
-            1. Ngôn ngữ: Tiếng Việt, sử dụng từ ngữ hoa mỹ, đậm phong thái "Artisan" và "Luxury".
-            2. Tiêu đề không quá 8 từ, phụ đề không quá 20 từ.
-            3. Trả về kết quả dưới dạng JSON: { "title": "...", "subtitle": "...", "button": "..." }
-            Ví dụ: { "title": "BÁT TRÀNG - TINH HOA TỰ CỔ", "subtitle": "Mỗi tác phẩm là một câu chuyện tình ca của đất và lửa, gìn giữ hồn cốt dân tộc qua nghìn năm.", "button": "Khám Phá Di Sản" }`;
-
+            const prompt = 'Viết title, subtitle và button text cao cấp cho banner gốm sứ Bát Tràng. Trả về JSON với keys: title, subtitle, button.';
             const response = await aiApi.chat({ message: prompt });
-            let aiData;
-            try {
-                const jsonMatch = response.data.response.match(/\{[\s\S]*\}/);
-                aiData = JSON.parse(jsonMatch ? jsonMatch[0] : response.data.response);
-            } catch (e) {
-                aiData = { title: "TINH HOA GỐM VIỆT", subtitle: "Di sản nghìn năm truyền đời", button: "Xem Ngay" };
-            }
+            const jsonMatch = String(response?.data?.response || '').match(/\{[\s\S]*\}/);
+            const aiData = JSON.parse(jsonMatch ? jsonMatch[0] : response.data.response);
 
-            setBanner(prev => ({
+            setBanner((prev) => ({
                 ...prev,
                 title: aiData.title || prev.title,
                 subtitle: aiData.subtitle || prev.subtitle,
-                button_text: aiData.button || prev.button_text
+                button_text: aiData.button || prev.button_text,
             }));
-
-            showModal({ title: 'Thành công', content: 'AI đã sáng tạo ra thông điệp thương hiệu đẳng cấp!', type: 'success' });
-        } catch (error) {
-            showModal({ title: 'Lỗi AI', content: 'Không thể kết nối AI.', type: 'error' });
+        } catch {
+            showModal({
+                title: 'Lá»—i AI',
+                content: 'KhÃ´ng thá»ƒ táº¡o ná»™i dung banner lÃºc nÃ y.',
+                type: 'error',
+            });
         } finally {
             setAiGenerating(false);
         }
     };
 
-    useEffect(() => {
-        if (isEdit) {
-            setLoading(true);
-            cmsApi.banners.getOne(id)
-                .then(res => {
-                    setBanner(res.data);
-                })
-                .catch(err => {
-                    console.error("Error fetching banner", err);
-                    showModal({
-                        title: 'Lỗi',
-                        content: 'Không thể tải thông tin banner.',
-                        type: 'error'
-                    });
-                })
-                .finally(() => setLoading(false));
-        }
-    }, [id, isEdit]);
+    const handleFieldChange = (event) => {
+        const { name, value, type, checked } = event.target;
 
-    const handleChange = (e) => {
-        const { name, value, type, checked } = e.target;
-        setBanner(prev => ({
+        setBanner((prev) => ({
             ...prev,
-            [name]: type === 'checkbox' ? checked : value
+            [name]: type === 'checkbox' ? checked : value,
         }));
+
+        if (name === 'image_url' && !(banner.image instanceof File)) {
+            setPreviewUrl(resolveMediaUrl(value));
+        }
     };
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
+    const handleImageUpload = (event) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+
+        if (!file) {
+            return;
+        }
+
+        if (previewUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(previewUrl);
+        }
+
+        const nextPreviewUrl = URL.createObjectURL(file);
+
+        setBanner((prev) => ({
+            ...prev,
+            image: file,
+        }));
+        setPreviewUrl(nextPreviewUrl);
+    };
+
+    const handleSubmit = async (event) => {
+        event.preventDefault();
         setSaving(true);
+
         try {
-            if (isEdit) {
-                await cmsApi.banners.update(id, banner);
-                showModal({
-                    title: 'Thành công',
-                    content: 'Đã cập nhật banner.',
-                    type: 'success'
-                });
-            } else {
-                await cmsApi.banners.store(banner);
-                showModal({
-                    title: 'Thành công',
-                    content: 'Đã thêm banner mới.',
-                    type: 'success'
-                });
+            const submitData = new FormData();
+            submitData.append('account_id', String(banner.account_id || ''));
+            submitData.append('title', banner.title || '');
+            submitData.append('subtitle', banner.subtitle || '');
+            submitData.append('image_url', banner.image instanceof File ? '' : (banner.image_url || ''));
+            submitData.append('link_url', banner.link_url || '');
+            submitData.append('button_text', banner.button_text || '');
+            submitData.append('sort_order', String(banner.sort_order || 0));
+            submitData.append('is_active', banner.is_active ? '1' : '0');
+
+            if (banner.image instanceof File) {
+                submitData.append('image', banner.image);
             }
-            navigate('/admin/banners');
-        } catch (error) {
-            console.error("Error saving banner", error);
+
+            if (isEdit) {
+                await cmsApi.banners.update(id, submitData);
+            } else {
+                await cmsApi.banners.store(submitData);
+            }
+
             showModal({
-                title: 'Lỗi',
-                content: 'Không thể lưu banner.',
-                type: 'error'
+                title: 'ThÃ nh cÃ´ng',
+                content: isEdit ? 'ÄÃ£ cáº­p nháº­t banner.' : 'ÄÃ£ thÃªm banner má»›i.',
+                type: 'success',
+            });
+
+            navigate('/admin/banners');
+        } catch {
+            showModal({
+                title: 'Lá»—i',
+                content: 'KhÃ´ng thá»ƒ lÆ°u banner.',
+                type: 'error',
             });
         } finally {
             setSaving(false);
@@ -123,186 +184,170 @@ const BannerForm = () => {
 
     if (loading) {
         return (
-            <div className="flex justify-center items-center h-64">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gold"></div>
+            <div className="flex h-64 items-center justify-center">
+                <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-gold" />
             </div>
         );
     }
 
     return (
-        <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full overflow-hidden">
-            {/* Sticky Header */}
-            <div className="flex-none bg-[#fcfcfa] pb-6 border-b border-gold/10">
-                <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-4">
-                        <button 
-                            onClick={() => navigate('/admin/banners')}
-                            className="size-10 rounded-full border border-gold/20 flex items-center justify-center text-primary hover:bg-gold/10 transition-all group"
-                        >
-                            <span className="material-symbols-outlined text-[20px] group-hover:-translate-x-0.5 transition-transform">west</span>
-                        </button>
-                        <div className="flex flex-col">
-                            <h1 className="text-2xl font-display font-bold text-primary italic uppercase tracking-wider">
-                                {isEdit ? 'Biên Tập Banner' : 'Tạo Banner Mới'}
-                            </h1>
-                            <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.2em] leading-none mt-1">Cấu hình trình diễn hình ảnh tại trang chủ</p>
-                        </div>
-                    </div>
-                    
-                    <div className="flex gap-3">
-                        <button
-                            type="button"
-                            onClick={() => navigate('/admin/banners')}
-                            className="px-8 py-2.5 bg-white border border-stone/20 text-stone text-[11px] font-bold uppercase tracking-widest hover:bg-stone/5 transition-all rounded-sm"
-                        >
-                            Hủy bỏ
-                        </button>
-                        <button
-                            form="banner-form"
-                            type="submit"
-                            disabled={saving}
-                            className="px-10 py-2.5 bg-primary text-white text-[11px] font-bold uppercase tracking-widest hover:bg-umber transition-all flex items-center gap-2 rounded-sm shadow-premium-sm disabled:opacity-50"
-                        >
-                            {saving && <span className="animate-spin size-3 border-2 border-white/30 border-t-white rounded-full"></span>}
-                            {isEdit ? 'Cập nhật thay đổi' : 'Khởi tạo ngay'}
-                        </button>
-                    </div>
+        <div className="mx-auto max-w-5xl p-6">
+            <div className="mb-6 flex items-center justify-between gap-4">
+                <div>
+                    <h1 className="text-2xl font-display font-bold italic text-primary">
+                        {isEdit ? 'BiÃªn Táº­p Banner' : 'Táº¡o Banner Má»›i'}
+                    </h1>
+                    <p className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-stone/45">
+                        Upload trực tiếp lên R2 hoặc import từ URL
+                    </p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                    <button
+                        type="button"
+                        onClick={() => navigate('/admin/banners')}
+                        className="border border-stone/20 px-4 py-3 text-[10px] font-bold uppercase tracking-[0.18em] text-stone transition hover:border-primary hover:text-primary"
+                    >
+                        Há»§y
+                    </button>
+                    <button
+                        type="submit"
+                        form="banner-form"
+                        disabled={saving}
+                        className="bg-primary px-5 py-3 text-[10px] font-bold uppercase tracking-[0.18em] text-white transition hover:bg-umber disabled:opacity-50"
+                    >
+                        {saving ? 'Äang lÆ°u...' : isEdit ? 'Cáº­p nháº­t' : 'Táº¡o banner'}
+                    </button>
                 </div>
             </div>
 
-            {/* Scrollable Content Area */}
-            <div className="flex-1 overflow-y-auto custom-scrollbar pt-8">
-                <div className="max-w-4xl mx-auto">
-                    <form id="banner-form" onSubmit={handleSubmit} className="bg-white border border-gold/10 shadow-premium p-8 space-y-8 rounded-sm">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                            <div className="space-y-3">
-                                <div className="flex justify-between items-center">
-                                    <label className="text-[10px] font-black uppercase tracking-widest text-primary/60">Tiêu đề Banner</label>
-                                    <button
-                                        type="button"
-                                        onClick={handleAIGenerate}
-                                        disabled={aiGenerating || !aiAvailable}
-                                        className={`text-[9px] font-black uppercase tracking-[0.1em] flex items-center gap-1.5 transition-all ${aiGenerating ? 'text-gold opacity-50' : 'text-gold hover:text-primary active:scale-95'}`}
-                                        title={!aiAvailable ? disabledReason : 'Tạo nội dung banner bằng AI'}
-                                    >
-                                        <span className={`material-symbols-outlined text-[14px] ${aiGenerating ? 'animate-spin' : ''}`}>auto_awesome</span>
-                                        {aiGenerating ? 'Đang soạn...' : 'AI Sáng Tạo Content'}
-                                    </button>
-                                </div>
-                                <input
-                                    type="text"
-                                    name="title"
-                                    value={banner.title}
-                                    onChange={handleChange}
-                                    className="w-full bg-stone/5 border border-gold/10 p-4 focus:outline-none focus:border-primary font-display text-[15px] font-bold text-primary uppercase tracking-wider rounded-sm"
-                                    placeholder="Nhập tiêu đề hoặc dùng AI..."
-                                />
+            <form id="banner-form" onSubmit={handleSubmit} className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+                <div className="space-y-6 rounded-sm border border-gold/10 bg-white p-6 shadow-premium">
+                    <div className="grid gap-6 md:grid-cols-2">
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between gap-3">
+                                <label className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/60">TiÃªu Ä‘á»</label>
+                                <button
+                                    type="button"
+                                    onClick={handleAIGenerate}
+                                    disabled={aiGenerating || !aiAvailable}
+                                    title={!aiAvailable ? disabledReason : 'Tạo nội dung bằng AI'}
+                                    className="text-[10px] font-black uppercase tracking-[0.16em] text-gold transition hover:text-primary disabled:opacity-50"
+                                >
+                                    {aiGenerating ? 'Äang táº¡o...' : 'AI Content'}
+                                </button>
                             </div>
-                            <div className="space-y-3">
-                                <label className="text-[10px] font-black uppercase tracking-widest text-primary/60">Thông điệp phụ (Subtitle)</label>
-                                <input
-                                    type="text"
-                                    name="subtitle"
-                                    value={banner.subtitle}
-                                    onChange={handleChange}
-                                    className="w-full bg-stone/5 border border-gold/10 p-4 focus:outline-none focus:border-primary font-body text-[14px] rounded-sm"
-                                    placeholder="Ví dụ: Di sản nghìn năm từ tinh hoa làng nghề..."
-                                />
-                            </div>
+                            <input
+                                type="text"
+                                name="title"
+                                value={banner.title}
+                                onChange={handleFieldChange}
+                                className="w-full border border-gold/10 bg-stone/5 p-4 text-sm text-primary outline-none transition focus:border-primary"
+                                placeholder="Tiêu đề banner"
+                            />
                         </div>
 
-                        <div className="space-y-4">
-                            <label className="text-[10px] font-black uppercase tracking-widest text-primary/60 flex items-center gap-2">
-                                <span className="material-symbols-outlined text-[18px]">image</span>
-                                Liên kết hình ảnh (URL)
+                        <div className="space-y-3">
+                            <label className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/60">Subtitle</label>
+                            <input
+                                type="text"
+                                name="subtitle"
+                                value={banner.subtitle}
+                                onChange={handleFieldChange}
+                                className="w-full border border-gold/10 bg-stone/5 p-4 text-sm outline-none transition focus:border-primary"
+                                placeholder="Thông điệp phụ"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="space-y-3">
+                        <label className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/60">Ảnh banner</label>
+                        <div className="flex flex-wrap items-center gap-3">
+                            <label className="inline-flex cursor-pointer items-center gap-2 border border-gold/20 px-4 py-3 text-[10px] font-bold uppercase tracking-[0.18em] text-primary transition hover:border-primary hover:bg-primary hover:text-white">
+                                <span className="material-symbols-outlined text-[18px]">upload_file</span>
+                                Tải ảnh lên
+                                <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
                             </label>
-                            <div className="flex flex-col md:flex-row gap-6 items-start">
-                                <div className="flex-grow w-full space-y-2">
-                                    <input
-                                        type="text"
-                                        name="image_url"
-                                        required
-                                        value={banner.image_url}
-                                        onChange={handleChange}
-                                        className="w-full bg-stone/5 border border-gold/10 p-4 focus:outline-none focus:border-primary font-body text-[13px] rounded-sm"
-                                        placeholder="Vui lòng dán link ảnh từ thư viện hoặc URL ngoài..."
-                                    />
-                                    <div className="p-3 bg-gold/5 border-l-2 border-gold/30 rounded-r-sm">
-                                        <p className="text-[11px] text-stone-500 italic leading-relaxed">
-                                            Khuyến nghị: Sử dụng ảnh có độ phân giải 1920x800 pixel để đạt độ sắc nét tối đa trên mọi màn hình.
-                                        </p>
-                                    </div>
-                                </div>
-                                {banner.image_url && (
-                                    <div className="w-full md:w-64 aspect-video bg-stone/10 border border-gold/20 overflow-hidden flex-shrink-0 rounded-sm shadow-premium-sm group">
-                                        <img src={banner.image_url} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700" alt="Preview banner" />
-                                    </div>
-                                )}
-                            </div>
+                            <span className="text-xs text-stone/55">Ảnh sẽ được resize `thumbnail`, `medium`, `large` và lưu trên Cloudflare R2.</span>
+                        </div>
+                        <input
+                            type="text"
+                            name="image_url"
+                            value={banner.image_url}
+                            onChange={handleFieldChange}
+                            className="w-full border border-gold/10 bg-stone/5 p-4 text-sm outline-none transition focus:border-primary"
+                            placeholder="Hoặc dán URL ảnh hiện có để import lên R2"
+                        />
+                    </div>
+
+                    <div className="grid gap-6 md:grid-cols-3">
+                        <div className="space-y-3">
+                            <label className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/60">Link URL</label>
+                            <input
+                                type="text"
+                                name="link_url"
+                                value={banner.link_url}
+                                onChange={handleFieldChange}
+                                className="w-full border border-gold/10 bg-stone/5 p-4 text-sm outline-none transition focus:border-primary"
+                                placeholder="/san-pham-noi-bat"
+                            />
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                            <div className="space-y-3">
-                                <label className="text-[10px] font-black uppercase tracking-widest text-primary/60 italic">Điều hướng (Link URL)</label>
-                                <input
-                                    type="text"
-                                    name="link_url"
-                                    value={banner.link_url}
-                                    onChange={handleChange}
-                                    className="w-full bg-stone/5 border border-gold/10 p-4 focus:outline-none focus:border-primary font-body text-[14px] rounded-sm"
-                                    placeholder="VD: /san-pham-noi-bat"
-                                />
-                            </div>
-                            <div className="space-y-3">
-                                <label className="text-[10px] font-black uppercase tracking-widest text-primary/60 italic">Tên nút Call-to-action</label>
-                                <input
-                                    type="text"
-                                    name="button_text"
-                                    value={banner.button_text}
-                                    onChange={handleChange}
-                                    className="w-full bg-stone/5 border border-gold/10 p-4 focus:outline-none focus:border-primary font-body text-[14px] rounded-sm"
-                                    placeholder="VD: Xem bộ sưu tập"
-                                />
-                            </div>
-                            <div className="space-y-3">
-                                <label className="text-[10px] font-black uppercase tracking-widest text-primary/60 italic">Vị trí ưu tiên</label>
-                                <input
-                                    type="number"
-                                    name="sort_order"
-                                    value={banner.sort_order}
-                                    onChange={handleChange}
-                                    className="w-full bg-stone/5 border border-gold/10 p-4 focus:outline-none focus:border-primary font-mono text-[14px] rounded-sm"
-                                    placeholder="0"
-                                />
-                            </div>
+                        <div className="space-y-3">
+                            <label className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/60">Button text</label>
+                            <input
+                                type="text"
+                                name="button_text"
+                                value={banner.button_text}
+                                onChange={handleFieldChange}
+                                className="w-full border border-gold/10 bg-stone/5 p-4 text-sm outline-none transition focus:border-primary"
+                                placeholder="KhÃ¡m phÃ¡"
+                            />
                         </div>
 
-                        <div className="flex items-center space-x-4 pt-6 mt-4 border-t border-gold/5">
-                            <label className="relative flex items-center gap-3 cursor-pointer group">
-                                <input
-                                    type="checkbox"
-                                    name="is_active"
-                                    checked={banner.is_active}
-                                    onChange={handleChange}
-                                    className="size-5 accent-primary rounded-sm border-gold/20"
-                                />
-                                <span className="text-[11px] font-black uppercase tracking-widest text-primary group-hover:text-umber transition-colors">
-                                    Đang Kích Hoạt (Hiển thị ngay lập tức)
-                                </span>
-                            </label>
+                        <div className="space-y-3">
+                            <label className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/60">Sort order</label>
+                            <input
+                                type="number"
+                                name="sort_order"
+                                value={banner.sort_order}
+                                onChange={handleFieldChange}
+                                className="w-full border border-gold/10 bg-stone/5 p-4 text-sm outline-none transition focus:border-primary"
+                            />
                         </div>
+                    </div>
 
-                        {!banner.account_id && (
-                            <div className="p-4 bg-brick/[0.03] border border-brick/10 rounded-sm flex gap-3 text-brick">
-                                <span className="material-symbols-outlined text-[18px]">warning</span>
-                                <p className="text-[11px] font-bold uppercase tracking-tight leading-relaxed">
-                                    Cảnh báo: Banner chưa được gắn với Tài khoản quản trị. Vui lòng kiểm tra lại cấu hình Account ID.
-                                </p>
-                            </div>
-                        )}
-                    </form>
+                    <label className="inline-flex items-center gap-3 text-sm text-primary">
+                        <input
+                            type="checkbox"
+                            name="is_active"
+                            checked={banner.is_active}
+                            onChange={handleFieldChange}
+                            className="size-4 accent-primary"
+                        />
+                        Banner đang kích hoạt
+                    </label>
                 </div>
-            </div>
+
+                <aside className="rounded-sm border border-gold/10 bg-white p-6 shadow-premium">
+                    <p className="text-[10px] font-black uppercase tracking-[0.18em] text-stone/45">Preview</p>
+                    <div className="mt-4 overflow-hidden rounded-sm border border-gold/15 bg-stone/5">
+                        <div className="aspect-[16/9]">
+                            {previewUrl ? (
+                                <img src={previewUrl} alt={banner.title || 'Banner preview'} className="h-full w-full object-cover" loading="lazy" />
+                            ) : (
+                                <div className="flex h-full items-center justify-center text-stone/35">
+                                    <span className="material-symbols-outlined text-[42px]">image</span>
+                                </div>
+                            )}
+                        </div>
+                        <div className="space-y-2 border-t border-gold/10 p-4">
+                            <p className="font-display text-lg font-bold text-primary">{banner.title || 'ChÆ°a cÃ³ tiÃªu Ä‘á»'}</p>
+                            <p className="text-sm text-stone/70">{banner.subtitle || 'ChÆ°a cÃ³ subtitle'}</p>
+                        </div>
+                    </div>
+                </aside>
+            </form>
         </div>
     );
 };

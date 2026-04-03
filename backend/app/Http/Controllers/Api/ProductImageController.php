@@ -5,14 +5,18 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\ProductImage;
+use App\Services\MediaService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
-
 
 class ProductImageController extends Controller
 {
+    public function __construct(
+        protected MediaService $mediaService
+    ) {
+    }
+
     /**
-     * Upload images to S3 and associate with a product
+     * Upload images to R2 and associate with a product
      */
     public function store(Request $request, $productId)
     {
@@ -25,26 +29,24 @@ class ProductImageController extends Controller
 
         $product = Product::findOrFail($productId);
         $uploadedImages = [];
-        $disk = 's3';
         $nextSortOrder = (int) $product->images()->count();
         $shouldMarkPrimary = $nextSortOrder === 0;
 
-        if($request->hasFile('images')) {
+        if ($request->hasFile('images')) {
             foreach ($request->file('images') as $file) {
-                $path = Storage::disk($disk)->put('products', $file, 'public');
-                
-                // Construct Clean S3 URL
-                $baseUrl = rtrim(config('filesystems.disks.s3.url'), '/');
-                $url = $baseUrl . '/' . ltrim($path, '/');
-
+                $asset = $this->mediaService->uploadImage($file, [
+                    'collection' => 'products',
+                    'source' => 'product-gallery-upload',
+                ]);
                 $image = ProductImage::create([
                     'product_id' => $productId,
-                    'image_url' => $url,
+                    'media_asset_id' => $asset->id,
+                    'image_url' => $this->mediaService->buildAssetUrl($asset, 'large'),
                     'file_name' => $file->getClientOriginalName(),
                     'file_size' => $file->getSize(),
                     'is_primary' => $shouldMarkPrimary,
                     'sort_order' => $nextSortOrder,
-                ]);
+                ])->load('mediaAsset');
 
                 $uploadedImages[] = $image;
                 $shouldMarkPrimary = false;
@@ -72,41 +74,13 @@ class ProductImageController extends Controller
     }
 
     /**
-     * Delete an image from DB and S3
+     * Delete an image from DB and R2
      */
     public function destroy($id)
     {
         $image = ProductImage::findOrFail($id);
-        
-        $disk = 's3';
-        
-        // Try to determine the path from the URL
-        $url = $image->image_url;
-        $path = '';
-
-        // Case 1: URL starts with the disk's base URL
-        $baseUrl = Storage::disk($disk)->url('');
-        if (str_starts_with($url, $baseUrl)) {
-            $path = str_replace($baseUrl, '', $url);
-        } 
-        // Case 2: Fallback for local storage URL format
-        elseif (str_contains($url, '/storage/')) {
-            $path = substr($url, strpos($url, '/storage/') + 9);
-        }
-        // Case 3: S3 direct URL format fallback
-        elseif ($disk === 's3' && str_contains($url, '.amazonaws.com/')) {
-            $path = substr($url, strrpos($url, '.amazonaws.com/') + 15);
-        }
-
-        $path = ltrim($path, '/');
-        
-        // Only attempt deletion if we have a valid non-empty path/key
-        if (!empty($path) && Storage::disk($disk)->exists($path)) {
-            Storage::disk($disk)->delete($path);
-        }
-        
         $image->delete();
-        
+
         return response()->json(['message' => 'Image deleted successfully.']);
     }
     public function reorder(Request $request)

@@ -14,7 +14,7 @@ function getRelatedImageSrc(relatedProduct) {
   ];
 
   for (const candidate of candidates) {
-    const resolved = resolveImageObjectUrl(candidate, '');
+    const resolved = resolveImageObjectUrl(candidate, 'medium', '');
     if (resolved) {
       return resolved;
     }
@@ -126,7 +126,7 @@ export default function RelatedProductsSection({ relatedProducts = [] }) {
         </Link>
       </div>
 
-      <div className={styles.relatedCarousel}>
+      <div className={styles.relatedCarousel} data-testid="related-products-carousel">
         {showArrows && (
           <>
             <button
@@ -153,6 +153,7 @@ export default function RelatedProductsSection({ relatedProducts = [] }) {
         <div
           ref={railRef}
           className={`${styles.relatedGrid} ${!hasRelatedProducts ? styles.relatedGridLoading : ''}`}
+          data-testid="related-products-rail"
         >
           {hasRelatedProducts ? relatedProducts.map((relatedProduct) => {
             const imageSrc = getRelatedImageSrc(relatedProduct);
@@ -163,6 +164,7 @@ export default function RelatedProductsSection({ relatedProducts = [] }) {
                 key={relatedProduct.id}
                 href={`/product/${relatedProduct.slug || relatedProduct.id}`}
                 className={styles.relatedCard}
+                data-testid="related-product-card"
               >
                 <div className={styles.relImage}>
                   {imageSrc ? (

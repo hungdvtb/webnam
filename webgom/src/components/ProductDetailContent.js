@@ -3,6 +3,16 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/context/CartContext';
+import {
+  BUNDLE_METADATA_VERSION,
+  buildBundleSnapshot,
+  createBundleCartEntry,
+  evaluateBundleSelection,
+  getBundleOptionTitle,
+  getBundleSourcePosition,
+  getBundleSlotKey,
+  resolveBundleConfigName,
+} from '@/lib/bundlePricing';
 import { flyToCart } from '@/utils/flyToCart';
 import { resolveImageObjectUrl, resolveVideoEmbedUrl } from '@/lib/media';
 import SimpleProductView from './product/SimpleProductView';
@@ -11,14 +21,6 @@ import GroupedProductView from './product/GroupedProductView';
 import BundleProductView from './product/BundleProductView';
 
 const FALLBACK_PRODUCT_IMAGE = 'https://placehold.co/800';
-
-const getBundleOptionTitle = (item) => item?.option_title || item?.pivot?.option_title || '';
-
-const getBundleSourcePosition = (item, fallbackIndex = 0) => {
-  const rawPosition = item?.source_position ?? item?.pivot?.position ?? fallbackIndex;
-  const normalizedPosition = Number(rawPosition);
-  return Number.isFinite(normalizedPosition) ? normalizedPosition : fallbackIndex;
-};
 
 const createBundleItemUid = (item, fallbackIndex = 0) => {
   const optionTitle = getBundleOptionTitle(item);
@@ -36,6 +38,7 @@ const normalizeBundleItemState = (item, fallbackIndex = 0) => {
   return {
     ...item,
     bundle_item_uid: item?.bundle_item_uid || createBundleItemUid(item, fallbackIndex),
+    bundle_slot_key: item?.bundle_slot_key || getBundleSlotKey(item, fallbackIndex),
     option_title: optionTitle,
     source_position: sourcePosition,
     base_product_id: baseProductId,
@@ -52,6 +55,7 @@ export default function ProductDetailContent({ product }) {
   const [hasExplicitVariantSelection, setHasExplicitVariantSelection] = useState(false);
   const [selectedGroupItems, setSelectedGroupItems] = useState([]);
   const [bundleItems, setBundleItems] = useState([]);
+  const [activeBundleConfig, setActiveBundleConfig] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [activeIndex, setActiveIndex] = useState(0);
   const { addToCart } = useCart();
@@ -127,7 +131,14 @@ export default function ProductDetailContent({ product }) {
           ...item,
           selected: !item.option_title || item.option_title === firstConfigTitle
         })));
+        setActiveBundleConfig(firstConfigTitle);
+      } else {
+        setBundleItems([]);
+        setActiveBundleConfig('');
       }
+    } else {
+      setBundleItems([]);
+      setActiveBundleConfig('');
     }
   }, [hasStructuredVariantAttributes, hasVariants, product]);
 
@@ -149,6 +160,38 @@ export default function ProductDetailContent({ product }) {
   }, [hasStructuredVariantAttributes, hasVariants, product, selectedOptions, selectedVariantId]);
 
   const currentProduct = matchingVariant || product;
+  const bundleSourceItems = useMemo(() => (
+    (product?.bundle_items?.length ? product.bundle_items : null)
+    || (product?.grouped_items?.length ? product.grouped_items : [])
+  ), [product]);
+  const resolvedActiveBundleConfig = useMemo(() => {
+    if (product?.type !== 'bundle') {
+      return '';
+    }
+
+    return activeBundleConfig
+      || resolveBundleConfigName(bundleItems.filter((item) => item.selected))
+      || resolveBundleConfigName(bundleSourceItems);
+  }, [activeBundleConfig, bundleItems, bundleSourceItems, product?.type]);
+  const selectedBundleCartItems = useMemo(() => {
+    if (product?.type !== 'bundle') {
+      return [];
+    }
+
+    return bundleItems
+      .filter((item) => item.selected && !item.removed)
+      .map((item, index) => createBundleCartEntry(item, index));
+  }, [bundleItems, product?.type]);
+  const selectedBundleSnapshot = useMemo(() => (
+    product?.type === 'bundle'
+      ? buildBundleSnapshot(bundleSourceItems, resolvedActiveBundleConfig)
+      : []
+  ), [bundleSourceItems, resolvedActiveBundleConfig, product?.type]);
+  const selectedBundlePricing = useMemo(() => (
+    product?.type === 'bundle'
+      ? evaluateBundleSelection(selectedBundleCartItems, selectedBundleSnapshot)
+      : null
+  ), [selectedBundleCartItems, selectedBundleSnapshot, product?.type]);
 
   const hasConfigurableChoices = useMemo(() => {
     if (!hasVariants) return false;
@@ -225,6 +268,7 @@ export default function ProductDetailContent({ product }) {
   };
 
   const switchBundleConfiguration = (configName) => {
+    setActiveBundleConfig(configName || '');
     setBundleItems(prev => {
       return prev.map(item => {
         const itemConfig = item.option_title || item.pivot?.option_title || '';
@@ -256,6 +300,7 @@ export default function ProductDetailContent({ product }) {
       ...item,
       selected: !item.option_title || item.option_title === firstConfigTitle
     })));
+    setActiveBundleConfig(firstConfigTitle);
   };
 
   const toggleBundleItem = (bundleItemUid) => {
@@ -283,13 +328,10 @@ export default function ProductDetailContent({ product }) {
       return sum > 0 ? sum : product.price;
     }
     if (product?.type === 'bundle' && bundleItems.length > 0) {
-      const sum = bundleItems
-        .filter(item => item.selected && !item.removed)
-        .reduce((acc, item) => acc + (parseFloat(item.price) * item.qty), 0);
-      return sum;
+      return selectedBundlePricing?.finalSubtotal ?? 0;
     }
     return currentProduct.current_price ?? currentProduct.price;
-  }, [product, currentProduct, selectedGroupItems, bundleItems]);
+  }, [product, currentProduct, selectedGroupItems, bundleItems, selectedBundlePricing]);
 
   const images = useMemo(() => {
     const sourceImages = (currentProduct.images && currentProduct.images.length > 0)
@@ -354,32 +396,55 @@ export default function ProductDetailContent({ product }) {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
   };
 
+  const buildBundleCartPayload = (configName = resolvedActiveBundleConfig) => {
+    const normalizedConfig = String(configName || '').trim();
+    const currentItems = bundleItems
+      .filter((item) => {
+        if (item.removed) return false;
+
+        const itemConfig = getBundleOptionTitle(item);
+
+        if (normalizedConfig) {
+          return !itemConfig || itemConfig === normalizedConfig;
+        }
+
+        return item.selected;
+      })
+      .map((item, index) => createBundleCartEntry(item, index));
+    const resolvedConfigName = normalizedConfig
+      || resolveBundleConfigName(currentItems)
+      || resolveBundleConfigName(bundleSourceItems);
+    const snapshotItems = buildBundleSnapshot(bundleSourceItems, resolvedConfigName);
+    const pricing = evaluateBundleSelection(currentItems, snapshotItems);
+    const options = {
+      bundle_metadata_version: BUNDLE_METADATA_VERSION,
+      is_full_bundle: pricing.isFullBundle,
+      eligible_discount: pricing.eligibleDiscount,
+      combo_discount_rate: pricing.comboDiscountRate,
+      combo_discount_amount: pricing.comboDiscountAmount,
+    };
+
+    if (resolvedConfigName) {
+      options.bundle_config = resolvedConfigName;
+      options.bundle_option_title = resolvedConfigName;
+    }
+
+    return {
+      itemsToCart: currentItems,
+      finalPrice: pricing.finalSubtotal,
+      pricing,
+      options,
+      bundleMeta: {
+        bundleConfigName: resolvedConfigName,
+        bundleSnapshot: snapshotItems,
+        originalGroupedItems: snapshotItems,
+        pricing,
+      },
+    };
+  };
+
   const getBundleSelectionByConfig = (configName) => {
-    const normalizedConfig = configName || '';
-    const selectedItems = bundleItems.filter(item => {
-      if (item.removed) return false;
-      const itemConfig = item.option_title || item.pivot?.option_title || '';
-      return !itemConfig || itemConfig === normalizedConfig;
-    });
-
-    const itemsToCart = selectedItems.map((it, idx) => ({
-      uid: it.bundle_item_uid || `${it.base_product_id || it.id}_${idx}`,
-      id: it.selected_product_id || it.id,
-      product_id: it.selected_product_id || it.id,
-      base_product_id: it.base_product_id || it.id,
-      variant_id: it.pivot?.variant_id || null,
-      name: it.name,
-      qty: it.qty || 1,
-      price: it.price,
-      image: it.images?.[0]?.image_url || it.primary_image?.url
-    }));
-
-    const finalPrice = selectedItems.reduce(
-      (acc, item) => acc + (parseFloat(item.price || 0) * (item.qty || 1)),
-      0
-    );
-
-    return { itemsToCart, finalPrice };
+    return buildBundleCartPayload(configName);
   };
 
   const getSelectedOptionsPayload = () => {
@@ -404,22 +469,6 @@ export default function ProductDetailContent({ product }) {
     const items = (product.bundle_items?.length ? product.bundle_items : null)
       || (product.grouped_items?.length ? product.grouped_items : []);
 
-    if (product.type === 'bundle') {
-      return bundleItems
-        .filter(it => it.selected && !it.removed)
-        .map((it, idx) => ({
-          uid: it.bundle_item_uid || `${it.base_product_id || it.id}_${idx}`,
-          id: it.selected_product_id || it.id,
-          product_id: it.selected_product_id || it.id,
-          base_product_id: it.base_product_id || it.id,
-          variant_id: it.pivot?.variant_id || null,
-          name: it.name,
-          qty: it.qty,
-          price: it.price,
-          image: it.images?.[0]?.image_url || it.primary_image?.url
-        }));
-    }
-
     return selectedGroupItems.map((id, idx) => {
       const item = items.find(i => i.id === id);
       return {
@@ -434,6 +483,16 @@ export default function ProductDetailContent({ product }) {
 
   const addCurrentSelectionToCart = () => {
     const cartProduct = product.type === 'configurable' ? currentProduct : product;
+
+    if (product?.type === 'bundle') {
+      const { itemsToCart, finalPrice, options, bundleMeta } = buildBundleCartPayload(resolvedActiveBundleConfig);
+      if (itemsToCart.length === 0) {
+        return;
+      }
+      addToCart(cartProduct, quantity, options, itemsToCart, finalPrice, bundleMeta);
+      return;
+    }
+
     addToCart(cartProduct, quantity, getSelectedOptionsPayload(), getCurrentItemsToCart(), displayPrice);
   };
 
@@ -535,10 +594,10 @@ export default function ProductDetailContent({ product }) {
 
   const handleAddBundleConfig = (configName, e) => {
     if (e) e.preventDefault();
-    const { itemsToCart, finalPrice } = getBundleSelectionByConfig(configName);
+    const { itemsToCart, finalPrice, options, bundleMeta } = getBundleSelectionByConfig(configName);
     if (itemsToCart.length === 0) return;
 
-    addToCart(product, quantity, { bundle_config: configName }, itemsToCart, finalPrice);
+    addToCart(product, quantity, options, itemsToCart, finalPrice, bundleMeta);
     flyToCart(
       e,
       images?.[0] ? getImageUrl(images[0]) : '/logo-dai-thanh.png'
@@ -582,26 +641,23 @@ export default function ProductDetailContent({ product }) {
   ]);
 
   const handleBuyBundleConfig = (configName) => {
-    const { itemsToCart, finalPrice } = getBundleSelectionByConfig(configName);
+    const { itemsToCart, finalPrice, options, bundleMeta } = getBundleSelectionByConfig(configName);
     if (itemsToCart.length === 0) return;
 
-    addToCart(product, quantity, { bundle_config: configName }, itemsToCart, finalPrice);
+    addToCart(product, quantity, options, itemsToCart, finalPrice, bundleMeta);
     router.push('/cart');
   };
 
   // Buy only the items in a specific tab config (called from BundleProductView)
-  const handleBuyTabConfig = (tabItems, finalPrice) => {
-    const itemsToCart = tabItems
-      .filter(it => !it.removed)
-      .map((it, idx) => ({
-        uid: `${it.id}_${it.pivot?.variant_id || idx}`,
-        id: it.id,
-        name: it.name,
-        qty: it.qty || 1,
-        price: it.price,
-        image: it.images?.[0]?.image_url || it.primary_image?.url
-      }));
-    addToCart(product, 1, {}, itemsToCart, finalPrice);
+  const handleBuyTabConfig = (tabItems) => {
+    const configName = resolveBundleConfigName(tabItems) || resolvedActiveBundleConfig;
+    const { itemsToCart, finalPrice, options, bundleMeta } = getBundleSelectionByConfig(configName);
+
+    if (itemsToCart.length === 0) {
+      return;
+    }
+
+    addToCart(product, 1, options, itemsToCart, finalPrice, bundleMeta);
     router.push('/cart');
   };
 

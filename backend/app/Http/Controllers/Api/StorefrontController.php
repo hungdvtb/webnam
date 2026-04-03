@@ -146,8 +146,15 @@ class StorefrontController extends Controller
     {
         return $product->images->map(fn ($img) => [
             'id' => $img->id,
-            'url' => $img->image_url,
-            'path' => $img->image_url,
+            'url' => $img->large_url ?: $img->image_url,
+            'path' => $img->large_url ?: $img->image_url,
+            'image_url' => $img->image_url,
+            'thumbnail_url' => $img->thumbnail_url,
+            'medium_url' => $img->medium_url,
+            'large_url' => $img->large_url,
+            'width' => $img->width,
+            'height' => $img->height,
+            'srcset' => $img->srcset,
             'is_primary' => $img->is_primary,
         ])->values()->all();
     }

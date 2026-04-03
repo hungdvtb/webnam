@@ -106,12 +106,25 @@ export const resolveMediaUrl = (value) => {
   return storageBase ? `${storageBase}/${cleanPath}` : normalized;
 };
 
-export const resolveImageObjectUrl = (image, fallback = '') => {
+export const resolveImageObjectUrl = (image, preferredOrFallback = 'large', fallback = '') => {
+  const normalizedPreferred = ['thumbnail', 'medium', 'large', 'original'].includes(preferredOrFallback)
+    ? preferredOrFallback
+    : 'large';
+  const resolvedFallback = normalizedPreferred === preferredOrFallback ? fallback : preferredOrFallback;
+
   if (!image) {
-    return fallback;
+    return resolvedFallback;
   }
 
   const candidates = [
+    normalizedPreferred === 'thumbnail' ? image.thumbnail_url : null,
+    normalizedPreferred === 'medium' ? image.medium_url : null,
+    normalizedPreferred === 'large' ? image.large_url : null,
+    normalizedPreferred === 'original' ? image.original_url : null,
+    image.thumbnail_url,
+    image.medium_url,
+    image.large_url,
+    image.original_url,
     image.image_url,
     image.url,
     image.path,
@@ -125,7 +138,7 @@ export const resolveImageObjectUrl = (image, fallback = '') => {
     }
   }
 
-  return fallback;
+  return resolvedFallback;
 };
 
 export const resolveYouTubeVideoId = (value) => {

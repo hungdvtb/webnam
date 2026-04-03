@@ -90,12 +90,15 @@ const orderFormColumnOrderStorageKey = 'order_form_column_order';
 const orderFormVisibleColumnsStorageKey = 'order_form_visible_columns';
 const orderFormColumnWidthsStorageKey = 'order_column_widths';
 const orderFormCostPriceMigrationStorageKey = 'added_cost_price_migrated_form';
-const ORDER_FORM_DEFAULT_COLUMN_IDS = ['stt', 'sku', 'name', 'quantity', 'price', 'cost_price', 'total', 'actions'];
+const orderFormAvailableToSellVisibleMigrationStorageKey = 'added_available_to_sell_migrated_form';
+const ORDER_FORM_AVAILABLE_TO_SELL_TOOLTIP = 'Có thể bán = Tồn kho - SL chờ xuất';
+const ORDER_FORM_DEFAULT_COLUMN_IDS = ['stt', 'sku', 'name', 'quantity', 'available_to_sell', 'price', 'cost_price', 'total', 'actions'];
 const ORDER_FORM_DEFAULT_COLUMN_WIDTHS = {
     stt: 50,
     sku: 150,
     name: null,
     quantity: 90,
+    available_to_sell: 120,
     price: 150,
     cost_price: 150,
     total: 170,
@@ -171,14 +174,31 @@ const insertOrderFormColumnAfter = (columnIds, columnId, afterColumnId) => {
 };
 const normalizeStoredOrderFormColumnOrder = (value) => {
     const nextColumnIds = normalizeStoredOrderFormColumnIds(value);
+    const hasAvailableToSellColumn = nextColumnIds.includes('available_to_sell');
 
     ORDER_FORM_DEFAULT_COLUMN_IDS.forEach((columnId) => {
-        if (!nextColumnIds.includes(columnId)) {
+        if (columnId !== 'available_to_sell' && !nextColumnIds.includes(columnId)) {
             nextColumnIds.push(columnId);
         }
     });
 
+    if (!hasAvailableToSellColumn) {
+        return insertOrderFormColumnAfter(nextColumnIds, 'available_to_sell', 'quantity');
+    }
+
     return nextColumnIds;
+};
+const migrateStoredOrderFormColumns = (storedColumns, { storageKey, migrationStorageKey, columnId, afterColumnId }) => {
+    const hasCompletedMigration = readOrderFormStorageValue(migrationStorageKey, '');
+
+    if (storedColumns.includes(columnId) || hasCompletedMigration) {
+        return storedColumns;
+    }
+
+    const migratedColumns = insertOrderFormColumnAfter(storedColumns, columnId, afterColumnId);
+    writeOrderFormStorageValue(migrationStorageKey, 'true');
+    writeOrderFormStorageJson(storageKey, migratedColumns);
+    return migratedColumns;
 };
 const normalizeStoredOrderFormVisibleColumns = (value) => {
     if (!Array.isArray(value)) {
@@ -209,19 +229,26 @@ const getStoredOrderFormColumnOrder = () => normalizeStoredOrderFormColumnOrder(
     readOrderFormStorageJson(orderFormColumnOrderStorageKey, ORDER_FORM_DEFAULT_COLUMN_IDS)
 );
 const getStoredOrderFormVisibleColumns = () => {
-    const storedColumns = normalizeStoredOrderFormVisibleColumns(
+    let storedColumns = normalizeStoredOrderFormVisibleColumns(
         readOrderFormStorageJson(orderFormVisibleColumnsStorageKey, ORDER_FORM_DEFAULT_COLUMN_IDS)
     );
     const hasCompletedCostPriceMigration = readOrderFormStorageValue(orderFormCostPriceMigrationStorageKey, '');
 
-    if (storedColumns.includes('cost_price') || hasCompletedCostPriceMigration) {
-        return storedColumns;
+    if (!storedColumns.includes('cost_price') && !hasCompletedCostPriceMigration) {
+        storedColumns = migrateStoredOrderFormColumns(storedColumns, {
+            storageKey: orderFormVisibleColumnsStorageKey,
+            migrationStorageKey: orderFormCostPriceMigrationStorageKey,
+            columnId: 'cost_price',
+            afterColumnId: 'price',
+        });
     }
 
-    const migratedColumns = insertOrderFormColumnAfter(storedColumns, 'cost_price', 'price');
-    writeOrderFormStorageValue(orderFormCostPriceMigrationStorageKey, 'true');
-    writeOrderFormStorageJson(orderFormVisibleColumnsStorageKey, migratedColumns);
-    return migratedColumns;
+    return migrateStoredOrderFormColumns(storedColumns, {
+        storageKey: orderFormVisibleColumnsStorageKey,
+        migrationStorageKey: orderFormAvailableToSellVisibleMigrationStorageKey,
+        columnId: 'available_to_sell',
+        afterColumnId: 'quantity',
+    });
 };
 const getStoredOrderFormColumnWidths = () => normalizeStoredOrderFormColumnWidths(
     readOrderFormStorageJson(orderFormColumnWidthsStorageKey, ORDER_FORM_DEFAULT_COLUMN_WIDTHS)
@@ -378,6 +405,7 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                 price: Number(item?.price ?? 0) || 0,
                 expected_cost: parseMoneyNumber(item?.expected_cost),
                 cost_price: resolveProductCostPrice(item),
+                ...resolveInventorySnapshot(item),
                 main_image: String(item?.main_image ?? '').trim(),
                 type: String(item?.type ?? '').trim(),
                 entry_kind: String(item?.entry_kind ?? SEARCH_ENTRY_PRODUCT).trim(),
@@ -578,6 +606,14 @@ const parseMoneyNumber = (value, fallback = null) => {
     const numericValue = Number(value);
     return Number.isFinite(numericValue) ? numericValue : fallback;
 };
+const parseQuantityNumber = (value, fallback = null) => {
+    if (value === null || value === undefined || value === '') {
+        return fallback;
+    }
+
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) ? numericValue : fallback;
+};
 const resolveMoneyValue = (...candidates) => {
     for (const candidate of candidates) {
         const normalizedValue = parseMoneyNumber(candidate);
@@ -587,6 +623,57 @@ const resolveMoneyValue = (...candidates) => {
     }
 
     return 0;
+};
+const resolveInventorySnapshot = (source, fallbackSource = null) => {
+    const fallbackComputedStock = parseQuantityNumber(
+        fallbackSource?.computed_stock,
+        parseQuantityNumber(fallbackSource?.stock_quantity)
+    );
+    const fallbackPendingExportQuantity = parseQuantityNumber(fallbackSource?.pending_export_quantity);
+    const computedStock = parseQuantityNumber(
+        source?.computed_stock,
+        parseQuantityNumber(source?.stock_quantity, fallbackComputedStock)
+    );
+    const pendingExportQuantity = parseQuantityNumber(
+        source?.pending_export_quantity,
+        fallbackPendingExportQuantity
+    );
+    const computedAvailableToSell = computedStock !== null && pendingExportQuantity !== null
+        ? computedStock - pendingExportQuantity
+        : null;
+    const availableToSell = parseQuantityNumber(
+        source?.available_to_sell,
+        computedAvailableToSell ?? parseQuantityNumber(fallbackSource?.available_to_sell)
+    );
+
+    return {
+        computed_stock: computedStock,
+        pending_export_quantity: pendingExportQuantity,
+        available_to_sell: availableToSell,
+    };
+};
+const hasInventorySnapshot = (source) => {
+    const snapshot = resolveInventorySnapshot(source);
+
+    return snapshot.computed_stock !== null
+        && snapshot.pending_export_quantity !== null
+        && snapshot.available_to_sell !== null;
+};
+const formatOrderFormQuantity = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(Number(value) || 0);
+const buildAvailableToSellCellTitle = (source) => {
+    const snapshot = resolveInventorySnapshot(source);
+
+    if (snapshot.computed_stock === null || snapshot.pending_export_quantity === null) {
+        return 'Đang đồng bộ Tồn kho và SL chờ xuất';
+    }
+
+    return `Tồn kho: ${formatOrderFormQuantity(snapshot.computed_stock)} | SL chờ xuất: ${formatOrderFormQuantity(snapshot.pending_export_quantity)}`;
+};
+const getAvailableToSellTextClass = (value) => {
+    if (value === null) return 'text-primary/25';
+    if (value < 0) return 'text-brick';
+    if (value === 0) return 'text-amber-600';
+    return 'text-emerald-700';
 };
 const resolveRoundedImportCostValue = (value, fallback = 0) => normalizeRoundedImportCostNumber(value) ?? fallback;
 const resolveProductCostPrice = (product, fallback = 0) => resolveRoundedImportCostValue(resolveMoneyValue(
@@ -607,19 +694,37 @@ const hasProductCostSnapshot = (product) => [
 const normalizeProductPickerEntry = (product) => {
     if (!product || typeof product !== 'object') return product;
 
+    const inventorySnapshot = resolveInventorySnapshot(product);
+
     return {
         ...product,
+        ...inventorySnapshot,
         price: resolveMoneyValue(product?.price, 0),
         expected_cost: parseMoneyNumber(product?.expected_cost),
         cost_price: resolveProductCostPrice(product),
         variations: Array.isArray(product?.variations)
             ? product.variations.map((variation) => ({
                 ...variation,
+                ...resolveInventorySnapshot(variation),
                 price: resolveMoneyValue(variation?.price, 0),
                 expected_cost: parseMoneyNumber(variation?.expected_cost),
                 cost_price: resolveProductCostPrice(variation),
             }))
             : product?.variations,
+        bundle_options: Array.isArray(product?.bundle_options)
+            ? product.bundle_options.map((bundleOption) => ({
+                ...bundleOption,
+                items: Array.isArray(bundleOption?.items)
+                    ? bundleOption.items.map((bundleItem) => ({
+                        ...bundleItem,
+                        ...resolveInventorySnapshot(bundleItem),
+                        price: resolveMoneyValue(bundleItem?.price, 0),
+                        expected_cost: parseMoneyNumber(bundleItem?.expected_cost),
+                        cost_price: resolveProductCostPrice(bundleItem),
+                    }))
+                    : bundleOption?.items,
+            }))
+            : product?.bundle_options,
     };
 };
 const calculateItemsCostTotal = (items = []) => items.reduce(
@@ -734,6 +839,9 @@ const createOrderLineItem = ({
     quantity = 1,
     price = 0,
     cost_price = 0,
+    computed_stock = null,
+    pending_export_quantity = null,
+    available_to_sell = null,
     options = undefined,
 }) => {
     const normalizedOptions = options && typeof options === 'object'
@@ -741,6 +849,11 @@ const createOrderLineItem = ({
             Object.entries(options).filter(([, value]) => value !== null && value !== undefined && value !== '')
         )
         : undefined;
+    const inventorySnapshot = resolveInventorySnapshot({
+        computed_stock,
+        pending_export_quantity,
+        available_to_sell,
+    });
 
     return {
         line_id: normalizeCanvasText(line_id) || createOrderLineId('order-item'),
@@ -750,6 +863,9 @@ const createOrderLineItem = ({
         quantity: Math.max(1, Number(quantity) || 1),
         price: Number(price) || 0,
         cost_price: resolveRoundedImportCostValue(cost_price, 0),
+        computed_stock: inventorySnapshot.computed_stock,
+        pending_export_quantity: inventorySnapshot.pending_export_quantity,
+        available_to_sell: inventorySnapshot.available_to_sell,
         options: normalizedOptions && Object.keys(normalizedOptions).length > 0 ? normalizedOptions : undefined,
     };
 };
@@ -836,6 +952,9 @@ const buildOrderItemsFromSearchEntry = (entry) => {
                 quantity: Math.max(1, Number(bundleItem?.quantity) || 1),
                 price: Number(bundleItem?.price ?? 0) || 0,
                 cost_price: resolveProductCostPrice(bundleItem),
+                computed_stock: bundleItem?.computed_stock,
+                pending_export_quantity: bundleItem?.pending_export_quantity,
+                available_to_sell: bundleItem?.available_to_sell,
                 options: {
                     bundle_parent_id: bundleParentId || undefined,
                     bundle_parent_name: bundleParentName,
@@ -874,6 +993,9 @@ const buildOrderItemsFromSearchEntry = (entry) => {
         quantity: 1,
         price: Number(entry?.price ?? 0) || 0,
         cost_price: resolveProductCostPrice(entry),
+        computed_stock: entry?.computed_stock,
+        pending_export_quantity: entry?.pending_export_quantity,
+        available_to_sell: entry?.available_to_sell,
         options: baseOptions,
     })];
 };
@@ -952,6 +1074,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
             price: Number(product?.price ?? 0) || 0,
             expected_cost: parseMoneyNumber(product?.expected_cost),
             cost_price: resolveProductCostPrice(product),
+            ...resolveInventorySnapshot(product),
             type: normalizeCanvasText(product?.type),
             main_image: getPickerPrimaryImage(product),
             attribute_values: getPickerAttributeValues(product),
@@ -997,6 +1120,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 price: Number(variation?.price ?? 0) || 0,
                 expected_cost: parseMoneyNumber(variation?.expected_cost),
                 cost_price: resolveProductCostPrice(variation),
+                ...resolveInventorySnapshot(variation),
                 type: normalizeCanvasText(variation?.type || 'simple'),
                 main_image: getPickerPrimaryImage(variation) || baseEntry.main_image,
                 attribute_values: getPickerAttributeValues(variation),
@@ -1025,6 +1149,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                     price: Number(bundleItem?.price ?? 0) || 0,
                     expected_cost: parseMoneyNumber(bundleItem?.expected_cost),
                     cost_price: resolveProductCostPrice(bundleItem),
+                    ...resolveInventorySnapshot(bundleItem),
                     main_image: getPickerPrimaryImage(bundleItem),
                     attribute_values: getPickerAttributeValues(bundleItem),
                     option_label: normalizeCanvasText(bundleItem?.option_label || bundleItem?.variant_label || buildAttributeValueSummary(bundleItem)),
@@ -1124,6 +1249,7 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
             price: Number(item?.price ?? 0) || 0,
             expected_cost: parseMoneyNumber(item?.expected_cost),
             cost_price: resolveProductCostPrice(item),
+            ...resolveInventorySnapshot(item),
             type: normalizeCanvasText(item?.type),
             main_image: getPickerPrimaryImage(item),
             parent_product_id: Number.isFinite(parentProductId) && parentProductId > 0 ? parentProductId : null,
@@ -1502,6 +1628,24 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, i
     );
 };
 
+const getOrderFormHeaderJustifyClass = (align = 'left') => {
+    if (align === 'right') return 'justify-end';
+    if (align === 'center') return 'justify-center';
+    return 'justify-start';
+};
+
+const OrderFormHeaderLabel = ({ label, tooltip = '' }) => (
+    <div className="relative inline-flex items-center group/tooltip">
+        <span className="block whitespace-nowrap text-primary font-black uppercase tracking-[0.15em]">{label}</span>
+        {tooltip ? (
+            <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 w-max max-w-[240px] -translate-x-1/2 rounded-sm border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-semibold normal-case tracking-normal text-slate-700 opacity-0 shadow-[0_16px_32px_rgba(15,23,42,0.16)] transition-all duration-150 group-hover/tooltip:opacity-100">
+                {tooltip}
+                <span className="absolute bottom-full left-1/2 -translate-x-1/2 border-b-[6px] border-b-white border-x-[6px] border-x-transparent"></span>
+            </span>
+        ) : null}
+    </div>
+);
+
 const OrderForm = () => {
     const { id } = useParams();
     const location = useLocation();
@@ -1635,6 +1779,7 @@ const OrderForm = () => {
                                     price: resolveMoneyValue(latest.price, item?.price, 0),
                                     expected_cost: parseMoneyNumber(latest.expected_cost, parseMoneyNumber(item?.expected_cost)),
                                     cost_price: resolveProductCostPrice({ ...item, ...latest }),
+                                    ...resolveInventorySnapshot(latest, item),
                                     main_image: String(latest.main_image ?? item?.main_image ?? '').trim(),
                                     type: latest.type ?? item?.type ?? '',
                                 };
@@ -1667,6 +1812,7 @@ const OrderForm = () => {
                     sku: latest.sku ?? item.sku,
                     price: Number(latest.price ?? 0),
                     cost_price: resolveProductCostPrice(latest, item.cost_price),
+                    ...resolveInventorySnapshot(latest, item),
                 };
             });
 
@@ -1683,6 +1829,7 @@ const OrderForm = () => {
 
             return normalizeProductPickerEntry({
                 ...product,
+                ...latest,
                 sku: latest.sku ?? product.sku,
                 name: latest.name ?? product.name,
                 price: Number(latest.price ?? product.price ?? 0),
@@ -1696,6 +1843,66 @@ const OrderForm = () => {
 
         return refreshedMap;
     }, [syncLatestProductsIntoLocalSources]);
+    const applyInventorySnapshotToOrderState = useCallback((refreshedItems = []) => {
+        const refreshedMap = new Map(
+            (Array.isArray(refreshedItems) ? refreshedItems : []).map((item) => [Number(item.product_id), item])
+        );
+
+        if (refreshedMap.size === 0) {
+            return refreshedMap;
+        }
+
+        setFormData((prev) => ({
+            ...prev,
+            items: prev.items.map((item) => {
+                const latest = refreshedMap.get(Number(item.product_id));
+                if (!latest) return item;
+
+                return {
+                    ...item,
+                    ...resolveInventorySnapshot(latest, item),
+                };
+            }),
+        }));
+
+        setProducts((prev) => prev.map((product) => {
+            const latest = refreshedMap.get(Number(product.id));
+            if (!latest) return normalizeProductPickerEntry(product);
+
+            return normalizeProductPickerEntry({ ...product, ...latest });
+        }));
+
+        syncLatestProductsIntoLocalSources(refreshedMap);
+
+        return refreshedMap;
+    }, [syncLatestProductsIntoLocalSources]);
+    const refreshOrderItemInventorySnapshot = useCallback(async (itemsToRefresh = []) => {
+        const normalizedItems = Array.from(new Map(
+            (Array.isArray(itemsToRefresh) ? itemsToRefresh : [])
+                .map((item) => {
+                    const productId = Number(item?.product_id ?? 0);
+                    if (!productId) return null;
+
+                    return [productId, {
+                        product_id: productId,
+                        sku: item?.sku || '',
+                        name: item?.name || '',
+                    }];
+                })
+                .filter(Boolean)
+        ).values());
+
+        if (normalizedItems.length === 0) {
+            return;
+        }
+
+        try {
+            const response = await productApi.refreshOrderItems({ items: normalizedItems });
+            applyInventorySnapshotToOrderState(response.data?.items);
+        } catch (error) {
+            console.error('Error refreshing order item inventory snapshot', error);
+        }
+    }, [applyInventorySnapshotToOrderState]);
 
     const navigateBack = useCallback(() => {
         if (returnTo && returnTo.startsWith('/admin/')) {
@@ -1716,6 +1923,7 @@ const OrderForm = () => {
         sku: { label: 'Mã sản phẩm', width: 'w-40', align: 'left' },
         name: { label: 'Tên sản phẩm', width: '', align: 'left' },
         quantity: { label: 'Số lượng', width: 'w-24', align: 'center' },
+        available_to_sell: { label: 'Có thể bán', width: 'w-32', align: 'center', tooltip: ORDER_FORM_AVAILABLE_TO_SELL_TOOLTIP },
         price: { label: 'Đơn giá', width: 'w-44', align: 'center' },
         cost_price: { label: 'Giá nhập', width: 'w-44', align: 'center' },
         total: { label: 'Thành tiền', width: 'w-48', align: 'right' },
@@ -2278,6 +2486,7 @@ const OrderForm = () => {
                 price: product.price,
                 expected_cost: parseMoneyNumber(product?.expected_cost),
                 cost_price: resolveProductCostPrice(product),
+                ...resolveInventorySnapshot(product),
                 main_image: product.main_image,
                 type: product.type,
                 entry_kind: product.entry_kind ?? SEARCH_ENTRY_PRODUCT,
@@ -2687,6 +2896,7 @@ const OrderForm = () => {
                 supplement_items: mappedSupplementItems,
             }));
             setRegionType(order.district ? 'old' : 'new');
+            void refreshOrderItemInventorySnapshot(normalizedMappedItems);
 
         } catch (error) {
             console.error("Error fetching order", error);
@@ -2773,6 +2983,7 @@ const OrderForm = () => {
                 status: draft.status || 'new'
             }));
             setRegionType(draft.district ? 'old' : 'new');
+            void refreshOrderItemInventorySnapshot(normalizedDraftItems);
         } catch (error) {
             console.error('Error fetching lead draft', error);
             showModal({
@@ -2923,10 +3134,13 @@ const OrderForm = () => {
 
         setShowSearchHistory(false);
 
-        if (entryKind !== SEARCH_ENTRY_BUNDLE_OPTION && !hasProductCostSnapshot(product)) {
+        const needsInventorySnapshot = itemsToAppend.some((item) => !hasInventorySnapshot(item));
+        if (needsInventorySnapshot) {
+            void refreshOrderItemInventorySnapshot(itemsToAppend);
+        } else if (entryKind !== SEARCH_ENTRY_BUNDLE_OPTION && !hasProductCostSnapshot(product)) {
             hydrateMissingProductCostSnapshot(product);
         }
-    }, [hydrateMissingProductCostSnapshot, pushSearchHistory, searchTerm]);
+    }, [hydrateMissingProductCostSnapshot, pushSearchHistory, refreshOrderItemInventorySnapshot, searchTerm]);
 
     const addProductById = useCallback((product) => {
         if (!product) return;
@@ -4167,9 +4381,9 @@ const OrderForm = () => {
                                                                                                             <button
                                                                             type="button"
                                                                             onClick={() => {
-                                                                                const defOrder = ['stt', 'sku', 'name', 'quantity', 'price', 'cost_price', 'total', 'actions'];
-                                                                                const defVisible = ['stt', 'sku', 'name', 'quantity', 'price', 'cost_price', 'total', 'actions'];
-                                                                                const defWidths = { stt: 50, sku: 150, name: null, quantity: 90, price: 150, cost_price: 150, total: 170, actions: 60 };
+                                                                                const defOrder = [...ORDER_FORM_DEFAULT_COLUMN_IDS];
+                                                                                const defVisible = [...ORDER_FORM_DEFAULT_COLUMN_IDS];
+                                                                                const defWidths = { ...ORDER_FORM_DEFAULT_COLUMN_WIDTHS };
                                                                                 setColumnOrder(defOrder);
                                                                                 setVisibleColumns(defVisible);
                                                                                 setColumnWidths(defWidths);
@@ -4185,7 +4399,7 @@ const OrderForm = () => {
                                                     </AnimatePresence>
                                                 </div>
                                             </th>
-                                            {columnOrder.filter(id => visibleColumns.includes(id)).map((colId, idx) => {
+                                            {columnOrder.filter(id => visibleColumns.includes(id)).map((colId) => {
                                                 const def = COLUMN_DEFS[colId];
                                                 const width = columnWidths[colId];
                                                 return (
@@ -4194,7 +4408,9 @@ const OrderForm = () => {
                                                         className={`py-3 px-4 border border-primary/10 text-${def.align} relative group/header sticky top-0 z-30 bg-[#F0F4F8]`}
                                                         style={width ? { width: `${width}px` } : { width: 'auto' }}
                                                     >
-                                                          <span className="block whitespace-nowrap text-primary font-black uppercase tracking-[0.15em]">{def.label}</span>
+                                                        <div className={`flex items-center ${getOrderFormHeaderJustifyClass(def.align)}`}>
+                                                            <OrderFormHeaderLabel label={def.label} tooltip={def.tooltip} />
+                                                        </div>
                                                         {/* Resize Handle */}
                                                         <div
                                                             className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/30 z-20 transition-colors opacity-0 group-hover/header:opacity-100"
@@ -4291,6 +4507,21 @@ const OrderForm = () => {
                                                                     />
                                                                 </td>
                                                             );
+                                                        case 'available_to_sell': {
+                                                            const availableToSell = parseQuantityNumber(item.available_to_sell);
+
+                                                            return (
+                                                                <td
+                                                                    key={colId}
+                                                                    className="py-2.5 px-3 border border-primary/10 text-center"
+                                                                    title={buildAvailableToSellCellTitle(item)}
+                                                                >
+                                                                    <span className={`font-sans text-[13px] font-black ${getAvailableToSellTextClass(availableToSell)}`}>
+                                                                        {availableToSell !== null ? formatOrderFormQuantity(availableToSell) : '...'}
+                                                                    </span>
+                                                                </td>
+                                                            );
+                                                        }
                                                         case 'price':
                                                             return (
                                                                 <td key={colId} className="py-2.5 px-4 border border-primary/10">

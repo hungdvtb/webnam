@@ -28,6 +28,7 @@ import {
     normalizeWholeMoneyDraft,
     normalizeWholeMoneyNumber,
 } from '../../utils/money';
+import { resolveImageObjectUrl } from '../../utils/mediaUrl';
 
 const ItemType = {
     IMAGE: 'image',
@@ -46,6 +47,19 @@ const chunkItems = (items = [], size = 1) => {
 
     return chunks;
 };
+
+const resolveAdminImageUrl = (image, fallback = '') => resolveImageObjectUrl(image, 'thumbnail', fallback);
+
+const normalizeAdminImages = (items = []) => (
+    Array.isArray(items)
+        ? items.map((item) => ({
+            ...item,
+            image_url: item?.image_url?.startsWith?.('blob:')
+                ? item.image_url
+                : resolveAdminImageUrl(item, item?.image_url || ''),
+        }))
+        : []
+);
 
 const AI_INSTRUCTION_SUGGESTIONS = [
     'Viết ngắn gọn hơn, súc tích hơn.',
@@ -2003,7 +2017,7 @@ const ProductForm = () => {
     };
 
     const resolveBundleItemImage = (product) => {
-        return (product?.images?.find((image) => image.is_primary) || product?.images?.[0])?.image_url || '';
+        return resolveAdminImageUrl(product?.images?.find((image) => image.is_primary) || product?.images?.[0], '');
     };
 
     const restoreBundleItemBaseDisplay = (item) => ({
@@ -3114,7 +3128,7 @@ const ProductForm = () => {
                     option_title: item.pivot?.option_title || '',
                     is_default: !!(item.pivot?.is_default),
                     variant_id: item.pivot?.variant_id || null,
-                    image_url: (item.images?.find(img => img.is_primary) || item.images?.[0])?.image_url
+                    image_url: resolveAdminImageUrl(item.images?.find(img => img.is_primary) || item.images?.[0], '')
                 })),
                 super_attribute_ids: data.super_attributes ? data.super_attributes.map(a => a.id) : [],
                 custom_attributes: (data.attribute_values || []).reduce((acc, curr) => {
@@ -3143,7 +3157,7 @@ const ProductForm = () => {
                 bundle_title: data.bundle_title || '',
                 site_domain_id: data.site_domain_id || ''
             });
-            setImages(data.images || []);
+            setImages(normalizeAdminImages(data.images || []));
             duplicateDraftDefaultsRef.current = isDuplicate
                 ? { parentSku: duplicateParentSku, variantSkus: [] }
                 : null;
@@ -3174,7 +3188,7 @@ const ProductForm = () => {
                         product_sku: item.sku,
                         product_price: normalizeMoneyValue(item.price),
                         product_cost_price: resolveDuplicateSafeCost(item.cost_price),
-                        product_image_url: (item.images?.find(img => img.is_primary) || item.images?.[0])?.image_url,
+                        product_image_url: resolveAdminImageUrl(item.images?.find(img => img.is_primary) || item.images?.[0], ''),
                         name: item.name,
                         sku: item.sku,
                         price: normalizeMoneyValue(item.pivot?.price ?? item.price),
@@ -3182,7 +3196,7 @@ const ProductForm = () => {
                         quantity: item.pivot?.quantity ?? 1,
                         is_required: !!item.pivot?.is_required,
                         is_default: !!item.pivot?.is_default,
-                            image_url: (item.images?.find(img => img.is_primary) || item.images?.[0])?.image_url,
+                            image_url: resolveAdminImageUrl(item.images?.find(img => img.is_primary) || item.images?.[0], ''),
                             type: item.type,
                             variant_id: item.pivot?.variant_id || null,
                             variant_label: '',
@@ -3242,7 +3256,7 @@ const ProductForm = () => {
                         sku: v.sku ?? '',
                         sku_auto: false,
                         attributes: attrs,
-                        image_url: primaryImage ? primaryImage.image_url : null,
+                        image_url: primaryImage ? resolveAdminImageUrl(primaryImage, primaryImage.image_url) : null,
                         label: v.name ?? (v.attribute_values || []).map(av => av.value).join(' / ') ?? ''
                     };
                 });
@@ -3373,7 +3387,7 @@ const ProductForm = () => {
                     uploadedCount += uploadedImages.length;
                     setImages(prev => {
                         const filtered = prev.filter(img => !batchIds.has(img.id));
-                        return [...filtered, ...uploadedImages];
+                        return [...filtered, ...normalizeAdminImages(uploadedImages)];
                     });
 
                     batch.forEach((img) => {

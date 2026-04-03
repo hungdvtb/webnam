@@ -560,6 +560,7 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    gap: 0.6rem;
 }
 
 .itemName {
@@ -569,7 +570,7 @@
     font-family: var(--font-roboto);
     line-height: 1.3;
     padding-right: 1.5rem;
-    margin-bottom: 0.2rem;
+    margin-bottom: 0;
     overflow-wrap: anywhere;
     word-break: break-word;
 }
@@ -578,50 +579,66 @@
     font-size: 0.75rem;
     color: #94A3B8;
     font-style: italic;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0;
 }
 
 .itemActions {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: minmax(0, 1.3fr) auto minmax(0, 1fr);
     align-items: center;
     margin-top: auto;
-    gap: 0.75rem;
-    flex-wrap: wrap;
+    gap: 0.8rem;
+    width: 100%;
+    min-width: 0;
 }
 
 .quantityCtrl {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    border: 1px solid rgba(197,160,101,0.25);
+    border: 1px solid rgba(197,160,101,0.3);
+    border-radius: 999px;
+    background: #fff;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.8);
+    min-width: 6.25rem;
 }
 
 .quantityCtrl button {
-    padding: 0.2rem 0.5rem;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
     color: var(--primary);
     font-weight: 700;
     background: none;
     border: none;
     cursor: pointer;
-    font-size: 1rem;
+    font-size: 1.05rem;
+    line-height: 1;
     transition: background 0.2s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .quantityCtrl button:hover {
     background: rgba(197,160,101,0.1);
 }
 
-.quantityCtrl input {
-    width: 30px;
+.quantityCtrl input,
+.quantityCtrl span {
+    min-width: 1.9rem;
     text-align: center;
-    border: none;
-    border-left: 1px solid rgba(197,160,101,0.25);
-    border-right: 1px solid rgba(197,160,101,0.25);
     font-weight: 700;
-    font-size: 0.85rem;
-    padding: 0.2rem 0;
+    font-size: 0.9rem;
+    line-height: 1;
+    padding: 0;
     background: transparent;
     color: var(--primary);
+    font-family: var(--font-roboto);
+}
+
+.quantityCtrl input {
+    width: 1.9rem;
+    border: none;
 }
 
 .itemPrice {
@@ -631,6 +648,61 @@
     font-family: var(--font-roboto);
     margin-left: auto;
     text-align: right;
+}
+
+.itemMetric {
+    min-width: 0;
+    min-height: 2.65rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.24rem;
+}
+
+.itemPriceMetric {
+    align-items: flex-start;
+    text-align: left;
+}
+
+.itemLabel,
+.itemLineLabel {
+    font-size: 0.75rem;
+    font-family: var(--font-roboto);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #94A3B8;
+    font-weight: 700;
+    line-height: 1.4;
+}
+
+.itemUnitPrice {
+    font-size: 0.95rem;
+    line-height: 1.4;
+    color: var(--accent-dark);
+    font-weight: 700;
+    font-family: var(--font-roboto);
+}
+
+.itemQtyInline {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+}
+
+.itemTotalMetric {
+    align-items: flex-end;
+    text-align: right;
+}
+
+.itemLinePrice {
+    font-size: 0.95rem;
+    line-height: 1.4;
+    color: var(--primary);
+    font-weight: 700;
+    font-family: var(--font-roboto);
+    text-align: right;
+    white-space: nowrap;
 }
 
 /* Sub-items (Combo/Bundle) in summary */
@@ -816,7 +888,7 @@
 /* Add More Button */
 .addMoreBtn {
     width: 100%;
-    padding: 0.75rem;
+    padding: 0.75rem 1rem;
     margin-top: 0.75rem;
     margin-bottom: 1.5rem;
     border: 1px dashed var(--accent, #C5A065);
@@ -824,12 +896,15 @@
     color: var(--accent, #C5A065);
     font-weight: 700;
     font-size: 0.75rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
+    line-height: 1.2;
+    letter-spacing: 0.02em;
+    text-transform: none;
     cursor: pointer;
     transition: background 0.2s;
     text-align: center;
-    display: block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     text-decoration: none;
 }
 
@@ -1664,11 +1739,12 @@
     .addMoreBtn {
         margin-top: 0.2rem;
         margin-bottom: 1rem;
-        padding: 0.85rem 1rem;
+        min-height: 2rem;
+        padding: 5px 1rem;
         border-radius: 16px;
         font-size: var(--mobile-body-size);
-        line-height: var(--mobile-body-line);
-        letter-spacing: 0.08em;
+        line-height: 1.3;
+        letter-spacing: 0.02em;
     }
 
     .summaryBody {

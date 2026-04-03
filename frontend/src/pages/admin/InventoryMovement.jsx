@@ -347,6 +347,22 @@ const renderTwoLineHeader = (topLine, bottomLine) => (
         <span>{bottomLine}</span>
     </span>
 );
+const getHeaderTooltipPlacementClass = (placement = 'center') => {
+    if (placement === 'left') return 'left-0';
+    if (placement === 'right') return 'right-0';
+    return 'left-1/2 -translate-x-1/2';
+};
+const ColumnHeaderTooltip = ({ tooltip, placement = 'center', children }) => (
+    <div className="relative inline-flex max-w-full items-center">
+        <div className="min-w-0">{children}</div>
+        <div
+            className={`pointer-events-none absolute top-full z-[80] mt-2 rounded-sm border border-primary/15 bg-white px-4 py-2.5 text-left text-[12px] font-semibold leading-none text-primary opacity-0 shadow-[0_16px_40px_rgba(15,23,42,0.16)] transition duration-150 group-hover/header:translate-y-0 group-hover/header:opacity-100 group-focus-within/header:translate-y-0 group-focus-within/header:opacity-100 ${getHeaderTooltipPlacementClass(placement)} max-w-none whitespace-nowrap translate-y-1`}
+            role="tooltip"
+        >
+            {tooltip}
+        </div>
+    </div>
+);
 const supplierPasteModeConfigs = {
     sku_price: {
         label: 'SKU + Giá',
@@ -1707,18 +1723,18 @@ const isCompletedImportStatus = (status) => {
 
 const productColumns = [
     { id: 'product', label: 'Sản phẩm', minWidth: 300 },
-    { id: 'total_imported', label: 'Tổng nhập', minWidth: 72, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'nhập') },
-    { id: 'total_exported', label: 'Tổng xuất', minWidth: 72, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'xuất') },
-    { id: 'total_returned', label: 'Tổng hoàn', minWidth: 72, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'hoàn') },
-    { id: 'total_damaged', label: 'Tổng hỏng', minWidth: 72, align: 'right', headerRender: () => renderTwoLineHeader('Tổng', 'hỏng') },
-    { id: 'total_adjusted', label: 'Điều chỉnh tồn', minWidth: 92, align: 'right', headerTooltip: 'Chỉ lấy từ phiếu điều chỉnh tồn kho độc lập', headerRender: () => renderTwoLineHeader('Điều chỉnh', 'tồn') },
-    { id: 'computed_stock', label: 'Tồn kho', minWidth: 76, align: 'right', headerRender: () => renderTwoLineHeader('Tồn', 'kho') },
-    { id: 'pending_export_quantity', label: 'SL chờ xuất', minWidth: 82, align: 'right', headerTooltip: 'Đã bán nhưng chưa xuất kho', headerRender: () => renderTwoLineHeader('SL chờ', 'xuất') },
-    { id: 'pending_return_quantity', label: 'SL hoàn chờ về', minWidth: 90, align: 'right', headerTooltip: 'Đơn hoàn chưa tạo phiếu hoàn nhập lại kho', headerRender: () => renderTwoLineHeader('SL hoàn', 'chờ về') },
-    { id: 'actual_stock', label: 'Tồn thực tế', minWidth: 84, align: 'right', headerTooltip: 'Tồn kho - đơn chờ xuất + đơn hoàn chờ về', headerRender: () => renderTwoLineHeader('Tồn', 'thực tế') },
+    { id: 'total_imported', label: 'Tổng nhập', minWidth: 72, align: 'right', headerTooltip: 'Cộng SL đã về từ các phiếu nhập.', headerRender: () => renderTwoLineHeader('Tổng', 'nhập') },
+    { id: 'total_exported', label: 'Tổng xuất', minWidth: 72, align: 'right', headerTooltip: 'Cộng SL từ các phiếu xuất kho.', headerRender: () => renderTwoLineHeader('Tổng', 'xuất') },
+    { id: 'total_returned', label: 'Tổng hoàn', minWidth: 72, align: 'right', headerTooltip: 'Cộng SL đã nhập lại từ phiếu hoàn.', headerRender: () => renderTwoLineHeader('Tổng', 'hoàn') },
+    { id: 'total_damaged', label: 'Tổng hỏng', minWidth: 72, align: 'right', headerTooltip: 'Cộng SL từ các phiếu hỏng.', headerRender: () => renderTwoLineHeader('Tổng', 'hỏng') },
+    { id: 'total_adjusted', label: 'Điều chỉnh tồn', minWidth: 92, align: 'right', headerTooltip: 'Cộng/trừ SL từ phiếu điều chỉnh tồn độc lập.', headerRender: () => renderTwoLineHeader('Điều chỉnh', 'tồn') },
+    { id: 'computed_stock', label: 'Tồn kho', minWidth: 76, align: 'right', headerTooltip: 'Tổng nhập - Tổng xuất + Tổng hoàn - Tổng hỏng + Điều chỉnh tồn', headerRender: () => renderTwoLineHeader('Tồn', 'kho') },
+    { id: 'pending_export_quantity', label: 'SL chờ xuất', minWidth: 82, align: 'right', headerTooltip: 'Cộng SL đã bán nhưng chưa có phiếu xuất.', headerRender: () => renderTwoLineHeader('SL chờ', 'xuất') },
+    { id: 'pending_return_quantity', label: 'SL hoàn chờ về', minWidth: 90, align: 'right', headerTooltip: 'Cộng SL đơn hoàn chưa nhập lại kho.', headerRender: () => renderTwoLineHeader('SL hoàn', 'chờ về') },
+    { id: 'actual_stock', label: 'Tồn thực tế', minWidth: 84, align: 'right', headerTooltip: 'Tồn kho - SL chờ xuất + SL hoàn chờ về', headerRender: () => renderTwoLineHeader('Tồn', 'thực tế') },
     { id: 'expected_cost', label: 'Giá nhập dự kiến', minWidth: 108, align: 'right', headerRender: () => renderTwoLineHeader('Giá nhập', 'dự kiến') },
-    { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 108, align: 'right', headerRender: () => renderTwoLineHeader('Giá nhập', 'thực tế') },
-    { id: 'inventory_value', label: 'Thành tiền', minWidth: 104, align: 'right', headerRender: () => renderTwoLineHeader('Thành', 'tiền') },
+    { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 108, align: 'right', headerTooltip: 'Tổng tiền nhập hợp lệ / Tổng SL nhập hợp lệ', headerRender: () => renderTwoLineHeader('Giá nhập', 'thực tế') },
+    { id: 'inventory_value', label: 'Thành tiền', minWidth: 104, align: 'right', headerTooltip: 'Tồn thực tế x giá đang dùng; thiếu giá thực tế thì lấy giá dự kiến', headerRender: () => renderTwoLineHeader('Thành', 'tiền') },
     { id: 'actions', label: 'Thao tác', minWidth: 88, align: 'center' },
 ];
 
@@ -1738,7 +1754,7 @@ const supplierPriceBaseColumns = [
     { id: 'name', label: 'Tên sản phẩm', minWidth: 280 },
     { id: 'price', label: 'Giá bán', minWidth: 110, align: 'right' },
     { id: 'supplier_unit_cost', label: 'Giá dự kiến', minWidth: 160, align: 'right' },
-    { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 125, align: 'right' },
+    { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 125, align: 'right', headerTooltip: 'Tổng tiền nhập hợp lệ / Tổng SL nhập hợp lệ; chưa có nhập thì tạm lấy giá dự kiến' },
     { id: 'supplier_price_updated_at', label: 'Sửa gần nhất', minWidth: 150, align: 'center' },
 ];
 
@@ -1829,7 +1845,7 @@ const supplierPriceTableBaseColumns = [
     { id: 'name', label: 'Tên sản phẩm', minWidth: 280 },
     { id: 'price', label: 'Giá bán', minWidth: 110, align: 'right' },
     { id: 'unit_cost', label: 'Giá nhập dự kiến', minWidth: 160, align: 'right' },
-    { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 125, align: 'right' },
+    { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 125, align: 'right', headerTooltip: 'Tổng tiền nhập hợp lệ / Tổng SL nhập hợp lệ; chưa có nhập thì tạm lấy giá dự kiến' },
     { id: 'supplier_name', label: 'Nhà CC', minWidth: 180 },
     { id: 'updated_at', label: 'Sửa gần nhất', minWidth: 150, align: 'center' },
     { id: 'actions', label: 'Thao tác', minWidth: 120, align: 'center' },
@@ -3205,6 +3221,20 @@ const InventoryTable = ({
         if (sortColumnMap) return Boolean(sortColumnMap[column.id]);
         return !['actions', 'select'].includes(column.id);
     };
+    const renderHeaderLabel = (column) => {
+        const content = column.headerRender
+            ? column.headerRender()
+            : <span className="block min-w-0 truncate">{column.label}</span>;
+
+        if (!column.headerTooltip) return content;
+
+        const placement = column.headerTooltipPlacement || (column.align === 'right' ? 'right' : column.align === 'left' ? 'left' : 'center');
+        return (
+            <ColumnHeaderTooltip tooltip={column.headerTooltip} placement={placement}>
+                {content}
+            </ColumnHeaderTooltip>
+        );
+    };
 
     return (
         <div className={`${panelClass} ${wrapperClassName}`.trim()}>
@@ -3232,15 +3262,12 @@ const InventoryTable = ({
                                     onDragOver={(event) => event.preventDefault()}
                                     onDrop={column.draggable === false ? undefined : (event) => handleHeaderDrop(event, index)}
                                     onDoubleClick={canSortColumn(column) ? () => onSort(column.id) : undefined}
-                                    title={[
-                                        column.headerTooltip || '',
-                                        canSortColumn(column) ? 'Double click để sắp xếp' : '',
-                                    ].filter(Boolean).join(' • ') || undefined}
-                                    className={`relative border-b border-r border-primary/10 px-3 py-3 text-center font-bold text-primary ${headerTextClassName} ${canSortColumn(column) ? 'cursor-pointer select-none' : ''}`}
+                                    title={canSortColumn(column) ? 'Double click để sắp xếp' : undefined}
+                                    className={`group/header relative border-b border-r border-primary/10 px-3 py-3 text-center font-bold text-primary ${headerTextClassName} ${canSortColumn(column) ? 'cursor-pointer select-none' : ''}`}
                                     style={{ width: columnWidths[column.id] || column.minWidth }}
                                 >
                                     <div className={`flex items-center gap-1 ${column.align === 'right' ? 'justify-end' : 'justify-center'}`}>
-                                        {column.headerRender ? column.headerRender() : <span className="block min-w-0 truncate">{column.label}</span>}
+                                        {renderHeaderLabel(column)}
                                         {canSortColumn(column) ? <SortIndicator colId={column.id} sortConfig={sortConfig} showNeutral /> : null}
                                     </div>
                                     <div onMouseDown={(event) => handleColumnResize(column.id, event)} className="absolute right-0 top-0 h-full w-2 cursor-col-resize transition hover:bg-brick/20" title="Kéo để đổi độ rộng cột" />

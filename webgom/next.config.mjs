@@ -1,4 +1,24 @@
 /** @type {import('next').NextConfig} */
+const parseRemotePattern = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(value);
+    return {
+      protocol: parsed.protocol.replace(':', ''),
+      hostname: parsed.hostname,
+      port: parsed.port || '',
+      pathname: '/**',
+    };
+  } catch {
+    return null;
+  }
+};
+
+const mediaRemotePattern = parseRemotePattern(process.env.NEXT_PUBLIC_MEDIA_BASE_URL);
+
 const nextConfig = {
   devIndicators: false,
   async redirects() {
@@ -55,6 +75,7 @@ const nextConfig = {
         hostname: 'images.unsplash.com',
         pathname: '/**',
       },
+      ...(mediaRemotePattern ? [mediaRemotePattern] : []),
     ],
   },
 };

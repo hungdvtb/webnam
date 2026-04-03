@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useCart } from "@/context/CartContext";
+import { resolveMediaUrl } from "@/lib/media";
 
 const DEFAULT_BRAND_TITLE = "G\u1ed1m \u0110\u1ea1i Th\u00e0nh";
 const DEFAULT_SEARCH_PLACEHOLDER = "B\u1ea1n c\u1ea7n t\u00ecm s\u1ea3n ph\u1ea9m g\u00ec?";
@@ -164,6 +165,28 @@ const isMobileMenuItemActive = (pathname, item) => {
   });
 };
 
+const resolveCategoryLogoUrl = (category = {}) => {
+  const candidates = [
+    category?.logo_path,
+    category?.logoPath,
+    category?.logo_url,
+    category?.logoUrl,
+    category?.logo?.path,
+    category?.logo?.url,
+    category?.logo?.src,
+  ];
+
+  for (const candidate of candidates) {
+    const resolved = resolveMediaUrl(candidate);
+
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  return "";
+};
+
 const flattenProductCategories = (categories = []) => {
   const flattened = [];
 
@@ -176,7 +199,9 @@ const flattenProductCategories = (categories = []) => {
           name: String(category?.name || "").trim(),
           slug: String(category?.slug || "").trim(),
           level,
+          depthOffset: Math.min(level, 4) * 10,
           count: Number(category?.products_count || 0),
+          logoUrl: resolveCategoryLogoUrl(category),
         });
         walk(category?.id, level + 1);
       });
@@ -787,7 +812,12 @@ export default function Header({
                   className={`mobile-products-link mobile-products-link-all ${isAllProductsView ? "mobile-products-link-active" : ""}`}
                   onClick={handleMobileAllProductsClick}
                 >
+                  <span className="mobile-products-link__main">
+                    <span className="mobile-products-link__logo mobile-products-link__logo-generic" aria-hidden="true">
+                      <span className="material-symbols-outlined">grid_view</span>
+                    </span>
                   <span className="mobile-products-link__name">Tất cả sản phẩm</span>
+                  </span>
                   <span className="material-symbols-outlined mobile-products-link__arrow">chevron_right</span>
                 </Link>
 
@@ -802,11 +832,35 @@ export default function Header({
                       href={`/products?category=${category.slug}`}
                       className={`mobile-products-link ${isCategoryActive ? "mobile-products-link-active" : ""}`}
                       onClick={() => setIsMobileProductsMenuOpen(false)}
-                      style={{ paddingLeft: `${16 + (category.level * 14)}px` }}
+                      style={{ "--mobile-products-indent": `${category.depthOffset}px` }}
                     >
+                      <span className="mobile-products-link__main">
+                        <span
+                          className={`mobile-products-link__logo ${
+                            category.logoUrl ? "mobile-products-link__logo-has-image" : ""
+                          }`}
+                          aria-hidden="true"
+                        >
+                          {category.logoUrl ? (
+                            <Image
+                              src={category.logoUrl}
+                              alt=""
+                              width={28}
+                              height={28}
+                              sizes="28px"
+                              className="mobile-products-link__logo-image"
+                              unoptimized
+                            />
+                          ) : (
+                            <span className="mobile-products-link__logo-fallback">
+                              {(category.name || "?").trim().charAt(0).toLocaleUpperCase("vi-VN")}
+                            </span>
+                          )}
+                        </span>
                       <span className="mobile-products-link__name">
                         {category.level > 0 ? "— " : ""}
                         {category.name}
+                      </span>
                       </span>
                       <span className="mobile-products-link__count">{category.count}</span>
                     </Link>
@@ -1540,16 +1594,18 @@ export default function Header({
             bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
             z-index: 996;
             display: block;
-            width: min(calc(100vw - 24px), 296px);
-            max-height: none;
+            width: fit-content;
+            min-width: min(320px, calc(100vw - 24px));
+            max-width: calc(100vw - 24px);
             padding: 12px;
             border: 1px solid rgba(197, 160, 89, 0.18);
             border-radius: 18px;
             background: rgba(255, 255, 255, 0.98);
             backdrop-filter: blur(20px);
             box-shadow: 0 18px 45px rgba(15, 23, 42, 0.16);
-            overflow: visible;
+            overflow: hidden;
             opacity: 0;
+            visibility: hidden;
             transform: translateY(16px) scale(0.98);
             pointer-events: none;
             transition:
@@ -1557,9 +1613,20 @@ export default function Header({
               transform 220ms ease;
           }
 
+          .mobile-products-sheet,
+          .mobile-products-sheet * {
+            pointer-events: none;
+          }
+
           .mobile-products-sheet-open {
             opacity: 1;
+            visibility: visible;
             transform: translateY(0) scale(1);
+            pointer-events: auto;
+          }
+
+          .mobile-products-sheet-open,
+          .mobile-products-sheet-open * {
             pointer-events: auto;
           }
 
@@ -1608,17 +1675,21 @@ export default function Header({
             flex-direction: column;
             gap: 6px;
             margin-top: 10px;
-            overflow: visible;
+            max-height: min(52vh, 340px);
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            padding-right: 2px;
+            scrollbar-width: thin;
           }
 
           .mobile-products-link {
             width: 100%;
-            min-height: 46px;
+            min-height: 44px;
             display: flex;
             align-items: center;
-            justify-content: flex-start;
-            gap: 12px;
-            padding: 10px 12px;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 9px 12px;
             border-radius: 14px;
             border: 1px solid rgba(226, 232, 240, 0.95);
             background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
@@ -1662,30 +1733,78 @@ export default function Header({
               inset 0 0 0 1px rgba(197, 160, 89, 0.18);
           }
 
+          .mobile-products-link__main {
+            min-width: 0;
+            flex: 1 1 auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding-left: var(--mobile-products-indent, 0px);
+          }
+
+          .mobile-products-link__logo {
+            width: 28px;
+            height: 28px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 28px;
+            overflow: hidden;
+            border: 1px solid rgba(197, 160, 89, 0.16);
+            border-radius: 10px;
+            background: linear-gradient(180deg, #fffdfa 0%, #f7efe2 100%);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+          }
+
+          .mobile-products-link__logo-has-image {
+            background: #ffffff;
+          }
+
+          .mobile-products-link__logo-generic :global(.material-symbols-outlined) {
+            font-size: 16px !important;
+            color: #9b7330;
+          }
+
+          .mobile-products-link__logo-image {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: contain;
+          }
+
+          .mobile-products-link__logo-fallback {
+            color: #9b7330;
+            font-size: 12px;
+            font-weight: 800;
+            line-height: 1;
+            text-transform: uppercase;
+          }
+
           .mobile-products-link__name {
             min-width: 0;
             flex: 1;
-            padding-right: 4px;
+            padding-right: 0;
             font-size: 14px;
             font-weight: 700;
-            line-height: 1.3;
-            white-space: normal;
-            overflow-wrap: anywhere;
+            line-height: 1.25;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
           }
 
           .mobile-products-link__count {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            margin-left: auto;
-            min-width: 30px;
-            height: 26px;
-            padding: 0 8px;
+            margin-left: 6px;
+            min-width: 28px;
+            height: 24px;
+            padding: 0 7px;
             border-radius: 999px;
             border: 1px solid rgba(197, 160, 89, 0.18);
             background: #f8f3e9;
             color: #946d26;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 800;
             line-height: 1;
             font-variant-numeric: tabular-nums;
@@ -2058,7 +2177,9 @@ export default function Header({
         @media (max-width: 420px) {
           .mobile-products-sheet {
             left: 8px;
-            width: min(calc(100vw - 16px), 286px);
+            width: fit-content;
+            min-width: min(304px, calc(100vw - 16px));
+            max-width: calc(100vw - 16px);
             bottom: calc(env(safe-area-inset-bottom, 0px) + 82px);
             padding: 12px;
           }

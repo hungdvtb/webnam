@@ -696,14 +696,58 @@ class BlogExcelService
         }
 
         if (preg_match('/^[a-z][a-z0-9+.-]*:/i', $normalizedValue) === 1) {
-            return $normalizedValue;
+            return $this->collapseInternalAbsoluteUrlToRelative($normalizedValue);
         }
 
         if (Str::startsWith($normalizedValue, '/')) {
-            return url($normalizedValue);
+            return $normalizedValue;
         }
 
-        return url('/' . ltrim($normalizedValue, '/'));
+        return '/' . ltrim($normalizedValue, '/');
+    }
+
+    private function collapseInternalAbsoluteUrlToRelative(string $value): string
+    {
+        $parts = parse_url($value);
+
+        if ($parts === false || !$this->shouldCollapseToRelative($parts)) {
+            return $value;
+        }
+
+        $path = (string) ($parts['path'] ?? '/');
+        $query = isset($parts['query']) && $parts['query'] !== '' ? '?' . $parts['query'] : '';
+        $fragment = isset($parts['fragment']) && $parts['fragment'] !== '' ? '#' . $parts['fragment'] : '';
+
+        return ($path !== '' ? $path : '/') . $query . $fragment;
+    }
+
+    /**
+     * @param  array<string, mixed>  $parts
+     */
+    private function shouldCollapseToRelative(array $parts): bool
+    {
+        $host = Str::lower(trim((string) ($parts['host'] ?? '')));
+
+        if ($host === '') {
+            return false;
+        }
+
+        if (in_array($host, ['localhost', '127.0.0.1', '::1'], true)) {
+            return true;
+        }
+
+        $knownHosts = array_values(array_filter([
+            parse_url((string) config('app.url'), PHP_URL_HOST),
+            request()?->getHost(),
+        ]));
+
+        foreach ($knownHosts as $knownHost) {
+            if (Str::lower(trim((string) $knownHost)) === $host) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function transformHtml(string $content, callable $transformer): string

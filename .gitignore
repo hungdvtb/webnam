@@ -1,6 +1,11 @@
 # Workspace runtime artifacts
 *.log
 .tmp-appdata/
+.env
+backend/.env
+frontend/.env
+webgom/.env
+*.env.local
 
 # Local browser debug profiles
 webgom/.tmp-chrome-profile/

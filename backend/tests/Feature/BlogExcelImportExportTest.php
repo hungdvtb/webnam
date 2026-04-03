@@ -116,11 +116,11 @@ class BlogExcelImportExportTest extends TestCase
             ->first(fn (array $row) => ($row[$headerIndex['slug']] ?? null) === $regularPost->slug);
 
         $this->assertIsArray($regularExportRow);
-        $this->assertSame(url('/storage/uploads/blog/featured.jpg'), $regularExportRow[$headerIndex['featured_image_url']]);
-        $this->assertStringContainsString(url('/storage/uploads/blog/body-inline.jpg'), $regularExportRow[$headerIndex['content_image_urls']]);
-        $this->assertStringContainsString(url('/storage/uploads/blog/gallery-1.jpg'), $regularExportRow[$headerIndex['content_image_urls']]);
+        $this->assertSame('/storage/uploads/blog/featured.jpg', $regularExportRow[$headerIndex['featured_image_url']]);
+        $this->assertStringContainsString('/storage/uploads/blog/body-inline.jpg', $regularExportRow[$headerIndex['content_image_urls']]);
+        $this->assertStringContainsString('/storage/uploads/blog/gallery-1.jpg', $regularExportRow[$headerIndex['content_image_urls']]);
         $this->assertStringContainsString('https://cdn.example.com/gallery-2.jpg', $regularExportRow[$headerIndex['content_image_urls']]);
-        $this->assertStringContainsString(url('/blog/chinh-sach-demo'), $regularExportRow[$headerIndex['content_link_urls']]);
+        $this->assertStringContainsString('/blog/chinh-sach-demo', $regularExportRow[$headerIndex['content_link_urls']]);
         $this->assertStringContainsString('<strong>Noi dung</strong>', $regularExportRow[$headerIndex['content_html']]);
         $this->assertSame('regular', $regularExportRow[$headerIndex['post_type']]);
 
@@ -147,12 +147,12 @@ class BlogExcelImportExportTest extends TestCase
             ->firstOrFail();
 
         $this->assertSame('Mo ta ngan bai thuong', $importedRegularPost->excerpt);
-        $this->assertSame(url('/storage/uploads/blog/featured.jpg'), $importedRegularPost->featured_image);
+        $this->assertSame('/storage/uploads/blog/featured.jpg', $importedRegularPost->featured_image);
         $this->assertTrue((bool) $importedRegularPost->is_published);
         $this->assertTrue((bool) $importedRegularPost->is_starred);
         $this->assertFalse((bool) $importedRegularPost->is_system);
-        $this->assertStringContainsString(url('/storage/uploads/blog/body-inline.jpg'), (string) $importedRegularPost->content);
-        $this->assertStringContainsString(url('/blog/chinh-sach-demo'), (string) $importedRegularPost->content);
+        $this->assertStringContainsString('/storage/uploads/blog/body-inline.jpg', (string) $importedRegularPost->content);
+        $this->assertStringContainsString('/blog/chinh-sach-demo', (string) $importedRegularPost->content);
         $this->assertSame('gom bat trang', $importedRegularPost->seo_keyword);
         $this->assertSame('kien-thuc-gom', $importedRegularPost->category?->slug);
 

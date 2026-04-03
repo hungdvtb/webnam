@@ -74,7 +74,6 @@ const DEFAULT_COLUMNS = [
     { id: 'images', label: 'Ảnh', minWidth: '80px' },
     { id: 'type', label: 'Loại hình', minWidth: '110px' },
     { id: 'category', label: 'Danh mục', minWidth: '120px' },
-    { id: 'stock', label: 'Tồn kho', minWidth: '80px' },
     { id: 'is_featured', label: 'Nổi bật', minWidth: '80px', align: 'center' },
     { id: 'is_new', label: 'Mới', minWidth: '80px', align: 'center' },
     { id: 'status', label: 'Bán', minWidth: '60px', align: 'center' },
@@ -82,8 +81,58 @@ const DEFAULT_COLUMNS = [
     { id: 'product_link', label: 'Link SP', minWidth: '150px' },
 ];
 
+const DEFAULT_SORT_CONFIG = { key: 'created_at', direction: 'desc', phase: 1 };
 const DEFAULT_EXPORT_COLUMN_IDS = ['name', 'product_link'];
 const EXPORT_EXCLUDED_COLUMN_IDS = new Set(['actions', 'images']);
+const DEFAULT_IMPORT_MODE = 'replace_all';
+const DEFAULT_IMPORT_MISSING_PRODUCT_ACTION = 'create';
+const EXTRA_EXPORT_FIELDS = [
+    { id: 'id', label: 'ID' },
+    { id: 'slug', label: 'Slug' },
+    { id: 'stock', label: 'Tồn kho' },
+    { id: 'special_price', label: 'Giá bán' },
+    { id: 'description', label: 'Mô tả' },
+    { id: 'additional_info', label: 'Thông tin bổ sung' },
+    { id: 'meta_title', label: 'SEO title' },
+    { id: 'meta_description', label: 'SEO description' },
+    { id: 'meta_keywords', label: 'SEO keywords' },
+    { id: 'weight', label: 'Khối lượng' },
+    { id: 'supplier_product_code', label: 'Mã NCC' },
+    { id: 'domain', label: 'Domain' },
+    { id: 'video_url', label: 'Video URL' },
+    { id: 'bundle_title', label: 'Tiêu đề bundle' },
+    { id: 'child_skus', label: 'Mã SP con' },
+    { id: 'component_data', label: 'Thành phần bundle/grouped' },
+    { id: 'attributes', label: 'Thuộc tính' },
+    { id: 'primary_image_url', label: 'Ảnh đại diện' },
+    { id: 'gallery_image_urls', label: 'Thư viện ảnh' },
+    { id: 'variant_data', label: 'Biến thể' },
+];
+const IMPORT_BASE_FIELD_OPTIONS = [
+    { id: 'name', label: 'Tên sản phẩm', description: 'Cập nhật cột Tên sản phẩm.' },
+    { id: 'sku', label: 'SKU', description: 'Cập nhật SKU nếu dòng có định danh ổn định khác.' },
+    { id: 'slug', label: 'Slug', description: 'Cập nhật đường dẫn slug của sản phẩm.' },
+    { id: 'type', label: 'Loại sản phẩm', description: 'Cập nhật loại sản phẩm từ file Excel.' },
+    { id: 'price', label: 'Giá', description: 'Cập nhật giá chính của sản phẩm.' },
+    { id: 'special_price', label: 'Giá bán', description: 'Cập nhật giá bán ưu đãi hoặc giá khuyến mãi.' },
+    { id: 'expected_cost', label: 'Giá nhập dự kiến', description: 'Cập nhật giá nhập dự kiến.' },
+    { id: 'stock_quantity', label: 'Tồn kho', description: 'Cập nhật tồn kho theo file Excel.' },
+    { id: 'category', label: 'Danh mục', description: 'Cập nhật danh mục chính và danh mục liên kết.' },
+    { id: 'attributes', label: 'Thuộc tính', description: 'Cập nhật cột Thuộc tính dạng JSON hoặc text.' },
+    { id: 'images', label: 'Ảnh', description: 'Cập nhật ảnh đại diện và thư viện ảnh.' },
+    { id: 'description', label: 'Mô tả', description: 'Cập nhật mô tả nội dung sản phẩm.' },
+    { id: 'status', label: 'Trạng thái', description: 'Cập nhật trạng thái đang bán hoặc tạm ẩn.' },
+    { id: 'seo', label: 'SEO', description: 'Gồm SEO title, SEO description và SEO keywords.' },
+    { id: 'additional_info', label: 'Thông tin bổ sung', description: 'Cập nhật block thông tin bổ sung dạng JSON.' },
+    { id: 'specifications', label: 'Thông số kỹ thuật', description: 'Cập nhật bảng thông số kỹ thuật.' },
+    { id: 'weight', label: 'Khối lượng', description: 'Cập nhật trọng lượng hoặc quy cách đóng gói.' },
+    { id: 'video_url', label: 'Video URL', description: 'Cập nhật liên kết video sản phẩm.' },
+    { id: 'bundle_title', label: 'Tiêu đề bundle', description: 'Cập nhật tiêu đề bundle nếu có.' },
+    { id: 'domain', label: 'Domain', description: 'Cập nhật domain gắn với sản phẩm.' },
+    { id: 'is_featured', label: 'Nổi bật', description: 'Cập nhật cờ sản phẩm nổi bật.' },
+    { id: 'is_new', label: 'Mới', description: 'Cập nhật cờ sản phẩm mới.' },
+    { id: 'variant_data', label: 'Biến thể', description: 'Cập nhật danh sách biến thể từ cột Biến thể.' },
+];
 
 function extractFilenameFromDisposition(headerValue, fallbackFilename) {
     if (!headerValue) return fallbackFilename;
@@ -183,14 +232,11 @@ function sanitizeProductFilters(rawFilters) {
 
 function normalizeProductSortConfig(rawSortConfig) {
     if (!rawSortConfig) {
-        return { key: 'created_at', direction: 'desc', phase: 1 };
+        return DEFAULT_SORT_CONFIG;
     }
 
-    if (rawSortConfig.key === 'stock_quantity') {
-        return {
-            ...rawSortConfig,
-            key: 'actual_stock',
-        };
+    if (rawSortConfig.key === 'stock_quantity' || rawSortConfig.key === 'actual_stock') {
+        return DEFAULT_SORT_CONFIG;
     }
 
     return rawSortConfig;
@@ -353,16 +399,21 @@ const ProductList = () => {
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [showColumnSettings, setShowColumnSettings] = useState(false);
     const [showExportModal, setShowExportModal] = useState(false);
+    const [showImportConfigModal, setShowImportConfigModal] = useState(false);
     const [copiedText, setCopiedText] = useState(null);
     const [previewImage, setPreviewImage] = useState(null);
     const [expandedRows, setExpandedRows] = useState([]);
     const [exportColumnIds, setExportColumnIds] = useState(DEFAULT_EXPORT_COLUMN_IDS);
     const [exportOnlySelected, setExportOnlySelected] = useState(false);
     const [isExportingExcel, setIsExportingExcel] = useState(false);
-    const [isDownloadingImportTemplate, setIsDownloadingImportTemplate] = useState(false);
     const [isImportingExcel, setIsImportingExcel] = useState(false);
+    const [pendingImportFile, setPendingImportFile] = useState(null);
+    const [importMode, setImportMode] = useState(DEFAULT_IMPORT_MODE);
+    const [importMissingProductAction, setImportMissingProductAction] = useState(DEFAULT_IMPORT_MISSING_PRODUCT_ACTION);
+    const [importUpdateFieldIds, setImportUpdateFieldIds] = useState([]);
     const [importExcelErrors, setImportExcelErrors] = useState([]);
     const [importExcelErrorMessage, setImportExcelErrorMessage] = useState('');
+    const [importExcelResultTone, setImportExcelResultTone] = useState('error');
 
     const toggleExpandRow = (productId, e) => {
         if (e) e.stopPropagation();
@@ -586,20 +637,37 @@ const ProductList = () => {
         setVisibleColumns
     } = useTableColumns('product_list', DEFAULT_COLUMNS);
 
-    const exportFieldOptions = availableColumns
-        .filter((column) => !EXPORT_EXCLUDED_COLUMN_IDS.has(column.id))
-        .map((column) => ({
-            id: column.id,
-            label: column.label,
-        }));
-
-    useEffect(() => {
-        const nextExportFieldOptions = availableColumns
+    const exportFieldOptions = [
+        ...availableColumns
             .filter((column) => !EXPORT_EXCLUDED_COLUMN_IDS.has(column.id))
             .map((column) => ({
                 id: column.id,
                 label: column.label,
-            }));
+            })),
+        ...EXTRA_EXPORT_FIELDS.filter((field) => !availableColumns.some((column) => column.id === field.id)),
+    ];
+    const importFieldOptions = [
+        ...IMPORT_BASE_FIELD_OPTIONS,
+        ...[...allAttributes]
+            .sort((left, right) => String(left?.name || '').localeCompare(String(right?.name || ''), 'vi'))
+            .map((attribute) => ({
+                id: `attr_${attribute.id}`,
+                label: `Thuộc tính: ${attribute.name}`,
+                description: 'Chỉ cập nhật cột thuộc tính riêng của trường này.',
+            })),
+    ];
+    const isSelectiveImport = importMode === 'update_selected_fields';
+
+    useEffect(() => {
+        const nextExportFieldOptions = [
+            ...availableColumns
+                .filter((column) => !EXPORT_EXCLUDED_COLUMN_IDS.has(column.id))
+                .map((column) => ({
+                    id: column.id,
+                    label: column.label,
+                })),
+            ...EXTRA_EXPORT_FIELDS.filter((field) => !availableColumns.some((column) => column.id === field.id)),
+        ];
 
         if (nextExportFieldOptions.length === 0) {
             return;
@@ -620,6 +688,15 @@ const ProductList = () => {
             return nextExportFieldOptions.slice(0, 2).map((option) => option.id);
         });
     }, [availableColumns]);
+
+    useEffect(() => {
+        const validImportFieldIds = new Set([
+            ...IMPORT_BASE_FIELD_OPTIONS.map((option) => option.id),
+            ...(allAttributes || []).map((attribute) => `attr_${attribute.id}`),
+        ]);
+
+        setImportUpdateFieldIds((prev) => prev.filter((id) => validImportFieldIds.has(id)));
+    }, [allAttributes]);
 
     useEffect(() => {
         fetchInitialData();
@@ -893,7 +970,7 @@ const ProductList = () => {
 
     const handleReset = () => {
         const resetFilters = getDefaultProductFilters();
-        const defaultSort = { key: 'created_at', direction: 'desc', phase: 1 };
+        const defaultSort = DEFAULT_SORT_CONFIG;
         
         localStorage.removeItem('product_management_persistent_state');
         localStorage.removeItem('product_list_search_current_term');
@@ -912,11 +989,25 @@ const ProductList = () => {
     const closeImportErrorModal = () => {
         setImportExcelErrors([]);
         setImportExcelErrorMessage('');
+        setImportExcelResultTone('error');
+    };
+
+    const resetImportConfig = () => {
+        setPendingImportFile(null);
+        setImportMode(DEFAULT_IMPORT_MODE);
+        setImportMissingProductAction(DEFAULT_IMPORT_MISSING_PRODUCT_ACTION);
+        setImportUpdateFieldIds([]);
+        setShowImportConfigModal(false);
+    };
+
+    const closeImportConfigModal = () => {
+        if (isImportingExcel) return;
+        resetImportConfig();
     };
 
     const openExportModal = () => {
         if (isTrashView) return;
-        setExportOnlySelected(false);
+        setExportOnlySelected(selectedIds.length > 0);
         setShowExportModal(true);
     };
 
@@ -965,29 +1056,33 @@ const ProductList = () => {
         }
     };
 
-    const handleDownloadImportTemplate = async () => {
-        setIsDownloadingImportTemplate(true);
-        try {
-            const response = await productApi.downloadImportTemplate();
-            downloadBlobResponse(response, 'mau-import-san-pham.xlsx');
-        } catch (error) {
-            console.error('Product import template error:', error);
-            setNotification({
-                type: 'error',
-                message: error?.response?.data?.message || 'KhÃ´ng thá»ƒ táº£i file máº«u import.',
-            });
-            setTimeout(() => setNotification(null), 3500);
-        } finally {
-            setIsDownloadingImportTemplate(false);
-        }
-    };
-
     const handleOpenImportPicker = () => {
         if (isImportingExcel) return;
         importInputRef.current?.click();
     };
 
-    const handleImportFileChange = async (event) => {
+    const handleImportModeChange = (nextMode) => {
+        setImportMode(nextMode);
+        setImportMissingProductAction(nextMode === 'update_selected_fields' ? 'skip' : 'create');
+    };
+
+    const toggleImportUpdateField = (fieldId) => {
+        setImportUpdateFieldIds((prev) => (
+            prev.includes(fieldId)
+                ? prev.filter((id) => id !== fieldId)
+                : [...prev, fieldId]
+        ));
+    };
+
+    const handleSelectAllImportFields = () => {
+        setImportUpdateFieldIds(importFieldOptions.map((option) => option.id));
+    };
+
+    const handleClearImportFields = () => {
+        setImportUpdateFieldIds([]);
+    };
+
+    const handleImportFileChange = (event) => {
         const file = event.target.files?.[0];
         event.target.value = '';
 
@@ -995,18 +1090,53 @@ const ProductList = () => {
             return;
         }
 
+        closeImportErrorModal();
+        setPendingImportFile(file);
+        setImportMode(DEFAULT_IMPORT_MODE);
+        setImportMissingProductAction(DEFAULT_IMPORT_MISSING_PRODUCT_ACTION);
+        setImportUpdateFieldIds([]);
+        setShowImportConfigModal(true);
+    };
+
+    const handleSubmitImportExcel = async () => {
+        if (!pendingImportFile) {
+            return;
+        }
+
+        if (isSelectiveImport && importUpdateFieldIds.length === 0) {
+            setNotification({ type: 'error', message: 'Hãy chọn ít nhất 1 trường cần cập nhật.' });
+            setTimeout(() => setNotification(null), 3000);
+            return;
+        }
+
         const data = new FormData();
-        data.append('file', file);
+        data.append('file', pendingImportFile);
+        data.append('mode', importMode);
+        data.append('missing_product_action', importMissingProductAction);
+
+        if (isSelectiveImport) {
+            importUpdateFieldIds.forEach((fieldId) => data.append('update_fields[]', fieldId));
+        }
 
         setIsImportingExcel(true);
         closeImportErrorModal();
         try {
             const response = await productApi.importExcel(data);
+            const importErrors = Array.isArray(response?.data?.errors)
+                ? response.data.errors
+                : [];
+            const message = response?.data?.message || 'Import Excel thành công.';
             setNotification({
                 type: 'success',
-                message: response?.data?.message || 'Import Excel thÃ nh cÃ´ng.',
+                message,
             });
             setTimeout(() => setNotification(null), 4000);
+            resetImportConfig();
+            if (importErrors.length > 0) {
+                setImportExcelErrors(importErrors);
+                setImportExcelErrorMessage(message);
+                setImportExcelResultTone('warning');
+            }
             fetchProducts(pagination.current_page, filters, sortConfig, pagination.per_page);
         } catch (error) {
             console.error('Product import error:', error);
@@ -1016,8 +1146,10 @@ const ProductList = () => {
             const message = error?.response?.data?.message || 'KhÃ´ng thá»ƒ import file Excel sáº£n pháº©m.';
 
             if (importErrors.length > 0) {
+                resetImportConfig();
                 setImportExcelErrors(importErrors);
                 setImportExcelErrorMessage(message);
+                setImportExcelResultTone('error');
             } else {
                 setNotification({ type: 'error', message });
                 setTimeout(() => setNotification(null), 4000);
@@ -1610,7 +1742,6 @@ const ProductList = () => {
         if (!columnId) return null;
         if (columnId === 'actions' || columnId === 'images') return null;
         if (columnId === 'stock') return 'actual_stock';
-
         return columnId;
     };
 
@@ -1887,6 +2018,191 @@ const ProductList = () => {
                 onChange={handleImportFileChange}
             />
 
+            {showImportConfigModal && (
+                <div className="fixed inset-0 z-[130] bg-black/60 flex items-center justify-center p-4" onClick={closeImportConfigModal}>
+                    <div
+                        className="bg-white rounded p-6 w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between gap-4 border-b border-primary/10 pb-4">
+                            <div>
+                                <h2 className="text-lg font-bold text-primary flex items-center gap-2">
+                                    <span className="material-symbols-outlined">upload_file</span>
+                                    Import Excel sản phẩm
+                                </h2>
+                                <p className="mt-2 text-[13px] text-primary/65">
+                                    Chọn chế độ import và quyết định rõ những trường nào được phép cập nhật từ file Excel.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closeImportConfigModal}
+                                className="text-gray-500 hover:text-brick disabled:opacity-40"
+                                disabled={isImportingExcel}
+                            >
+                                <span className="material-symbols-outlined">close</span>
+                            </button>
+                        </div>
+
+                        <div className="mt-4 rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-3">
+                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">File đã chọn</div>
+                            <div className="mt-1 text-[13px] font-bold text-primary break-all">{pendingImportFile?.name || 'Chưa có file'}</div>
+                        </div>
+
+                        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {[
+                                {
+                                    value: 'replace_all',
+                                    label: 'Import đầy đủ',
+                                    description: 'Cập nhật toàn bộ các cột có dữ liệu trong file, giữ nguyên flow import hiện tại.',
+                                },
+                                {
+                                    value: 'update_selected_fields',
+                                    label: 'Cập nhật sản phẩm',
+                                    description: 'Chỉ các trường được tick mới được cập nhật, các trường còn lại giữ nguyên.',
+                                },
+                            ].map((option) => {
+                                const checked = importMode === option.value;
+                                return (
+                                    <button
+                                        key={option.value}
+                                        type="button"
+                                        onClick={() => handleImportModeChange(option.value)}
+                                        className={`rounded-sm border px-4 py-4 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
+                                    >
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div>
+                                                <div className="text-[14px] font-bold text-primary">{option.label}</div>
+                                                <div className="mt-1 text-[12px] leading-5 text-primary/60">{option.description}</div>
+                                            </div>
+                                            <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
+                                                {checked ? 'check_circle' : 'radio_button_unchecked'}
+                                            </span>
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        <div className="mt-4 rounded-sm border border-primary/10 p-4">
+                            <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Sản phẩm chưa tồn tại</div>
+                            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {[
+                                    {
+                                        value: 'skip',
+                                        label: 'Bỏ qua',
+                                        description: 'Không tạo mới, chỉ log vào summary nếu dòng không khớp sản phẩm hiện có.',
+                                    },
+                                    {
+                                        value: 'create',
+                                        label: 'Tạo mới nếu thiếu',
+                                        description: 'Cho phép tạo sản phẩm mới từ dòng Excel khi không tìm thấy sản phẩm cần cập nhật.',
+                                    },
+                                ].map((option) => {
+                                    const checked = importMissingProductAction === option.value;
+                                    return (
+                                        <button
+                                            key={option.value}
+                                            type="button"
+                                            onClick={() => setImportMissingProductAction(option.value)}
+                                            className={`rounded-sm border px-4 py-3 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
+                                        >
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div>
+                                                    <div className="text-[13px] font-bold text-primary">{option.label}</div>
+                                                    <div className="mt-1 text-[12px] leading-5 text-primary/60">{option.description}</div>
+                                                </div>
+                                                <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
+                                                    {checked ? 'check_circle' : 'radio_button_unchecked'}
+                                                </span>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {isSelectiveImport ? (
+                            <>
+                                <div className="mt-4 flex flex-wrap items-center gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={handleSelectAllImportFields}
+                                        className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                    >
+                                        Chọn tất cả
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleClearImportFields}
+                                        className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-brick hover:bg-brick/5"
+                                    >
+                                        Bỏ chọn tất cả
+                                    </button>
+                                    <p className="text-[12px] text-primary/60">
+                                        Đang chọn <strong>{importUpdateFieldIds.length}</strong> trường cập nhật.
+                                    </p>
+                                </div>
+
+                                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 overflow-y-auto pr-1 custom-scrollbar max-h-[340px]">
+                                    {importFieldOptions.map((option) => {
+                                        const checked = importUpdateFieldIds.includes(option.id);
+                                        return (
+                                            <button
+                                                key={option.id}
+                                                type="button"
+                                                onClick={() => toggleImportUpdateField(option.id)}
+                                                className={`rounded-sm border px-4 py-3 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
+                                            >
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <div className="text-[13px] font-bold text-primary">{option.label}</div>
+                                                        <div className="mt-1 text-[11px] leading-5 text-primary/55">{option.description}</div>
+                                                        <div className="mt-2 text-[10px] uppercase tracking-[0.16em] text-primary/35">{option.id}</div>
+                                                    </div>
+                                                    <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
+                                                        {checked ? 'check_circle' : 'radio_button_unchecked'}
+                                                    </span>
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </>
+                        ) : (
+                            <div className="mt-4 rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-3 text-[13px] text-primary/70">
+                                Hệ thống sẽ đọc toàn bộ cột có dữ liệu trong file để cập nhật sản phẩm hiện có hoặc tạo mới theo rule bạn vừa chọn.
+                            </div>
+                        )}
+
+                        <div className="mt-6 pt-4 border-t border-primary/10 flex flex-col md:flex-row md:items-center md:justify-between gap-3 shrink-0">
+                            <p className="text-[12px] text-primary/60">
+                                Nhận diện sản phẩm theo SKU, đồng thời đối soát thêm ID, slug và link sản phẩm nếu file đang có sẵn các cột đó.
+                            </p>
+                            <div className="flex justify-end gap-3">
+                                <button
+                                    type="button"
+                                    onClick={closeImportConfigModal}
+                                    className="px-4 py-2 border border-primary/20 text-primary rounded-sm font-bold text-[13px] hover:bg-primary/5"
+                                    disabled={isImportingExcel}
+                                >
+                                    Hủy
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleSubmitImportExcel}
+                                    className="px-6 py-2 bg-primary text-white rounded-sm font-bold text-[13px] hover:bg-primary/90 flex items-center gap-2 disabled:opacity-60"
+                                    disabled={isImportingExcel || !pendingImportFile || (isSelectiveImport && importUpdateFieldIds.length === 0)}
+                                >
+                                    {isImportingExcel ? <span className="material-symbols-outlined animate-spin text-[16px]">sync</span> : <span className="material-symbols-outlined text-[16px]">upload_file</span>}
+                                    Bắt đầu import
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {showExportModal && (
                 <div className="fixed inset-0 z-[130] bg-black/60 flex items-center justify-center p-4" onClick={() => !isExportingExcel && setShowExportModal(false)}>
                     <div
@@ -1937,17 +2253,49 @@ const ProductList = () => {
                             </button>
                         </div>
 
-                        {selectedIds.length > 0 && (
-                            <label className="mt-4 inline-flex items-center gap-2 text-[13px] font-medium text-primary/75">
-                                <input
-                                    type="checkbox"
-                                    className="size-4 accent-primary"
-                                    checked={exportOnlySelected}
-                                    onChange={(event) => setExportOnlySelected(event.target.checked)}
-                                />
-                                Chỉ xuất <strong>{selectedIds.length}</strong> sản phẩm đang tick
-                            </label>
-                        )}
+                        <div className="mt-4 rounded-sm border border-primary/10 p-4">
+                            <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Phạm vi xuất</div>
+                            {selectedIds.length > 0 ? (
+                                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {[
+                                        {
+                                            value: 'selected',
+                                            label: `Chỉ xuất ${selectedIds.length} sản phẩm đang chọn`,
+                                            description: 'Chỉ lấy đúng các dòng bạn đang tick trong bảng sản phẩm.',
+                                        },
+                                        {
+                                            value: 'all',
+                                            label: 'Xuất toàn bộ sản phẩm',
+                                            description: 'Bỏ qua danh sách đang tick và tải toàn bộ dữ liệu theo bộ lọc hiện tại.',
+                                        },
+                                    ].map((option) => {
+                                        const checked = option.value === 'selected' ? exportOnlySelected : !exportOnlySelected;
+                                        return (
+                                            <button
+                                                key={option.value}
+                                                type="button"
+                                                onClick={() => setExportOnlySelected(option.value === 'selected')}
+                                                className={`rounded-sm border px-4 py-3 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
+                                            >
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div>
+                                                        <div className="text-[13px] font-bold text-primary">{option.label}</div>
+                                                        <div className="mt-1 text-[12px] leading-5 text-primary/60">{option.description}</div>
+                                                    </div>
+                                                    <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
+                                                        {checked ? 'check_circle' : 'radio_button_unchecked'}
+                                                    </span>
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <p className="mt-3 text-[13px] text-primary/65">
+                                    Chưa có sản phẩm nào được chọn, hệ thống sẽ xuất toàn bộ danh sách theo bộ lọc hiện tại.
+                                </p>
+                            )}
+                        </div>
 
                         <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 overflow-y-auto pr-1 custom-scrollbar">
                             {exportFieldOptions.map((option) => {
@@ -2010,8 +2358,8 @@ const ProductList = () => {
                         <div className="flex items-start justify-between gap-4 border-b border-primary/10 pb-4">
                             <div>
                                 <h2 className="text-lg font-bold text-brick flex items-center gap-2">
-                                    <span className="material-symbols-outlined">error</span>
-                                    Import Excel thất bại
+                                    <span className="material-symbols-outlined">{importExcelResultTone === 'warning' ? 'warning' : 'error'}</span>
+                                    {importExcelResultTone === 'warning' ? 'Import Excel hoàn tất với cảnh báo' : 'Import Excel thất bại'}
                                 </h2>
                                 <p className="mt-2 text-[13px] text-primary/65">{importExcelErrorMessage}</p>
                             </div>
@@ -2073,16 +2421,6 @@ const ProductList = () => {
                                     title="Xuất Excel"
                                 >
                                     <span className="material-symbols-outlined text-[18px]">download</span>
-                                </button>
-                                <button
-                                    onClick={handleDownloadImportTemplate}
-                                    disabled={isDownloadingImportTemplate}
-                                    className={`p-1.5 border border-primary/20 bg-white text-primary rounded-sm w-9 h-9 hover:bg-primary/5 transition-all ${isDownloadingImportTemplate ? 'opacity-70' : ''}`}
-                                    title="Tải file mẫu import"
-                                >
-                                    <span className={`material-symbols-outlined text-[18px] ${isDownloadingImportTemplate ? 'animate-refresh-spin' : ''}`}>
-                                        description
-                                    </span>
                                 </button>
                                 <button
                                     onClick={handleOpenImportPicker}
@@ -2921,12 +3259,13 @@ const ProductList = () => {
                                                     <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 font-black text-primary group/cell">
                                                         <div className="flex items-center justify-between">
                                                             <span>{getDisplayStock(p)}</span>
-                                                            <button onClick={(e) => handleCopy(String(p.stock_quantity || 0), 'số lượng tồn kho', e, `${p.id}-stock`)} className={`${copiedText === `${p.id}-stock` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép tồn kho">
+                                                            <button onClick={(e) => handleCopy(String(getDisplayStock(p)), 'số lượng tồn kho', e, `${p.id}-stock`)} className={`${copiedText === `${p.id}-stock` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép tồn kho">
                                                                 <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-stock` ? 'check' : 'content_copy'}</span>
                                                             </button>
                                                         </div>
                                                     </td>
                                                 );
+
                                                 if (col.id === 'category') return (
                                                     <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#1e293b] font-medium truncate group/cell">
                                                          <div className="flex items-center justify-between">

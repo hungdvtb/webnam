@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { blogApi } from '../../services/api';
+import { blogApi, cmsApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
+import { buildPublicBlogUrl } from '../../utils/publicSiteLinks';
+import { resolveMediaUrl } from '../../utils/mediaUrl';
 
 const collator = new Intl.Collator('vi', { sensitivity: 'base' });
 
@@ -162,6 +164,7 @@ const BlogList = () => {
     const [keywords, setKeywords] = useState([]);
     const [managedKeywords, setManagedKeywords] = useState([]);
     const [categories, setCategories] = useState([]);
+    const [domains, setDomains] = useState([]);
 
     const [showKeywordModal, setShowKeywordModal] = useState(false);
     const [newKeyword, setNewKeyword] = useState('');
@@ -294,6 +297,16 @@ const BlogList = () => {
         }
     }, []);
 
+    const loadDomains = useCallback(async () => {
+        try {
+            const response = await cmsApi.domains.getAll();
+            const items = Array.isArray(response.data) ? response.data : [];
+            setDomains(items);
+        } catch (error) {
+            // no-op
+        }
+    }, []);
+
     const fetchTrashCount = useCallback(async () => {
         try {
             const response = await blogApi.getAll({ trashed: 1, per_page: 1 });
@@ -310,6 +323,10 @@ const BlogList = () => {
     useEffect(() => {
         fetchTrashCount();
     }, [fetchTrashCount, isTrashView]);
+
+    useEffect(() => {
+        loadDomains();
+    }, [loadDomains]);
 
     useEffect(() => {
         const handleClickOutside = (event) => {
@@ -1012,8 +1029,18 @@ const BlogList = () => {
     };
 
     const openOnWeb = (post) => {
-        const slugOrId = post.slug || post.id;
-        window.open(`${window.location.origin}/blog/${slugOrId}`, '_blank', 'noopener,noreferrer');
+        const publicUrl = buildPublicBlogUrl(post, { domains });
+
+        if (!publicUrl) {
+            showModal({
+                title: 'Khong mo duoc bai viet',
+                content: 'Bai viet nay chua co URL frontend/public hop le. Hay kiem tra slug va domain website.',
+                type: 'warning',
+            });
+            return;
+        }
+
+        window.open(publicUrl, '_blank', 'noopener,noreferrer');
     };
 
     const triggerImportPicker = () => {
@@ -1437,8 +1464,8 @@ const BlogList = () => {
                                 </td>
                                 <td>
                                     <div className="w-12 h-12 mx-auto bg-stone/10 border border-gold/20 rounded-sm overflow-hidden">
-                                        {post.featured_image ? (
-                                            <img src={post.featured_image} alt={post.title} className="w-full h-full object-cover" />
+                                        {resolveMediaUrl(post.featured_image) ? (
+                                            <img src={resolveMediaUrl(post.featured_image)} alt={post.title} className="w-full h-full object-cover" />
                                         ) : (
                                             <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,rgba(27,54,93,0.96),rgba(197,160,101,0.82))] text-white/90">
                                                 <span className="material-symbols-outlined text-[18px]">auto_stories</span>

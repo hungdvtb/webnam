@@ -1,19 +1,27 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import ReactQuill from 'react-quill-new';
-import { blogApi, aiApi } from '../../services/api';
+import { blogApi, aiApi, cmsApi, mediaApi } from '../../services/api';
+import BlogInlineImageModal from '../../components/admin/BlogInlineImageModal';
 import BlogMediaGalleryModal from '../../components/admin/BlogMediaGalleryModal';
 import { useUI } from '../../context/UIContext';
 import useAiAvailability from '../../hooks/useAiAvailability';
+import {
+    readInlineImageAttributes,
+    registerBlogInlineImageBlot,
+} from '../../utils/blogInlineImage';
 import {
     GALLERY_BLOCK_CLASS,
     readGalleryItemsFromNode,
     registerBlogMediaGalleryBlot,
 } from '../../utils/blogMediaGallery';
+import { resolveMediaUrl } from '../../utils/mediaUrl';
+import { buildPublicBlogUrl } from '../../utils/publicSiteLinks';
 import 'react-quill-new/dist/quill.snow.css';
 
 const Quill = ReactQuill.Quill;
 const Delta = Quill.import('delta');
+registerBlogInlineImageBlot(Quill);
 registerBlogMediaGalleryBlot(Quill);
 
 const QUILL_FORMATS = [
@@ -21,6 +29,7 @@ const QUILL_FORMATS = [
     'bold', 'italic', 'underline', 'strike', 'blockquote',
     'list', 'indent',
     'link', 'image', 'video', 'mediaGallery',
+    'alt', 'title',
 ];
 
 const BlogForm = () => {
@@ -35,10 +44,18 @@ const BlogForm = () => {
 
     const [loading, setLoading] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
+    const [uploadingFeaturedImage, setUploadingFeaturedImage] = useState(false);
     const [categories, setCategories] = useState([]);
+    const [domains, setDomains] = useState([]);
     const [mediaModalState, setMediaModalState] = useState({
         open: false,
         items: [],
+        insertIndex: null,
+        editing: false,
+    });
+    const [inlineImageModalState, setInlineImageModalState] = useState({
+        open: false,
+        image: { src: '', alt: '', title: '' },
         insertIndex: null,
         editing: false,
     });
@@ -54,6 +71,8 @@ const BlogForm = () => {
         is_starred: false,
         published_at: '',
         is_system: false,
+        public_path: '',
+        public_url: '',
     });
 
     const getQuillEditor = () => {
@@ -85,6 +104,7 @@ const BlogForm = () => {
 
     useEffect(() => {
         loadCategories();
+        loadDomains();
         if (isEdit) {
             fetchPost();
         }
@@ -97,6 +117,15 @@ const BlogForm = () => {
             setCategories(Array.isArray(response.data?.data) ? response.data.data : []);
         } catch (error) {
             console.error('Error loading categories', error);
+        }
+    };
+
+    const loadDomains = async () => {
+        try {
+            const response = await cmsApi.domains.getAll();
+            setDomains(Array.isArray(response.data) ? response.data : []);
+        } catch (error) {
+            console.error('Error loading domains', error);
         }
     };
 
@@ -118,6 +147,8 @@ const BlogForm = () => {
                 is_starred: data.is_starred || false,
                 published_at: data.published_at ? new Date(data.published_at).toISOString().split('T')[0] : '',
                 is_system: Boolean(data.is_system),
+                public_path: data.public_path || '',
+                public_url: data.public_url || '',
             });
         } catch (error) {
             console.error('Error fetching post', error);
@@ -126,6 +157,12 @@ const BlogForm = () => {
             setLoading(false);
         }
     };
+
+    const publicPreviewUrl = useMemo(() => buildPublicBlogUrl(formData, { domains }), [domains, formData]);
+    const featuredImagePreviewUrl = useMemo(
+        () => resolveMediaUrl(formData.featured_image),
+        [formData.featured_image],
+    );
 
     const openMediaModal = (options = {}) => {
         const quill = getQuillEditor();
@@ -137,6 +174,25 @@ const BlogForm = () => {
         setMediaModalState({
             open: true,
             items: Array.isArray(options.items) ? options.items : [],
+            insertIndex: typeof options.index === 'number' ? options.index : fallbackIndex,
+            editing: Boolean(options.editing),
+        });
+    };
+
+    const openInlineImageModal = (options = {}) => {
+        const quill = getQuillEditor();
+        const range = quill?.getSelection(true);
+        const fallbackIndex = typeof range?.index === 'number'
+            ? range.index
+            : Math.max((quill?.getLength() ?? 1) - 1, 0);
+
+        setInlineImageModalState({
+            open: true,
+            image: {
+                src: String(options.src || '').trim(),
+                alt: String(options.alt || '').trim(),
+                title: String(options.title || '').trim(),
+            },
             insertIndex: typeof options.index === 'number' ? options.index : fallbackIndex,
             editing: Boolean(options.editing),
         });
@@ -155,6 +211,7 @@ const BlogForm = () => {
                     ['clean'],
                 ],
                 handlers: {
+                    image: () => openInlineImageModal(),
                     mediaGallery: () => openMediaModalRef.current(),
                 },
             },
@@ -197,20 +254,62 @@ const BlogForm = () => {
         return true;
     };
 
+    const openExistingInlineImage = (imageNode) => {
+        const quill = getQuillEditor();
+        const root = quill?.root;
+
+        if (!imageNode || !quill || !root?.contains(imageNode)) {
+            return false;
+        }
+
+        const blot = Quill.find(imageNode);
+        const blotIndex = blot ? quill.getIndex(blot) : Math.max(quill.getLength() - 1, 0);
+        const imageAttributes = readInlineImageAttributes(imageNode);
+
+        quill.setSelection(blotIndex, 1, 'silent');
+        openInlineImageModal({
+            ...imageAttributes,
+            index: blotIndex,
+            editing: true,
+        });
+
+        return true;
+    };
+
     const getGalleryNodeFromEventTarget = (target) => {
         const eventElement = target instanceof Element ? target : target?.parentElement;
         return eventElement?.closest?.(`.${GALLERY_BLOCK_CLASS}`) || null;
     };
 
+    const getInlineImageNodeFromEventTarget = (target) => {
+        const eventElement = target instanceof Element ? target : target?.parentElement;
+
+        if (!eventElement) {
+            return null;
+        }
+
+        if (eventElement.closest?.(`.${GALLERY_BLOCK_CLASS}`)) {
+            return null;
+        }
+
+        return eventElement.closest?.('img') || null;
+    };
+
     const handleEditorClickCapture = (event) => {
         const galleryNode = getGalleryNodeFromEventTarget(event.target);
 
-        if (!openExistingMediaGallery(galleryNode)) {
+        if (openExistingMediaGallery(galleryNode)) {
+            event.preventDefault();
+            event.stopPropagation();
             return;
         }
 
-        event.preventDefault();
-        event.stopPropagation();
+        const imageNode = getInlineImageNodeFromEventTarget(event.target);
+
+        if (openExistingInlineImage(imageNode)) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
     };
 
     const handleEditorKeyDownCapture = (event) => {
@@ -220,16 +319,29 @@ const BlogForm = () => {
 
         const galleryNode = getGalleryNodeFromEventTarget(event.target);
 
-        if (!openExistingMediaGallery(galleryNode)) {
+        if (openExistingMediaGallery(galleryNode)) {
+            event.preventDefault();
+            event.stopPropagation();
             return;
         }
 
-        event.preventDefault();
-        event.stopPropagation();
+        const imageNode = getInlineImageNodeFromEventTarget(event.target);
+
+        if (openExistingInlineImage(imageNode)) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
     };
 
     const closeMediaModal = () => {
         setMediaModalState((prev) => ({
+            ...prev,
+            open: false,
+        }));
+    };
+
+    const closeInlineImageModal = () => {
+        setInlineImageModalState((prev) => ({
             ...prev,
             open: false,
         }));
@@ -298,12 +410,140 @@ const BlogForm = () => {
         });
     };
 
+    const syncEditorContentToState = (editorInstance) => {
+        const nextContent = serializeEditorContent(editorInstance);
+        setFormData((prev) => (
+            nextContent === prev.content
+                ? prev
+                : { ...prev, content: nextContent }
+        ));
+    };
+
+    const handleSaveInlineImage = (image) => {
+        const quill = getQuillEditor();
+
+        if (!quill) {
+            showModal({
+                title: 'Editor chưa sẵn sàng',
+                content: 'Không thể cập nhật ảnh trong bài viết lúc này. Hãy tải lại trang rồi thử lại.',
+                type: 'warning',
+            });
+            return;
+        }
+
+        const selection = quill.getSelection(true);
+        let insertIndex = typeof inlineImageModalState.insertIndex === 'number'
+            ? inlineImageModalState.insertIndex
+            : Math.max(quill.getLength() - 1, 0);
+        let deleteLength = 0;
+
+        if (inlineImageModalState.editing) {
+            deleteLength = 1;
+        } else if (selection) {
+            insertIndex = selection.index;
+            deleteLength = Math.max(selection.length || 0, 0);
+        }
+
+        if (deleteLength > 0) {
+            quill.deleteText(insertIndex, deleteLength, 'user');
+        }
+
+        quill.insertEmbed(insertIndex, 'image', {
+            src: image.src,
+            alt: image.alt,
+            title: image.title,
+        }, 'user');
+        quill.setSelection(Math.min(insertIndex + 1, quill.getLength()), 0, 'silent');
+
+        syncEditorContentToState(quill);
+        closeInlineImageModal();
+
+        showToast({
+            message: inlineImageModalState.editing
+                ? 'Đã cập nhật ảnh trong nội dung bài viết.'
+                : 'Đã chèn ảnh mới vào nội dung bài viết.',
+            type: 'success',
+        });
+    };
+
+    const handleRemoveInlineImage = () => {
+        const quill = getQuillEditor();
+
+        if (!quill || typeof inlineImageModalState.insertIndex !== 'number') {
+            closeInlineImageModal();
+            return;
+        }
+
+        quill.deleteText(inlineImageModalState.insertIndex, 1, 'user');
+        syncEditorContentToState(quill);
+        closeInlineImageModal();
+
+        showToast({
+            message: 'Đã xóa ảnh khỏi nội dung bài viết.',
+            type: 'success',
+        });
+    };
+
     const handleChange = (event) => {
         const { name, value, type, checked } = event.target;
         setFormData((prev) => ({
             ...prev,
             [name]: type === 'checkbox' ? checked : value,
         }));
+    };
+
+    const handleFeaturedImageUpload = async (event) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+
+        if (!file) {
+            return;
+        }
+
+        setUploadingFeaturedImage(true);
+
+        try {
+            const uploadData = new FormData();
+            uploadData.append('image', file);
+
+            const response = await mediaApi.upload(uploadData);
+            const nextImageUrl = String(response?.data?.url || '').trim();
+
+            if (!nextImageUrl) {
+                throw new Error('UPLOAD_FAILED');
+            }
+
+            setFormData((prev) => ({
+                ...prev,
+                featured_image: nextImageUrl,
+            }));
+
+            showToast({
+                message: 'Đã cập nhật ảnh đại diện mới.',
+                type: 'success',
+            });
+        } catch (error) {
+            showModal({
+                title: 'Upload ảnh đại diện thất bại',
+                content: 'Không thể tải ảnh đại diện lên lúc này. Bạn có thể thử lại hoặc dán link ảnh trực tiếp.',
+                type: 'error',
+            });
+        } finally {
+            setUploadingFeaturedImage(false);
+        }
+    };
+
+    const handleOpenOnWeb = () => {
+        if (!publicPreviewUrl) {
+            showModal({
+                title: 'Khong mo duoc bai viet',
+                content: 'Bai viet nay chua co URL frontend/public hop le. Hay kiem tra slug va domain website.',
+                type: 'warning',
+            });
+            return;
+        }
+
+        window.open(publicPreviewUrl, '_blank', 'noopener,noreferrer');
     };
 
     const handleSubmit = async (event) => {
@@ -426,6 +666,15 @@ const BlogForm = () => {
                     </div>
 
                     <div className="flex gap-4">
+                        {isEdit && (
+                            <button
+                                type="button"
+                                onClick={handleOpenOnWeb}
+                                className="border border-gold/20 px-8 py-3 text-[10px] font-bold uppercase tracking-widest text-primary transition-colors hover:bg-primary/5"
+                            >
+                                Xem ngoai web
+                            </button>
+                        )}
                         <button
                             type="button"
                             onClick={() => navigate('/admin/blog')}
@@ -544,6 +793,10 @@ const BlogForm = () => {
                                 <p className="text-[11px] italic text-amber-700">{disabledReason}</p>
                             ) : null}
 
+                            <p className="text-[11px] italic text-stone/55">
+                                Bấm trực tiếp vào ảnh trong editor để thay ảnh, sửa tên ảnh hoặc chỉnh mô tả alt/title.
+                            </p>
+
                             <div
                                 className="quill-premium-wrapper border border-gold/20 bg-white shadow-sm"
                                 onClickCapture={handleEditorClickCapture}
@@ -580,9 +833,9 @@ const BlogForm = () => {
                                 </label>
 
                                 <div className="group relative flex aspect-[16/9] w-full items-center justify-center overflow-hidden border-2 border-dashed border-gold/20 bg-gold/5">
-                                    {formData.featured_image ? (
+                                    {featuredImagePreviewUrl ? (
                                         <>
-                                            <img src={formData.featured_image} className="h-full w-full object-cover" alt="Preview" />
+                                            <img src={featuredImagePreviewUrl} className="h-full w-full object-cover" alt="Preview" />
                                             <div className="absolute inset-0 flex items-center justify-center gap-4 bg-primary/40 opacity-0 transition-opacity group-hover:opacity-100">
                                                 <button
                                                     type="button"
@@ -609,6 +862,18 @@ const BlogForm = () => {
                                     className="w-full border border-gold/10 bg-gold/5 p-3 font-body text-xs italic focus:border-primary focus:outline-none"
                                     placeholder="Dán URL ảnh tại đây..."
                                 />
+
+                                <label className={`inline-flex cursor-pointer items-center gap-2 border px-4 py-3 text-[10px] font-bold uppercase tracking-[0.18em] transition-colors ${uploadingFeaturedImage ? 'border-gold/20 bg-primary/5 text-primary/50' : 'border-gold/20 text-primary hover:border-primary hover:bg-primary hover:text-white'}`}>
+                                    <span className="material-symbols-outlined text-[18px]">{uploadingFeaturedImage ? 'progress_activity' : 'upload_file'}</span>
+                                    {uploadingFeaturedImage ? 'Đang tải ảnh đại diện...' : 'Upload ảnh đại diện'}
+                                    <input
+                                        type="file"
+                                        accept="image/*"
+                                        className="hidden"
+                                        onChange={handleFeaturedImageUpload}
+                                        disabled={uploadingFeaturedImage}
+                                    />
+                                </label>
                             </div>
 
                             <div className="h-px bg-gold/10"></div>
@@ -670,6 +935,17 @@ const BlogForm = () => {
                     onClose={closeMediaModal}
                     onSave={handleSaveMediaGallery}
                     onRemoveBlock={mediaModalState.editing ? handleRemoveMediaGallery : null}
+                />
+            ) : null}
+
+            {inlineImageModalState.open ? (
+                <BlogInlineImageModal
+                    open={inlineImageModalState.open}
+                    initialImage={inlineImageModalState.image}
+                    editing={inlineImageModalState.editing}
+                    onClose={closeInlineImageModal}
+                    onSave={handleSaveInlineImage}
+                    onRemove={inlineImageModalState.editing ? handleRemoveInlineImage : null}
                 />
             ) : null}
         </>

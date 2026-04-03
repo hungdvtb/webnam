@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { blogApi } from '../services/api';
+import { resolvePostFeaturedImageUrl } from '../utils/mediaUrl';
 
 const HeroFallback = () => (
     <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,rgba(27,54,93,0.96),rgba(197,160,101,0.82))]">
@@ -69,7 +70,7 @@ const PostDetail = () => {
         );
     }
 
-    const heroImage = post.featured_image || post.image || '';
+    const heroImage = resolvePostFeaturedImageUrl(post);
     const shouldRenderHeroImage = heroImage && !heroImageFailed;
 
     return (

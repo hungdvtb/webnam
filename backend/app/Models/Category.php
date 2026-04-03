@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\MediaService;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -10,13 +11,50 @@ class Category extends Model
 {
     use \App\Traits\BelongsToAccount;
 
-    protected $fillable = ['name', 'code', 'slug', 'parent_id', 'description', 'banner_path', 'logo_path', 'status', 'order', 'account_id', 'display_layout', 'filterable_attribute_ids'];
+    protected $fillable = [
+        'name',
+        'code',
+        'slug',
+        'parent_id',
+        'description',
+        'banner_path',
+        'banner_media_asset_id',
+        'logo_path',
+        'logo_media_asset_id',
+        'status',
+        'order',
+        'account_id',
+        'display_layout',
+        'filterable_attribute_ids',
+    ];
 
     protected $casts = [
+        'banner_media_asset_id' => 'integer',
+        'logo_media_asset_id' => 'integer',
         'filterable_attribute_ids' => 'array',
         'status' => 'integer',
         'order' => 'integer'
     ];
+
+    protected $appends = [
+        'banner_image',
+        'logo_image',
+    ];
+
+    protected static function booted(): void
+    {
+        static::deleted(function (Category $category): void {
+            $mediaService = app(MediaService::class);
+
+            if ($category->banner_media_asset_id) {
+                $mediaService->deleteAsset($category->banner_media_asset_id);
+            }
+
+            if ($category->logo_media_asset_id) {
+                $mediaService->deleteAsset($category->logo_media_asset_id);
+            }
+        });
+    }
     
     public function parent()
     {
@@ -37,6 +75,44 @@ class Category extends Model
             ->withTimestamps()
             ->orderBy('category_product.sort_order')
             ->orderBy('category_product.id');
+    }
+
+    public function bannerMediaAsset()
+    {
+        return $this->belongsTo(MediaAsset::class, 'banner_media_asset_id');
+    }
+
+    public function logoMediaAsset()
+    {
+        return $this->belongsTo(MediaAsset::class, 'logo_media_asset_id');
+    }
+
+    public function getBannerPathAttribute($value): ?string
+    {
+        if ($this->relationLoaded('bannerMediaAsset') && $this->bannerMediaAsset) {
+            return app(MediaService::class)->buildAssetUrl($this->bannerMediaAsset, 'large');
+        }
+
+        return app(MediaService::class)->normalizeLegacyUrl($value);
+    }
+
+    public function getLogoPathAttribute($value): ?string
+    {
+        if ($this->relationLoaded('logoMediaAsset') && $this->logoMediaAsset) {
+            return app(MediaService::class)->buildAssetUrl($this->logoMediaAsset, 'large');
+        }
+
+        return app(MediaService::class)->normalizeLegacyUrl($value);
+    }
+
+    public function getBannerImageAttribute(): ?array
+    {
+        return app(MediaService::class)->buildAssetPayload($this->bannerMediaAsset, $this->getRawOriginal('banner_path'));
+    }
+
+    public function getLogoImageAttribute(): ?array
+    {
+        return app(MediaService::class)->buildAssetPayload($this->logoMediaAsset, $this->getRawOriginal('logo_path'));
     }
 
     public static function normalizeCode(?string $value): ?string

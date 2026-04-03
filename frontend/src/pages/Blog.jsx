@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { blogApi } from '../services/api';
+import { resolvePostFeaturedImageUrl } from '../utils/mediaUrl';
 
 const DEFAULT_CATEGORY_LABEL = 'Cẩm nang gốm sứ';
 
@@ -120,7 +121,7 @@ const FeaturedPostCard = ({ post, categoryLabel }) => (
     >
         <div className="relative aspect-[16/11] overflow-hidden bg-primary/5">
             <BlogImage
-                src={post.featured_image || post.image}
+                src={resolvePostFeaturedImageUrl(post)}
                 alt={post.title}
                 eager
                 className="h-full w-full object-cover transition duration-700 group-hover:scale-105"
@@ -175,7 +176,7 @@ const PostCard = ({ post, categoryLabel }) => (
         <article className="flex h-full flex-col">
             <div className="relative aspect-[16/11] overflow-hidden bg-primary/5">
                 <BlogImage
-                    src={post.featured_image || post.image}
+                    src={resolvePostFeaturedImageUrl(post)}
                     alt={post.title}
                     className="h-full w-full object-cover transition duration-700 group-hover:scale-105"
                 />

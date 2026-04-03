@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\ProductGroupController;
 use App\Http\Controllers\Api\ProductImageController;
 use App\Http\Controllers\Api\AIController;
 use App\Http\Controllers\Api\MediaController;
+use App\Http\Controllers\Api\MediaAssetController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
@@ -45,6 +46,8 @@ Route::get('/menus/code/{code}', [\App\Http\Controllers\Api\MenuController::clas
 Route::get('/menus/active', [\App\Http\Controllers\Api\MenuController::class , 'getActive']);
 Route::get('/thumbnail', [ProductImageController::class , 'thumbnail']);
 Route::get('/media/proxy', [MediaController::class, 'proxy']);
+Route::get('/media/assets/{publicId}/{variant?}', [MediaAssetController::class, 'show'])
+    ->where('variant', 'thumbnail|medium|large|original');
 Route::post('/shipments/carriers/viettel-post/webhook', [\App\Http\Controllers\Api\ShipmentController::class, 'processViettelPostWebhook']);
 
 

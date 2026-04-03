@@ -5,11 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\BlogCategory;
+use App\Models\MediaAsset;
 use App\Models\Post;
 use App\Models\PostSeoKeyword;
 use App\Services\BlogExcelService;
 use App\Services\BlogMediaGallerySupport;
 use App\Services\BlogSystemPostService;
+use App\Services\MediaService;
+use App\Support\PublicSiteUrlResolver;
 use DOMDocument;
 use DOMXPath;
 use Illuminate\Database\Eloquent\Builder;
@@ -27,6 +30,11 @@ class BlogController extends Controller
     private const MEDIA_GALLERY_BLOCK_CLASS = 'ql-bdt-media-gallery';
     private const MEDIA_GALLERY_PAYLOAD_ATTRIBUTE = 'data-gallery-payload';
     private const YOUTUBE_VIDEO_ID_PATTERN = '/^[a-zA-Z0-9_-]{6,}$/';
+
+    public function __construct(
+        protected MediaService $mediaService
+    ) {
+    }
 
     /**
      * Display a listing of the resource.
@@ -48,7 +56,7 @@ class BlogController extends Controller
         $query = clone $baseQuery;
 
         if ($this->hasBlogCategorySupport()) {
-            $query->with(['category:id,account_id,name,slug,sort_order']);
+            $query->with(['category:id,account_id,name,slug,sort_order', 'featuredMediaAsset']);
         }
 
         if ($isCompactView) {
@@ -140,7 +148,7 @@ class BlogController extends Controller
 
         $posts = $query->paginate($perPage);
 
-        $payload = $posts->toArray();
+        $payload = $this->decoratePaginatedPostPayload($posts->toArray());
 
         if ($isCompactView) {
             return response()->json($payload);
@@ -639,6 +647,8 @@ class BlogController extends Controller
             $validated['is_system'] = false;
         }
 
+        $this->prepareFeaturedImageForPersistence($validated);
+
         $post = DB::transaction(function () use ($accountId, $validated) {
             $payload = $validated;
             $sortOrderProvided = array_key_exists('sort_order', $payload) && $payload['sort_order'] !== null;
@@ -655,7 +665,7 @@ class BlogController extends Controller
         })->load('category');
         $this->ensureSeoKeywordExists($accountId, $validated['seo_keyword']);
 
-        return response()->json($post, 201);
+        return response()->json($this->decoratePostPayload($post), 201);
     }
 
     /**
@@ -664,7 +674,7 @@ class BlogController extends Controller
     public function show(Request $request, $id)
     {
         $authenticatedUser = $this->resolveAuthenticatedBlogUser($request);
-        $query = Post::query()->with(['category:id,account_id,name,slug,sort_order']);
+        $query = Post::query()->with(['category:id,account_id,name,slug,sort_order', 'featuredMediaAsset']);
         $this->applyAccountScope($query, $request);
 
         if (!$authenticatedUser) {
@@ -681,7 +691,7 @@ class BlogController extends Controller
             })
             ->firstOrFail();
 
-        return response()->json($post);
+        return response()->json($this->decoratePostPayload($post));
     }
 
     /**
@@ -710,6 +720,9 @@ class BlogController extends Controller
             'published_at' => 'nullable|date',
         ]);
 
+        $previousFeaturedAssetId = $post->featured_media_asset_id;
+        $previousContent = (string) $post->content;
+
         if (array_key_exists('seo_keyword', $validated)) {
             $validated['seo_keyword'] = $this->normalizeKeyword($validated['seo_keyword']);
             $this->ensureSeoKeywordExists($accountId, $validated['seo_keyword']);
@@ -734,9 +747,24 @@ class BlogController extends Controller
             $validated['slug'] = $this->buildUniqueSlug($validated['slug'], $accountId, $post->id);
         }
 
+        if (array_key_exists('featured_image', $validated)) {
+            $this->prepareFeaturedImageForPersistence($validated);
+        }
+
         $post->update($validated);
 
-        return response()->json($post->load('category'));
+        if (array_key_exists('featured_image', $validated)) {
+            $nextFeaturedAssetId = $post->featured_media_asset_id;
+            if ($previousFeaturedAssetId && $previousFeaturedAssetId !== $nextFeaturedAssetId) {
+                $this->mediaService->deleteAsset($previousFeaturedAssetId);
+            }
+        }
+
+        if (array_key_exists('content', $validated)) {
+            $this->cleanupRemovedManagedContentAssets($previousContent, (string) $post->content);
+        }
+
+        return response()->json($this->decoratePostPayload($post->load('category')));
     }
 
     /**
@@ -777,7 +805,7 @@ class BlogController extends Controller
 
         return response()->json([
             'message' => 'Post restored successfully.',
-            'data' => $post->fresh()->load('category'),
+            'data' => $this->decoratePostPayload($post->fresh()->load('category')),
         ]);
     }
 
@@ -800,6 +828,7 @@ class BlogController extends Controller
             return response()->json(['error' => 'System posts cannot be permanently deleted.'], 422);
         }
 
+        $this->deleteManagedPostAssets($post);
         $post->forceDelete();
 
         return response()->json(['message' => 'Post permanently deleted.']);
@@ -977,10 +1006,15 @@ class BlogController extends Controller
             return response()->json(['error' => 'Only trashed posts can be permanently deleted.'], 422);
         }
 
-        Post::withTrashed()
+        $postsToDelete = Post::withTrashed()
             ->where('account_id', $accountId)
             ->whereIn('id', $trashedIds)
-            ->forceDelete();
+            ->get();
+
+        foreach ($postsToDelete as $post) {
+            $this->deleteManagedPostAssets($post);
+            $post->forceDelete();
+        }
 
         return response()->json([
             'message' => sprintf('Permanently deleted %d posts.', count($trashedIds)),
@@ -1217,6 +1251,103 @@ class BlogController extends Controller
         }
 
         return null;
+    }
+
+    private function decoratePaginatedPostPayload(array $payload): array
+    {
+        $rows = $payload['data'] ?? null;
+
+        if (!is_array($rows)) {
+            return $payload;
+        }
+
+        $payload['data'] = array_map(function ($row) {
+            return is_array($row) ? $this->decoratePostArray($row) : $row;
+        }, $rows);
+
+        return $payload;
+    }
+
+    private function decoratePostPayload(Post $post): array
+    {
+        return $this->decoratePostArray($post->toArray());
+    }
+
+    private function decoratePostArray(array $post): array
+    {
+        $slug = trim((string) ($post['slug'] ?? ''));
+        $accountId = isset($post['account_id']) ? (int) $post['account_id'] : null;
+        $resolver = $this->publicSiteUrlResolver();
+
+        $post['featured_image'] = $this->mediaService->normalizeLegacyUrl($post['featured_image'] ?? null);
+        $post['content'] = BlogMediaGallerySupport::rewriteAssetReferences(
+            (string) ($post['content'] ?? ''),
+            fn (string $url) => $this->mediaService->normalizeLegacyUrl($url)
+        );
+
+        $post['public_path'] = $resolver->buildBlogPath($slug);
+        $post['public_url'] = $resolver->buildBlogUrl($slug, $accountId);
+
+        return $post;
+    }
+
+    private function prepareFeaturedImageForPersistence(array &$payload): void
+    {
+        if (!array_key_exists('featured_image', $payload)) {
+            return;
+        }
+
+        $rawValue = trim((string) ($payload['featured_image'] ?? ''));
+        if ($rawValue === '') {
+            $payload['featured_image'] = null;
+            $payload['featured_media_asset_id'] = null;
+            return;
+        }
+
+        $asset = $this->mediaService->importFromReference($rawValue, [
+            'collection' => 'blog-featured',
+            'source' => 'blog-featured-image',
+        ]);
+
+        if ($asset) {
+            $payload['featured_image'] = $this->mediaService->buildAssetUrl($asset, 'large');
+            $payload['featured_media_asset_id'] = $asset->id;
+            return;
+        }
+
+        $payload['featured_image'] = $this->mediaService->normalizeLegacyUrl($rawValue);
+    }
+
+    private function cleanupRemovedManagedContentAssets(?string $previousContent, ?string $nextContent): void
+    {
+        $previousIds = $this->mediaService->collectManagedPublicIdsFromHtml($previousContent);
+        $nextIds = $this->mediaService->collectManagedPublicIdsFromHtml($nextContent);
+
+        foreach (array_diff($previousIds, $nextIds) as $publicId) {
+            $assetId = MediaAsset::query()->where('public_id', $publicId)->value('id');
+            if ($assetId) {
+                $this->mediaService->deleteAsset((int) $assetId);
+            }
+        }
+    }
+
+    private function deleteManagedPostAssets(Post $post): void
+    {
+        if ($post->featured_media_asset_id) {
+            $this->mediaService->deleteAsset($post->featured_media_asset_id);
+        }
+
+        foreach ($this->mediaService->collectManagedPublicIdsFromHtml((string) $post->content) as $publicId) {
+            $assetId = MediaAsset::query()->where('public_id', $publicId)->value('id');
+            if ($assetId) {
+                $this->mediaService->deleteAsset((int) $assetId);
+            }
+        }
+    }
+
+    private function publicSiteUrlResolver(): PublicSiteUrlResolver
+    {
+        return app(PublicSiteUrlResolver::class);
     }
 
     private function nextSortOrder(int $accountId): int

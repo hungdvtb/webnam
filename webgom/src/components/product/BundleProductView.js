@@ -14,6 +14,13 @@ import ComponentSelectionModal from './common/ComponentSelectionModal';
 import { Fragment, useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Breadcrumb from './common/Breadcrumb';
+import {
+  BUNDLE_DISCOUNT_RATE,
+  buildBundleSnapshot,
+  createBundleCartEntry,
+  evaluateBundleSelection,
+  getBundleOptionTitle,
+} from '@/lib/bundlePricing';
 import { resolveImageObjectUrl } from '@/lib/media';
 
 const normalizeConfigMediaKey = (configName = '') =>
@@ -304,26 +311,6 @@ export default function BundleProductView({
     );
   };
 
-  const getBundleSlotPosition = (item, fallbackIndex = 0) => {
-    const rawPosition = item?.source_position ?? item?.pivot?.position ?? fallbackIndex;
-    const normalizedPosition = Number(rawPosition);
-    return Number.isFinite(normalizedPosition) ? normalizedPosition : fallbackIndex;
-  };
-
-  const getBundleSlotBaseId = (item) => Number(item?.base_product_id ?? item?.id ?? 0);
-
-  const getBundleSlotKey = (item, fallbackIndex = 0) => {
-    const optionTitle = item?.option_title || item?.pivot?.option_title || '';
-    return `${optionTitle}::${getBundleSlotBaseId(item)}::${getBundleSlotPosition(item, fallbackIndex)}`;
-  };
-
-  const findOriginalBundleItem = (slotItem, sourceItems = []) => {
-    const targetKey = slotItem?.bundle_item_uid || getBundleSlotKey(slotItem);
-    return sourceItems.find((candidate, candidateIndex) => (
-      getBundleSlotKey(candidate, candidateIndex) === targetKey
-    )) || null;
-  };
-
   const getBundleImageSrc = (item) => {
     const candidates = [
       item?.selected_variant?.primary_image,
@@ -335,7 +322,7 @@ export default function BundleProductView({
     ];
 
     for (const candidate of candidates) {
-      const resolved = resolveImageObjectUrl(candidate, '');
+      const resolved = resolveImageObjectUrl(candidate, 'medium', '');
       if (resolved) {
         return resolved;
       }
@@ -450,35 +437,60 @@ export default function BundleProductView({
     };
   }, [isMobileConfigMenuOpen, isMobileHeroConfigMenuOpen]);
 
+  const sourceBundleItems = useMemo(
+    () => product.bundle_items || product.grouped_items || [],
+    [product.bundle_items, product.grouped_items]
+  );
+
   // Items of the active tab (including removed ones for placeholder)
   const tabItems = useMemo(() => {
-    if (!activeTab) return bundleItems.filter(i => !i.option_title);
-    return bundleItems.filter(i => (i.option_title || i.pivot?.option_title) === activeTab);
+    if (!activeTab) return bundleItems.filter((item) => !getBundleOptionTitle(item));
+    return bundleItems.filter((item) => getBundleOptionTitle(item) === activeTab);
   }, [bundleItems, activeTab]);
 
-  // Original tab items from product data (for full-combo check)
-  const originalTabItems = useMemo(() => {
-    const src = product.bundle_items || product.grouped_items || [];
-    if (!activeTab) return src.filter(i => !i.option_title && !i.pivot?.option_title);
-    return src.filter(i => (i.option_title || i.pivot?.option_title) === activeTab);
-  }, [product, activeTab]);
+  const bundleEvaluationsByConfig = useMemo(() => {
+    const evaluationMap = new Map();
+    const configKeys = configurations.length > 0 ? configurations : [''];
 
-  // Is full combo? All tab items present and qty >= default qty
-  const isFullCombo = useMemo(() => {
-    if (tabItems.length === 0) return false;
-    return tabItems.every(item => {
-      if (item.removed) return false;
-      const origItem = findOriginalBundleItem(item, originalTabItems);
-      const defaultQty = origItem?.pivot?.quantity || 1;
-      return (item.qty || 1) >= defaultQty;
+    configKeys.forEach((configName) => {
+      const currentItems = bundleItems
+        .filter((item) => {
+          if (item.removed) return false;
+
+          const itemConfig = getBundleOptionTitle(item);
+
+          if (configName) {
+            return !itemConfig || itemConfig === configName;
+          }
+
+          return item.selected;
+        })
+        .map((item, index) => createBundleCartEntry(item, index));
+      const snapshotItems = buildBundleSnapshot(sourceBundleItems, configName);
+
+      evaluationMap.set(
+        configName,
+        evaluateBundleSelection(currentItems, snapshotItems, { discountRate: BUNDLE_DISCOUNT_RATE })
+      );
     });
-  }, [tabItems, originalTabItems]);
+
+    return evaluationMap;
+  }, [bundleItems, configurations, sourceBundleItems]);
+
+  const activeEvaluationKey = activeTab || configurations[0] || '';
+  const activeBundleEvaluation = bundleEvaluationsByConfig.get(activeEvaluationKey)
+    || evaluateBundleSelection([], [], { discountRate: BUNDLE_DISCOUNT_RATE });
+  const isFullCombo = Boolean(activeBundleEvaluation.isFullBundle);
+  const tabSubtotal = activeBundleEvaluation.currentSubtotal || 0;
+  const tabDiscountAmount = activeBundleEvaluation.comboDiscountAmount || 0;
+  const tabFinalPrice = activeBundleEvaluation.finalSubtotal || tabSubtotal;
+  const bundleRequirementCount = activeBundleEvaluation.expectedCount || tabItems.length;
 
   // activeConfig for the upper config buttons
   const activeConfig = useMemo(() => {
     for (const config of configurations) {
-      const itemsInConfig = bundleItems.filter(item => (item.option_title || item.pivot?.option_title) === config);
-      if (itemsInConfig.every(item => item.selected && !item.removed)) return config;
+      const itemsInConfig = bundleItems.filter((item) => getBundleOptionTitle(item) === config);
+      if (itemsInConfig.every((item) => item.selected && !item.removed)) return config;
     }
     return null;
   }, [bundleItems, configurations]);
@@ -580,27 +592,8 @@ export default function BundleProductView({
   const hasActiveConfigMedia = Boolean(activeConfigMedia?.href);
 
   // Subtotal of tab items (active items only)
-  const tabSubtotal = useMemo(() =>
-    tabItems
-      .filter(i => !i.removed)
-      .reduce((acc, i) => acc + parseFloat(i.price || 0) * (i.qty || 1), 0),
-    [tabItems]
-  );
-
   // Full combo subtotal (sum of all tab items at their default qty × price)
-  const fullComboSubtotal = useMemo(() =>
-    tabItems.reduce((acc, i) => {
-      const origItem = findOriginalBundleItem(i, originalTabItems);
-      const defaultQty = origItem?.pivot?.quantity || 1;
-      return acc + parseFloat(i.price || 0) * defaultQty;
-    }, 0),
-    [tabItems, originalTabItems]
-  );
-
-  const DISCOUNT_RATE = 0.10;
-  const tabDiscountAmount = isFullCombo ? Math.round(tabSubtotal * DISCOUNT_RATE) : 0;
-  const tabFinalPrice = tabSubtotal - tabDiscountAmount;
-
+  const DISCOUNT_RATE = BUNDLE_DISCOUNT_RATE;
   // For upper info section: selectedItems (all configs) for top-level displayPrice
   const selectedItems = bundleItems.filter(item => item.selected && !item.removed);
   const subtotal = selectedItems.reduce((acc, it) => acc + (parseFloat(it.price || 0) * (it.qty || 1)), 0);
@@ -609,15 +602,7 @@ export default function BundleProductView({
   const infoDiscount = subtotal - displayPrice;
 
   const isConfigEligibleForDiscount = (configName) => {
-    const cfgItems = bundleItems.filter((item) => (item.option_title || item.pivot?.option_title) === configName);
-    const origSrc = product.bundle_items || product.grouped_items || [];
-    const origCfg = origSrc.filter((item) => (item.option_title || item.pivot?.option_title) === configName);
-
-    return cfgItems.length > 0 && cfgItems.every((item) => {
-      if (item.removed) return false;
-      const originalItem = findOriginalBundleItem(item, origCfg);
-      return (item.qty || 1) >= (originalItem?.pivot?.quantity || 1);
-    });
+    return Boolean(bundleEvaluationsByConfig.get(configName)?.eligibleDiscount);
   };
 
   const openSelectionModal = (slot) => {
@@ -911,7 +896,7 @@ export default function BundleProductView({
                   <span>
                     {isFullCombo
                       ? `Giảm giá ${(DISCOUNT_RATE * 100).toFixed(0)}% khi mua trọn bộ`
-                      : `Đủ ${tabItems.length} món: -${(DISCOUNT_RATE * 100).toFixed(0)}%`}
+                      : `Đủ ${bundleRequirementCount} món: -${(DISCOUNT_RATE * 100).toFixed(0)}%`}
                   </span>
                 </span>
 
@@ -1045,16 +1030,8 @@ export default function BundleProductView({
               </span>
               {config}
               {(() => {
-                const cfgItems = bundleItems.filter(i => (i.option_title || i.pivot?.option_title) === config);
-                const origSrc = product.bundle_items || product.grouped_items || [];
-                const origCfg = origSrc.filter(i => (i.option_title || i.pivot?.option_title) === config);
-                  const full = cfgItems.every(item => {
-                    if (item.removed) return false;
-                    const o = findOriginalBundleItem(item, origCfg);
-                    return (item.qty || 1) >= (o?.pivot?.quantity || 1);
-                  });
-
-                return cfgItems.length > 0 && full
+                const full = isConfigEligibleForDiscount(config);
+                return full
                   ? <span className={builderStyles.tabFullDot} title="Äá»§ Ä‘iá»u kiá»‡n giáº£m giÃ¡"></span>
                   : null;
               })()}
@@ -1073,7 +1050,7 @@ export default function BundleProductView({
           ) : (
             <div className={builderStyles.discountHintInline}>
               <span className="material-symbols-outlined" style={{ fontSize: 18 }}>info</span>
-                    <span>Mua Ä‘á»§ <strong>{tabItems.length} mÃ³n</strong> nháº­n Æ°u Ä‘Ã£i giáº£m {(DISCOUNT_RATE * 100).toFixed(0)}%</span>
+                    <span>Mua Ä‘á»§ <strong>{bundleRequirementCount} mÃ³n</strong> nháº­n Æ°u Ä‘Ã£i giáº£m {(DISCOUNT_RATE * 100).toFixed(0)}%</span>
                   </div>
                 )}
 
@@ -1357,15 +1334,8 @@ export default function BundleProductView({
                     {config}
                     {/* Green dot if full combo */}
                     {(() => {
-                      const cfgItems = bundleItems.filter(i => (i.option_title || i.pivot?.option_title) === config);
-                      const origSrc = product.bundle_items || product.grouped_items || [];
-                      const origCfg = origSrc.filter(i => (i.option_title || i.pivot?.option_title) === config);
-                      const full = cfgItems.every(item => {
-                        if (item.removed) return false;
-                        const o = findOriginalBundleItem(item, origCfg);
-                        return (item.qty || 1) >= (o?.pivot?.quantity || 1);
-                      });
-                      return cfgItems.length > 0 && full
+                      const full = isConfigEligibleForDiscount(config);
+                      return full
                         ? <span className={builderStyles.tabFullDot} title="Đủ điều kiện giảm giá"></span>
                         : null;
                     })()}
@@ -1385,7 +1355,7 @@ export default function BundleProductView({
                 ) : (
                   <div className={builderStyles.discountHintInline}>
                     <span className="material-symbols-outlined" style={{ fontSize: 18 }}>info</span>
-                    <span>Mua đủ <strong>{tabItems.length} món</strong> nhận ưu đãi giảm {(DISCOUNT_RATE * 100).toFixed(0)}%</span>
+                    <span>Mua đủ <strong>{bundleRequirementCount} món</strong> nhận ưu đãi giảm {(DISCOUNT_RATE * 100).toFixed(0)}%</span>
                   </div>
                 )}
 

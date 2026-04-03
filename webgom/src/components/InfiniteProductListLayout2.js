@@ -22,7 +22,7 @@ export default function InfiniteProductListLayout2({ initialData }) {
             <div className={styles.imageArea}>
               <Link href={`/product/${product.slug || product.id}`} className={styles.imageLink}>
                 <Image
-                  src={resolveImageObjectUrl(product.primary_image, FALLBACK_PRODUCT_IMAGE)}
+                  src={resolveImageObjectUrl(product.primary_image, 'medium', FALLBACK_PRODUCT_IMAGE)}
                   alt={product.name || FALLBACK_PRODUCT_ALT}
                   fill
                   className={styles.image}

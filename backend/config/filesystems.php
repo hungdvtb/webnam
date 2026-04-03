@@ -1,5 +1,16 @@
 <?php
 
+$mediaHttpVerify = env('MEDIA_HTTP_VERIFY_SSL', true);
+
+if (is_string($mediaHttpVerify)) {
+    $mediaHttpVerify = filter_var($mediaHttpVerify, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true;
+}
+
+$mediaHttpCaBundle = trim((string) env('MEDIA_HTTP_CA_BUNDLE', ''));
+$mediaHttpVerifyOption = $mediaHttpVerify
+    ? ($mediaHttpCaBundle !== '' ? $mediaHttpCaBundle : true)
+    : false;
+
 return [
 
     /*
@@ -62,6 +73,22 @@ return [
             'url' => env('AWS_URL'),
             'endpoint' => env('AWS_ENDPOINT'),
             'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
+            'throw' => false,
+            'report' => false,
+        ],
+
+        'r2' => [
+            'driver' => 's3',
+            'key' => env('R2_ACCESS_KEY_ID'),
+            'secret' => env('R2_SECRET_ACCESS_KEY'),
+            'region' => env('R2_REGION', 'auto'),
+            'bucket' => env('R2_BUCKET'),
+            'url' => env('MEDIA_PUBLIC_BASE_URL'),
+            'endpoint' => env('R2_ENDPOINT'),
+            'use_path_style_endpoint' => env('R2_USE_PATH_STYLE_ENDPOINT', false),
+            'http' => [
+                'verify' => $mediaHttpVerifyOption,
+            ],
             'throw' => false,
             'report' => false,
         ],

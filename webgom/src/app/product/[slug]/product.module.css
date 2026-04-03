@@ -3610,12 +3610,13 @@
     gap: 0.85rem;
     overflow-x: auto;
     padding: 0.05rem 0.05rem 0.35rem;
-    scroll-snap-type: x mandatory;
+    scroll-snap-type: x proximity;
     scroll-padding-inline: 0.05rem;
     overscroll-behavior-x: contain;
+    overscroll-behavior-y: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    touch-action: pan-x;
+    touch-action: manipulation;
   }
 
   .relatedGrid::-webkit-scrollbar {

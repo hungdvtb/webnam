@@ -3,6 +3,7 @@ import { Link, useOutletContext } from 'react-router-dom';
 import api, { STORAGE_BASE_URL } from '../../services/api';
 import { LeadFormModal } from '../../layouts/StorefrontLayout';
 import StoreLocationCards from '../../components/store/StoreLocationCards';
+import { resolveEntityImageUrl } from '../../utils/mediaUrl';
 
 const resolveCategoryLogoUrl = (value) => {
     if (!value || typeof value !== 'string') {
@@ -28,15 +29,18 @@ const resolveCategoryLogoUrl = (value) => {
 const ProductCard = ({ product, onConsult }) => {
     const [imageLoaded, setImageLoaded] = useState(false);
     const hasDiscount = product.special_price && product.current_price < product.price;
+    const productImageUrl = resolveEntityImageUrl(product, 'medium', 'https://placehold.co/400x400?text=No+Image');
 
     return (
         <div className="group overflow-hidden rounded-2xl border border-stone-100 bg-white transition-all duration-300 hover:-translate-y-1 hover:shadow-xl">
             <Link to={`/san-pham/${product.slug || product.id}`} className="relative block aspect-square overflow-hidden bg-stone-100">
                 {!imageLoaded ? <div className="absolute inset-0 animate-pulse bg-stone-200" /> : null}
                 <img
-                    src={product.main_image || 'https://placehold.co/400x400?text=No+Image'}
+                    src={productImageUrl}
                     alt={product.name}
                     loading="lazy"
+                    width="800"
+                    height="800"
                     onLoad={() => setImageLoaded(true)}
                     className={`h-full w-full object-cover transition-transform duration-500 group-hover:scale-105 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
                 />
@@ -146,10 +150,12 @@ const BannerSlider = ({ banners }) => {
                     className={`absolute inset-0 transition-opacity duration-700 ${index === currentIndex ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
                 >
                     <img
-                        src={item.image_url || 'https://placehold.co/1200x600'}
+                        src={resolveEntityImageUrl(item, 'large', item.image_url || 'https://placehold.co/1200x600')}
                         alt={item.title}
                         className="h-full w-full object-cover"
                         loading={index === 0 ? 'eager' : 'lazy'}
+                        width="1600"
+                        height="900"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
                 </div>

@@ -4,6 +4,7 @@ import { PRODUCT_TYPE_LABELS } from '../../config/productTypes';
 import api from '../../services/api';
 import { LeadFormModal } from '../../layouts/StorefrontLayout';
 import { trackAddToCart } from '../../components/TrackingScripts';
+import { resolveEntityImageUrl, resolveImageObjectUrl, resolveMediaUrl } from '../../utils/mediaUrl';
 
 const FALLBACK_IMAGE = 'https://placehold.co/800x800?text=No+Image';
 
@@ -14,7 +15,8 @@ const normalizeImages = (entity) => {
         ? entity.images
             .map((image, index) => ({
                 id: image.id || `${entity?.id || 'image'}-${index}`,
-                url: image.url || image.path || image.image_url || entity?.main_image || FALLBACK_IMAGE,
+                url: resolveImageObjectUrl(image, 'large', entity?.main_image || FALLBACK_IMAGE),
+                thumbnailUrl: resolveImageObjectUrl(image, 'thumbnail', image.image_url || entity?.main_image || FALLBACK_IMAGE),
                 is_primary: Boolean(image.is_primary),
             }))
             .filter((image) => image.url)
@@ -24,11 +26,12 @@ const normalizeImages = (entity) => {
         return images;
     }
 
-    const primaryUrl = entity?.primary_image?.url || entity?.primary_image?.path || entity?.main_image;
+    const primaryUrl = resolveEntityImageUrl(entity, 'large', entity?.main_image || '');
     if (primaryUrl) {
         return [{
             id: entity?.primary_image?.id || entity?.id || 0,
             url: primaryUrl,
+            thumbnailUrl: resolveEntityImageUrl(entity?.primary_image || entity, 'thumbnail', primaryUrl),
             is_primary: true,
         }];
     }
@@ -55,7 +58,7 @@ const extractRenderableImages = (entity) => {
         ? entity.images
             .map((image, index) => ({
                 id: image.id || `${entity?.id || 'image'}-${index}`,
-                url: image.url || image.path || image.image_url || entity?.main_image || '',
+                url: resolveImageObjectUrl(image, 'large', entity?.main_image || ''),
                 is_primary: Boolean(image.is_primary),
             }))
             .filter((image) => isRenderableMediaUrl(image.url))
@@ -65,7 +68,7 @@ const extractRenderableImages = (entity) => {
         return images;
     }
 
-    const primaryUrl = entity?.primary_image?.url || entity?.primary_image?.path || entity?.main_image;
+    const primaryUrl = resolveEntityImageUrl(entity, 'large', entity?.main_image || '');
     if (isRenderableMediaUrl(primaryUrl)) {
         return [{
             id: entity?.primary_image?.id || entity?.id || 0,

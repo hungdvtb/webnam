@@ -4,7 +4,7 @@
   right: max(14px, calc(env(safe-area-inset-right, 0px) + 14px));
   bottom: max(88px, calc(env(safe-area-inset-bottom, 0px) + 88px));
   z-index: 9998;
-  pointer-events: auto;
+  pointer-events: none;
 }
 
 .desktopFloatingContacts {
@@ -17,6 +17,7 @@
   display: none;
   align-items: flex-end;
   gap: 10px;
+  overflow: visible;
 }
 
 .button {
@@ -36,6 +37,11 @@
     filter 180ms ease,
     opacity 180ms ease;
   will-change: transform;
+}
+
+.desktopFloatingContacts .button,
+.mobileToggle {
+  pointer-events: auto;
 }
 
 .button:hover,
@@ -107,7 +113,12 @@
 }
 
 .mobileMenuButton {
+  pointer-events: none;
   box-shadow: 0 10px 22px rgba(15, 23, 42, 0.2);
+}
+
+.mobileMenuOpen .mobileMenuButton {
+  pointer-events: auto;
 }
 
 .icon {

@@ -3,56 +3,77 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\MediaService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
 class MediaController extends Controller
 {
+    public function __construct(
+        protected MediaService $mediaService
+    ) {
+    }
+
     public function proxy(Request $request)
     {
         $validated = $request->validate([
             'url' => 'required|string|max:2048',
         ]);
 
-        $path = parse_url($validated['url'], PHP_URL_PATH) ?: $validated['url'];
-
-        if (!$path || !str_starts_with($path, '/storage/')) {
+        $normalized = $this->mediaService->normalizeLegacyUrl($validated['url']);
+        if ($normalized === '') {
             return response()->json(['message' => 'Invalid image path'], 422);
         }
 
-        $fullPath = public_path(ltrim($path, '/'));
-
-        if (!is_file($fullPath)) {
-            return response()->json(['message' => 'Image not found'], 404);
-        }
-
-        return response()->file($fullPath, [
+        return redirect()->away($normalized, 302, [
             'Cache-Control' => 'public, max-age=86400',
-            'Content-Disposition' => 'inline; filename="' . basename($fullPath) . '"',
         ]);
     }
 
     public function upload(Request $request)
     {
         $request->validate([
-            'image' => 'required|file|mimes:jpeg,png,jpg,gif,webp,avif,svg|max:10240',
+            'image' => 'nullable|file|mimes:jpeg,png,jpg,gif,webp,avif,svg|max:10240',
+            'images' => 'nullable|array',
+            'images.*' => 'file|mimes:jpeg,png,jpg,gif,webp,avif,svg|max:10240',
+            'collection' => 'nullable|string|max:80',
         ]);
 
+        $collection = trim((string) $request->input('collection', 'editor')) ?: 'editor';
+        $files = [];
+
         if ($request->hasFile('image')) {
-            $file = $request->file('image');
-            $extension = $file->getClientOriginalExtension();
-            $filename = Str::random(20) . '.' . $extension;
-            
-            // Store in public/uploads/editor
-            $path = $file->storeAs('uploads/editor', $filename, 'public');
-            
+            $files[] = $request->file('image');
+        }
+
+        if ($request->hasFile('images')) {
+            $files = array_merge($files, $request->file('images'));
+        }
+
+        if (empty($files)) {
+            return response()->json(['success' => false, 'message' => 'No image uploaded'], 400);
+        }
+
+        $assets = $this->mediaService->uploadImages($files, [
+            'collection' => $collection,
+            'source' => 'media-api-upload',
+        ]);
+
+        $payload = array_map(
+            fn ($asset) => $this->mediaService->buildAssetPayload($asset),
+            $assets
+        );
+
+        if (count($payload) === 1) {
             return response()->json([
-                'url' => asset('storage/' . $path),
-                'success' => true
+                'success' => true,
+                'url' => $payload[0]['large_url'] ?? $payload[0]['url'] ?? '',
+                'image' => $payload[0],
             ]);
         }
 
-        return response()->json(['success' => false, 'message' => 'No image uploaded'], 400);
+        return response()->json([
+            'success' => true,
+            'images' => $payload,
+        ]);
     }
 }

@@ -118,6 +118,53 @@ class InventoryProductStockSummaryTest extends TestCase
         $this->assertSame(560000.0, (float) ($summary['total_inventory_value'] ?? 0));
     }
 
+    public function test_refresh_order_items_returns_inventory_snapshot_for_available_to_sell(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham cap nhat order form',
+            'sku' => 'ORDER-FORM-STOCK-001',
+        ]);
+
+        $service = app(InventoryService::class);
+        $service->createImport([
+            'supplier_id' => $supplier->id,
+            'import_date' => now()->subDay()->toDateString(),
+            'items' => [[
+                'product_id' => $product->id,
+                'quantity' => 10,
+                'received_quantity' => 10,
+                'unit_cost' => 100000,
+            ]],
+        ], $account->id, $user->id);
+
+        $order = $this->createOrder($account, $user, [
+            'order_number' => 'ORD-PENDING-EXPORT-001',
+            'status' => 'new',
+        ]);
+        $this->createOrderItem($account, $order, $product, 3);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/products/refresh-order-items', [
+                'items' => [[
+                    'product_id' => $product->id,
+                    'sku' => $product->sku,
+                    'name' => $product->name,
+                ]],
+            ]);
+
+        $response->assertOk();
+
+        $item = collect($response->json('items'))->firstWhere('product_id', $product->id);
+
+        $this->assertNotNull($item);
+        $this->assertSame(10, (int) ($item['computed_stock'] ?? 0));
+        $this->assertSame(3, (int) ($item['pending_export_quantity'] ?? 0));
+        $this->assertSame(7, (int) ($item['available_to_sell'] ?? 0));
+    }
+
     public function test_inventory_products_can_filter_low_stock_using_current_inventory_state(): void
     {
         [$account, $user] = $this->authenticate();

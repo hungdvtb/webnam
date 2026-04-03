@@ -147,11 +147,11 @@ export const categoryApi = {
     getAll: () => api.get('/categories'),
     getOne: (id) => api.get(`/categories/${id}`),
     getProducts: (id) => api.get(`/categories/${id}/products`),
-    downloadExcel: () => api.get('/categories/export', { responseType: 'blob' }),
+    downloadExcel: (params) => api.get('/categories/export', { params, responseType: 'blob' }),
     downloadImportTemplate: () => api.get('/categories/import/template', { responseType: 'blob' }),
     importExcel: (data) => api.post('/categories/import', data, { headers: { 'Content-Type': 'multipart/form-data' } }),
-    store: (data) => api.post('/categories', data),
-    update: (id, data) => api.post(`/categories/${id}`, data),
+    store: (data) => api.post('/categories', data, multipartConfig(data)),
+    update: (id, data) => api.post(`/categories/${id}`, data, multipartConfig(data)),
     destroy: (id) => api.delete(`/categories/${id}`),
     bulkDelete: (ids) => api.delete('/categories/bulk-delete', { data: { ids } }),
     reorder: (items) => api.post('/categories/reorder', { items }),
@@ -586,8 +586,15 @@ export const cmsApi = {
     banners: {
         getAll: (params) => api.get('/banners', { params }),
         getOne: (id) => api.get(`/banners/${id}`),
-        store: (data) => api.post('/banners', data),
-        update: (id, data) => api.put(`/banners/${id}`, data),
+        store: (data) => api.post('/banners', data, multipartConfig(data)),
+        update: (id, data) => {
+            if (data instanceof FormData) {
+                data.append('_method', 'PUT');
+                return api.post(`/banners/${id}`, data, multipartConfig(data));
+            }
+
+            return api.put(`/banners/${id}`, data, multipartConfig(data));
+        },
         destroy: (id) => api.delete(`/banners/${id}`),
     },
     settings: {

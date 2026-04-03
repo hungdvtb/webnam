@@ -1382,28 +1382,44 @@
 .specList {
   list-style: none;
   padding: 0;
+  margin: 0;
 }
 
 .specItem {
-  display: flex;
-  justify-content: space-between;
-  padding: 0.5rem 0;
+  display: grid;
+  grid-template-columns: minmax(8rem, 9.5rem) minmax(0, 1fr);
+  align-items: start;
+  gap: 0.4rem 1rem;
+  padding: 0.625rem 0;
   border-bottom: 1px solid #F0EFE9;
+  text-align: left;
 }
 
 .specItem:last-child {
   border-bottom: none;
 }
 
+.specItem > :only-child {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 .specLabel {
   color: #666;
   font-size: 0.9rem;
+  line-height: 1.5;
+  min-width: 0;
 }
 
 .specValue {
   font-weight: 700;
   color: #1B365D;
   font-size: 0.9rem;
+  line-height: 1.5;
+  min-width: 0;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .specLink {
@@ -1708,13 +1724,6 @@
 .tabContent {
   padding-top: 2.5rem;
   padding-bottom: 2.5rem;
-}
-
-.descTitle {
-  font-family: var(--font-serif);
-  font-size: 1.5rem;
-  color: #1B365D;
-  margin-bottom: 1.5rem;
 }
 
 .descBody {
@@ -3504,12 +3513,6 @@
     padding-bottom: 0;
   }
 
-  .descTitle {
-    font-size: 14px;
-    line-height: 1.45;
-    margin-bottom: 1rem;
-  }
-
   .descBody {
     font-size: 14px;
     line-height: 1.65;
@@ -3731,7 +3734,6 @@
 
   .simpleView .title,
   .simpleView .specValue,
-  .descTitle,
   .relTitle {
     overflow-wrap: anywhere;
   }

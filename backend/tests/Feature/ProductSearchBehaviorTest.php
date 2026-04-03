@@ -72,6 +72,55 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.id', $matching->id);
     }
 
+    public function test_short_mixed_code_search_returns_all_matching_skus_and_names_case_insensitively(): void
+    {
+        $account = $this->authenticate();
+
+        $exact = $this->createProduct($account, [
+            'name' => 'Tron bo do tho men Lam',
+            'sku' => 'ML80',
+        ]);
+
+        $skuMatchA = $this->createProduct($account, [
+            'name' => 'Bat huong men Lam rong nhu y',
+            'sku' => 'ML80-BATHUONGLAM',
+        ]);
+
+        $skuMatchB = $this->createProduct($account, [
+            'name' => 'Den men Lam',
+            'sku' => 'ml80-DENLAM',
+        ]);
+
+        $nameMatch = $this->createProduct($account, [
+            'name' => 'Phu kien dong bo ML80 dac biet',
+            'sku' => 'PK-LAM-001',
+        ]);
+
+        $this->createProduct($account, [
+            'name' => 'San pham khong lien quan',
+            'sku' => 'LAM-081',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?search=ml80&per_page=20');
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 4)
+            ->assertJsonPath('data.0.id', $exact->id);
+
+        $returnedIds = collect($response->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertEqualsCanonicalizing(
+            [$exact->id, $skuMatchA->id, $skuMatchB->id, $nameMatch->id],
+            $returnedIds
+        );
+    }
+
     public function test_picker_search_uses_expected_cost_when_current_cost_is_missing(): void
     {
         $account = $this->authenticate();

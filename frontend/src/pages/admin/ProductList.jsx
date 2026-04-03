@@ -83,8 +83,9 @@ const DEFAULT_COLUMNS = [
 
 const DEFAULT_SORT_CONFIG = { key: 'created_at', direction: 'desc', phase: 1 };
 const DEFAULT_EXPORT_COLUMN_IDS = ['name', 'product_link'];
-const CONTENT_ONLY_EXPORT_COLUMN_IDS = ['sku', 'name', 'child_names', 'description', 'specifications'];
-const CONTENT_ONLY_IMPORT_FIELD_IDS = ['description', 'specifications'];
+const CONTENT_ONLY_EXPORT_COLUMN_IDS = ['sku', 'name', 'child_names', 'description', 'specifications', 'meta_title', 'meta_description'];
+const CONTENT_ONLY_IMPORT_FIELD_IDS = ['description', 'specifications', 'seo'];
+const LOCAL_STRUCTURE_EXPORT_COLUMN_IDS = ['sku', 'name', 'type', 'bundle_title', 'child_names', 'variant_data', 'component_data', 'description', 'specifications', 'meta_title', 'meta_description'];
 const EXPORT_EXCLUDED_COLUMN_IDS = new Set(['actions', 'images']);
 const DEFAULT_IMPORT_MODE = 'replace_all';
 const DEFAULT_IMPORT_MISSING_PRODUCT_ACTION = 'create';
@@ -1021,6 +1022,12 @@ const ProductList = () => {
         );
     };
 
+    const applyLocalStructureExportPreset = () => {
+        setExportColumnIds(
+            LOCAL_STRUCTURE_EXPORT_COLUMN_IDS.filter((id) => exportFieldOptions.some((option) => option.id === id))
+        );
+    };
+
     const toggleExportColumn = (columnId) => {
         setExportColumnIds((prev) => (
             prev.includes(columnId)
@@ -1082,6 +1089,12 @@ const ProductList = () => {
         setImportUpdateFieldIds(
             CONTENT_ONLY_IMPORT_FIELD_IDS.filter((id) => importFieldOptions.some((option) => option.id === id))
         );
+    };
+
+    const applyLocalStructureImportPreset = () => {
+        setImportMode('replace_all');
+        setImportMissingProductAction('create');
+        setImportUpdateFieldIds([]);
     };
 
     const toggleImportUpdateField = (fieldId) => {
@@ -2082,25 +2095,50 @@ const ProductList = () => {
                         </div>
 
                         <div className="mt-4 rounded-sm border border-primary/10 p-4">
-                            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                                <div>
-                                    <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Preset tiện dùng</div>
-                                    <p className="mt-2 text-[13px] leading-5 text-primary/65">
-                                        Dùng preset này khi bạn chỉ cần đưa file sang local để viết nội dung rồi import ngược lại web.
-                                        Hệ thống sẽ chỉ cập nhật <strong>Mô tả</strong> và <strong>Thông số kỹ thuật</strong>, đồng thời bỏ qua dòng không khớp sản phẩm hiện có.
-                                    </p>
+                            <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Preset tiện dùng</div>
+                            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="rounded-sm border border-primary/10 bg-primary/[0.03] p-4">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <div className="text-[13px] font-bold text-primary">Nội dung web</div>
+                                            <p className="mt-2 text-[12px] leading-5 text-primary/65">
+                                                Chỉ cập nhật <strong>Mô tả</strong>, <strong>Thông số kỹ thuật</strong>, <strong>Meta title</strong> và <strong>Meta description</strong>,
+                                                đồng thời bỏ qua dòng không khớp sản phẩm hiện có.
+                                            </p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={applyContentOnlyImportPreset}
+                                            className="shrink-0 rounded-sm border border-primary/20 px-3 py-2 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                        >
+                                            Áp dụng
+                                        </button>
+                                    </div>
+                                    <div className="mt-3 text-[12px] text-primary/70">
+                                        Dùng khi import ngược từ local lên web chính. File nên giữ: <strong>SKU</strong>, <strong>Tên sản phẩm</strong>, <strong>Mô tả</strong>,
+                                        <strong> Thông số kỹ thuật</strong>, <strong>Meta title</strong>, <strong>Meta description</strong>.
+                                    </div>
                                 </div>
-                                <button
-                                    type="button"
-                                    onClick={applyContentOnlyImportPreset}
-                                    className="shrink-0 rounded-sm border border-primary/20 px-4 py-2 text-[12px] font-bold text-primary hover:bg-primary/5"
-                                >
-                                    Áp dụng preset: Nội dung web
-                                </button>
-                            </div>
-                            <div className="mt-3 rounded-sm bg-primary/[0.03] px-3 py-2 text-[12px] text-primary/70">
-                                File import cho preset này nên chỉ giữ các cột: <strong>SKU</strong>, <strong>Tên sản phẩm</strong>, <strong>Mô tả</strong>, <strong>Thông số kỹ thuật</strong>.
-                                Nếu file đang có thêm cột <strong>Tên biến thể / thành phần</strong> để tham chiếu nội dung thì vẫn an toàn, backend sẽ tự bỏ qua cột này khi import.
+                                <div className="rounded-sm border border-primary/10 bg-amber-50/70 p-4">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <div className="text-[13px] font-bold text-primary">Dựng local</div>
+                                            <p className="mt-2 text-[12px] leading-5 text-primary/65">
+                                                Import đầy đủ cấu trúc sản phẩm, cho phép tạo mới nếu thiếu để local có đúng <strong>loại sản phẩm</strong>, <strong>biến thể</strong> và <strong>bundle/grouped</strong>.
+                                            </p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={applyLocalStructureImportPreset}
+                                            className="shrink-0 rounded-sm border border-primary/20 px-3 py-2 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                        >
+                                            Áp dụng
+                                        </button>
+                                    </div>
+                                    <div className="mt-3 text-[12px] text-primary/70">
+                                        Dùng khi bạn muốn dựng dữ liệu web sang local để team biên tập nội dung ngay trên local.
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -2261,17 +2299,18 @@ const ProductList = () => {
             {showExportModal && (
                 <div className="fixed inset-0 z-[130] bg-black/60 flex items-center justify-center p-4" onClick={() => !isExportingExcel && setShowExportModal(false)}>
                     <div
-                        className="bg-white rounded p-6 w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200"
+                        className="bg-white rounded w-full max-w-5xl max-h-[92vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
                         onClick={(event) => event.stopPropagation()}
                     >
-                        <div className="flex items-start justify-between gap-4 border-b border-primary/10 pb-4">
+                        <div className="flex items-start justify-between gap-4 border-b border-primary/10 px-6 pt-6 pb-4 shrink-0">
                             <div>
                                 <h2 className="text-lg font-bold text-primary flex items-center gap-2">
                                     <span className="material-symbols-outlined">download</span>
                                     Xuất sản phẩm ra Excel
                                 </h2>
                                 <p className="mt-2 text-[13px] text-primary/65">
-                                    Chọn đúng các cột cần tải. Nếu mục tiêu là viết nội dung hàng loạt rồi import ngược lại web, hãy dùng preset <strong>Nội dung web</strong>.
+                                    Chọn đúng các cột cần tải. Nếu cần dựng dữ liệu web sang local có cả biến thể và bundle/grouped, hãy dùng preset <strong>Dựng local</strong>.
+                                    Nếu chỉ cần biên tập nội dung rồi import ngược lại web, hãy dùng preset <strong>Nội dung web</strong>.
                                 </p>
                             </div>
                             <button
@@ -2284,146 +2323,198 @@ const ProductList = () => {
                             </button>
                         </div>
 
-                        <div className="mt-4 rounded-sm border border-primary/10 p-4">
-                            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                                <div>
-                                    <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Preset tiện dùng</div>
-                                    <p className="mt-2 text-[13px] leading-5 text-primary/65">
-                                        Preset này sẽ chỉ xuất các cột phục vụ biên tập nội dung: <strong>SKU</strong>, <strong>Tên sản phẩm</strong>,
-                                        <strong> Tên biến thể / thành phần</strong>, <strong>Mô tả</strong> và <strong>Thông số kỹ thuật</strong>.
-                                    </p>
+                        <div className="sticky top-0 z-10 border-b border-primary/10 bg-white/95 backdrop-blur px-6 py-3 shrink-0">
+                            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                <p className="text-[12px] text-primary/60">
+                                    Đang chọn <strong>{exportColumnIds.length}</strong> cột để xuất.
+                                </p>
+                                <div className="flex justify-end gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowExportModal(false)}
+                                        className="px-4 py-2 border border-primary/20 text-primary rounded-sm font-bold text-[13px] hover:bg-primary/5"
+                                        disabled={isExportingExcel}
+                                    >
+                                        Hủy
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleDownloadExportExcel}
+                                        className="px-6 py-2 bg-primary text-white rounded-sm font-bold text-[13px] hover:bg-primary/90 flex items-center gap-2"
+                                        disabled={isExportingExcel}
+                                    >
+                                        {isExportingExcel ? <span className="material-symbols-outlined animate-spin text-[16px]">sync</span> : <span className="material-symbols-outlined text-[16px]">download</span>}
+                                        Tải file Excel
+                                    </button>
                                 </div>
-                                <button
-                                    type="button"
-                                    onClick={applyContentOnlyExportPreset}
-                                    className="shrink-0 rounded-sm border border-primary/20 px-4 py-2 text-[12px] font-bold text-primary hover:bg-primary/5"
-                                >
-                                    Chọn preset: Nội dung web
-                                </button>
                             </div>
                         </div>
 
-                        <div className="mt-4 flex flex-wrap items-center gap-3">
-                            <button
-                                type="button"
-                                onClick={handleSelectAllExportColumns}
-                                className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
-                            >
-                                Chọn tất cả
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setExportColumnIds(DEFAULT_EXPORT_COLUMN_IDS.filter((id) => exportFieldOptions.some((option) => option.id === id)))}
-                                className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
-                            >
-                                Chọn nhanh: Tên + Link
-                            </button>
-                            <button
-                                type="button"
-                                onClick={applyContentOnlyExportPreset}
-                                className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
-                            >
-                                Chọn nhanh: Nội dung web
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setExportColumnIds([])}
-                                className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-brick hover:bg-brick/5"
-                            >
-                                Bỏ chọn hết
-                            </button>
-                        </div>
-
-                        <div className="mt-4 rounded-sm border border-primary/10 p-4">
-                            <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Phạm vi xuất</div>
-                            {selectedIds.length > 0 ? (
+                        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 pr-5 custom-scrollbar space-y-4">
+                            <div className="rounded-sm border border-primary/10 p-4">
+                                <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Preset tiện dùng</div>
                                 <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    {[
-                                        {
-                                            value: 'selected',
-                                            label: `Chỉ xuất ${selectedIds.length} sản phẩm đang chọn`,
-                                            description: 'Chỉ lấy đúng các dòng bạn đang tick trong bảng sản phẩm.',
-                                        },
-                                        {
-                                            value: 'all',
-                                            label: 'Xuất toàn bộ sản phẩm',
-                                            description: 'Bỏ qua danh sách đang tick và tải toàn bộ dữ liệu theo bộ lọc hiện tại.',
-                                        },
-                                    ].map((option) => {
-                                        const checked = option.value === 'selected' ? exportOnlySelected : !exportOnlySelected;
-                                        return (
-                                            <button
-                                                key={option.value}
-                                                type="button"
-                                                onClick={() => setExportOnlySelected(option.value === 'selected')}
-                                                className={`rounded-sm border px-4 py-3 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
-                                            >
-                                                <div className="flex items-start justify-between gap-3">
-                                                    <div>
-                                                        <div className="text-[13px] font-bold text-primary">{option.label}</div>
-                                                        <div className="mt-1 text-[12px] leading-5 text-primary/60">{option.description}</div>
-                                                    </div>
-                                                    <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
-                                                        {checked ? 'check_circle' : 'radio_button_unchecked'}
-                                                    </span>
-                                                </div>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            ) : (
-                                <p className="mt-3 text-[13px] text-primary/65">
-                                    Chưa có sản phẩm nào được chọn, hệ thống sẽ xuất toàn bộ danh sách theo bộ lọc hiện tại.
-                                </p>
-                            )}
-                        </div>
-
-                        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 overflow-y-auto pr-1 custom-scrollbar">
-                            {exportFieldOptions.map((option) => {
-                                const checked = exportColumnIds.includes(option.id);
-                                return (
-                                    <button
-                                        key={option.id}
-                                        type="button"
-                                        onClick={() => toggleExportColumn(option.id)}
-                                        className={`rounded-sm border px-4 py-3 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
-                                    >
-                                        <div className="flex items-center justify-between gap-3">
-                                            <div className="min-w-0">
-                                                <div className="truncate text-[13px] font-bold text-primary">{option.label}</div>
-                                                <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-primary/35">{option.id}</div>
+                                    <div className="rounded-sm border border-primary/10 bg-primary/[0.03] p-4">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div>
+                                                <div className="text-[13px] font-bold text-primary">Nội dung web</div>
+                                                <p className="mt-2 text-[12px] leading-5 text-primary/65">
+                                                    Xuất các cột phục vụ biên tập nội dung: <strong>SKU</strong>, <strong>Tên sản phẩm</strong>,
+                                                    <strong> Tên biến thể / thành phần</strong>, <strong>Mô tả</strong>, <strong>Thông số kỹ thuật</strong>,
+                                                    <strong> Meta title</strong> và <strong>Meta description</strong>.
+                                                </p>
                                             </div>
-                                            <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
-                                                {checked ? 'check_circle' : 'radio_button_unchecked'}
-                                            </span>
+                                            <button
+                                                type="button"
+                                                onClick={applyContentOnlyExportPreset}
+                                                className="shrink-0 rounded-sm border border-primary/20 px-3 py-2 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                            >
+                                                Chọn
+                                            </button>
                                         </div>
-                                    </button>
-                                );
-                            })}
-                        </div>
+                                    </div>
+                                    <div className="rounded-sm border border-primary/10 bg-amber-50/70 p-4">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div>
+                                                <div className="text-[13px] font-bold text-primary">Dựng local</div>
+                                                <p className="mt-2 text-[12px] leading-5 text-primary/65">
+                                                    Xuất thêm <strong>Loại sản phẩm</strong>, <strong>Biến thể</strong>, <strong>Thành phần bundle/grouped</strong> và
+                                                    <strong> Tiêu đề bundle</strong>, <strong>Meta title</strong>, <strong>Meta description</strong> để local dựng được đúng cấu trúc sản phẩm
+                                                    và vẫn có đủ dữ liệu SEO để biên tập.
+                                                </p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={applyLocalStructureExportPreset}
+                                                className="shrink-0 rounded-sm border border-primary/20 px-3 py-2 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                            >
+                                                Chọn
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
 
-                        <div className="mt-6 pt-4 border-t border-primary/10 flex flex-col md:flex-row md:items-center md:justify-between gap-3 shrink-0">
-                            <p className="text-[12px] text-primary/60">
-                                Đang chọn <strong>{exportColumnIds.length}</strong> cột để xuất.
-                            </p>
-                            <div className="flex justify-end gap-3">
+                            <div className="flex flex-wrap items-center gap-3">
                                 <button
                                     type="button"
-                                    onClick={() => setShowExportModal(false)}
-                                    className="px-4 py-2 border border-primary/20 text-primary rounded-sm font-bold text-[13px] hover:bg-primary/5"
-                                    disabled={isExportingExcel}
+                                    onClick={handleSelectAllExportColumns}
+                                    className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
                                 >
-                                    Hủy
+                                    Chọn tất cả
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={handleDownloadExportExcel}
-                                    className="px-6 py-2 bg-primary text-white rounded-sm font-bold text-[13px] hover:bg-primary/90 flex items-center gap-2"
-                                    disabled={isExportingExcel}
+                                    onClick={() => setExportColumnIds(DEFAULT_EXPORT_COLUMN_IDS.filter((id) => exportFieldOptions.some((option) => option.id === id)))}
+                                    className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
                                 >
-                                    {isExportingExcel ? <span className="material-symbols-outlined animate-spin text-[16px]">sync</span> : <span className="material-symbols-outlined text-[16px]">download</span>}
-                                    Tải file Excel
+                                    Chọn nhanh: Tên + Link
                                 </button>
+                                <button
+                                    type="button"
+                                    onClick={applyContentOnlyExportPreset}
+                                    className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                >
+                                    Chọn nhanh: Nội dung web
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={applyLocalStructureExportPreset}
+                                    className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                >
+                                    Chọn nhanh: Dựng local
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setExportColumnIds([])}
+                                    className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-brick hover:bg-brick/5"
+                                >
+                                    Bỏ chọn hết
+                                </button>
+                            </div>
+
+                            <div className="rounded-sm border border-primary/10 p-4">
+                                <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Phạm vi xuất</div>
+                                {selectedIds.length > 0 ? (
+                                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        {[
+                                            {
+                                                value: 'selected',
+                                                label: `Chỉ xuất ${selectedIds.length} sản phẩm đang chọn`,
+                                                description: 'Chỉ lấy đúng các dòng bạn đang tick trong bảng sản phẩm.',
+                                            },
+                                            {
+                                                value: 'all',
+                                                label: 'Xuất toàn bộ sản phẩm',
+                                                description: 'Bỏ qua danh sách đang tick và tải toàn bộ dữ liệu theo bộ lọc hiện tại.',
+                                            },
+                                        ].map((option) => {
+                                            const checked = option.value === 'selected' ? exportOnlySelected : !exportOnlySelected;
+                                            return (
+                                                <button
+                                                    key={option.value}
+                                                    type="button"
+                                                    onClick={() => setExportOnlySelected(option.value === 'selected')}
+                                                    className={`rounded-sm border px-4 py-3 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
+                                                >
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div>
+                                                            <div className="text-[13px] font-bold text-primary">{option.label}</div>
+                                                            <div className="mt-1 text-[12px] leading-5 text-primary/60">{option.description}</div>
+                                                        </div>
+                                                        <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
+                                                            {checked ? 'check_circle' : 'radio_button_unchecked'}
+                                                        </span>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <p className="mt-3 text-[13px] text-primary/65">
+                                        Chưa có sản phẩm nào được chọn, hệ thống sẽ xuất toàn bộ danh sách theo bộ lọc hiện tại.
+                                    </p>
+                                )}
+                            </div>
+
+                            <div className="rounded-sm border border-primary/10 p-4">
+                                <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between border-b border-primary/10 pb-3">
+                                    <div>
+                                        <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Danh sách cột</div>
+                                        <p className="mt-2 text-[12px] leading-5 text-primary/60">
+                                            Cuộn trong khu vực này để duyệt nhanh toàn bộ cột. Các phần phía trên sẽ tự trôi đi để nhường không gian cho danh sách.
+                                        </p>
+                                    </div>
+                                    <div className="text-[12px] text-primary/55">
+                                        {exportFieldOptions.length} lựa chọn
+                                    </div>
+                                </div>
+
+                                <div className="mt-4 min-h-[44vh] md:min-h-[52vh]">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                        {exportFieldOptions.map((option) => {
+                                            const checked = exportColumnIds.includes(option.id);
+                                            return (
+                                                <button
+                                                    key={option.id}
+                                                    type="button"
+                                                    onClick={() => toggleExportColumn(option.id)}
+                                                    className={`rounded-sm border px-4 py-3 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
+                                                >
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <div className="min-w-0">
+                                                            <div className="truncate text-[13px] font-bold text-primary">{option.label}</div>
+                                                            <div className="mt-1 text-[10px] uppercase tracking-[0.16em] text-primary/35">{option.id}</div>
+                                                        </div>
+                                                        <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
+                                                            {checked ? 'check_circle' : 'radio_button_unchecked'}
+                                                        </span>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>

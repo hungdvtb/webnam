@@ -191,6 +191,34 @@ function getDisplayStock(product) {
     return Number.isFinite(numericStock) ? numericStock : 0;
 }
 
+function getVariantParentProduct(product) {
+    if (!product || typeof product !== 'object') {
+        return null;
+    }
+
+    if (Array.isArray(product.parent_products) && product.parent_products.length > 0) {
+        return product.parent_products[0] || null;
+    }
+
+    if (Array.isArray(product.parent_configurable) && product.parent_configurable.length > 0) {
+        return product.parent_configurable[0] || null;
+    }
+
+    if (product.parent_configurable && typeof product.parent_configurable === 'object') {
+        return product.parent_configurable;
+    }
+
+    return null;
+}
+
+function isVariantChildProduct(product) {
+    return Boolean(getVariantParentProduct(product));
+}
+
+function getProductEditTargetId(product) {
+    return getVariantParentProduct(product)?.id || product?.id || null;
+}
+
 function getSupplierFilterLabel(suppliers, supplierId) {
     if (!supplierId) {
         return '';
@@ -416,6 +444,7 @@ const ProductList = () => {
     const [importMode, setImportMode] = useState(DEFAULT_IMPORT_MODE);
     const [importMissingProductAction, setImportMissingProductAction] = useState(DEFAULT_IMPORT_MISSING_PRODUCT_ACTION);
     const [importUpdateFieldIds, setImportUpdateFieldIds] = useState([]);
+    const [importAttributeSearch, setImportAttributeSearch] = useState('');
     const [importExcelErrors, setImportExcelErrors] = useState([]);
     const [importExcelErrorMessage, setImportExcelErrorMessage] = useState('');
     const [importExcelResultTone, setImportExcelResultTone] = useState('error');
@@ -651,16 +680,26 @@ const ProductList = () => {
             })),
         ...EXTRA_EXPORT_FIELDS.filter((field) => !availableColumns.some((column) => column.id === field.id)),
     ];
+    const importAttributeFieldOptions = [...allAttributes]
+        .sort((left, right) => String(left?.name || '').localeCompare(String(right?.name || ''), 'vi'))
+        .map((attribute) => ({
+            id: `attr_${attribute.id}`,
+            label: `Thuộc tính: ${attribute.name}`,
+            description: 'Chỉ cập nhật cột thuộc tính riêng của trường này khi file có đúng cột tương ứng.',
+        }));
     const importFieldOptions = [
         ...IMPORT_BASE_FIELD_OPTIONS,
-        ...[...allAttributes]
-            .sort((left, right) => String(left?.name || '').localeCompare(String(right?.name || ''), 'vi'))
-            .map((attribute) => ({
-                id: `attr_${attribute.id}`,
-                label: `Thuộc tính: ${attribute.name}`,
-                description: 'Chỉ cập nhật cột thuộc tính riêng của trường này.',
-            })),
+        ...importAttributeFieldOptions,
     ];
+    const normalizedImportAttributeSearch = importAttributeSearch.trim().toLowerCase();
+    const filteredImportAttributeFieldOptions = normalizedImportAttributeSearch === ''
+        ? importAttributeFieldOptions
+        : importAttributeFieldOptions.filter((option) => {
+            const haystack = `${option.label} ${option.id} ${option.description}`.toLowerCase();
+            return haystack.includes(normalizedImportAttributeSearch);
+        });
+    const selectedImportAttributeCount = importUpdateFieldIds.filter((id) => String(id).startsWith('attr_')).length;
+    const selectedImportBaseFieldCount = importUpdateFieldIds.length - selectedImportAttributeCount;
     const isSelectiveImport = importMode === 'update_selected_fields';
 
     useEffect(() => {
@@ -1002,6 +1041,7 @@ const ProductList = () => {
         setImportMode(DEFAULT_IMPORT_MODE);
         setImportMissingProductAction(DEFAULT_IMPORT_MISSING_PRODUCT_ACTION);
         setImportUpdateFieldIds([]);
+        setImportAttributeSearch('');
         setShowImportConfigModal(false);
     };
 
@@ -1109,6 +1149,24 @@ const ProductList = () => {
         setImportUpdateFieldIds(importFieldOptions.map((option) => option.id));
     };
 
+    const handleSelectImportBaseFields = () => {
+        setImportUpdateFieldIds((prev) => Array.from(new Set([
+            ...prev.filter((id) => String(id).startsWith('attr_')),
+            ...IMPORT_BASE_FIELD_OPTIONS.map((option) => option.id),
+        ])));
+    };
+
+    const handleSelectImportAttributeFields = () => {
+        setImportUpdateFieldIds((prev) => Array.from(new Set([
+            ...prev.filter((id) => !String(id).startsWith('attr_')),
+            ...importAttributeFieldOptions.map((option) => option.id),
+        ])));
+    };
+
+    const handleClearImportAttributeFields = () => {
+        setImportUpdateFieldIds((prev) => prev.filter((id) => !String(id).startsWith('attr_')));
+    };
+
     const handleClearImportFields = () => {
         setImportUpdateFieldIds([]);
     };
@@ -1126,6 +1184,7 @@ const ProductList = () => {
         setImportMode(DEFAULT_IMPORT_MODE);
         setImportMissingProductAction(DEFAULT_IMPORT_MISSING_PRODUCT_ACTION);
         setImportUpdateFieldIds([]);
+        setImportAttributeSearch('');
         setShowImportConfigModal(true);
     };
 
@@ -2066,10 +2125,10 @@ const ProductList = () => {
             {showImportConfigModal && (
                 <div className="fixed inset-0 z-[130] bg-black/60 flex items-center justify-center p-4" onClick={closeImportConfigModal}>
                     <div
-                        className="bg-white rounded p-6 w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200"
+                        className="bg-white rounded w-full max-w-5xl max-h-[92vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200 overflow-hidden"
                         onClick={(event) => event.stopPropagation()}
                     >
-                        <div className="flex items-start justify-between gap-4 border-b border-primary/10 pb-4">
+                        <div className="flex items-start justify-between gap-4 border-b border-primary/10 px-6 pt-6 pb-4 shrink-0">
                             <div>
                                 <h2 className="text-lg font-bold text-primary flex items-center gap-2">
                                     <span className="material-symbols-outlined">upload_file</span>
@@ -2089,12 +2148,13 @@ const ProductList = () => {
                             </button>
                         </div>
 
-                        <div className="mt-4 rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-3">
+                        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 pr-5 custom-scrollbar space-y-4">
+                        <div className="rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-3">
                             <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">File đã chọn</div>
                             <div className="mt-1 text-[13px] font-bold text-primary break-all">{pendingImportFile?.name || 'Chưa có file'}</div>
                         </div>
 
-                        <div className="mt-4 rounded-sm border border-primary/10 p-4">
+                        <div className="rounded-sm border border-primary/10 p-4">
                             <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Preset tiện dùng</div>
                             <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                                 <div className="rounded-sm border border-primary/10 bg-primary/[0.03] p-4">
@@ -2142,7 +2202,7 @@ const ProductList = () => {
                             </div>
                         </div>
 
-                        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                             {[
                                 {
                                     value: 'replace_all',
@@ -2177,7 +2237,7 @@ const ProductList = () => {
                             })}
                         </div>
 
-                        <div className="mt-4 rounded-sm border border-primary/10 p-4">
+                        <div className="rounded-sm border border-primary/10 p-4">
                             <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Sản phẩm chưa tồn tại</div>
                             <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                                 {[
@@ -2217,7 +2277,7 @@ const ProductList = () => {
 
                         {isSelectiveImport ? (
                             <>
-                                <div className="mt-4 flex flex-wrap items-center gap-3">
+                                <div className="flex flex-wrap items-center gap-3">
                                     <button
                                         type="button"
                                         onClick={handleSelectAllImportFields}
@@ -2227,48 +2287,163 @@ const ProductList = () => {
                                     </button>
                                     <button
                                         type="button"
+                                        onClick={handleSelectImportBaseFields}
+                                        className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                    >
+                                        Chọn trường cơ bản
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleSelectImportAttributeFields}
+                                        className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                    >
+                                        Chọn thuộc tính
+                                    </button>
+                                    <button
+                                        type="button"
                                         onClick={handleClearImportFields}
                                         className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-brick hover:bg-brick/5"
                                     >
                                         Bỏ chọn tất cả
                                     </button>
-                                    <p className="text-[12px] text-primary/60">
-                                        Đang chọn <strong>{importUpdateFieldIds.length}</strong> trường cập nhật.
-                                    </p>
+                                    <div className="rounded-sm bg-primary/[0.04] px-3 py-2 text-[12px] text-primary/65">
+                                        Đang chọn <strong>{importUpdateFieldIds.length}</strong> trường:
+                                        {' '}
+                                        <strong>{selectedImportBaseFieldCount}</strong> cơ bản,
+                                        {' '}
+                                        <strong>{selectedImportAttributeCount}</strong> thuộc tính.
+                                    </div>
                                 </div>
 
-                                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 overflow-y-auto pr-1 custom-scrollbar max-h-[340px]">
-                                    {importFieldOptions.map((option) => {
-                                        const checked = importUpdateFieldIds.includes(option.id);
-                                        return (
-                                            <button
-                                                key={option.id}
-                                                type="button"
-                                                onClick={() => toggleImportUpdateField(option.id)}
-                                                className={`rounded-sm border px-4 py-3 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
-                                            >
-                                                <div className="flex items-start justify-between gap-3">
-                                                    <div className="min-w-0">
-                                                        <div className="text-[13px] font-bold text-primary">{option.label}</div>
-                                                        <div className="mt-1 text-[11px] leading-5 text-primary/55">{option.description}</div>
-                                                        <div className="mt-2 text-[10px] uppercase tracking-[0.16em] text-primary/35">{option.id}</div>
-                                                    </div>
-                                                    <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
-                                                        {checked ? 'check_circle' : 'radio_button_unchecked'}
-                                                    </span>
+                                <div className="space-y-4">
+                                    <div className="rounded-sm border border-primary/10 p-4">
+                                        <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between border-b border-primary/10 pb-3">
+                                            <div>
+                                                <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Trường cơ bản</div>
+                                                <p className="mt-2 text-[12px] leading-5 text-primary/60">
+                                                    Chọn các field chuẩn như mô tả, giá, SEO, thông số kỹ thuật, ảnh, biến thể hoặc bundle/grouped.
+                                                </p>
+                                            </div>
+                                            <div className="text-[12px] text-primary/55">
+                                                {selectedImportBaseFieldCount}/{IMPORT_BASE_FIELD_OPTIONS.length} đã chọn
+                                            </div>
+                                        </div>
+                                        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                            {IMPORT_BASE_FIELD_OPTIONS.map((option) => {
+                                                const checked = importUpdateFieldIds.includes(option.id);
+                                                return (
+                                                    <button
+                                                        key={option.id}
+                                                        type="button"
+                                                        onClick={() => toggleImportUpdateField(option.id)}
+                                                        className={`rounded-sm border px-4 py-3 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
+                                                    >
+                                                        <div className="flex items-start justify-between gap-3">
+                                                            <div className="min-w-0">
+                                                                <div className="text-[13px] font-bold text-primary">{option.label}</div>
+                                                                <div className="mt-1 text-[11px] leading-5 text-primary/55">{option.description}</div>
+                                                                <div className="mt-2 text-[10px] uppercase tracking-[0.16em] text-primary/35">{option.id}</div>
+                                                            </div>
+                                                            <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
+                                                                {checked ? 'check_circle' : 'radio_button_unchecked'}
+                                                            </span>
+                                                        </div>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    <div className="rounded-sm border border-primary/10 p-4">
+                                        <div className="flex flex-col gap-3 border-b border-primary/10 pb-3">
+                                            <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+                                                <div>
+                                                    <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Thuộc tính có thể cập nhật</div>
+                                                    <p className="mt-2 text-[12px] leading-5 text-primary/60">
+                                                        Nếu file Excel có các cột thuộc tính riêng như bên xuất Excel, bạn có thể chọn đúng từng thuộc tính để chỉ cập nhật các cột đó.
+                                                    </p>
                                                 </div>
-                                            </button>
-                                        );
-                                    })}
+                                                <div className="text-[12px] text-primary/55">
+                                                    {selectedImportAttributeCount}/{importAttributeFieldOptions.length} đã chọn
+                                                </div>
+                                            </div>
+                                            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                                <div className="relative w-full md:max-w-sm">
+                                                    <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">search</span>
+                                                    <input
+                                                        type="text"
+                                                        value={importAttributeSearch}
+                                                        onChange={(event) => setImportAttributeSearch(event.target.value)}
+                                                        placeholder="Tìm theo tên thuộc tính..."
+                                                        className="w-full rounded-sm border border-primary/15 bg-white py-2 pl-10 pr-3 text-[13px] text-primary outline-none transition-all focus:border-primary/35 focus:ring-2 focus:ring-primary/10"
+                                                    />
+                                                </div>
+                                                <div className="flex flex-wrap gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleSelectImportAttributeFields}
+                                                        className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                                    >
+                                                        Chọn hết thuộc tính
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleClearImportAttributeFields}
+                                                        className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-brick hover:bg-brick/5"
+                                                    >
+                                                        Bỏ thuộc tính
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="rounded-sm bg-primary/[0.03] px-3 py-2 text-[12px] text-primary/65">
+                                                Mẹo: nếu file dùng cột tổng <strong>Thuộc tính</strong> thì chọn field <strong>Thuộc tính</strong> ở phần trên. Nếu file có từng cột thuộc tính riêng, hãy tick đúng các thuộc tính bên dưới.
+                                            </div>
+                                        </div>
+                                        <div className="mt-4 max-h-[320px] overflow-y-auto pr-1 custom-scrollbar">
+                                            {filteredImportAttributeFieldOptions.length > 0 ? (
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                                    {filteredImportAttributeFieldOptions.map((option) => {
+                                                        const checked = importUpdateFieldIds.includes(option.id);
+                                                        return (
+                                                            <button
+                                                                key={option.id}
+                                                                type="button"
+                                                                onClick={() => toggleImportUpdateField(option.id)}
+                                                                className={`rounded-sm border px-4 py-3 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
+                                                            >
+                                                                <div className="flex items-start justify-between gap-3">
+                                                                    <div className="min-w-0">
+                                                                        <div className="text-[13px] font-bold text-primary">{option.label}</div>
+                                                                        <div className="mt-1 text-[11px] leading-5 text-primary/55">{option.description}</div>
+                                                                        <div className="mt-2 text-[10px] uppercase tracking-[0.16em] text-primary/35">{option.id}</div>
+                                                                    </div>
+                                                                    <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
+                                                                        {checked ? 'check_circle' : 'radio_button_unchecked'}
+                                                                    </span>
+                                                                </div>
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            ) : (
+                                                <div className="rounded-sm border border-dashed border-primary/15 bg-primary/[0.02] px-4 py-6 text-center text-[12px] text-primary/55">
+                                                    {importAttributeFieldOptions.length === 0
+                                                        ? 'Chưa có thuộc tính nào để chọn cập nhật.'
+                                                        : 'Không tìm thấy thuộc tính nào khớp với từ khóa bạn vừa nhập.'}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
                                 </div>
                             </>
                         ) : (
-                            <div className="mt-4 rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-3 text-[13px] text-primary/70">
+                            <div className="rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-3 text-[13px] text-primary/70">
                                 Hệ thống sẽ đọc toàn bộ cột có dữ liệu trong file để cập nhật sản phẩm hiện có hoặc tạo mới theo rule bạn vừa chọn.
                             </div>
                         )}
+                        </div>
 
-                        <div className="mt-6 pt-4 border-t border-primary/10 flex flex-col md:flex-row md:items-center md:justify-between gap-3 shrink-0">
+                        <div className="border-t border-primary/10 bg-white px-6 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3 shrink-0">
                             <p className="text-[12px] text-primary/60">
                                 Nhận diện sản phẩm theo SKU, đồng thời đối soát thêm ID, slug và link sản phẩm nếu file đang có sẵn các cột đó.
                             </p>
@@ -3186,7 +3361,6 @@ const ProductList = () => {
                         ) : (
                             products.map(product => {
                                 const isParent = product.type === 'configurable' || product.type === 'grouped' || product.type === 'bundle';
-                                const isChild = product.parent_products?.length > 0;
                                 const isExpanded = expandedRows.includes(product.id);
                                 const bundleOptionGroups = product.type === 'bundle'
                                     ? buildBundleOptionGroups(product.bundle_items || [])
@@ -3197,7 +3371,8 @@ const ProductList = () => {
                                 
                                 const renderRow = (p, isSubRow = false) => {
                                     const pIsParent = p.type === 'configurable' || p.type === 'grouped' || p.type === 'bundle';
-                                    const pIsChild = isSubRow || p.parent_products?.length > 0;
+                                    const pIsChild = isSubRow || isVariantChildProduct(p);
+                                    const editTargetId = getProductEditTargetId(p);
                                     
                                     // Custom aggregate price display for parent products
                                     let displayCostPrice = normalizeRoundedImportCostNumber(p.expected_cost ?? p.cost_price);
@@ -3237,7 +3412,7 @@ const ProductList = () => {
                                             animate={{ opacity: 1, y: 0 }}
                                             exit={{ opacity: 0, y: -10 }}
                                             onClick={(event) => handleRowSelectionClick(p.id, event)}
-                                            onDoubleClick={() => navigate(`/admin/products/edit/${p.id}`)}
+                                            onDoubleClick={() => navigate(`/admin/products/edit/${editTargetId}`)}
                                             className={`transition-all group cursor-pointer ${
                                                 selectedIds.includes(p.id) ? 'bg-gold/10' : 
                                                 pIsParent ? 'row-parent' : 
@@ -3515,7 +3690,7 @@ const ProductList = () => {
                                                             ) : (
                                                                 <React.Fragment>
                                                                     <button onClick={(e) => { e.stopPropagation(); requestDuplicate(p.id); }} className="p-1 hover:text-gold" title="Nhân bản"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
-                                                                    <button onClick={(e) => { e.stopPropagation(); navigate(`/admin/products/edit/${p.id}`); }} className="p-1 hover:text-primary" title="Sửa"><span className="material-symbols-outlined text-[18px]">edit</span></button>
+                                                                    <button onClick={(e) => { e.stopPropagation(); navigate(`/admin/products/edit/${editTargetId}`); }} className="p-1 hover:text-primary" title="Sửa"><span className="material-symbols-outlined text-[18px]">edit</span></button>
                                                                     <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }} className="p-1 hover:text-brick" title="Xóa"><span className="material-symbols-outlined text-[18px]">delete</span></button>
                                                                 </React.Fragment>
                                                             )}

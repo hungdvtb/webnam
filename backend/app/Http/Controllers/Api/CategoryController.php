@@ -451,7 +451,7 @@ class CategoryController extends Controller
             ->filter()
             ->values();
 
-        $existingProductIds = $category->products()
+        $existingProductIds = $this->sortableCategoryProductsQuery($category)
             ->pluck('products.id')
             ->map(fn ($productId) => (int) $productId)
             ->values();
@@ -488,15 +488,20 @@ class CategoryController extends Controller
         ]);
     }
 
+    protected function sortableCategoryProductsQuery(Category $category)
+    {
+        return $category->products()
+            ->whereDoesntHave('parentConfigurable');
+    }
+
     protected function buildCategoryProductPayload(Category $category): array
     {
-        $category->loadCount('products');
-
-        $products = $category->products()
+        $products = $this->sortableCategoryProductsQuery($category)
             ->with([
                 'images:id,product_id,image_url,is_primary,sort_order',
                 'category:id,name',
             ])
+            ->withCount('parentConfigurable')
             ->get([
                 'products.id',
                 'products.name',
@@ -517,6 +522,7 @@ class CategoryController extends Controller
                     'main_image' => $product->main_image,
                     'sort_order' => (int) ($product->pivot->sort_order ?? 0),
                     'is_primary_category' => (int) $product->category_id === (int) $category->id,
+                    'is_variant_child' => ((int) ($product->parent_configurable_count ?? 0)) > 0,
                 ];
             })
             ->values();
@@ -529,7 +535,7 @@ class CategoryController extends Controller
                 'parent_id' => $category->parent_id ? (int) $category->parent_id : null,
                 'display_layout' => 'layout_1',
                 'status' => (int) $category->status,
-                'products_count' => (int) ($category->products_count ?? $products->count()),
+                'products_count' => (int) $products->count(),
             ],
             'products' => $products,
         ];

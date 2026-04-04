@@ -245,6 +245,12 @@ const downloadBlobResponse = (response, fallbackFilename) => {
     window.URL.revokeObjectURL(url);
 };
 
+const normalizeSortableCategoryProducts = (products) => (
+    Array.isArray(products)
+        ? products.filter((product) => product && product.is_variant_child !== true)
+        : []
+);
+
 const CategoryProductRow = ({
     product,
     index,
@@ -480,7 +486,7 @@ const CategoryList = () => {
         try {
             const response = await categoryApi.getProducts(categoryId);
             setSelectedCategoryMeta(response.data?.category || null);
-            setCategoryProducts(Array.isArray(response.data?.products) ? response.data.products : []);
+            setCategoryProducts(normalizeSortableCategoryProducts(response.data?.products));
             setCategoryProductsDirty(false);
         } catch (error) {
             console.error('Error loading category products:', error);
@@ -523,7 +529,7 @@ const CategoryList = () => {
             );
 
             setSelectedCategoryMeta(response.data?.category || null);
-            setCategoryProducts(Array.isArray(response.data?.products) ? response.data.products : []);
+            setCategoryProducts(normalizeSortableCategoryProducts(response.data?.products));
             setCategoryProductsDirty(false);
             showToast({ message: 'Đã lưu thứ tự sản phẩm trong danh mục.', type: 'success' });
         } catch (error) {

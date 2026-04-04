@@ -3820,7 +3820,7 @@ class ProductController extends Controller
             && preg_match('/\d/u', $trimmed) === 1;
     }
 
-    protected function applyProductSearch(Builder $query, string $rawSearch): array
+    protected function applyProductSearch(Builder $query, string $rawSearch, bool $includeVariationMatches = true): array
     {
         $trimmedSearch = trim($rawSearch);
         if ($trimmedSearch === '') {
@@ -3829,17 +3829,17 @@ class ProductController extends Controller
 
         if ($this->looksLikeProductCodeSearch($trimmedSearch)) {
             $codeProbeQuery = clone $query;
-            [$codeSearchRankingSql] = $this->applyProductCodeSearch($codeProbeQuery, $trimmedSearch);
+            [$codeSearchRankingSql] = $this->applyProductCodeSearch($codeProbeQuery, $trimmedSearch, $includeVariationMatches);
 
             if ($codeSearchRankingSql !== null && $codeProbeQuery->exists()) {
-                return $this->applyProductCodeSearch($query, $trimmedSearch);
+                return $this->applyProductCodeSearch($query, $trimmedSearch, $includeVariationMatches);
             }
         }
 
-        return $this->applyProductNameSearch($query, $trimmedSearch);
+        return $this->applyProductNameSearch($query, $trimmedSearch, $includeVariationMatches);
     }
 
-    protected function applyProductCodeSearch(Builder $query, string $rawSearch): array
+    protected function applyProductCodeSearch(Builder $query, string $rawSearch, bool $includeVariationMatches = true): array
     {
         $normalizedCode = $this->normalizeCodeSearchText($rawSearch);
         $compactCode = $this->compactSearchText($rawSearch);
@@ -3854,7 +3854,7 @@ class ProductController extends Controller
         $compactSkuExpr = $this->compactSearchExpression('products.sku');
         $nameExpr = $includeNameMatches ? $this->normalizedWordsExpression('products.name') : null;
         $compactNameExpr = $includeNameMatches ? $this->compactSearchExpression('products.name') : null;
-        $exactCodeSearch = function (Builder $searchQuery) use ($skuExpr, $compactSkuExpr, $normalizedCode, $compactCode) {
+        $exactCodeSearch = function (Builder $searchQuery) use ($skuExpr, $compactSkuExpr, $normalizedCode, $compactCode, $includeVariationMatches) {
             $searchQuery
                 ->where(function (Builder $directQuery) use ($skuExpr, $compactSkuExpr, $normalizedCode, $compactCode) {
                     $directQuery->whereRaw("{$skuExpr} = ?", [$normalizedCode]);
@@ -3862,8 +3862,10 @@ class ProductController extends Controller
                     if ($compactCode !== '') {
                         $directQuery->orWhereRaw("{$compactSkuExpr} = ?", [$compactCode]);
                     }
-                })
-                ->orWhereHas('variations', function (Builder $variationQuery) use ($normalizedCode, $compactCode) {
+                });
+
+            if ($includeVariationMatches) {
+                $searchQuery->orWhereHas('variations', function (Builder $variationQuery) use ($normalizedCode, $compactCode) {
                     $variationSkuExpr = $this->loweredSearchExpression('sku');
                     $variationCompactSkuExpr = $this->compactSearchExpression('sku');
 
@@ -3875,7 +3877,7 @@ class ProductController extends Controller
                         }
                     });
                 });
-
+            }
         };
 
         $hasExactCodeMatch = (clone $query)->where($exactCodeSearch)->exists();
@@ -3983,7 +3985,8 @@ class ProductController extends Controller
             $includeNameMatches,
             $nameExpr,
             $compactNameExpr,
-            $nameContainsLike
+            $nameContainsLike,
+            $includeVariationMatches
         ) {
             $searchQuery
                 ->where(function (Builder $directQuery) use (
@@ -4009,8 +4012,10 @@ class ProductController extends Controller
                     if ($includeNameMatches && $compactNameExpr !== null && $compactCodeContainsLike !== null) {
                         $directQuery->orWhereRaw("{$compactNameExpr} LIKE ? ESCAPE '\\'", [$compactCodeContainsLike]);
                     }
-                })
-                ->orWhereHas('variations', function (Builder $variationQuery) use (
+                });
+
+            if ($includeVariationMatches) {
+                $searchQuery->orWhereHas('variations', function (Builder $variationQuery) use (
                     $codeContainsLike,
                     $compactCodeContainsLike,
                     $includeNameMatches,
@@ -4046,6 +4051,7 @@ class ProductController extends Controller
                         }
                     });
                 });
+            }
 
         });
 
@@ -4106,7 +4112,12 @@ class ProductController extends Controller
         });
     }
 
-    protected function applyProductNamePhraseConstraint(Builder $query, string $nameContainsLike, ?string $compactNameContainsLike = null): void
+    protected function applyProductNamePhraseConstraint(
+        Builder $query,
+        string $nameContainsLike,
+        ?string $compactNameContainsLike = null,
+        bool $includeVariationMatches = true
+    ): void
     {
         $nameExpr = $this->normalizedWordsExpression('products.name');
         $compactNameExpr = $this->compactSearchExpression('products.name');
@@ -4119,29 +4130,38 @@ class ProductController extends Controller
                     $directQuery->orWhereRaw("{$compactNameExpr} LIKE ? ESCAPE '\\'", [$compactNameContainsLike]);
                 }
             })
-            ->orWhereHas('variations', function (Builder $variationQuery) use ($nameContainsLike, $compactNameContainsLike) {
-                $variationNameExpr = $this->normalizedWordsExpression('name');
-                $variationCompactNameExpr = $this->compactSearchExpression('name');
-
-                $variationQuery->where(function (Builder $directVariationQuery) use ($variationNameExpr, $variationCompactNameExpr, $nameContainsLike, $compactNameContainsLike) {
-                    $directVariationQuery->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
-
-                    if ($compactNameContainsLike !== null) {
-                        $directVariationQuery->orWhereRaw("{$variationCompactNameExpr} LIKE ? ESCAPE '\\'", [$compactNameContainsLike]);
-                    }
-                });
-            })
             ->orWhereHas('attributeValues', function (Builder $attributeValueQuery) use ($nameContainsLike) {
                 $this->applyProductSearchAttributeValueLikeConstraint($attributeValueQuery, $nameContainsLike);
-            })
-            ->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($nameContainsLike) {
-                $this->applyProductSearchAttributeValueLikeConstraint($attributeValueQuery, $nameContainsLike);
             });
+
+        if ($includeVariationMatches) {
+            $query
+                ->orWhereHas('variations', function (Builder $variationQuery) use ($nameContainsLike, $compactNameContainsLike) {
+                    $variationNameExpr = $this->normalizedWordsExpression('name');
+                    $variationCompactNameExpr = $this->compactSearchExpression('name');
+
+                    $variationQuery->where(function (Builder $directVariationQuery) use ($variationNameExpr, $variationCompactNameExpr, $nameContainsLike, $compactNameContainsLike) {
+                        $directVariationQuery->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
+
+                        if ($compactNameContainsLike !== null) {
+                            $directVariationQuery->orWhereRaw("{$variationCompactNameExpr} LIKE ? ESCAPE '\\'", [$compactNameContainsLike]);
+                        }
+                    });
+                })
+                ->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($nameContainsLike) {
+                    $this->applyProductSearchAttributeValueLikeConstraint($attributeValueQuery, $nameContainsLike);
+                });
+        }
 
         $this->applyBundleNamePhraseConstraint($query, $nameContainsLike, $compactNameContainsLike);
     }
 
-    protected function applyProductNameTokenConstraint(Builder $query, array $tokenLikes, bool $includeSku = false): void
+    protected function applyProductNameTokenConstraint(
+        Builder $query,
+        array $tokenLikes,
+        bool $includeSku = false,
+        bool $includeVariationMatches = true
+    ): void
     {
         $nameExpr = $this->normalizedWordsExpression('products.name');
         $compactNameExpr = $this->compactSearchExpression('products.name');
@@ -4161,38 +4181,46 @@ class ProductController extends Controller
                     });
                 }
             })
-            ->orWhereHas('variations', function (Builder $variationQuery) use ($tokenLikes, $includeSku) {
-                $variationNameExpr = $this->normalizedWordsExpression('name');
-                $variationCompactNameExpr = $this->compactSearchExpression('name');
-                $variationCompactSkuExpr = $includeSku ? $this->compactSearchExpression('sku') : null;
-
-                foreach ($tokenLikes as $tokenLike) {
-                    $variationQuery->where(function (Builder $segmentQuery) use ($variationNameExpr, $variationCompactNameExpr, $variationCompactSkuExpr, $tokenLike) {
-                        $segmentQuery
-                            ->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike])
-                            ->orWhereRaw("{$variationCompactNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
-
-                        if ($variationCompactSkuExpr !== null) {
-                            $segmentQuery->orWhereRaw("{$variationCompactSkuExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
-                        }
-                    });
-                }
-            })
             ->orWhereHas('attributeValues', function (Builder $attributeValueQuery) use ($tokenLikes) {
-                foreach ($tokenLikes as $tokenLike) {
-                    $this->applyProductSearchAttributeValueLikeConstraint($attributeValueQuery, $tokenLike);
-                }
-            })
-            ->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($tokenLikes) {
                 foreach ($tokenLikes as $tokenLike) {
                     $this->applyProductSearchAttributeValueLikeConstraint($attributeValueQuery, $tokenLike);
                 }
             });
 
+        if ($includeVariationMatches) {
+            $query
+                ->orWhereHas('variations', function (Builder $variationQuery) use ($tokenLikes, $includeSku) {
+                    $variationNameExpr = $this->normalizedWordsExpression('name');
+                    $variationCompactNameExpr = $this->compactSearchExpression('name');
+                    $variationCompactSkuExpr = $includeSku ? $this->compactSearchExpression('sku') : null;
+
+                    foreach ($tokenLikes as $tokenLike) {
+                        $variationQuery->where(function (Builder $segmentQuery) use ($variationNameExpr, $variationCompactNameExpr, $variationCompactSkuExpr, $tokenLike) {
+                            $segmentQuery
+                                ->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike])
+                                ->orWhereRaw("{$variationCompactNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+
+                            if ($variationCompactSkuExpr !== null) {
+                                $segmentQuery->orWhereRaw("{$variationCompactSkuExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+                            }
+                        });
+                    }
+                })
+                ->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($tokenLikes) {
+                    foreach ($tokenLikes as $tokenLike) {
+                        $this->applyProductSearchAttributeValueLikeConstraint($attributeValueQuery, $tokenLike);
+                    }
+                });
+        }
+
         $this->applyBundleNameTokenConstraint($query, $tokenLikes);
     }
 
-    protected function applyProductNameAdjacentPhraseConstraint(Builder $query, array $adjacentPhraseLikes): void
+    protected function applyProductNameAdjacentPhraseConstraint(
+        Builder $query,
+        array $adjacentPhraseLikes,
+        bool $includeVariationMatches = true
+    ): void
     {
         $nameExpr = $this->normalizedWordsExpression('products.name');
 
@@ -4201,8 +4229,10 @@ class ProductController extends Controller
                 foreach ($adjacentPhraseLikes as $phraseLike) {
                     $directQuery->orWhereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$phraseLike]);
                 }
-            })
-            ->orWhereHas('variations', function (Builder $variationQuery) use ($adjacentPhraseLikes) {
+            });
+
+        if ($includeVariationMatches) {
+            $query->orWhereHas('variations', function (Builder $variationQuery) use ($adjacentPhraseLikes) {
                 $variationNameExpr = $this->normalizedWordsExpression('name');
 
                 $variationQuery->where(function (Builder $directVariationQuery) use ($variationNameExpr, $adjacentPhraseLikes) {
@@ -4211,11 +4241,12 @@ class ProductController extends Controller
                     }
                 });
             });
+        }
 
         $this->applyBundleNameAdjacentPhraseConstraint($query, $adjacentPhraseLikes);
     }
 
-    protected function applyProductNameSearch(Builder $query, string $rawSearch): array
+    protected function applyProductNameSearch(Builder $query, string $rawSearch, bool $includeVariationMatches = true): array
     {
         $normalizedName = $this->normalizeNameSearchText($rawSearch);
         if ($normalizedName === '') {
@@ -4277,15 +4308,15 @@ class ProductController extends Controller
         $phraseRankingSql = '(' . implode(' + ', $phraseRankingParts) . ')';
 
         $hasPhraseMatch = (clone $query)
-            ->where(function (Builder $searchQuery) use ($nameContainsLike, $compactNameContainsLike) {
-                $this->applyProductNamePhraseConstraint($searchQuery, $nameContainsLike, $compactNameContainsLike);
+            ->where(function (Builder $searchQuery) use ($nameContainsLike, $compactNameContainsLike, $includeVariationMatches) {
+                $this->applyProductNamePhraseConstraint($searchQuery, $nameContainsLike, $compactNameContainsLike, $includeVariationMatches);
             })
             ->exists();
 
         if ($hasPhraseMatch || empty($tokenLikes)) {
             $query->selectRaw("{$phraseRankingSql} AS search_score", $phraseRankingBindings);
-            $query->where(function (Builder $searchQuery) use ($nameContainsLike, $compactNameContainsLike) {
-                $this->applyProductNamePhraseConstraint($searchQuery, $nameContainsLike, $compactNameContainsLike);
+            $query->where(function (Builder $searchQuery) use ($nameContainsLike, $compactNameContainsLike, $includeVariationMatches) {
+                $this->applyProductNamePhraseConstraint($searchQuery, $nameContainsLike, $compactNameContainsLike, $includeVariationMatches);
             });
 
             return [$phraseRankingSql, $phraseRankingBindings];
@@ -4293,8 +4324,8 @@ class ProductController extends Controller
 
         $hasAdjacentPhraseMatch = !empty($adjacentPhraseLikes)
             && (clone $query)
-                ->where(function (Builder $searchQuery) use ($adjacentPhraseLikes) {
-                    $this->applyProductNameAdjacentPhraseConstraint($searchQuery, $adjacentPhraseLikes);
+                ->where(function (Builder $searchQuery) use ($adjacentPhraseLikes, $includeVariationMatches) {
+                    $this->applyProductNameAdjacentPhraseConstraint($searchQuery, $adjacentPhraseLikes, $includeVariationMatches);
                 })
                 ->exists();
 
@@ -4329,13 +4360,13 @@ class ProductController extends Controller
 
         $searchRankingSql = '(' . implode(' + ', $searchRankingParts) . ')';
         $query->selectRaw("{$searchRankingSql} AS search_score", $searchRankingBindings);
-        $query->where(function (Builder $searchQuery) use ($tokenLikes, $isCompactCompositeSearch) {
-            $this->applyProductNameTokenConstraint($searchQuery, $tokenLikes, $isCompactCompositeSearch);
+        $query->where(function (Builder $searchQuery) use ($tokenLikes, $isCompactCompositeSearch, $includeVariationMatches) {
+            $this->applyProductNameTokenConstraint($searchQuery, $tokenLikes, $isCompactCompositeSearch, $includeVariationMatches);
         });
 
         if ($hasAdjacentPhraseMatch) {
-            $query->where(function (Builder $searchQuery) use ($adjacentPhraseLikes) {
-                $this->applyProductNameAdjacentPhraseConstraint($searchQuery, $adjacentPhraseLikes);
+            $query->where(function (Builder $searchQuery) use ($adjacentPhraseLikes, $includeVariationMatches) {
+                $this->applyProductNameAdjacentPhraseConstraint($searchQuery, $adjacentPhraseLikes, $includeVariationMatches);
             });
         }
 
@@ -4539,6 +4570,153 @@ class ProductController extends Controller
         }
 
         return false;
+    }
+
+    protected function buildProductListSortProjection(string $sortBy, string $actualStockSql): array
+    {
+        $resolvedSort = match ($sortBy) {
+            'stock', 'stock_quantity' => 'actual_stock',
+            default => $sortBy,
+        };
+
+        if (preg_match('/^attr_(\d+)$/', $resolvedSort, $matches) === 1) {
+            $attributeId = (int) $matches[1];
+            $attributeValueExpression = "(SELECT product_attribute_values.value
+                FROM product_attribute_values
+                WHERE product_attribute_values.product_id = products.id
+                    AND product_attribute_values.attribute_id = {$attributeId}
+                ORDER BY product_attribute_values.id ASC
+                LIMIT 1)";
+
+            return [
+                'mode' => 'text',
+                'empty_rank' => "CASE WHEN TRIM(COALESCE({$attributeValueExpression}, '')) = '' THEN 1 ELSE 0 END",
+                'text_value' => $this->normalizedAttributeSortExpression($attributeValueExpression),
+                'number_value' => 'NULL',
+            ];
+        }
+
+        if ($resolvedSort === 'actual_stock') {
+            return [
+                'mode' => 'number',
+                'empty_rank' => '0',
+                'text_value' => 'NULL',
+                'number_value' => $actualStockSql,
+            ];
+        }
+
+        if ($resolvedSort === 'category') {
+            $categoryExpression = $this->resolveProductCategorySortExpression();
+
+            return [
+                'mode' => 'text',
+                'empty_rank' => "CASE WHEN TRIM(COALESCE({$categoryExpression}, '')) = '' THEN 1 ELSE 0 END",
+                'text_value' => $this->normalizedSortExpression($categoryExpression),
+                'number_value' => 'NULL',
+            ];
+        }
+
+        if ($resolvedSort === 'supplier_product_code') {
+            $supplierCodeExpression = $this->resolveProductSupplierCodeSortExpression();
+
+            if ($supplierCodeExpression !== null) {
+                return [
+                    'mode' => 'text',
+                    'empty_rank' => "CASE WHEN TRIM(COALESCE({$supplierCodeExpression}, '')) = '' THEN 1 ELSE 0 END",
+                    'text_value' => $this->normalizedSortExpression($supplierCodeExpression),
+                    'number_value' => 'NULL',
+                ];
+            }
+        }
+
+        $textSortColumns = [
+            'sku' => 'products.sku',
+            'name' => 'products.name',
+            'type' => 'products.type',
+            'specifications' => 'products.specifications',
+        ];
+
+        if (isset($textSortColumns[$resolvedSort])) {
+            $expression = $textSortColumns[$resolvedSort];
+
+            return [
+                'mode' => 'text',
+                'empty_rank' => "CASE WHEN TRIM(COALESCE({$expression}, '')) = '' THEN 1 ELSE 0 END",
+                'text_value' => $this->normalizedSortExpression($expression),
+                'number_value' => 'NULL',
+            ];
+        }
+
+        $directSortColumns = [
+            'id' => 'products.id',
+            'price' => 'products.price',
+            'expected_cost' => 'products.expected_cost',
+            'cost_price' => 'products.cost_price',
+            'created_at' => 'products.created_at',
+            'status' => 'products.status',
+            'is_featured' => 'products.is_featured',
+            'is_new' => 'products.is_new',
+            'category_id' => 'products.category_id',
+            'stock_quantity' => 'products.stock_quantity',
+        ];
+
+        return [
+            'mode' => 'number',
+            'empty_rank' => '0',
+            'text_value' => 'NULL',
+            'number_value' => $directSortColumns[$resolvedSort] ?? 'products.id',
+        ];
+    }
+
+    protected function buildAdminProductListBaseQuery(Request $request): array
+    {
+        $query = Product::query()
+            ->select([
+                'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
+                'supplier_id', 'inventory_unit_id',
+                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title', 'site_domain_id'
+            ])
+            ->withCount('suppliers')
+            ->with([
+                'categories:id,name,code,slug',
+                'category:id,name,code,slug',
+                'supplier:id,name,code',
+                'suppliers:id,name,code',
+                'parentConfigurable:id,name,sku,type',
+                'unit:id,name',
+                'siteDomain:id,domain',
+                'images:id,product_id,image_url,is_primary,sort_order',
+                'attributeValues:id,product_id,attribute_id,value',
+                'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
+                'variations:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
+                'variations.parentConfigurable:id,name,sku,type',
+                'variations.supplier:id,name,code',
+                'variations.suppliers:id,name,code',
+                'variations.attributeValues:id,product_id,attribute_id,value',
+                'variations.attributeValues.attribute:id,name,code,frontend_type',
+                'variations.unit:id,name',
+                'variations.images:id,product_id,image_url,is_primary,sort_order',
+                'groupedItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
+                'groupedItems.supplier:id,name,code',
+                'groupedItems.suppliers:id,name,code',
+                'groupedItems.unit:id,name',
+                'groupedItems.images:id,product_id,image_url,is_primary,sort_order',
+                'bundleItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
+                'bundleItems.supplier:id,name,code',
+                'bundleItems.suppliers:id,name,code',
+                'bundleItems.unit:id,name',
+                'bundleItems.images:id,product_id,image_url,is_primary,sort_order'
+            ]);
+
+        $stockContext = $this->attachActualStockSubqueries($query, $request);
+        $actualStockSql = $stockContext['actual_stock_sql'];
+        $query->selectRaw($actualStockSql . ' AS actual_stock');
+        $supplierCodeExpression = $this->resolveProductSupplierCodeSortExpression();
+        if ($supplierCodeExpression !== null) {
+            $query->selectRaw($supplierCodeExpression . ' AS supplier_product_code');
+        }
+
+        return [$query, $actualStockSql];
     }
 
     protected function pickerPrimaryImage(?Product $product): ?string
@@ -4791,50 +4969,7 @@ class ProductController extends Controller
             return $this->pickerIndex($request);
         }
 
-        // Start with optimized column selection for products list to reduce memory & payload
-        $query = Product::query()
-            ->select([
-            'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
-            'supplier_id', 'inventory_unit_id',
-            'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title', 'site_domain_id'
-        ])
-            ->withCount('suppliers')
-            ->with([
-            'categories:id,name,code,slug',
-            'category:id,name,code,slug',
-            'supplier:id,name,code',
-            'suppliers:id,name,code',
-            'unit:id,name',
-            'siteDomain:id,domain',
-            'images:id,product_id,image_url,is_primary,sort_order',
-            'attributeValues:id,product_id,attribute_id,value',
-            'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
-            'variations:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
-            'variations.supplier:id,name,code',
-            'variations.suppliers:id,name,code',
-            'variations.attributeValues:id,product_id,attribute_id,value',
-            'variations.attributeValues.attribute:id,name,code,frontend_type',
-            'variations.unit:id,name',
-            'variations.images:id,product_id,image_url,is_primary,sort_order',
-            'groupedItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
-            'groupedItems.supplier:id,name,code',
-            'groupedItems.suppliers:id,name,code',
-            'groupedItems.unit:id,name',
-            'groupedItems.images:id,product_id,image_url,is_primary,sort_order',
-            'bundleItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
-            'bundleItems.supplier:id,name,code',
-            'bundleItems.suppliers:id,name,code',
-            'bundleItems.unit:id,name',
-            'bundleItems.images:id,product_id,image_url,is_primary,sort_order'
-        ]);
-
-        $stockContext = $this->attachActualStockSubqueries($query, $request);
-        $actualStockSql = $stockContext['actual_stock_sql'];
-        $query->selectRaw($actualStockSql . ' AS actual_stock');
-        $supplierCodeExpression = $this->resolveProductSupplierCodeSortExpression();
-        if ($supplierCodeExpression !== null) {
-            $query->selectRaw($supplierCodeExpression . ' AS supplier_product_code');
-        }
+        [$query, $actualStockSql] = $this->buildAdminProductListBaseQuery($request);
 
         // Handle Trash View
         if ($request->boolean('is_trash')) {
@@ -5124,14 +5259,165 @@ class ProductController extends Controller
         $this->applyProductAttributeFilters($query, $request->input('attributes'));
         // Mặc định luôn ẩn sản phẩm con (biến thể) ở danh sách chính
         // Sản phẩm con chỉ hiển thị khi bấm mở rộng sản phẩm cha ở frontend
-        if ($request->filled('search')) {
+        $searchTerm = trim((string) $request->input('search', ''));
+        $typeFilterApplied = $request->filled('type');
+        if ($searchTerm !== '' && !$typeFilterApplied) {
+            $sortBy = $request->input('sort_by', 'created_at');
+            $sortOrder = $request->input('sort_order', 'desc');
+            $requestedSort = is_string($sortBy) && trim($sortBy) !== '' ? trim($sortBy) : 'created_at';
+            $order = strtolower((string) $sortOrder) === 'asc' ? 'asc' : 'desc';
+
+            $topLevelScopeQuery = clone $query;
+            $topLevelScopeQuery->whereDoesntHave('parentConfigurable');
+
+            $directMatchQuery = clone $topLevelScopeQuery;
+            $directMatchQuery->setEagerLoads([]);
+            $directMatchQuery->select('products.id');
+            [$directSearchRankingSql, $directSearchRankingBindings] = $this->applyProductSearch(
+                $directMatchQuery,
+                $searchTerm,
+                false
+            );
+            if ($directSearchRankingSql === null) {
+                $directMatchQuery->selectRaw('0 AS search_score');
+            }
+
+            $directSortProjection = $this->buildProductListSortProjection($requestedSort, $actualStockSql);
+            $directMatchQuery
+                ->selectRaw("{$directSortProjection['empty_rank']} AS sort_empty_rank")
+                ->selectRaw("{$directSortProjection['text_value']} AS sort_text_value")
+                ->selectRaw("{$directSortProjection['number_value']} AS sort_numeric_value");
+
+            $configurableParentIdsQuery = clone $topLevelScopeQuery;
+            $configurableParentIdsQuery->setEagerLoads([]);
+            $configurableParentIdsQuery
+                ->select('products.id')
+                ->where('products.type', 'configurable');
+
+            $variantMatchQuery = Product::query()
+                ->select('products.id');
+
+            if ($request->boolean('is_trash')) {
+                $variantMatchQuery->onlyTrashed();
+            }
+
+            $variantStockContext = $this->attachActualStockSubqueries($variantMatchQuery, $request);
+            $variantActualStockSql = $variantStockContext['actual_stock_sql'];
+
+            $variantMatchQuery->whereHas('parentConfigurable', function (Builder $parentQuery) use ($configurableParentIdsQuery) {
+                $parentQuery->whereIn('products.id', $configurableParentIdsQuery);
+            });
+
+            [$variantSearchRankingSql, $variantSearchRankingBindings] = $this->applyProductSearch(
+                $variantMatchQuery,
+                $searchTerm,
+                false
+            );
+            if ($variantSearchRankingSql === null) {
+                $variantMatchQuery->selectRaw('0 AS search_score');
+            }
+
+            $variantParentIdsQuery = clone $variantMatchQuery;
+            $variantParentIdsQuery
+                ->join('product_links', function ($join) {
+                    $join->on('product_links.linked_product_id', '=', 'products.id')
+                        ->where('product_links.link_type', 'super_link');
+                })
+                ->select('product_links.product_id')
+                ->distinct();
+
+            $directMatchQuery->where(function (Builder $directTopLevelQuery) use ($variantParentIdsQuery) {
+                $directTopLevelQuery
+                    ->where('products.type', '!=', 'configurable')
+                    ->orWhereNotIn('products.id', $variantParentIdsQuery);
+            });
+
+            $variantSortProjection = $this->buildProductListSortProjection($requestedSort, $variantActualStockSql);
+            $variantMatchQuery
+                ->selectRaw("{$variantSortProjection['empty_rank']} AS sort_empty_rank")
+                ->selectRaw("{$variantSortProjection['text_value']} AS sort_text_value")
+                ->selectRaw("{$variantSortProjection['number_value']} AS sort_numeric_value");
+
+            $searchMatches = $directMatchQuery->toBase()->unionAll($variantMatchQuery->toBase());
+            $rankedMatches = DB::query()
+                ->fromSub($searchMatches, 'search_matches')
+                ->orderByDesc('search_score');
+
+            if ($directSortProjection['mode'] === 'text') {
+                $rankedMatches
+                    ->orderBy('sort_empty_rank', 'asc')
+                    ->orderBy('sort_text_value', $order);
+            } else {
+                $rankedMatches->orderBy('sort_numeric_value', $order);
+            }
+
+            $rankedMatches->orderByDesc('id');
+
+            $perPage = min(max((int) $request->get('per_page', 20), 1), 100);
+            $paginatedMatches = $rankedMatches->paginate($perPage);
+            $pageIds = collect($paginatedMatches->items())
+                ->pluck('id')
+                ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+                ->filter()
+                ->values();
+
+            if ($pageIds->isEmpty()) {
+                $paginatedMatches->setCollection(collect());
+                return response()->json($paginatedMatches);
+            }
+
+            [$resourceQuery] = $this->buildAdminProductListBaseQuery($request);
+            if ($request->boolean('is_trash')) {
+                $resourceQuery->onlyTrashed();
+            }
+
+            $orderedIds = $pageIds->all();
+            $orderLookup = array_flip($orderedIds);
+            $products = $resourceQuery
+                ->whereIn('products.id', $orderedIds)
+                ->get()
+                ->sortBy(fn (Product $product) => $orderLookup[(int) $product->id] ?? PHP_INT_MAX)
+                ->values();
+
+            $stockMap = $this->buildActualStockMap(
+                $request,
+                $products
+                    ->flatMap(function (Product $product) {
+                        $ids = [$product->id];
+
+                        if ($product->relationLoaded('variations')) {
+                            $ids = array_merge($ids, $product->variations->pluck('id')->all());
+                        }
+
+                        if ($product->relationLoaded('groupedItems')) {
+                            $ids = array_merge($ids, $product->groupedItems->pluck('id')->all());
+                        }
+
+                        return $ids;
+                    })
+                    ->all()
+            );
+
+            $paginatedMatches->setCollection(
+                $products->map(function (Product $product) use ($stockMap) {
+                    return $this->syncProductStocksFromInventory(
+                        $this->appendSupplierMeta($product),
+                        $stockMap
+                    );
+                })
+            );
+
+            return response()->json($paginatedMatches);
+        }
+
+        if ($searchTerm !== '') {
             [$searchRankingSql, $searchRankingBindings] = $this->applyProductSearch(
                 $query,
-                (string) $request->input('search')
+                $searchTerm
             );
         }
 
-        if (!$request->filled('type')) {
+        if (!$typeFilterApplied) {
             $query->whereDoesntHave('parentConfigurable');
         }
 

@@ -463,6 +463,77 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.sku', 'BUNDLE-MEN-LAM-RAN');
     }
 
+    public function test_admin_search_returns_matching_variant_row_instead_of_parent(): void
+    {
+        $account = $this->authenticate();
+
+        $parent = $this->createProduct($account, [
+            'name' => 'Ong huong men lam',
+            'sku' => 'ML80-ONGHUONG-LAM',
+            'type' => 'configurable',
+        ]);
+
+        $matchingVariant = $this->createProduct($account, [
+            'name' => 'Ong huong men lam - S1 - Cao 22cm',
+            'sku' => 'ML80-ONGHUONG-S1-22',
+        ]);
+
+        $otherVariant = $this->createProduct($account, [
+            'name' => 'Ong huong men lam - S2 - Cao 18cm',
+            'sku' => 'ML80-ONGHUONG-S2-18',
+        ]);
+
+        $this->attachVariation($parent, $matchingVariant);
+        $this->attachVariation($parent, $otherVariant);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?search=ML80-ONGHUONG-S1-22&per_page=20');
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $matchingVariant->id)
+            ->assertJsonPath('data.0.sku', 'ML80-ONGHUONG-S1-22')
+            ->assertJsonPath('data.0.parent_configurable.0.id', $parent->id);
+    }
+
+    public function test_admin_search_keeps_parent_filters_but_renders_matching_variant_directly(): void
+    {
+        $account = $this->authenticate();
+        $category = $this->createCategory($account, 'Danh muc ong huong');
+
+        $parent = $this->createProduct($account, [
+            'name' => 'Ong huong men lam',
+            'sku' => 'ML80-ONGHUONG-LAM',
+            'type' => 'configurable',
+            'category_id' => $category->id,
+        ]);
+
+        $matchingVariant = $this->createProduct($account, [
+            'name' => 'Ong huong men lam - S1 - Cao 22cm',
+            'sku' => 'ML80-ONGHUONG-S1-22',
+        ]);
+
+        $nonMatchingVariant = $this->createProduct($account, [
+            'name' => 'Ong huong men lam - S2 - Cao 18cm',
+            'sku' => 'ML80-ONGHUONG-S2-18',
+        ]);
+
+        $this->attachVariation($parent, $matchingVariant);
+        $this->attachVariation($parent, $nonMatchingVariant);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?search=' . urlencode('cao 22') . '&category_ids=' . $category->id . '&per_page=20');
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $matchingVariant->id)
+            ->assertJsonPath('data.0.parent_configurable.0.id', $parent->id);
+    }
+
     private function authenticate(): Account
     {
         $account = Account::query()->create([

@@ -4470,6 +4470,7 @@ class ProductController extends Controller
                 FROM categories
                 INNER JOIN category_product ON category_product.category_id = categories.id
                 WHERE category_product.product_id = products.id
+                    AND category_product.item_type = 'product'
                 ORDER BY category_product.sort_order ASC, categories.id ASC
                 LIMIT 1),
             ''
@@ -4556,6 +4557,7 @@ class ProductController extends Controller
             'price' => 'products.price',
             'expected_cost' => 'products.expected_cost',
             'cost_price' => 'products.cost_price',
+            'sort_order' => 'products.sort_order',
             'created_at' => 'products.created_at',
             'status' => 'products.status',
             'is_featured' => 'products.is_featured',
@@ -4652,6 +4654,7 @@ class ProductController extends Controller
             'price' => 'products.price',
             'expected_cost' => 'products.expected_cost',
             'cost_price' => 'products.cost_price',
+            'sort_order' => 'products.sort_order',
             'created_at' => 'products.created_at',
             'status' => 'products.status',
             'is_featured' => 'products.is_featured',
@@ -4673,7 +4676,7 @@ class ProductController extends Controller
         $query = Product::query()
             ->select([
                 'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
-                'supplier_id', 'inventory_unit_id',
+                'supplier_id', 'inventory_unit_id', 'sort_order',
                 'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title', 'site_domain_id'
             ])
             ->withCount('suppliers')
@@ -4717,6 +4720,100 @@ class ProductController extends Controller
         }
 
         return [$query, $actualStockSql];
+    }
+
+    protected function sortableAdminProductsQuery(?int $accountId = null): Builder
+    {
+        $query = Product::query()
+            ->whereDoesntHave('parentConfigurable');
+
+        if ($accountId !== null) {
+            $query->where('account_id', $accountId);
+        }
+
+        return $query;
+    }
+
+    protected function nextProductSortOrder(?int $accountId = null): int
+    {
+        return (int) $this->sortableAdminProductsQuery($accountId)->max('sort_order') + 1;
+    }
+
+    public function sortItems(Request $request)
+    {
+        $products = $this->sortableAdminProductsQuery()
+            ->select([
+                'products.id',
+                'products.name',
+                'products.sku',
+                'products.status',
+                'products.type',
+                'products.category_id',
+                'products.sort_order',
+            ])
+            ->with([
+                'category:id,name',
+                'categories:id,name',
+                'images:id,product_id,image_url,is_primary,sort_order',
+            ])
+            ->orderBy('products.sort_order')
+            ->orderByDesc('products.id')
+            ->get();
+
+        return response()->json([
+            'data' => $products->map(function (Product $product) {
+                return [
+                    'id' => (int) $product->id,
+                    'name' => $product->name,
+                    'sku' => $product->sku,
+                    'status' => (bool) $product->status,
+                    'type' => $product->type,
+                    'sort_order' => (int) ($product->sort_order ?? 0),
+                    'category_name' => $product->category?->name
+                        ?? $product->categories->pluck('name')->filter()->first(),
+                    'main_image' => $product->main_image,
+                ];
+            })->values(),
+        ]);
+    }
+
+    public function reorder(Request $request)
+    {
+        $validated = $request->validate([
+            'product_ids' => 'required|array|min:1',
+            'product_ids.*' => 'required|integer|distinct|exists:products,id',
+        ]);
+
+        $normalizedIds = collect($validated['product_ids'])
+            ->map(fn ($id) => (int) $id)
+            ->values();
+
+        $existingIds = $this->sortableAdminProductsQuery()
+            ->orderBy('sort_order')
+            ->orderByDesc('id')
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values();
+
+        if ($normalizedIds->count() !== $existingIds->count()
+            || $normalizedIds->diff($existingIds)->isNotEmpty()
+            || $existingIds->diff($normalizedIds)->isNotEmpty()) {
+            throw ValidationException::withMessages([
+                'product_ids' => 'Danh sach sap xep khong hop le. Vui long tai lai va thu lai.',
+            ]);
+        }
+
+        DB::transaction(function () use ($normalizedIds) {
+            foreach ($normalizedIds as $index => $productId) {
+                Product::query()
+                    ->whereKey($productId)
+                    ->update(['sort_order' => $index + 1]);
+            }
+        });
+
+        return response()->json([
+            'message' => 'Da cap nhat thu tu san pham thanh cong.',
+        ]);
     }
 
     protected function pickerPrimaryImage(?Product $product): ?string
@@ -5295,7 +5392,12 @@ class ProductController extends Controller
                 ->where('products.type', 'configurable');
 
             $variantMatchQuery = Product::query()
-                ->select('products.id');
+                ->select('products.id')
+                ->distinct()
+                ->join('product_links as variant_parent_links', function ($join) {
+                    $join->on('variant_parent_links.linked_product_id', '=', 'products.id')
+                        ->where('variant_parent_links.link_type', 'super_link');
+                });
 
             if ($request->boolean('is_trash')) {
                 $variantMatchQuery->onlyTrashed();
@@ -5304,9 +5406,10 @@ class ProductController extends Controller
             $variantStockContext = $this->attachActualStockSubqueries($variantMatchQuery, $request);
             $variantActualStockSql = $variantStockContext['actual_stock_sql'];
 
-            $variantMatchQuery->whereHas('parentConfigurable', function (Builder $parentQuery) use ($configurableParentIdsQuery) {
-                $parentQuery->whereIn('products.id', $configurableParentIdsQuery);
-            });
+            // Keep variant rows in the result set by filtering through the
+            // parent ids subquery directly, instead of relying on relation
+            // aliases inside whereHas that can point back to the child table.
+            $variantMatchQuery->whereIn('variant_parent_links.product_id', $configurableParentIdsQuery);
 
             [$variantSearchRankingSql, $variantSearchRankingBindings] = $this->applyProductSearch(
                 $variantMatchQuery,
@@ -5316,21 +5419,6 @@ class ProductController extends Controller
             if ($variantSearchRankingSql === null) {
                 $variantMatchQuery->selectRaw('0 AS search_score');
             }
-
-            $variantParentIdsQuery = clone $variantMatchQuery;
-            $variantParentIdsQuery
-                ->join('product_links', function ($join) {
-                    $join->on('product_links.linked_product_id', '=', 'products.id')
-                        ->where('product_links.link_type', 'super_link');
-                })
-                ->select('product_links.product_id')
-                ->distinct();
-
-            $directMatchQuery->where(function (Builder $directTopLevelQuery) use ($variantParentIdsQuery) {
-                $directTopLevelQuery
-                    ->where('products.type', '!=', 'configurable')
-                    ->orWhereNotIn('products.id', $variantParentIdsQuery);
-            });
 
             $variantSortProjection = $this->buildProductListSortProjection($requestedSort, $variantActualStockSql);
             $variantMatchQuery
@@ -8062,12 +8150,16 @@ class ProductController extends Controller
 
         try {
             $product = DB::transaction(function () use ($request, $validated, $supplierIds) {
+                $accountId = $request->header('X-Account-Id');
                 $this->prepareProductSku($validated);
                 $preparedVariants = $validated['type'] === 'configurable'
                     ? $this->prepareVariantPayloads($request->input('variants', []), $validated['sku'])
                     : [];
 
-                $product = Product::create(array_merge($validated, ['account_id' => $request->header('X-Account-Id')]));
+                $product = Product::create(array_merge($validated, [
+                    'account_id' => $accountId,
+                    'sort_order' => $this->nextProductSortOrder(is_numeric($accountId) ? (int) $accountId : null),
+                ]));
                 $this->syncProductSuppliers($product, $supplierIds);
                 $this->productPricingService->syncExpectedCost(
                     $product,
@@ -9022,6 +9114,7 @@ class ProductController extends Controller
                 $clone->slug = $this->productSkuService->generateUniqueSlug($clone->name);
                 $clone->status = false;
                 $clone->is_new = true;
+                $clone->sort_order = $this->nextProductSortOrder($original->account_id ? (int) $original->account_id : null);
                 $this->productSkuService->resetInventoryDerivedState($clone);
                 $clone->save();
 

@@ -68,6 +68,7 @@ class ProductController extends Controller
         $subquery = DB::table('category_product')
             ->select('product_id')
             ->selectRaw("MIN((CASE category_id {$caseSql} ELSE 999999 END) * 1000000 + COALESCE(sort_order, 999999)) as category_order_key")
+            ->where('item_type', 'product')
             ->whereIn('category_id', $normalizedCategoryIds)
             ->groupBy('product_id');
 
@@ -155,6 +156,10 @@ class ProductController extends Controller
 
         if ($prioritizeCategoryOrder) {
             $finalQuery->orderBy('category_sorting.category_order_key');
+        }
+
+        if (in_array($sortKey, ['popular', 'newest'], true)) {
+            $finalQuery->orderBy('products.sort_order', 'asc');
         }
 
         switch ($sortKey) {

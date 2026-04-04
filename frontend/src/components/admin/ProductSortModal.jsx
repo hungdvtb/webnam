@@ -1,96 +1,35 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { normalizeCategoryAssignmentSearchValue } from '../../utils/categoryAssignments';
 
-const buildProductSearchValue = (product) => normalizeCategoryAssignmentSearchValue(
-    product?.search_text
-        || [
-            product?.name,
-            product?.sku,
-            product?.product_id,
-            product?.admin_product_id,
-            product?.category_name,
-            product?.bundle_parent_name,
-            product?.bundle_option_title,
-            product?.variant_parent_name,
-        ].filter((value) => value !== null && value !== undefined && value !== '').join(' ')
-);
+const normalizeSearchValue = (value = '') => String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toLowerCase()
+    .trim();
 
-const resolveDisplayBadgeClasses = (product) => {
-    if (product?.item_type === 'bundle_option') {
-        return 'bg-amber-100 text-amber-700';
-    }
+const buildProductSearchValue = (product) => normalizeSearchValue([
+    product?.name,
+    product?.sku,
+    product?.id,
+    product?.category_name,
+].filter((value) => value !== null && value !== undefined && value !== '').join(' '));
 
-    if (product?.display_type === 'variant' || product?.is_variant_child) {
-        return 'bg-emerald-100 text-emerald-700';
-    }
-
-    if (product?.product_type === 'bundle') {
-        return 'bg-primary/10 text-primary';
-    }
-
-    return 'bg-stone-100 text-stone-600';
-};
-
-const CategoryProductSortRow = ({
+const ProductSortRow = ({
     product,
     index,
     total,
     draftPosition,
-    isDragging,
-    isDropTarget,
     disabled,
     onDraftPositionChange,
     onPositionCommit,
-    onDragStart,
-    onDragEnter,
-    onDrop,
-    onDragEnd,
     onMoveUp,
     onMoveDown,
 }) => {
     const currentPosition = index + 1;
-    const productKey = product.assignment_key || product.id;
 
     return (
-        <tr
-            draggable={!disabled}
-            onDragStart={() => {
-                if (!disabled) {
-                    onDragStart(productKey);
-                }
-            }}
-            onDragEnter={(event) => {
-                if (disabled) {
-                    return;
-                }
-
-                event.preventDefault();
-                onDragEnter(productKey);
-            }}
-            onDragOver={(event) => {
-                if (!disabled) {
-                    event.preventDefault();
-                }
-            }}
-            onDrop={(event) => {
-                if (disabled) {
-                    return;
-                }
-
-                event.preventDefault();
-                onDrop(productKey);
-            }}
-            onDragEnd={onDragEnd}
-            className={`border-b border-gold/10 align-top transition-colors ${
-                isDropTarget ? 'bg-primary/5' : 'hover:bg-gold/5'
-            } ${isDragging ? 'opacity-40' : ''}`}
-        >
-            <td className="px-3 py-3">
-                <div className="flex items-center justify-center text-stone/40">
-                    <span className="material-symbols-outlined text-[18px]">drag_indicator</span>
-                </div>
-            </td>
+        <tr className="border-b border-gold/10 align-top transition-colors hover:bg-gold/5">
             <td className="px-3 py-3 text-center">
                 <span className="inline-flex min-w-12 items-center justify-center rounded-full bg-stone/5 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-stone/70">
                     #{currentPosition}
@@ -112,47 +51,21 @@ const CategoryProductSortRow = ({
                     <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                             <Link
-                                to={`/admin/products/edit/${product.admin_product_id || product.product_id}`}
+                                to={`/admin/products/edit/${product.id}`}
                                 className="truncate text-[13px] font-bold text-primary transition-colors hover:text-umber"
                             >
-                                {product.item_type === 'bundle_option'
-                                    ? (product.bundle_option_title || product.name)
-                                    : product.name}
+                                {product.name}
                             </Link>
-                            <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${resolveDisplayBadgeClasses(product)}`}>
-                                {product.display_label || 'San pham'}
-                            </span>
-                            {product.is_primary_category && product.item_type === 'product' ? (
-                                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-primary">
-                                    Danh muc chinh
-                                </span>
-                            ) : product.item_type === 'product' ? (
-                                <span className="rounded-full bg-gold/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-amber-700">
-                                    Gan them
-                                </span>
-                            ) : null}
                             {!product.status ? (
                                 <span className="rounded-full bg-brick/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-brick">
-                                    Dang an
+                                    Đang ẩn
                                 </span>
                             ) : null}
                         </div>
-                        {product.item_type === 'bundle_option' ? (
-                            <p className="mt-1 text-[11px] font-semibold text-primary/70">
-                                Bundle: {product.bundle_parent_name || 'San pham bundle'}
-                            </p>
-                        ) : product.variant_parent_name ? (
-                            <p className="mt-1 text-[11px] font-semibold text-primary/70">
-                                Thuoc: {product.variant_parent_name}
-                            </p>
-                        ) : null}
                         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-medium text-stone/55">
                             <span>SKU: {product.sku || '--'}</span>
-                            <span>ID: {product.product_id || product.admin_product_id || '--'}</span>
-                            {product.item_type === 'bundle_option' && product.bundle_items_count > 0 ? (
-                                <span>{product.bundle_items_count} thanh phan</span>
-                            ) : null}
-                            {product.category_name ? <span>Chinh: {product.category_name}</span> : null}
+                            <span>ID: {product.id}</span>
+                            {product.category_name ? <span>Danh mục: {product.category_name}</span> : null}
                         </div>
                     </div>
                 </div>
@@ -164,19 +77,19 @@ const CategoryProductSortRow = ({
                         min="1"
                         max={total}
                         value={draftPosition ?? String(currentPosition)}
-                        onChange={(event) => onDraftPositionChange(productKey, event.target.value)}
-                        onBlur={() => onPositionCommit(productKey)}
+                        onChange={(event) => onDraftPositionChange(product.id, event.target.value)}
+                        onBlur={() => onPositionCommit(product.id)}
                         onKeyDown={(event) => {
                             if (event.key === 'Enter') {
                                 event.preventDefault();
-                                onPositionCommit(productKey);
+                                onPositionCommit(product.id);
                             }
                         }}
                         disabled={disabled}
                         className="h-10 w-20 rounded-sm border border-gold/15 bg-white px-3 text-center text-[13px] font-bold text-primary outline-none transition-colors focus:border-primary disabled:cursor-not-allowed disabled:bg-stone-100"
                     />
                     <span className="text-[10px] text-stone/50">
-                        Nhap so roi nhan Enter
+                        Nhập số rồi nhấn Enter
                     </span>
                 </div>
             </td>
@@ -184,19 +97,19 @@ const CategoryProductSortRow = ({
                 <div className="flex items-center justify-center gap-1">
                     <button
                         type="button"
-                        onClick={() => onMoveUp(productKey)}
+                        onClick={() => onMoveUp(product.id)}
                         disabled={disabled || index === 0}
                         className="flex h-9 w-9 items-center justify-center rounded-sm border border-gold/15 text-stone/60 transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-30"
-                        title="Dua len"
+                        title="Đưa lên"
                     >
                         <span className="material-symbols-outlined text-[16px]">arrow_upward</span>
                     </button>
                     <button
                         type="button"
-                        onClick={() => onMoveDown(productKey)}
+                        onClick={() => onMoveDown(product.id)}
                         disabled={disabled || index === total - 1}
                         className="flex h-9 w-9 items-center justify-center rounded-sm border border-gold/15 text-stone/60 transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-30"
-                        title="Dua xuong"
+                        title="Đưa xuống"
                     >
                         <span className="material-symbols-outlined text-[16px]">arrow_downward</span>
                     </button>
@@ -206,20 +119,14 @@ const CategoryProductSortRow = ({
     );
 };
 
-const CategoryProductSortModal = ({
+const ProductSortModal = ({
     open,
     onClose,
-    category,
     products,
     isLoading,
     isSaving,
     isDirty,
-    draggingProductId,
-    dragOverProductId,
-    onDragStart,
-    onDragEnter,
-    onDrop,
-    onDragEnd,
+    onSortAlphabetically,
     onMoveUp,
     onMoveDown,
     onMoveToPosition,
@@ -259,37 +166,31 @@ const CategoryProductSortModal = ({
 
         setPositionDrafts(
             Object.fromEntries(
-                products.map((product, index) => [product.assignment_key || product.id, String(index + 1)]),
+                products.map((product, index) => [product.id, String(index + 1)]),
             ),
         );
     }, [products, open]);
 
     useEffect(() => {
-        setSearchQuery('');
-    }, [open, category?.id]);
+        if (open) {
+            setSearchQuery('');
+        }
+    }, [open]);
 
     if (!open) {
         return null;
     }
 
     const isBusy = isLoading || isSaving;
-    const categoryName = category?.name || 'Danh muc';
     const totalProducts = products.length;
-    const normalizedSearchQuery = normalizeCategoryAssignmentSearchValue(searchQuery);
+    const normalizedSearchQuery = normalizeSearchValue(searchQuery);
     const filteredProducts = normalizedSearchQuery
         ? products.filter((product) => buildProductSearchValue(product).includes(normalizedSearchQuery))
         : products;
-    const productPositions = new Map(
-        products.map((product, index) => [product.assignment_key || product.id, index]),
-    );
-
-    const handleClose = () => {
-        onDragEnd();
-        onClose();
-    };
+    const productPositions = new Map(products.map((product, index) => [product.id, index]));
 
     const handlePositionCommit = (productId) => {
-        const currentIndex = products.findIndex((product) => (product.assignment_key || product.id) === productId);
+        const currentIndex = products.findIndex((product) => product.id === productId);
         if (currentIndex < 0) {
             return;
         }
@@ -316,17 +217,17 @@ const CategoryProductSortModal = ({
     };
 
     const helperText = isLoading
-        ? 'Dang tai item...'
+        ? 'Đang tải danh sách sản phẩm...'
         : normalizedSearchQuery
-            ? `Hien thi ${filteredProducts.length}/${totalProducts} item khop. Vi tri van la thu tu that trong danh muc.`
-            : 'Nhap so thu tu roi nhan Enter de chuyen nhanh.';
+            ? `Hiển thị ${filteredProducts.length}/${totalProducts} sản phẩm khớp.`
+            : 'Nhập số thứ tự rồi nhấn Enter để chuyển nhanh.';
 
     return (
         <div
             className="fixed inset-0 z-[1200] overflow-y-auto bg-primary/25 p-4 backdrop-blur-sm"
             onMouseDown={(event) => {
                 if (event.target === event.currentTarget) {
-                    handleClose();
+                    onClose();
                 }
             }}
         >
@@ -339,33 +240,33 @@ const CategoryProductSortModal = ({
                         <div className="flex flex-wrap items-start justify-between gap-4">
                             <div className="min-w-0">
                                 <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.18em] text-primary">
-                                    <span className="material-symbols-outlined text-[18px]">table_rows</span>
-                                    Bang sap xep san pham
+                                    <span className="material-symbols-outlined text-[18px]">swap_vert</span>
+                                    Sắp xếp sản phẩm
                                 </div>
                                 <h3 className="mt-2 truncate text-xl font-black text-primary">
-                                    {categoryName}
+                                    Thứ tự hiển thị sản phẩm ngoài frontend
                                 </h3>
                                 <p className="mt-2 max-w-3xl text-[12px] leading-relaxed text-stone/60">
-                                    Keo tha truc tiep trong bang hoac nhap so thu tu de dua item toi dung vi tri nhanh hon.
+                                    Đổi số thứ tự để đưa sản phẩm tới đúng vị trí mong muốn ngoài frontend. Backend vẫn giữ nguyên cách hiển thị danh sách như cũ.
                                 </p>
                             </div>
 
                             <div className="flex flex-wrap items-center justify-end gap-2">
                                 <span className="rounded-full bg-primary/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-primary">
-                                    {category?.items_count ?? category?.products_count ?? totalProducts} item
+                                    {totalProducts} sản phẩm
                                 </span>
                                 {normalizedSearchQuery ? (
                                     <span className="rounded-full bg-gold/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">
-                                        {filteredProducts.length} khop tim kiem
+                                        {filteredProducts.length} khớp tìm kiếm
                                     </span>
                                 ) : null}
                                 {isDirty ? (
                                     <span className="rounded-full bg-amber-100 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">
-                                        Chua luu thay doi
+                                        Chưa lưu thay đổi
                                     </span>
                                 ) : (
                                     <span className="rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700">
-                                        Da dong bo
+                                        Đã đồng bộ
                                     </span>
                                 )}
                             </div>
@@ -374,7 +275,7 @@ const CategoryProductSortModal = ({
                         <div className="mt-4">
                             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                                 <label className="text-[10px] font-black uppercase tracking-[0.16em] text-stone/55">
-                                    Tim nhanh item
+                                    Tìm nhanh sản phẩm
                                 </label>
                                 <div className="text-[11px] text-stone/55">
                                     {helperText}
@@ -389,7 +290,7 @@ const CategoryProductSortModal = ({
                                             type="text"
                                             value={searchQuery}
                                             onChange={(event) => setSearchQuery(event.target.value)}
-                                            placeholder="Tim theo ten, SKU, bien the hoac tuy chon bundle"
+                                            placeholder="Tìm theo tên, SKU hoặc ID sản phẩm"
                                             autoComplete="off"
                                             className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-primary outline-none placeholder:text-stone/35"
                                         />
@@ -398,7 +299,7 @@ const CategoryProductSortModal = ({
                                                 type="button"
                                                 onClick={() => setSearchQuery('')}
                                                 className="flex h-8 w-8 items-center justify-center rounded-full text-stone/45 transition-colors hover:bg-stone-100 hover:text-brick"
-                                                title="Xoa tu khoa tim kiem"
+                                                title="Xóa từ khóa tìm kiếm"
                                             >
                                                 <span className="material-symbols-outlined text-[16px]">close</span>
                                             </button>
@@ -414,7 +315,7 @@ const CategoryProductSortModal = ({
                                         className="flex h-10 items-center gap-2 rounded-sm px-3 text-[11px] font-black uppercase tracking-[0.12em] text-stone/70 transition-colors hover:bg-primary/5 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
                                     >
                                         <span className={`material-symbols-outlined text-[16px] ${isBusy ? 'animate-spin' : ''}`}>refresh</span>
-                                        Tai lai
+                                        Tải lại
                                     </button>
                                     <button
                                         type="button"
@@ -423,7 +324,7 @@ const CategoryProductSortModal = ({
                                         className="flex h-10 items-center gap-2 rounded-sm px-3 text-[11px] font-black uppercase tracking-[0.12em] text-stone/70 transition-colors hover:bg-primary/5 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
                                     >
                                         <span className="material-symbols-outlined text-[16px]">history</span>
-                                        Hoan tac
+                                        Hoàn tác
                                     </button>
                                     <button
                                         type="button"
@@ -432,15 +333,15 @@ const CategoryProductSortModal = ({
                                         className="flex h-10 items-center gap-2 rounded-sm bg-brick px-4 text-[11px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-umber disabled:cursor-not-allowed disabled:opacity-40"
                                     >
                                         <span className="material-symbols-outlined text-[16px]">save</span>
-                                        {isSaving ? 'Dang luu' : 'Luu thu tu'}
+                                        {isSaving ? 'Đang lưu' : 'Lưu thứ tự'}
                                     </button>
                                     <button
                                         type="button"
-                                        onClick={handleClose}
+                                        onClick={onClose}
                                         className="flex h-10 items-center gap-2 rounded-sm px-3 text-[11px] font-black uppercase tracking-[0.12em] text-stone/70 transition-colors hover:bg-primary/5 hover:text-primary"
                                     >
                                         <span className="material-symbols-outlined text-[16px]">close</span>
-                                        Dong
+                                        Đóng
                                     </button>
                                 </div>
                             </div>
@@ -452,27 +353,21 @@ const CategoryProductSortModal = ({
                             <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 opacity-50">
                                 <div className="h-10 w-10 animate-spin rounded-full border-b-2 border-primary"></div>
                                 <p className="text-[11px] font-black uppercase tracking-[0.18em] text-stone/50">
-                                    Dang tai item
+                                    Đang tải sản phẩm
                                 </p>
                             </div>
                         ) : totalProducts === 0 ? (
                             <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 px-6 text-center opacity-60">
                                 <span className="material-symbols-outlined text-[48px] text-stone/40">inventory</span>
                                 <p className="text-[12px] font-bold uppercase tracking-[0.18em] text-stone/50">
-                                    Danh muc nay chua co item
-                                </p>
-                                <p className="max-w-md text-[12px] leading-relaxed text-stone/55">
-                                    Khi danh muc da duoc gan san pham, bien the hoac tuy chon bundle, bang sap xep se hien thi tai day.
+                                    Chưa có sản phẩm để sắp xếp
                                 </p>
                             </div>
                         ) : filteredProducts.length === 0 ? (
                             <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 px-6 text-center opacity-70">
                                 <span className="material-symbols-outlined text-[48px] text-stone/40">search_off</span>
                                 <p className="text-[12px] font-bold uppercase tracking-[0.18em] text-stone/50">
-                                    Khong tim thay item phu hop
-                                </p>
-                                <p className="max-w-md text-[12px] leading-relaxed text-stone/55">
-                                    Thu lai voi ten san pham, SKU hoac ten tuy chon bundle khac.
+                                    Không tìm thấy sản phẩm phù hợp
                                 </p>
                                 <button
                                     type="button"
@@ -480,7 +375,7 @@ const CategoryProductSortModal = ({
                                     className="flex h-10 items-center gap-2 rounded-sm border border-gold/15 px-3 text-[11px] font-black uppercase tracking-[0.12em] text-stone/70 transition-colors hover:border-primary hover:text-primary"
                                 >
                                     <span className="material-symbols-outlined text-[16px]">restart_alt</span>
-                                    Xoa tim kiem
+                                    Xóa tìm kiếm
                                 </button>
                             </div>
                         ) : (
@@ -488,43 +383,41 @@ const CategoryProductSortModal = ({
                                 <table className="min-w-full border-collapse">
                                     <thead className="sticky top-0 z-10 bg-white">
                                         <tr className="border-b border-gold/10 text-left text-[10px] font-black uppercase tracking-[0.16em] text-stone/55">
-                                            <th className="w-14 px-3 py-3 text-center">Keo</th>
-                                            <th className="w-24 px-3 py-3 text-center">Vi tri</th>
-                                            <th className="px-3 py-3">San pham</th>
-                                            <th className="w-56 px-3 py-3">Nhap so thu tu</th>
-                                            <th className="w-32 px-3 py-3 text-center">Tac vu</th>
+                                            <th className="w-24 px-3 py-3 text-center">Vị trí</th>
+                                            <th
+                                                className="cursor-pointer px-3 py-3 transition-colors hover:bg-primary/5 hover:text-primary"
+                                                onDoubleClick={onSortAlphabetically}
+                                                title="Nhấp đúp để sắp xếp tên sản phẩm từ A-Z"
+                                            >
+                                                <div className="flex items-center gap-2">
+                                                    <span>Tên sản phẩm</span>
+                                                    <span className="material-symbols-outlined text-[14px]">sort_by_alpha</span>
+                                                </div>
+                                            </th>
+                                            <th className="w-56 px-3 py-3">Nhập số thứ tự</th>
+                                            <th className="w-32 px-3 py-3 text-center">Tác vụ</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {filteredProducts.map((product) => {
-                                            const productKey = product.assignment_key || product.id;
-
-                                            return (
-                                                <CategoryProductSortRow
-                                                    key={productKey}
-                                                    product={product}
-                                                    index={productPositions.get(productKey) ?? 0}
-                                                    total={totalProducts}
-                                                    draftPosition={positionDrafts[productKey]}
-                                                    isDragging={draggingProductId === productKey}
-                                                    isDropTarget={dragOverProductId === productKey && draggingProductId !== productKey}
-                                                    disabled={isBusy}
-                                                    onDraftPositionChange={(productId, value) => {
-                                                        setPositionDrafts((previous) => ({
-                                                            ...previous,
-                                                            [productId]: value,
-                                                        }));
-                                                    }}
-                                                    onPositionCommit={handlePositionCommit}
-                                                    onDragStart={onDragStart}
-                                                    onDragEnter={onDragEnter}
-                                                    onDrop={onDrop}
-                                                    onDragEnd={onDragEnd}
-                                                    onMoveUp={onMoveUp}
-                                                    onMoveDown={onMoveDown}
-                                                />
-                                            );
-                                        })}
+                                        {filteredProducts.map((product) => (
+                                            <ProductSortRow
+                                                key={product.id}
+                                                product={product}
+                                                index={productPositions.get(product.id) ?? 0}
+                                                total={totalProducts}
+                                                draftPosition={positionDrafts[product.id]}
+                                                disabled={isBusy}
+                                                onDraftPositionChange={(productId, value) => {
+                                                    setPositionDrafts((previous) => ({
+                                                        ...previous,
+                                                        [productId]: value,
+                                                    }));
+                                                }}
+                                                onPositionCommit={handlePositionCommit}
+                                                onMoveUp={onMoveUp}
+                                                onMoveDown={onMoveDown}
+                                            />
+                                        ))}
                                     </tbody>
                                 </table>
                             </div>
@@ -532,9 +425,7 @@ const CategoryProductSortModal = ({
                     </div>
 
                     <div className="border-t border-gold/10 bg-white px-6 py-4 text-[11px] text-stone/55">
-                        Frontend se dung dung thu tu nay sau khi ban bam <span className="font-black uppercase tracking-[0.12em] text-primary">Luu thu tu</span>.
-                        {' '}
-                        {normalizedSearchQuery ? 'Bang dang hien thi ban loc, nhung so vi tri van la thu tu that.' : ''}
+                        Frontend sẽ dùng đúng thứ tự này sau khi bạn bấm <span className="font-black uppercase tracking-[0.12em] text-primary">Lưu thứ tự</span>. Bạn có thể nhấp đúp vào tiêu đề <span className="font-black text-primary">Tên sản phẩm</span> để sắp A-Z rồi tiếp tục chỉnh tay bằng số thứ tự.
                     </div>
                 </div>
             </div>
@@ -542,4 +433,4 @@ const CategoryProductSortModal = ({
     );
 };
 
-export default CategoryProductSortModal;
+export default ProductSortModal;

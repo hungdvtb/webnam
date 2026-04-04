@@ -8,7 +8,13 @@ import { useCart } from "@/context/CartContext";
 import { resolveMediaUrl } from "@/lib/media";
 
 const DEFAULT_BRAND_TITLE = "G\u1ed1m \u0110\u1ea1i Th\u00e0nh";
-const DEFAULT_SEARCH_PLACEHOLDER = "B\u1ea1n c\u1ea7n t\u00ecm s\u1ea3n ph\u1ea9m g\u00ec?";
+const DEFAULT_SEARCH_PLACEHOLDER = "B\u1ea1n c\u1ea7n t\u00ecm s\u1ea3n ph\u1ea9m g\u00ec";
+const LEGACY_SEARCH_PLACEHOLDER_KEYS = new Set([
+  "ban can tim san pham gi?",
+  "ban can tim san pham gi",
+  "ban can tim kiem san pham gi?",
+  "ban can tim kiem san pham gi",
+]);
 const DEFAULT_NAV_ITEMS = [
   { id: "header-default-products", title: "S\u1ea3n ph\u1ea9m", url: "/products" },
   { id: "header-default-about", title: "V\u1ec1 ch\u00fang t\u00f4i", url: "/about" },
@@ -88,9 +94,7 @@ const normalizeSearchPlaceholder = (value = "") => {
 
   if (!trimmed) return DEFAULT_SEARCH_PLACEHOLDER;
 
-  return toComparableText(trimmed) === "ban can tim kiem san pham gi?"
-    ? DEFAULT_SEARCH_PLACEHOLDER
-    : trimmed;
+  return LEGACY_SEARCH_PLACEHOLDER_KEYS.has(toComparableText(trimmed)) ? DEFAULT_SEARCH_PLACEHOLDER : trimmed;
 };
 
 const toUpperNavLabel = (value = "") => String(value || "").toLocaleUpperCase("vi-VN");
@@ -1107,17 +1111,18 @@ export default function Header({
           display: flex;
           align-items: center;
           min-width: 0;
+          min-height: 46px;
         }
 
         .search-icon {
           position: absolute;
-          left: 12px;
+          left: 14px;
           top: 50%;
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          width: 20px;
-          height: 20px;
+          width: 22px;
+          height: 22px;
           padding: 0;
           border: 0;
           background: transparent;
@@ -1134,10 +1139,15 @@ export default function Header({
         .search-input {
           background-color: #f1f5f9;
           border: none;
-          border-radius: 20px;
-          padding: 6px 16px 6px 36px;
-          width: clamp(190px, 18vw, 250px);
-          font-size: 13px;
+          border-radius: 999px;
+          box-sizing: border-box;
+          height: 46px;
+          min-height: 46px;
+          padding: 0 18px 0 46px;
+          width: clamp(320px, 29vw, 420px);
+          font-size: 15px;
+          line-height: 1.35;
+          color: #1f2937;
           appearance: none;
           -webkit-appearance: none;
           outline: none;
@@ -1148,12 +1158,12 @@ export default function Header({
         .search-input::placeholder {
           color: #94a3b8;
           opacity: 1;
-          font-size: inherit;
-          line-height: inherit;
+          font-size: 15px;
+          line-height: 1.35;
         }
 
         .search-input:focus {
-          width: clamp(220px, 21vw, 290px);
+          width: clamp(340px, 31vw, 450px);
           background-color: #e2e8f0;
         }
 

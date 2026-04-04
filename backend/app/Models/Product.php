@@ -12,7 +12,8 @@ class Product extends Model
     protected $fillable = [
         'type', 'name', 'slug', 'description', 'specifications', 'price', 'price_type', 'cost_price', 'expected_cost', 'special_price', 'special_price_from', 'special_price_to', 
         'imported_quantity_total', 'imported_value_total', 'category_id', 'stock_quantity', 'damaged_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
-        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'inventory_unit_id', 'inventory_import_starred', 'supplier_id', 'video_url', 'additional_info', 'bundle_title', 'site_domain_id'
+        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'inventory_unit_id', 'inventory_import_starred', 'supplier_id', 'video_url', 'additional_info', 'bundle_title', 'site_domain_id',
+        'sort_order',
     ];
 
     public function siteDomain()
@@ -30,6 +31,7 @@ class Product extends Model
         'inventory_import_starred' => 'boolean',
         'imported_quantity_total' => 'integer',
         'imported_value_total' => 'decimal:2',
+        'sort_order' => 'integer',
     ];
 
     protected $appends = ['average_rating', 'current_price', 'main_image', 'primary_image', 'inventory_display_cost', 'inventory_cost_source'];
@@ -114,7 +116,8 @@ class Product extends Model
     public function categories()
     {
         return $this->belongsToMany(Category::class)
-            ->withPivot('sort_order')
+            ->wherePivot('item_type', 'product')
+            ->withPivot(['sort_order', 'item_type', 'bundle_option_key'])
             ->withTimestamps()
             ->orderBy('category_product.sort_order')
             ->orderBy('categories.id');

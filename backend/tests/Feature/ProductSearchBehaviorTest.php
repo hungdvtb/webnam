@@ -534,6 +534,47 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.parent_configurable.0.id', $parent->id);
     }
 
+    public function test_admin_search_keeps_matching_parent_and_matching_variants_without_duplicate_parent_rows(): void
+    {
+        $account = $this->authenticate();
+
+        $parent = $this->createProduct($account, [
+            'name' => 'Lo hoa ve vang',
+            'sku' => 'VE8KVYFO',
+            'type' => 'configurable',
+        ]);
+
+        $variantSmall = $this->createProduct($account, [
+            'name' => 'Lo hoa ve vang - nho',
+            'sku' => 'VE8KVYFO-NHO',
+        ]);
+
+        $variantMedium = $this->createProduct($account, [
+            'name' => 'Lo hoa ve vang - trung',
+            'sku' => 'VE8KVYFO-TRUNG',
+        ]);
+
+        $this->attachVariation($parent, $variantSmall, ['position' => 0]);
+        $this->attachVariation($parent, $variantMedium, ['position' => 1]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?search=VE8KVYFO&per_page=20');
+
+        $response->assertOk();
+
+        $returnedIds = collect($response->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertEqualsCanonicalizing(
+            [$parent->id, $variantSmall->id, $variantMedium->id],
+            $returnedIds
+        );
+        $this->assertSame(1, count(array_keys($returnedIds, $parent->id, true)));
+    }
+
     private function authenticate(): Account
     {
         $account = Account::query()->create([

@@ -75,6 +75,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/products/bulk-update-undo', [ProductController::class , 'undoBulkUpdate']);
     Route::delete('/products/bulk-force-delete', [ProductController::class , 'bulkForceDelete']);
     Route::post('/products/refresh-order-items', [ProductController::class , 'refreshOrderItems']);
+    Route::get('/products/sort-items', [ProductController::class , 'sortItems']);
+    Route::post('/products/reorder', [ProductController::class , 'reorder']);
     Route::post('/products/{id}/duplicate', [ProductController::class , 'duplicate']);
     Route::post('/products/{id}/convert-to-configurable', [ProductController::class , 'convertToConfigurable'])->where('id', '[0-9]+');
     Route::post('/products/{id}', [ProductController::class , 'update']); // Use POST for update to handle file uploads

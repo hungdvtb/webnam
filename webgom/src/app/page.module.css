@@ -99,6 +99,14 @@
   position: relative;
 }
 
+.heroBannerLink {
+  display: block;
+  width: 100%;
+  height: 100%;
+  color: inherit;
+  text-decoration: none;
+}
+
 .heroOverlay {
   position: absolute;
   inset: 0;
@@ -129,6 +137,23 @@
   font-family: var(--font-display);
 }
 
+.dynamicHeroTitle {
+  max-width: 12ch;
+  margin-bottom: 1rem;
+}
+
+.heroDescription {
+  max-width: 32rem;
+  margin: 0 0 1.5rem;
+  font-size: 1rem;
+  line-height: 1.65;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.heroCta {
+  width: fit-content;
+}
+
 .heroSideBanners {
   display: flex;
   flex-direction: column;
@@ -137,6 +162,7 @@
 }
 
 .sideBanner {
+  display: block;
   flex: 1;
   border-radius: 12px;
   position: relative;
@@ -144,6 +170,9 @@
   background-size: cover;
   background-position: center;
   box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+  color: inherit;
+  text-decoration: none;
+  transition: transform 0.3s, box-shadow 0.3s;
 }
 
 .sideBanner::before {
@@ -158,11 +187,18 @@
   background: rgba(0,0,0,0.4);
 }
 
+.sideBanner:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 24px -12px rgba(0, 0, 0, 0.45);
+}
+
 .bannerText {
   position: absolute;
   bottom: 1.5rem;
   left: 1.5rem;
   color: white;
+  right: 1.5rem;
+  z-index: 1;
 }
 
 .bannerText p {
@@ -177,6 +213,17 @@
 .bannerText h3 {
   font-size: 1.25rem;
   font-family: var(--font-display);
+}
+
+.sideBannerCta {
+  display: inline-flex;
+  margin-top: 0.75rem;
+  padding-bottom: 0.15rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.85);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .valuesSection {
@@ -225,6 +272,24 @@
   margin-bottom: 4rem;
 }
 
+.catalogGroups {
+  display: flex;
+  flex-direction: column;
+  gap: 3.5rem;
+}
+
+.categoryGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.categoryMeta {
+  margin: 0.35rem 0 0;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
 .sectionHeader {
   display: flex;
   justify-content: space-between;
@@ -252,7 +317,8 @@
   gap: 1.5rem;
 }
 
-.sectionTabs a {
+.sectionTabs a,
+.sectionTabs button {
   font-size: 0.875rem;
   font-weight: bold;
   text-transform: uppercase;
@@ -261,14 +327,20 @@
   margin-bottom: -1rem;
   transition: all 0.2s;
   text-decoration: none;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
 }
 
-.sectionTabs a.active {
+.sectionTabs a.active,
+.sectionTabs button.active,
+.sectionTabs .active {
   color: var(--accent);
   border-bottom: 2px solid var(--accent);
 }
 
-.sectionTabs a:hover:not(.active) {
+.sectionTabs a:hover:not(.active),
+.sectionTabs button:hover:not(.active) {
   color: var(--primary);
 }
 
@@ -397,8 +469,206 @@
   color: var(--brick);
 }
 
+.emptyCategoryState {
+  padding: 2rem 1.5rem;
+  border: 1px dashed rgba(27, 54, 93, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.loadMoreWrap {
+  display: flex;
+  justify-content: center;
+}
+
+.loadMoreButton {
+  min-width: 180px;
+  padding: 0.9rem 1.4rem;
+  border: 1px solid rgba(27, 54, 93, 0.12);
+  border-radius: 999px;
+  background: white;
+  color: var(--primary);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s;
+}
+
+.loadMoreButton:hover {
+  color: var(--accent);
+  border-color: rgba(193, 154, 107, 0.5);
+  transform: translateY(-2px);
+  box-shadow: 0 14px 30px -18px rgba(27, 54, 93, 0.4);
+}
+
 .oldPrice {
   font-size: 10px;
   color: var(--text-muted);
   text-decoration: line-through;
+}
+
+.homeCatalogSection {
+}
+
+.homeCatalogHeader {
+}
+
+.homeCatalogProductInfo {
+}
+
+.homeCatalogPrice {
+}
+
+.homeMobileOnly {
+}
+
+.homeMobileCatalogShell {
+  margin-bottom: 4rem;
+}
+
+.homeMobileCatalogContainer {
+}
+
+.homeMobileCatalogStack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.homeMobileCatalogGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.homeMobileCatalogHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.homeMobileCatalogTitle {
+  margin: 0;
+  color: #1b365d;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 800;
+  line-height: 1.28;
+}
+
+.homeMobileCatalogLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  color: #1b365d;
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.desktopOnly {
+}
+
+.mobileOnly {
+}
+
+@media (min-width: 769px) {
+  .homeMobileOnly {
+    display: none !important;
+  }
+
+  .homeMobileCatalogShell {
+    display: none !important;
+  }
+
+  .homeCatalogHeader {
+    align-items: center;
+    padding-bottom: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .homeCatalogProductInfo {
+    padding-top: 1rem;
+    gap: 0.75rem;
+  }
+
+  .homeCatalogProductInfo .productName {
+    margin-bottom: 0;
+  }
+
+  .homeCatalogPrice {
+    margin-top: auto;
+  }
+
+  .homeCatalogPrice .oldPrice {
+    display: none;
+  }
+}
+
+@media (min-width: 1201px) {
+  .mobileOnly {
+    display: none !important;
+  }
+}
+
+@media (max-width: 1200px) {
+  .desktopOnly {
+    display: none !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .homeMobileCatalogContainer {
+    padding-left: 0.6rem !important;
+    padding-right: 0.6rem !important;
+  }
+
+  .homeMobileCatalogShell {
+    margin-bottom: 3rem;
+  }
+
+  .homeMobileCatalogStack {
+    gap: 1.45rem;
+  }
+
+  .homeMobileCatalogGroup {
+    gap: 0.72rem;
+  }
+
+  .homeMobileCatalogTitle {
+    font-size: 1rem;
+  }
+
+  .homeMobileCatalogLink {
+    font-size: 0.82rem;
+  }
+}
+
+@media (max-width: 479px) {
+  .homeMobileCatalogContainer {
+    padding-left: 0.45rem !important;
+    padding-right: 0.45rem !important;
+  }
+
+  .homeMobileCatalogStack {
+    gap: 1.3rem;
+  }
+
+  .homeMobileCatalogGroup {
+    gap: 0.65rem;
+  }
+
+  .homeMobileCatalogTitle {
+    font-size: 0.96rem;
+  }
+
+  .homeMobileCatalogLink {
+    font-size: 0.78rem;
+  }
 }

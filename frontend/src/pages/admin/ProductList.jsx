@@ -9,6 +9,7 @@ import Pagination from '../../components/Pagination';
 import { useTableColumns } from '../../hooks/useTableColumns';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
 import SortIndicator from '../../components/SortIndicator';
+import ProductSortModal from '../../components/admin/ProductSortModal';
 import { ACTIVE_PRODUCT_TYPE_KEYS, ACTIVE_PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_META, sanitizeActiveProductTypeValues } from '../../config/productTypes';
 import {
     formatWholeMoneyInput,
@@ -268,7 +269,7 @@ function normalizeProductSortConfig(rawSortConfig) {
         return DEFAULT_SORT_CONFIG;
     }
 
-    if (rawSortConfig.key === 'stock_quantity' || rawSortConfig.key === 'actual_stock') {
+    if (rawSortConfig.key === 'stock_quantity' || rawSortConfig.key === 'actual_stock' || rawSortConfig.key === 'sort_order') {
         return DEFAULT_SORT_CONFIG;
     }
 
@@ -448,6 +449,12 @@ const ProductList = () => {
     const [importExcelErrors, setImportExcelErrors] = useState([]);
     const [importExcelErrorMessage, setImportExcelErrorMessage] = useState('');
     const [importExcelResultTone, setImportExcelResultTone] = useState('error');
+    const [showProductSortModal, setShowProductSortModal] = useState(false);
+    const [productSortItems, setProductSortItems] = useState([]);
+    const [isProductSortLoading, setIsProductSortLoading] = useState(false);
+    const [isProductSortSaving, setIsProductSortSaving] = useState(false);
+    const [isProductSortDirty, setIsProductSortDirty] = useState(false);
+    const productSortSnapshotRef = useRef([]);
 
     const toggleExpandRow = (productId, e) => {
         if (e) e.stopPropagation();
@@ -927,6 +934,143 @@ const ProductList = () => {
                 per_page: parseInt(response.data.per_page)
             });
         } catch (error) { console.error("Error fetching products", error); } finally { setLoading(false); }
+    };
+
+    const syncProductSortItems = (nextItems) => {
+        const normalizedItems = Array.isArray(nextItems) ? nextItems : [];
+        const currentIds = normalizedItems.map((item) => Number(item?.id) || 0);
+        const snapshotIds = (productSortSnapshotRef.current || []).map((item) => Number(item?.id) || 0);
+
+        setProductSortItems(normalizedItems);
+        setIsProductSortDirty(JSON.stringify(currentIds) !== JSON.stringify(snapshotIds));
+    };
+
+    const fetchProductSortItems = async () => {
+        setIsProductSortLoading(true);
+        try {
+            const response = await productApi.getSortItems();
+            const items = Array.isArray(response.data?.data) ? response.data.data : [];
+            productSortSnapshotRef.current = items;
+            setProductSortItems(items);
+            setIsProductSortDirty(false);
+        } catch (error) {
+            console.error('Error fetching product sort items', error);
+            setNotification({ type: 'error', message: 'Không tải được danh sách sắp xếp sản phẩm.' });
+        } finally {
+            setIsProductSortLoading(false);
+        }
+    };
+
+    const handleOpenProductSortModal = () => {
+        setShowProductSortModal(true);
+        fetchProductSortItems();
+    };
+
+    const handleCloseProductSortModal = () => {
+        if (isProductSortDirty && !window.confirm('Bạn có thay đổi thứ tự chưa lưu. Đóng bảng sắp xếp?')) {
+            return;
+        }
+
+        setShowProductSortModal(false);
+    };
+
+    const moveProductSortItem = (productId, nextIndex) => {
+        syncProductSortItems((() => {
+            const currentItems = [...productSortItems];
+            const currentIndex = currentItems.findIndex((item) => item.id === productId);
+
+            if (currentIndex < 0) {
+                return currentItems;
+            }
+
+            const boundedIndex = Math.min(Math.max(nextIndex, 0), currentItems.length - 1);
+            if (boundedIndex === currentIndex) {
+                return currentItems;
+            }
+
+            const [movedItem] = currentItems.splice(currentIndex, 1);
+            currentItems.splice(boundedIndex, 0, movedItem);
+            return currentItems;
+        })());
+    };
+
+    const handleMoveProductSortUp = (productId) => {
+        const currentIndex = productSortItems.findIndex((item) => item.id === productId);
+        if (currentIndex <= 0) {
+            return;
+        }
+
+        moveProductSortItem(productId, currentIndex - 1);
+    };
+
+    const handleMoveProductSortDown = (productId) => {
+        const currentIndex = productSortItems.findIndex((item) => item.id === productId);
+        if (currentIndex < 0 || currentIndex >= productSortItems.length - 1) {
+            return;
+        }
+
+        moveProductSortItem(productId, currentIndex + 1);
+    };
+
+    const handleMoveProductSortToPosition = (productId, nextPosition) => {
+        moveProductSortItem(productId, nextPosition - 1);
+    };
+
+    const handleResetProductSort = () => {
+        syncProductSortItems([...(productSortSnapshotRef.current || [])]);
+    };
+
+    const handleRefreshProductSort = () => {
+        if (isProductSortDirty && !window.confirm('Bạn có thay đổi thứ tự chưa lưu. Tải lại dữ liệu từ máy chủ?')) {
+            return;
+        }
+
+        fetchProductSortItems();
+    };
+
+    const handleSortProductsAlphabetically = () => {
+        syncProductSortItems(
+            [...productSortItems].sort((left, right) => {
+                const nameCompare = String(left?.name || '').localeCompare(String(right?.name || ''), 'vi', {
+                    sensitivity: 'base',
+                    numeric: true,
+                });
+
+                if (nameCompare !== 0) {
+                    return nameCompare;
+                }
+
+                const skuCompare = String(left?.sku || '').localeCompare(String(right?.sku || ''), 'vi', {
+                    sensitivity: 'base',
+                    numeric: true,
+                });
+
+                if (skuCompare !== 0) {
+                    return skuCompare;
+                }
+
+                return Number(left?.id || 0) - Number(right?.id || 0);
+            }),
+        );
+    };
+
+    const handleSaveProductSort = async () => {
+        if (productSortItems.length === 0) {
+            return;
+        }
+
+        setIsProductSortSaving(true);
+        try {
+            await productApi.reorder(productSortItems.map((item) => item.id));
+            productSortSnapshotRef.current = [...productSortItems];
+            setIsProductSortDirty(false);
+            setNotification({ type: 'success', message: 'Đã lưu thứ tự sản phẩm.' });
+        } catch (error) {
+            console.error('Error saving product sort', error);
+            setNotification({ type: 'error', message: 'Không lưu được thứ tự sản phẩm.' });
+        } finally {
+            setIsProductSortSaving(false);
+        }
     };
 
     const handleTempFilterChange = (e) => {
@@ -2748,6 +2892,9 @@ const ProductList = () => {
                         )}
                         <button onClick={handleRefresh} disabled={loading} className="p-1.5 border border-primary/10 bg-white text-primary rounded-sm w-9 h-9 hover:bg-primary/5 transition-all" title="Tải lại dữ liệu"><span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span></button>
                         <button data-column-settings-btn onClick={() => setShowColumnSettings(!showColumnSettings)} className={`p-1.5 border rounded-sm w-9 h-9 ${showColumnSettings ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/30 hover:bg-primary/5'}`} title="Cấu hình hiển thị cột"><span className="material-symbols-outlined text-[18px]">settings_suggest</span></button>
+                        <button onClick={handleOpenProductSortModal} className={`p-1.5 border rounded-sm w-9 h-9 ${showProductSortModal ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/30 hover:bg-primary/5'}`} title="Sắp xếp thứ tự sản phẩm">
+                            <span className="material-symbols-outlined text-[18px]">swap_vert</span>
+                        </button>
                         <button 
                             data-filter-btn 
                             onClick={() => {
@@ -2853,7 +3000,7 @@ const ProductList = () => {
                             type="text"
                             name="search"
                             autoComplete="off"
-                            placeholder="Tìm SKU / tên / mã NCC..."
+                            placeholder="Tìm nhanh sản phẩm theo SKU / tên / mã NCC..."
                             className="w-full bg-primary/5 border border-primary/10 px-8 py-1.5 rounded-sm text-[14px] focus:outline-none focus:border-primary/30 transition-all relative z-0"
                             value={filters.search}
                             onChange={handleFilterChange}
@@ -3317,6 +3464,22 @@ const ProductList = () => {
                     <TableColumnSettingsPanel availableColumns={availableColumns} visibleColumns={visibleColumns} toggleColumn={toggleColumn} setAvailableColumns={setAvailableColumns} resetDefault={resetDefault} saveAsDefault={saveAsDefault} onClose={() => setShowColumnSettings(false)} storageKey="product_list" />
                 </div>
             )}
+
+            <ProductSortModal
+                open={showProductSortModal}
+                onClose={handleCloseProductSortModal}
+                products={productSortItems}
+                isLoading={isProductSortLoading}
+                isSaving={isProductSortSaving}
+                isDirty={isProductSortDirty}
+                onSortAlphabetically={handleSortProductsAlphabetically}
+                onMoveUp={handleMoveProductSortUp}
+                onMoveDown={handleMoveProductSortDown}
+                onMoveToPosition={handleMoveProductSortToPosition}
+                onRefresh={handleRefreshProductSort}
+                onReset={handleResetProductSort}
+                onSave={handleSaveProductSort}
+            />
 
             <div className="flex-1 bg-white border border-primary/10 shadow-xl overflow-auto table-scrollbar relative rounded-md">
                 <table className="text-left border-collapse table-fixed min-w-full admin-text-13" style={{ width: `${totalTableWidth}px` }}>

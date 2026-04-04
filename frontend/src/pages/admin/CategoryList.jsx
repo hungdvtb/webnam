@@ -1,14 +1,37 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { categoryApi, attributeApi, STORAGE_BASE_URL } from '../../services/api';
+import { categoryApi, attributeApi, productApi, STORAGE_BASE_URL } from '../../services/api';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { Tree, getDescendants, isAncestor } from '@minoru/react-dnd-treeview';
 import { useUI } from '../../context/UIContext';
 import CategoryProductSortModal from '../../components/admin/CategoryProductSortModal';
+import CategoryItemPickerModal from '../../components/admin/CategoryItemPickerModal';
 import { resolveEntityImageUrl } from '../../utils/mediaUrl';
+import {
+    buildCategoryPickerGroups,
+    normalizeCategoryAssignmentItems,
+    normalizeCategoryAssignmentSearchValue,
+    normalizeCategoryAssignmentItem,
+} from '../../utils/categoryAssignments';
 
-const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelected, onSelect, isChecked, onCheck, isDropTarget }) => {
+const CustomNode = ({
+    node,
+    depth,
+    isOpen,
+    onToggle,
+    onEdit,
+    onDelete,
+    isSelected,
+    onSelect,
+    isChecked,
+    onCheck,
+    isDropTarget,
+    showOrderInput,
+    orderValue,
+    onOrderChange,
+    orderDisabled,
+}) => {
     return (
         <div 
             style={{ paddingLeft: depth * 24 }} 
@@ -58,6 +81,19 @@ const CustomNode = ({ node, depth, isOpen, onToggle, onEdit, onDelete, isSelecte
                 </span>
                 <span className={`font-ui text-primary transition-all ${isSelected ? 'font-black scale-[1.02] translate-x-1' : 'font-bold'}`}>{node.text}</span>
             </div>
+            {showOrderInput ? (
+                <div className="flex shrink-0 items-center gap-2" onClick={(event) => event.stopPropagation()}>
+                    <input
+                        type="number"
+                        min="1"
+                        value={orderValue}
+                        onChange={(event) => onOrderChange(node.id, event.target.value)}
+                        disabled={orderDisabled}
+                        className="h-8 w-16 rounded-sm border border-gold/20 bg-white px-2 text-center text-[12px] font-bold text-primary outline-none transition-colors focus:border-primary disabled:cursor-not-allowed disabled:bg-stone-100"
+                        title="So thu tu trong cung cap danh muc"
+                    />
+                </div>
+            ) : null}
             <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button 
                     onClick={(e) => { e.stopPropagation(); onEdit(node); }} 
@@ -137,7 +173,14 @@ const INITIAL_FORM_DATA = {
     banner: null,
     banner_url: null,
     filterable_attribute_ids: [],
+    category_items: [],
 };
+
+const createInitialFormData = () => ({
+    ...INITIAL_FORM_DATA,
+    filterable_attribute_ids: [],
+    category_items: [],
+});
 
 const DEFAULT_IMPORT_MODE = 'replace_all';
 const CATEGORY_IMPORT_FIELD_OPTIONS = [
@@ -245,11 +288,230 @@ const downloadBlobResponse = (response, fallbackFilename) => {
     window.URL.revokeObjectURL(url);
 };
 
-const normalizeSortableCategoryProducts = (products) => (
-    Array.isArray(products)
-        ? products.filter((product) => product && product.is_variant_child !== true)
-        : []
-);
+const normalizeSortableCategoryProducts = (products) => normalizeCategoryAssignmentItems(products);
+
+const resolveCategoryItemBadgeClasses = (item) => {
+    if (item?.item_type === 'bundle_option') {
+        return 'bg-amber-100 text-amber-700';
+    }
+
+    if (item?.display_type === 'variant' || item?.is_variant_child) {
+        return 'bg-emerald-100 text-emerald-700';
+    }
+
+    if (item?.product_type === 'bundle') {
+        return 'bg-primary/10 text-primary';
+    }
+
+    return 'bg-stone-100 text-stone-600';
+};
+
+const normalizeTreeParentId = (value) => {
+    const numericValue = Number(value);
+
+    return Number.isInteger(numericValue) && numericValue > 0 ? numericValue : 0;
+};
+
+const formatCategoriesForTree = (categories = []) => {
+    const normalizedCategories = Array.isArray(categories)
+        ? categories.map((category, index) => ({
+            ...category,
+            id: Number(category.id),
+            parent_id: normalizeTreeParentId(category.parent_id),
+            order: Number.isFinite(Number(category.order)) ? Number(category.order) : 0,
+            __originalIndex: index,
+        }))
+        : [];
+
+    const childrenByParent = new Map();
+
+    normalizedCategories.forEach((category) => {
+        const parentId = normalizeTreeParentId(category.parent_id);
+        const siblings = childrenByParent.get(parentId) || [];
+        siblings.push(category);
+        childrenByParent.set(parentId, siblings);
+    });
+
+    childrenByParent.forEach((siblings) => {
+        siblings.sort((left, right) => {
+            const orderDifference = (left.order ?? 0) - (right.order ?? 0);
+            if (orderDifference !== 0) {
+                return orderDifference;
+            }
+
+            const idDifference = Number(left.id) - Number(right.id);
+            if (idDifference !== 0) {
+                return idDifference;
+            }
+
+            return (left.__originalIndex ?? 0) - (right.__originalIndex ?? 0);
+        });
+    });
+
+    const orderedCategories = [];
+    const visitedIds = new Set();
+
+    const visit = (parentId = 0) => {
+        const siblings = childrenByParent.get(parentId) || [];
+
+        siblings.forEach((category) => {
+            if (visitedIds.has(category.id)) {
+                return;
+            }
+
+            visitedIds.add(category.id);
+            orderedCategories.push(category);
+            visit(category.id);
+        });
+    };
+
+    visit(0);
+
+    normalizedCategories.forEach((category) => {
+        if (!visitedIds.has(category.id)) {
+            orderedCategories.push(category);
+        }
+    });
+
+    return orderedCategories.map(({ __originalIndex, ...category }) => ({
+        id: category.id,
+        parent: normalizeTreeParentId(category.parent_id),
+        text: category.name,
+        droppable: true,
+        data: {
+            ...category,
+            parent_id: category.parent_id || null,
+        },
+    }));
+};
+
+const buildSiblingPositionMap = (tree = []) => {
+    const nextPositionByParent = new Map();
+
+    return tree.reduce((positions, node) => {
+        const parentId = normalizeTreeParentId(node.parent);
+        const nextPosition = (nextPositionByParent.get(parentId) ?? 0) + 1;
+
+        nextPositionByParent.set(parentId, nextPosition);
+        positions[node.id] = String(nextPosition);
+
+        return positions;
+    }, {});
+};
+
+const buildCategoryReorderPayload = (tree = []) => {
+    const nextOrderByParent = new Map();
+
+    return tree.map((node) => {
+        const parentId = normalizeTreeParentId(node.parent);
+        const nextOrder = nextOrderByParent.get(parentId) ?? 0;
+
+        nextOrderByParent.set(parentId, nextOrder + 1);
+
+        return {
+            id: node.id,
+            parent_id: parentId === 0 ? null : parentId,
+            order: nextOrder,
+        };
+    });
+};
+
+const parseTreeOrderDraft = (value, fallbackValue) => {
+    const parsedValue = Number.parseInt(String(value ?? '').trim(), 10);
+
+    if (!Number.isFinite(parsedValue) || parsedValue < 1) {
+        return fallbackValue;
+    }
+
+    return parsedValue;
+};
+
+const rebuildTreeFromOrderDrafts = (tree = [], draftOrders = {}) => {
+    const currentPositions = buildSiblingPositionMap(tree);
+    const siblingsByParent = new Map();
+
+    tree.forEach((node, index) => {
+        const parentId = normalizeTreeParentId(node.parent);
+        const siblings = siblingsByParent.get(parentId) || [];
+        const currentPosition = Number(currentPositions[node.id] || siblings.length + 1);
+
+        siblings.push({
+            node,
+            originalIndex: index,
+            currentPosition,
+            desiredPosition: parseTreeOrderDraft(draftOrders[node.id], currentPosition),
+        });
+        siblingsByParent.set(parentId, siblings);
+    });
+
+    const reorderedTree = [];
+    const visitedIds = new Set();
+
+    const visit = (parentId = 0) => {
+        const siblings = [...(siblingsByParent.get(parentId) || [])].sort((left, right) => {
+            const desiredDifference = left.desiredPosition - right.desiredPosition;
+            if (desiredDifference !== 0) {
+                return desiredDifference;
+            }
+
+            const currentDifference = left.currentPosition - right.currentPosition;
+            if (currentDifference !== 0) {
+                return currentDifference;
+            }
+
+            return left.originalIndex - right.originalIndex;
+        });
+
+        siblings.forEach(({ node }) => {
+            if (visitedIds.has(node.id)) {
+                return;
+            }
+
+            visitedIds.add(node.id);
+            reorderedTree.push({
+                ...node,
+                parent: parentId,
+            });
+            visit(node.id);
+        });
+    };
+
+    visit(0);
+
+    tree.forEach((node) => {
+        if (!visitedIds.has(node.id)) {
+            reorderedTree.push(node);
+        }
+    });
+
+    return reorderedTree;
+};
+
+const reorderSiblingNodesFromDrafts = (nodes = [], draftOrders = {}) => {
+    const currentPositions = buildSiblingPositionMap(nodes);
+
+    return [...nodes]
+        .map((node, index) => ({
+            node,
+            originalIndex: index,
+            currentPosition: Number(currentPositions[node.id] || (index + 1)),
+            desiredPosition: parseTreeOrderDraft(draftOrders[node.id], Number(currentPositions[node.id] || (index + 1))),
+        }))
+        .sort((left, right) => {
+            const desiredDifference = left.desiredPosition - right.desiredPosition;
+            if (desiredDifference !== 0) {
+                return desiredDifference;
+            }
+
+            const currentDifference = left.currentPosition - right.currentPosition;
+            if (currentDifference !== 0) {
+                return currentDifference;
+            }
+
+            return left.originalIndex - right.originalIndex;
+        })
+        .map(({ node }) => node);
+};
 
 const CategoryProductRow = ({
     product,
@@ -267,15 +529,15 @@ const CategoryProductRow = ({
 }) => (
     <div
         draggable
-        onDragStart={() => onDragStart(product.id)}
+        onDragStart={() => onDragStart(product.assignment_key)}
         onDragEnter={(event) => {
             event.preventDefault();
-            onDragEnter(product.id);
+            onDragEnter(product.assignment_key);
         }}
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => {
             event.preventDefault();
-            onDrop(product.id);
+            onDrop(product.assignment_key);
         }}
         onDragEnd={onDragEnd}
         className={`rounded-sm border transition-all ${
@@ -306,20 +568,33 @@ const CategoryProductRow = ({
                 <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                         <Link
-                            to={`/admin/products/edit/${product.id}`}
+                            to={`/admin/products/edit/${product.admin_product_id || product.product_id}`}
                             className="truncate text-[13px] font-bold text-primary transition-colors hover:text-umber"
                         >
-                            {product.name}
+                            {product.item_type === 'bundle_option'
+                                ? (product.bundle_option_title || product.name)
+                                : product.name}
                         </Link>
-                        {product.is_primary_category ? (
+                        <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${
+                            product.item_type === 'bundle_option'
+                                ? 'bg-amber-100 text-amber-700'
+                                : (product.display_type === 'variant' || product.is_variant_child)
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : (product.product_type === 'bundle'
+                                        ? 'bg-primary/10 text-primary'
+                                        : 'bg-stone-100 text-stone-600')
+                        }`}>
+                            {product.display_label || 'San pham'}
+                        </span>
+                        {product.is_primary_category && product.item_type === 'product' ? (
                             <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-primary">
                                 Danh mục chính
                             </span>
-                        ) : (
+                        ) : product.item_type === 'product' ? (
                             <span className="rounded-full bg-gold/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-amber-700">
                                 Gắn thêm
                             </span>
-                        )}
+                        ) : null}
                         {!product.status ? (
                             <span className="rounded-full bg-brick/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-brick">
                                 Đang ẩn
@@ -327,11 +602,43 @@ const CategoryProductRow = ({
                         ) : null}
                     </div>
 
+                    {product.item_type === 'bundle_option' ? (
+                        <p className="mt-1 text-[11px] font-semibold text-primary/70">
+                            Bundle: {product.bundle_parent_name || 'San pham bundle'}
+                        </p>
+                    ) : product.variant_parent_name ? (
+                        <p className="mt-1 text-[11px] font-semibold text-primary/70">
+                            Thuoc: {product.variant_parent_name}
+                        </p>
+                    ) : null}
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-medium text-stone/55">
                         <span>SKU: {product.sku || '--'}</span>
-                        <span>ID: {product.id}</span>
+                        <span>ID: {product.product_id || product.admin_product_id || '--'}</span>
                         {product.category_name ? <span>Chính: {product.category_name}</span> : null}
+                        {product.item_type === 'bundle_option' && product.bundle_items_count > 0 ? (
+                            <span>{product.bundle_items_count} thanh phan</span>
+                        ) : null}
                     </div>
+                    {product.item_type === 'bundle_option' && Array.isArray(product.bundle_items_summary) && product.bundle_items_summary.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                            {product.bundle_items_summary.slice(0, 3).map((summary, summaryIndex) => (
+                                <span
+                                    key={`${product.assignment_key}-summary-${summaryIndex}`}
+                                    className="inline-flex max-w-full items-center rounded-full bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-700"
+                                >
+                                    <span className="truncate">
+                                        {summary.name || 'San pham'}
+                                        {summary.sku ? ` - ${summary.sku}` : ''}
+                                    </span>
+                                </span>
+                            ))}
+                            {product.bundle_items_summary.length > 3 ? (
+                                <span className="inline-flex items-center rounded-full bg-stone-100 px-2 py-1 text-[10px] font-bold text-stone-500">
+                                    +{product.bundle_items_summary.length - 3}
+                                </span>
+                            ) : null}
+                        </div>
+                    ) : null}
                 </div>
             </div>
 
@@ -375,7 +682,12 @@ const CategoryList = () => {
     const [isExpandingAll, setIsExpandingAll] = useState(false);
     const [isAllOpen, setIsAllOpen] = useState(false);
     const [openNodes, setOpenNodes] = useState(new Set());
-    const [formData, setFormData] = useState(INITIAL_FORM_DATA);
+    const [isTreeOrderMode, setIsTreeOrderMode] = useState(false);
+    const [treeOrderDrafts, setTreeOrderDrafts] = useState({});
+    const [treeOrderSaving, setTreeOrderSaving] = useState(false);
+    const [selectedChildOrderDrafts, setSelectedChildOrderDrafts] = useState({});
+    const [selectedChildOrderSaving, setSelectedChildOrderSaving] = useState(false);
+    const [formData, setFormData] = useState(createInitialFormData);
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [isBulkDeleting, setIsBulkDeleting] = useState(false);
     const [allAttributes, setAllAttributes] = useState([]);
@@ -387,7 +699,12 @@ const CategoryList = () => {
     const [draggingProductId, setDraggingProductId] = useState(null);
     const [dragOverProductId, setDragOverProductId] = useState(null);
     const [isCategorySortModalOpen, setIsCategorySortModalOpen] = useState(false);
+    const [isCategoryItemPickerOpen, setIsCategoryItemPickerOpen] = useState(false);
+    const [categoryItemSearchQuery, setCategoryItemSearchQuery] = useState('');
+    const [categoryItemSearchLoading, setCategoryItemSearchLoading] = useState(false);
+    const [categoryItemPickerGroups, setCategoryItemPickerGroups] = useState([]);
     const importInputRef = useRef(null);
+    const categoryItemSearchRequestRef = useRef(0);
     const [isExportingExcel, setIsExportingExcel] = useState(false);
     const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
     const [isImportingExcel, setIsImportingExcel] = useState(false);
@@ -396,6 +713,7 @@ const CategoryList = () => {
     const [importMode, setImportMode] = useState(DEFAULT_IMPORT_MODE);
     const [importUpdateFieldIds, setImportUpdateFieldIds] = useState([]);
     const isSelectiveImport = importMode === 'update_selected_fields';
+    const canReorderTree = !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all';
 
     // Close dropdowns on outside click
     useEffect(() => {
@@ -458,10 +776,50 @@ const CategoryList = () => {
         return treeData.filter(node => includeIds.has(node.id));
     }, [treeData, searchQuery, filterLevel, filterStatus]);
 
+    const siblingPositionMap = React.useMemo(
+        () => buildSiblingPositionMap(treeData),
+        [treeData],
+    );
+
+    const isTreeOrderDirty = React.useMemo(() => {
+        if (!isTreeOrderMode) {
+            return false;
+        }
+
+        return treeData.some((node) => {
+            const fallbackValue = siblingPositionMap[node.id] ?? '';
+            return String(treeOrderDrafts[node.id] ?? fallbackValue) !== String(fallbackValue);
+        });
+    }, [isTreeOrderMode, siblingPositionMap, treeData, treeOrderDrafts]);
+
     const selectedCategoryNode = React.useMemo(
         () => treeData.find((node) => node.id === selectedId) || null,
         [treeData, selectedId],
     );
+
+    const selectedChildNodes = React.useMemo(() => {
+        if (!selectedCategoryNode) {
+            return [];
+        }
+
+        return treeData.filter((node) => normalizeTreeParentId(node.parent) === selectedCategoryNode.id);
+    }, [selectedCategoryNode, treeData]);
+
+    const selectedChildPositionMap = React.useMemo(
+        () => buildSiblingPositionMap(selectedChildNodes),
+        [selectedChildNodes],
+    );
+
+    const isSelectedChildOrderDirty = React.useMemo(() => {
+        if (!selectedCategoryNode || selectedChildNodes.length === 0) {
+            return false;
+        }
+
+        return selectedChildNodes.some((node) => {
+            const fallbackValue = selectedChildPositionMap[node.id] ?? '';
+            return String(selectedChildOrderDrafts[node.id] ?? fallbackValue) !== String(fallbackValue);
+        });
+    }, [selectedCategoryNode, selectedChildNodes, selectedChildOrderDrafts, selectedChildPositionMap]);
 
     const blockedParentIds = React.useMemo(() => {
         if (!formData.id) {
@@ -474,6 +832,130 @@ const CategoryList = () => {
         ]);
     }, [treeData, formData.id]);
 
+    const selectedCategoryItemMap = React.useMemo(
+        () => new Map(
+            normalizeCategoryAssignmentItems(formData.category_items)
+                .map((item) => [item.assignment_key, item])
+        ),
+        [formData.category_items],
+    );
+
+    const selectedCategoryItems = React.useMemo(
+        () => Array.from(selectedCategoryItemMap.values()),
+        [selectedCategoryItemMap],
+    );
+
+    const setFormCategoryItems = (updater) => {
+        setFormData((previous) => {
+            const currentItems = normalizeCategoryAssignmentItems(previous.category_items);
+            const nextItems = typeof updater === 'function'
+                ? updater(currentItems)
+                : updater;
+
+            return {
+                ...previous,
+                category_items: normalizeCategoryAssignmentItems(nextItems),
+            };
+        });
+    };
+
+    const toggleFormCategoryItem = (rawItem) => {
+        const normalizedItem = normalizeCategoryAssignmentItem(rawItem);
+
+        if (!normalizedItem.assignment_key || !normalizedItem.product_id) {
+            return;
+        }
+
+        setFormCategoryItems((currentItems) => {
+            const existingItem = currentItems.find((item) => item.assignment_key === normalizedItem.assignment_key);
+
+            if (existingItem) {
+                if (existingItem.is_removable === false) {
+                    return currentItems;
+                }
+
+                return currentItems.filter((item) => item.assignment_key !== normalizedItem.assignment_key);
+            }
+
+            return [...currentItems, normalizedItem];
+        });
+    };
+
+    const removeFormCategoryItem = (assignmentKey) => {
+        setFormCategoryItems((currentItems) => currentItems.filter((item) => (
+            item.assignment_key !== assignmentKey || item.is_removable === false
+        )));
+    };
+
+    const resetCategoryItemPickerState = () => {
+        categoryItemSearchRequestRef.current += 1;
+        setCategoryItemSearchQuery('');
+        setCategoryItemSearchLoading(false);
+        setCategoryItemPickerGroups([]);
+    };
+
+    const closeCategoryItemPicker = () => {
+        setIsCategoryItemPickerOpen(false);
+        resetCategoryItemPickerState();
+    };
+
+    const closeCategoryForm = () => {
+        setIsFormOpen(false);
+        closeCategoryItemPicker();
+    };
+
+    const openCategoryCreateForm = () => {
+        setFormData(createInitialFormData());
+        resetCategoryItemPickerState();
+        setIsCategoryItemPickerOpen(false);
+        setIsFormOpen(true);
+    };
+
+    const fetchCategoryProductsData = async (categoryId) => {
+        const response = await categoryApi.getProducts(categoryId);
+
+        return {
+            category: response.data?.category || null,
+            products: normalizeSortableCategoryProducts(response.data?.products),
+        };
+    };
+
+    useEffect(() => {
+        if (!isTreeOrderMode) {
+            return;
+        }
+
+        setTreeOrderDrafts((previous) => {
+            const nextDrafts = {};
+            let hasChanges = Object.keys(previous).length !== treeData.length;
+
+            treeData.forEach((node) => {
+                const fallbackValue = siblingPositionMap[node.id] ?? '';
+                const nextValue = previous[node.id] ?? fallbackValue;
+                nextDrafts[node.id] = nextValue;
+
+                if (previous[node.id] !== nextValue) {
+                    hasChanges = true;
+                }
+            });
+
+            return hasChanges ? nextDrafts : previous;
+        });
+    }, [isTreeOrderMode, siblingPositionMap, treeData]);
+
+    useEffect(() => {
+        if (!isTreeOrderMode || canReorderTree) {
+            return;
+        }
+
+        setIsTreeOrderMode(false);
+        setTreeOrderDrafts(siblingPositionMap);
+    }, [canReorderTree, isTreeOrderMode, siblingPositionMap]);
+
+    useEffect(() => {
+        setSelectedChildOrderDrafts(selectedChildPositionMap);
+    }, [selectedId, selectedChildPositionMap]);
+
     const loadCategoryProducts = async (categoryId = selectedId) => {
         if (!categoryId) {
             setSelectedCategoryMeta(null);
@@ -484,9 +966,9 @@ const CategoryList = () => {
 
         setCategoryProductsLoading(true);
         try {
-            const response = await categoryApi.getProducts(categoryId);
-            setSelectedCategoryMeta(response.data?.category || null);
-            setCategoryProducts(normalizeSortableCategoryProducts(response.data?.products));
+            const payload = await fetchCategoryProductsData(categoryId);
+            setSelectedCategoryMeta(payload.category);
+            setCategoryProducts(payload.products);
             setCategoryProductsDirty(false);
         } catch (error) {
             console.error('Error loading category products:', error);
@@ -499,6 +981,89 @@ const CategoryList = () => {
             });
         } finally {
             setCategoryProductsLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!isCategoryItemPickerOpen) {
+            return;
+        }
+
+        const normalizedQuery = normalizeCategoryAssignmentSearchValue(categoryItemSearchQuery);
+
+        if (normalizedQuery.length < 2) {
+            categoryItemSearchRequestRef.current += 1;
+            setCategoryItemSearchLoading(false);
+            setCategoryItemPickerGroups([]);
+            return undefined;
+        }
+
+        const requestId = categoryItemSearchRequestRef.current + 1;
+        categoryItemSearchRequestRef.current = requestId;
+
+        const timer = window.setTimeout(async () => {
+            setCategoryItemSearchLoading(true);
+
+            try {
+                const response = await productApi.getAll({
+                    picker: true,
+                    per_page: 50,
+                    search: categoryItemSearchQuery.trim(),
+                });
+
+                if (categoryItemSearchRequestRef.current !== requestId) {
+                    return;
+                }
+
+                const rawProducts = Array.isArray(response.data?.data) ? response.data.data : [];
+                setCategoryItemPickerGroups(buildCategoryPickerGroups(rawProducts, categoryItemSearchQuery));
+            } catch (error) {
+                console.error('Error searching category items:', error);
+
+                if (categoryItemSearchRequestRef.current === requestId) {
+                    setCategoryItemPickerGroups([]);
+                }
+            } finally {
+                if (categoryItemSearchRequestRef.current === requestId) {
+                    setCategoryItemSearchLoading(false);
+                }
+            }
+        }, 250);
+
+        return () => {
+            window.clearTimeout(timer);
+        };
+    }, [categoryItemSearchQuery, isCategoryItemPickerOpen]);
+
+    const applyFormattedTreeData = (formattedData, { reloadProducts = true } = {}) => {
+        setTreeData(formattedData);
+
+        const availableIds = new Set(formattedData.map((node) => node.id));
+
+        setSelectedIds((previous) => {
+            const next = new Set(Array.from(previous).filter((id) => availableIds.has(id)));
+            return next.size === previous.size ? previous : next;
+        });
+
+        const selectedStillExists = selectedId
+            ? formattedData.some((node) => node.id === selectedId)
+            : false;
+
+        if (selectedStillExists) {
+            if (reloadProducts) {
+                loadCategoryProducts(selectedId);
+            }
+        } else {
+            setSelectedId(null);
+            setSelectedCategoryMeta(null);
+            setCategoryProducts([]);
+            setCategoryProductsDirty(false);
+            setIsCategorySortModalOpen(false);
+        }
+
+        if (formData.id && !formattedData.some((node) => node.id === formData.id)) {
+            setIsFormOpen(false);
+            setFormData(createInitialFormData());
         }
     };
 
@@ -525,7 +1090,13 @@ const CategoryList = () => {
         try {
             const response = await categoryApi.reorderProducts(
                 selectedId,
-                categoryProducts.map((product) => product.id),
+                categoryProducts.map((product) => ({
+                    item_type: product.item_type,
+                    product_id: product.product_id,
+                    bundle_option_key: product.bundle_option_key || '',
+                    bundle_option_post_id: product.bundle_option_post_id || null,
+                    bundle_option_title: product.bundle_option_title || null,
+                })),
             );
 
             setSelectedCategoryMeta(response.data?.category || null);
@@ -545,7 +1116,7 @@ const CategoryList = () => {
     };
 
     const moveCategoryProductByOffset = (productId, offset) => {
-        const currentIndex = categoryProducts.findIndex((product) => product.id === productId);
+        const currentIndex = categoryProducts.findIndex((product) => product.assignment_key === productId);
         if (currentIndex < 0) {
             return;
         }
@@ -554,7 +1125,7 @@ const CategoryList = () => {
     };
 
     const moveCategoryProductToPosition = (productId, position) => {
-        const currentIndex = categoryProducts.findIndex((product) => product.id === productId);
+        const currentIndex = categoryProducts.findIndex((product) => product.assignment_key === productId);
         if (currentIndex < 0) {
             return;
         }
@@ -588,11 +1159,46 @@ const CategoryList = () => {
             return;
         }
 
-        const fromIndex = categoryProducts.findIndex((product) => product.id === draggingProductId);
-        const toIndex = categoryProducts.findIndex((product) => product.id === targetProductId);
+        const fromIndex = categoryProducts.findIndex((product) => product.assignment_key === draggingProductId);
+        const toIndex = categoryProducts.findIndex((product) => product.assignment_key === targetProductId);
 
         moveCategoryProduct(fromIndex, toIndex);
         resetCategoryProductDragState();
+    };
+
+    const persistTreeOrder = async (nextTree, successMessage) => {
+        setTreeOrderSaving(true);
+
+        try {
+            const response = await categoryApi.reorder(buildCategoryReorderPayload(nextTree));
+            const responseCategories = Array.isArray(response.data?.categories)
+                ? response.data.categories
+                : null;
+
+            if (responseCategories) {
+                applyFormattedTreeData(formatCategoriesForTree(responseCategories), { reloadProducts: false });
+            } else {
+                applyFormattedTreeData(nextTree, { reloadProducts: false });
+            }
+
+            showToast({
+                message: successMessage,
+                type: 'success',
+            });
+
+            return true;
+        } catch (error) {
+            console.error('Category tree reorder error:', error);
+            showModal({
+                title: 'Lỗi',
+                content: error?.response?.data?.message || 'Không thể lưu thứ tự cây danh mục.',
+                type: 'error',
+            });
+            await fetchCategories();
+            return false;
+        } finally {
+            setTreeOrderSaving(false);
+        }
     };
 
     const fetchInitialData = async () => {
@@ -602,16 +1208,8 @@ const CategoryList = () => {
                 categoryApi.getAll(),
                 attributeApi.getAll() // Fetch all to ensure names show even if inactive in this view
             ]);
-            
-            // Format categories for tree
-            const formattedData = catRes.data.map(cat => ({
-                id: cat.id,
-                parent: cat.parent_id || 0,
-                text: cat.name,
-                droppable: true,
-                data: cat
-            }));
-            setTreeData(formattedData);
+
+            applyFormattedTreeData(formatCategoriesForTree(catRes.data), { reloadProducts: false });
 
             // Set attributes for selection
             setAllAttributes(attrRes.data || []);
@@ -625,37 +1223,7 @@ const CategoryList = () => {
     const fetchCategories = async () => {
         try {
             const res = await categoryApi.getAll();
-            const formattedData = res.data.map(cat => ({
-                id: cat.id,
-                parent: cat.parent_id || 0,
-                text: cat.name,
-                droppable: true,
-                data: cat
-            }));
-            setTreeData(formattedData);
-            const availableIds = new Set(formattedData.map((node) => node.id));
-            setSelectedIds((prev) => {
-                const next = new Set(Array.from(prev).filter((id) => availableIds.has(id)));
-                return next.size === prev.size ? prev : next;
-            });
-            const selectedStillExists = selectedId
-                ? formattedData.some((node) => node.id === selectedId)
-                : false;
-
-            if (selectedStillExists) {
-                loadCategoryProducts(selectedId);
-            } else {
-                setSelectedId(null);
-                setSelectedCategoryMeta(null);
-                setCategoryProducts([]);
-                setCategoryProductsDirty(false);
-                setIsCategorySortModalOpen(false);
-            }
-
-            if (formData.id && !formattedData.some((node) => node.id === formData.id)) {
-                setIsFormOpen(false);
-                setFormData(INITIAL_FORM_DATA);
-            }
+            applyFormattedTreeData(formatCategoriesForTree(res.data));
         } catch (error) {
             console.error('Error fetching categories:', error);
             showModal({
@@ -672,13 +1240,13 @@ const CategoryList = () => {
 
     useEffect(() => {
         const handleKeyDown = (e) => {
-            if (e.key === 'Escape' && isFormOpen) {
-                setIsFormOpen(false);
+            if (e.key === 'Escape' && isFormOpen && !isCategoryItemPickerOpen) {
+                closeCategoryForm();
             }
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isFormOpen]);
+    }, [closeCategoryForm, isCategoryItemPickerOpen, isFormOpen]);
 
     useEffect(() => {
         if (!selectedId) {
@@ -706,33 +1274,142 @@ const CategoryList = () => {
         }
     }, [treeData, selectedId]);
 
-    const handleDrop = async (newTree, options) => {
-        if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all') return; // Disable reorder when filtered
+    const handleTreeOrderDraftChange = (categoryId, value) => {
+        if (value !== '' && !/^\d+$/.test(value)) {
+            return;
+        }
 
-        setTreeData(newTree); // Optimistic UI update
-
-        // Prepare items array for backend: [{ id: 1, parent_id: 0, order: 0 }, ...]
-        const itemsToUpdate = newTree.map((node, index) => ({
-            id: node.id,
-            parent_id: node.parent === 0 ? null : node.parent,
-            order: index
+        setTreeOrderDrafts((previous) => ({
+            ...previous,
+            [categoryId]: value,
         }));
+    };
+
+    const openTreeOrderMode = () => {
+        if (!canReorderTree || treeOrderSaving) {
+            showModal({
+                title: 'Khong the sap xep',
+                content: 'Hay tat tim kiem va bo loc truoc khi sap xep danh muc theo so thu tu.',
+                type: 'warning',
+            });
+            return;
+        }
+
+        setTreeOrderDrafts(siblingPositionMap);
+        setIsTreeOrderMode(true);
+    };
+
+    const closeTreeOrderMode = () => {
+        setTreeOrderDrafts(siblingPositionMap);
+        setIsTreeOrderMode(false);
+    };
+
+    const saveTreeOrderDrafts = async () => {
+        if (!isTreeOrderMode || treeOrderSaving) {
+            return;
+        }
+
+        if (!isTreeOrderDirty) {
+            setIsTreeOrderMode(false);
+            return;
+        }
+
+        const nextTree = rebuildTreeFromOrderDrafts(treeData, treeOrderDrafts);
+        applyFormattedTreeData(nextTree, { reloadProducts: false });
+
+        const saved = await persistTreeOrder(nextTree, 'Da luu thu tu danh muc.');
+        if (saved) {
+            setTreeOrderDrafts(buildSiblingPositionMap(nextTree));
+            setIsTreeOrderMode(false);
+        }
+    };
+
+    const handleSelectedChildOrderDraftChange = (categoryId, value) => {
+        if (value !== '' && !/^\d+$/.test(value)) {
+            return;
+        }
+
+        setSelectedChildOrderDrafts((previous) => ({
+            ...previous,
+            [categoryId]: value,
+        }));
+    };
+
+    const resetSelectedChildOrderDrafts = () => {
+        setSelectedChildOrderDrafts(selectedChildPositionMap);
+    };
+
+    const saveSelectedChildOrder = async () => {
+        if (!selectedCategoryNode || selectedChildNodes.length === 0 || selectedChildOrderSaving) {
+            return;
+        }
+
+        if (!isSelectedChildOrderDirty) {
+            return;
+        }
+
+        const orderedChildren = reorderSiblingNodesFromDrafts(selectedChildNodes, selectedChildOrderDrafts);
+        setSelectedChildOrderSaving(true);
 
         try {
-            await categoryApi.reorder(itemsToUpdate);
+            const response = await categoryApi.reorder(
+                orderedChildren.map((node, index) => ({
+                    id: node.id,
+                    parent_id: selectedCategoryNode.id,
+                    order: index,
+                })),
+            );
+
+            const responseCategories = Array.isArray(response.data?.categories)
+                ? response.data.categories
+                : null;
+
+            if (responseCategories) {
+                applyFormattedTreeData(formatCategoriesForTree(responseCategories), { reloadProducts: false });
+            } else {
+                await fetchCategories();
+            }
+
+            showToast({
+                message: `Đã lưu thứ tự danh mục con của "${selectedCategoryNode.text}".`,
+                type: 'success',
+            });
         } catch (error) {
-            console.error("Lỗi khi lưu vị trí danh mục:", error);
-            alert("Lỗi khi lưu cập nhật phân cấp.");
-            fetchCategories(); // Revert on error
+            console.error('Child category order save error:', error);
+            showModal({
+                title: 'Lỗi',
+                content: error?.response?.data?.message || 'Không thể lưu thứ tự danh mục con.',
+                type: 'error',
+            });
+            await fetchCategories();
+        } finally {
+            setSelectedChildOrderSaving(false);
         }
+    };
+
+    const handleDrop = async (newTree) => {
+        if (!canReorderTree || isTreeOrderMode || treeOrderSaving) {
+            return;
+        }
+
+        applyFormattedTreeData(newTree, { reloadProducts: false });
+        await persistTreeOrder(newTree, 'Da luu thu tu keo tha danh muc.');
     };
 
     const handleFormSubmit = async (e) => {
         e.preventDefault();
         try {
             const data = new FormData();
+            const payloadCategoryItems = normalizeCategoryAssignmentItems(formData.category_items).map((item) => ({
+                item_type: item.item_type,
+                product_id: item.product_id,
+                bundle_option_key: item.bundle_option_key || '',
+                bundle_option_post_id: item.bundle_option_post_id || null,
+                bundle_option_title: item.bundle_option_title || null,
+            }));
             data.append('name', formData.name);
             data.append('description', formData.description || '');
+            data.append('category_items', JSON.stringify(payloadCategoryItems));
             
             // Only append parent_id if it's not root (0 or empty)
             if (formData.parent_id && formData.parent_id !== '0' && formData.parent_id !== '') {
@@ -761,14 +1438,23 @@ const CategoryList = () => {
                 data.append('remove_logo', 'true');
             }
 
-            if (formData.id) {
-                await categoryApi.update(formData.id, data);
-            } else {
-                await categoryApi.store(data);
+            const response = formData.id
+                ? await categoryApi.update(formData.id, data)
+                : await categoryApi.store(data);
+            const savedCategoryId = Number(response?.data?.id || formData.id || 0) || null;
+
+            closeCategoryForm();
+            setFormData(createInitialFormData());
+            await fetchCategories();
+
+            if (savedCategoryId) {
+                setSelectedId(savedCategoryId);
             }
-            setIsFormOpen(false);
-            setFormData(INITIAL_FORM_DATA);
-            fetchCategories();
+
+            showToast({
+                message: 'Da luu danh muc va item trong danh muc.',
+                type: 'success',
+            });
         } catch (error) {
             console.error("Lỗi khi lưu danh mục:", error);
             const message = error.response?.data?.message || error.message;
@@ -783,10 +1469,30 @@ const CategoryList = () => {
         }
     };
 
-    const handleEdit = (node) => {
+    const handleEdit = async (node) => {
         const cat = node.data;
-            const bannerUrl = resolveCategoryAssetUrl(cat.banner_image || cat.banner_path, 'medium');
-            const logoUrl = resolveCategoryAssetUrl(cat.logo_image || cat.logo_path, 'thumbnail');
+        const bannerUrl = resolveCategoryAssetUrl(cat.banner_image || cat.banner_path, 'medium');
+        const logoUrl = resolveCategoryAssetUrl(cat.logo_image || cat.logo_path, 'thumbnail');
+        let categoryItems = [];
+
+        if (Number(selectedId) === Number(cat.id) && !categoryProductsLoading) {
+            categoryItems = categoryProducts;
+        } else {
+            try {
+                const payload = await fetchCategoryProductsData(cat.id);
+                categoryItems = payload.products;
+            } catch (error) {
+                console.error('Error loading category items for edit form:', error);
+                showModal({
+                    title: 'Lá»—i',
+                    content: 'KhÃ´ng thá»ƒ táº£i danh sÃ¡ch item trong danh má»¥c. Báº¡n váº«n cÃ³ thá»ƒ sá»­a thÃ´ng tin khÃ¡c.',
+                    type: 'error',
+                });
+            }
+        }
+
+        resetCategoryItemPickerState();
+        setIsCategoryItemPickerOpen(false);
 
         setFormData({
             id: cat.id,
@@ -798,7 +1504,8 @@ const CategoryList = () => {
             logo_url: logoUrl,
             banner: cat.banner_path,
             banner_url: bannerUrl,
-            filterable_attribute_ids: (cat.filterable_attribute_ids || []).map(id => Number(id))
+            filterable_attribute_ids: (cat.filterable_attribute_ids || []).map(id => Number(id)),
+            category_items: normalizeCategoryAssignmentItems(categoryItems),
         });
         setIsFormOpen(true);
     };
@@ -1227,7 +1934,7 @@ const CategoryList = () => {
                     <div className="bg-white border border-gold/10 p-2 shadow-sm rounded-sm flex items-center justify-between">
                         <div className="flex gap-1.5 items-center w-full max-w-3xl">
                             <button
-                                onClick={() => { setFormData(INITIAL_FORM_DATA); setIsFormOpen(true); }}
+                                onClick={openCategoryCreateForm}
                                 className="bg-brick text-white p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 shadow-sm shrink-0"
                                 title="Thêm danh mục mới"
                             >
@@ -1444,8 +2151,146 @@ const CategoryList = () => {
                                 Cấu Trúc Cây Danh Mục
                             </h2>
                             
-                            <span className="text-[9px] font-black text-stone/30 uppercase tracking-widest italic hidden sm:block">Kéo thả để sắp xếp</span>
+                            <div className="flex items-center gap-2">
+                                {isTreeOrderMode ? (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={saveTreeOrderDrafts}
+                                            disabled={treeOrderSaving || !isTreeOrderDirty}
+                                            className={`inline-flex h-8 items-center gap-1 rounded-sm border px-3 text-[10px] font-black uppercase tracking-[0.14em] transition-all ${
+                                                treeOrderSaving
+                                                    ? 'border-primary bg-primary text-white opacity-80'
+                                                    : 'border-primary/20 bg-primary text-white hover:bg-umber hover:border-umber'
+                                            }`}
+                                        >
+                                            <span className={`material-symbols-outlined text-[14px] ${treeOrderSaving ? 'animate-spin' : ''}`}>
+                                                {treeOrderSaving ? 'sync' : 'save'}
+                                            </span>
+                                            Lưu STT
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={closeTreeOrderMode}
+                                            disabled={treeOrderSaving}
+                                            className="inline-flex h-8 items-center gap-1 rounded-sm border border-gold/20 bg-white px-3 text-[10px] font-black uppercase tracking-[0.14em] text-stone transition-all hover:border-gold/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            <span className="material-symbols-outlined text-[14px]">close</span>
+                                            Hủy
+                                        </button>
+                                    </>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={openTreeOrderMode}
+                                        disabled={!canReorderTree || treeOrderSaving}
+                                        className={`inline-flex h-8 items-center gap-1 rounded-sm border px-3 text-[10px] font-black uppercase tracking-[0.14em] transition-all ${
+                                            canReorderTree && !treeOrderSaving
+                                                ? 'border-primary/20 bg-white text-primary hover:border-primary hover:bg-primary/5'
+                                                : 'border-gold/10 bg-stone/5 text-stone/35'
+                                        }`}
+                                        title={canReorderTree ? 'Mở chế độ sắp xếp theo số thứ tự' : 'Tắt tìm kiếm và bộ lọc trước khi sắp xếp'}
+                                    >
+                                        <span className="material-symbols-outlined text-[14px]">format_list_numbered</span>
+                                        Sắp xếp số
+                                    </button>
+                                )}
+                                <span className="hidden text-[9px] font-black uppercase tracking-widest italic text-stone/30 sm:block">
+                                    {isTreeOrderMode
+                                        ? (isTreeOrderDirty ? 'Nhập số theo từng cấp rồi lưu' : 'Nhập số theo từng cấp')
+                                        : (canReorderTree ? 'Kéo thả để sắp xếp' : 'Tắt bộ lọc để sắp xếp')}
+                                </span>
+                            </div>
                         </div>
+
+                        {selectedCategoryNode ? (
+                            <div className="flex-none border-b border-gold/10 px-4 py-3">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                        <h4 className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-primary">
+                                            <span className="material-symbols-outlined text-[16px]">format_list_numbered</span>
+                                            Sắp xếp danh mục con
+                                        </h4>
+                                        <p className="mt-1 text-[11px] leading-relaxed text-stone/55">
+                                            Chọn số thứ tự cho các danh mục con trực tiếp của &quot;{selectedCategoryNode.text}&quot;, rồi lưu.
+                                        </p>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={resetSelectedChildOrderDrafts}
+                                            disabled={!isSelectedChildOrderDirty || selectedChildOrderSaving}
+                                            className="rounded-sm border border-gold/15 px-3 py-2 text-[10px] font-black uppercase tracking-[0.14em] text-stone/60 transition-colors hover:border-primary hover:text-primary disabled:opacity-40"
+                                        >
+                                            Hoàn tác STT con
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={saveSelectedChildOrder}
+                                            disabled={selectedChildNodes.length === 0 || !isSelectedChildOrderDirty || selectedChildOrderSaving}
+                                            className="rounded-sm bg-brick px-3 py-2 text-[10px] font-black uppercase tracking-[0.14em] text-white transition-colors hover:bg-umber disabled:opacity-40"
+                                        >
+                                            {selectedChildOrderSaving ? 'Đang lưu' : 'Lưu STT con'}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {selectedChildNodes.length === 0 ? (
+                                    <div className="mt-3 rounded-sm border border-dashed border-gold/20 bg-stone/5 px-3 py-3 text-[11px] text-stone/50">
+                                        Danh mục này hiện chưa có danh mục con trực tiếp để sắp xếp.
+                                    </div>
+                                ) : (
+                                    <div className="mt-3 space-y-2">
+                                        {selectedChildNodes.map((childNode) => {
+                                            const currentPosition = selectedChildPositionMap[childNode.id] ?? '';
+                                            const draftValue = selectedChildOrderDrafts[childNode.id] ?? currentPosition;
+                                            const isActive = String(draftValue) !== String(currentPosition);
+
+                                            return (
+                                                <div
+                                                    key={`child-order-${childNode.id}`}
+                                                    className={`flex items-center gap-3 rounded-sm border px-3 py-2 transition-colors ${
+                                                        isActive
+                                                            ? 'border-amber-200 bg-amber-50/70'
+                                                            : 'border-gold/10 bg-white'
+                                                    }`}
+                                                >
+                                                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-primary/10 text-[11px] font-black text-primary">
+                                                        {currentPosition}
+                                                    </div>
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="truncate text-[12px] font-bold text-primary">
+                                                            {childNode.text}
+                                                        </div>
+                                                        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-stone/50">
+                                                            <span>ID: {childNode.id}</span>
+                                                            {childNode.data?.slug ? <span>Slug: {childNode.data.slug}</span> : null}
+                                                            <span className={Number(childNode.data?.status ?? 0) === 1 ? 'text-emerald-700' : 'text-stone-500'}>
+                                                                {Number(childNode.data?.status ?? 0) === 1 ? 'Đang hiển thị' : 'Đang ẩn'}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex shrink-0 items-center gap-2">
+                                                        <span className="text-[10px] font-black uppercase tracking-[0.14em] text-stone/45">
+                                                            STT
+                                                        </span>
+                                                        <input
+                                                            type="number"
+                                                            min="1"
+                                                            value={draftValue}
+                                                            onChange={(event) => handleSelectedChildOrderDraftChange(childNode.id, event.target.value)}
+                                                            disabled={selectedChildOrderSaving}
+                                                            className="h-9 w-16 rounded-sm border border-gold/20 bg-white px-2 text-center text-[12px] font-bold text-primary outline-none transition-colors focus:border-primary disabled:cursor-not-allowed disabled:bg-stone-100"
+                                                        />
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        ) : null}
 
                         {/* Column Headers */}
                         <div className="flex-none px-4 py-2 bg-gold/5 border-b border-gold/10 flex items-center">
@@ -1458,6 +2303,11 @@ const CategoryList = () => {
                                 />
                             </div>
                             <div className="flex-1 text-[10px] font-black uppercase tracking-[0.2em] text-primary/40 pl-11">Tên Danh Mục</div>
+                            {isTreeOrderMode ? (
+                                <div className="w-20 text-center text-[10px] font-black uppercase tracking-[0.2em] text-primary/60">
+                                    STT
+                                </div>
+                            ) : null}
                             <div className="hidden">
                                 <div className="min-w-[120px] max-w-[160px] text-[10px] font-black uppercase tracking-[0.2em] text-primary/60 text-center">Bộ lọc</div>
                             </div>
@@ -1479,9 +2329,9 @@ const CategoryList = () => {
                                         ref={treeRef}
                                         tree={filteredTreeData}
                                         rootId={0}
-                                        canDrag={() => !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all'}
+                                        canDrag={() => canReorderTree && !isTreeOrderMode && !treeOrderSaving}
                                         canDrop={(tree, { dragSourceId, dropTargetId }) => {
-                                            if (searchQuery.trim() || filterLevel !== 'all' || filterStatus !== 'all') return false;
+                                            if (!canReorderTree || isTreeOrderMode || treeOrderSaving) return false;
 
                                             if (dragSourceId === undefined || dragSourceId === null) {
                                                 return undefined;
@@ -1511,6 +2361,10 @@ const CategoryList = () => {
                                                 onSelect={(id) => setSelectedId(id)}
                                                 isChecked={selectedIds.has(node.id)}
                                                 onCheck={handleCheck}
+                                                showOrderInput={isTreeOrderMode}
+                                                orderValue={treeOrderDrafts[node.id] ?? siblingPositionMap[node.id] ?? ''}
+                                                onOrderChange={handleTreeOrderDraftChange}
+                                                orderDisabled={treeOrderSaving}
                                             />
                                         )}
                                         renderPlaceholder={(props) => <Placeholder {...props} />}
@@ -1583,7 +2437,7 @@ const CategoryList = () => {
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => setIsFormOpen(false)}
+                                            onClick={closeCategoryForm}
                                             className="size-8 flex items-center justify-center text-stone/30 hover:text-brick hover:bg-brick/5 rounded-full transition-all"
                                         >
                                             <span className="material-symbols-outlined text-[20px]">close</span>
@@ -1635,6 +2489,130 @@ const CategoryList = () => {
                                                 onChange={e => setFormData({ ...formData, description: e.target.value })}
                                                 className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body h-32 resize-none rounded-sm"
                                             />
+                                        </div>
+
+                                        <div className="space-y-3 rounded-sm border border-gold/10 bg-gold/5 p-4">
+                                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                                <div>
+                                                    <label className="text-[10px] font-black uppercase tracking-widest text-primary">San pham trong danh muc</label>
+                                                    <p className="mt-1 text-[10px] leading-relaxed text-stone/55">
+                                                        Chon san pham don, bien the hoac tung tuy chon bundle/combo de gan rieng cho danh muc nay.
+                                                    </p>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setIsCategoryItemPickerOpen(true)}
+                                                    className="inline-flex h-9 items-center gap-2 rounded-sm border border-primary/20 bg-white px-3 text-[10px] font-black uppercase tracking-[0.14em] text-primary transition-colors hover:border-primary hover:bg-primary/5"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">add_circle</span>
+                                                    Chon san pham
+                                                </button>
+                                            </div>
+
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <span className="rounded-full bg-white px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-primary">
+                                                    {selectedCategoryItems.length} item da chon
+                                                </span>
+                                                {selectedCategoryItems.some((item) => item.item_type === 'bundle_option') ? (
+                                                    <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-amber-700">
+                                                        Co tuy chon bundle
+                                                    </span>
+                                                ) : null}
+                                                {selectedCategoryItems.some((item) => item.display_type === 'variant' || item.is_variant_child) ? (
+                                                    <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-emerald-700">
+                                                        Co bien the
+                                                    </span>
+                                                ) : null}
+                                            </div>
+
+                                            {selectedCategoryItems.length === 0 ? (
+                                                <div className="rounded-sm border border-dashed border-gold/20 bg-white/80 px-3 py-4 text-[11px] leading-relaxed text-stone/50">
+                                                    Chua co item nao duoc gan vao danh muc nay. Bam "Chon san pham" de tim va them san pham, bien the hoac tuy chon bundle.
+                                                </div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {selectedCategoryItems.map((item) => (
+                                                        <div
+                                                            key={item.assignment_key}
+                                                            className="rounded-sm border border-gold/10 bg-white px-3 py-3"
+                                                        >
+                                                            <div className="flex items-start gap-3">
+                                                                <div className="min-w-0 flex-1">
+                                                                    <div className="flex flex-wrap items-center gap-2">
+                                                                        <div className="truncate text-[12px] font-bold text-primary">
+                                                                            {item.item_type === 'bundle_option'
+                                                                                ? (item.bundle_option_title || item.name || 'Tuy chon bundle')
+                                                                                : (item.name || 'San pham')}
+                                                                        </div>
+                                                                        <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${resolveCategoryItemBadgeClasses(item)}`}>
+                                                                            {item.display_label || 'San pham'}
+                                                                        </span>
+                                                                        {item.is_removable === false ? (
+                                                                            <span className="rounded-full bg-stone-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-stone-500">
+                                                                                Khoa boi danh muc chinh
+                                                                            </span>
+                                                                        ) : null}
+                                                                    </div>
+
+                                                                    {item.item_type === 'bundle_option' ? (
+                                                                        <p className="mt-1 text-[11px] font-semibold text-primary/70">
+                                                                            Bundle: {item.bundle_parent_name || 'San pham bundle'}
+                                                                        </p>
+                                                                    ) : item.variant_parent_name ? (
+                                                                        <p className="mt-1 text-[11px] font-semibold text-primary/70">
+                                                                            Thuoc: {item.variant_parent_name}
+                                                                        </p>
+                                                                    ) : null}
+
+                                                                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-medium text-stone/55">
+                                                                        {item.sku ? <span>SKU: {item.sku}</span> : null}
+                                                                        <span>ID: {item.product_id || '--'}</span>
+                                                                        {item.item_type === 'bundle_option' && item.bundle_items_count > 0 ? (
+                                                                            <span>{item.bundle_items_count} thanh phan</span>
+                                                                        ) : null}
+                                                                    </div>
+
+                                                                    {item.item_type === 'bundle_option' && Array.isArray(item.bundle_items_summary) && item.bundle_items_summary.length > 0 ? (
+                                                                        <div className="mt-2 flex flex-wrap gap-1.5">
+                                                                            {item.bundle_items_summary.slice(0, 3).map((summary, summaryIndex) => (
+                                                                                <span
+                                                                                    key={`${item.assignment_key}-form-summary-${summaryIndex}`}
+                                                                                    className="inline-flex max-w-full items-center rounded-full bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-700"
+                                                                                >
+                                                                                    <span className="truncate">
+                                                                                        {summary.name || 'San pham'}
+                                                                                        {summary.sku ? ` - ${summary.sku}` : ''}
+                                                                                    </span>
+                                                                                </span>
+                                                                            ))}
+                                                                            {item.bundle_items_summary.length > 3 ? (
+                                                                                <span className="inline-flex items-center rounded-full bg-stone-100 px-2 py-1 text-[10px] font-bold text-stone-500">
+                                                                                    +{item.bundle_items_summary.length - 3}
+                                                                                </span>
+                                                                            ) : null}
+                                                                        </div>
+                                                                    ) : null}
+                                                                </div>
+
+                                                                {item.is_removable === false ? (
+                                                                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-500" title="Item nay dang khoa boi danh muc chinh">
+                                                                        <span className="material-symbols-outlined text-[16px]">lock</span>
+                                                                    </div>
+                                                                ) : (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => removeFormCategoryItem(item.assignment_key)}
+                                                                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-stone/45 transition-colors hover:bg-brick/5 hover:text-brick"
+                                                                        title="Go item khoi danh muc"
+                                                                    >
+                                                                        <span className="material-symbols-outlined text-[16px]">close</span>
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
 
                                         {false && (
@@ -1923,7 +2901,7 @@ const CategoryList = () => {
                             {selectedCategoryNode ? (
                                 <div className="flex flex-wrap items-center gap-2 border-b border-gold/10 px-4 py-3">
                                     <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-primary">
-                                        {selectedCategoryMeta?.products_count ?? categoryProducts.length} sản phẩm
+                                        {selectedCategoryMeta?.items_count ?? selectedCategoryMeta?.products_count ?? categoryProducts.length} item
                                     </span>
                                     <span className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${
                                         Number(selectedCategoryMeta?.status ?? selectedCategoryNode.data?.status ?? 0) === 1
@@ -1976,21 +2954,21 @@ const CategoryList = () => {
                                     <div className="space-y-2">
                                         {categoryProducts.map((product, index) => (
                                             <CategoryProductRow
-                                                key={product.id}
+                                                key={product.assignment_key}
                                                 product={product}
                                                 index={index}
                                                 isFirst={index === 0}
                                                 isLast={index === categoryProducts.length - 1}
-                                                isDragging={draggingProductId === product.id}
-                                                isDropTarget={dragOverProductId === product.id && draggingProductId !== product.id}
+                                                isDragging={draggingProductId === product.assignment_key}
+                                                isDropTarget={dragOverProductId === product.assignment_key && draggingProductId !== product.assignment_key}
                                                 onDragStart={handleCategoryProductDragStart}
                                                 onDragEnter={setDragOverProductId}
                                                 onDrop={handleCategoryProductDrop}
                                                 onDragEnd={() => {
                                                     resetCategoryProductDragState();
                                                 }}
-                                                onMoveUp={() => moveCategoryProductByOffset(product.id, -1)}
-                                                onMoveDown={() => moveCategoryProductByOffset(product.id, 1)}
+                                                onMoveUp={() => moveCategoryProductByOffset(product.assignment_key, -1)}
+                                                onMoveDown={() => moveCategoryProductByOffset(product.assignment_key, 1)}
                                             />
                                         ))}
                                     </div>
@@ -2009,6 +2987,16 @@ const CategoryList = () => {
                     </div>
                 </div>
             </div>
+            <CategoryItemPickerModal
+                open={isCategoryItemPickerOpen}
+                onClose={closeCategoryItemPicker}
+                searchQuery={categoryItemSearchQuery}
+                onSearchChange={setCategoryItemSearchQuery}
+                groups={categoryItemPickerGroups}
+                selectedItemMap={selectedCategoryItemMap}
+                onToggleItem={toggleFormCategoryItem}
+                isLoading={categoryItemSearchLoading}
+            />
             <CategoryProductSortModal
                 open={isCategorySortModalOpen}
                 onClose={closeCategorySortModal}

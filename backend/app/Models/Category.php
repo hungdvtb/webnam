@@ -71,7 +71,8 @@ class Category extends Model
     public function products()
     {
         return $this->belongsToMany(Product::class)
-            ->withPivot('sort_order')
+            ->wherePivot('item_type', 'product')
+            ->withPivot(['sort_order', 'item_type', 'bundle_option_key'])
             ->withTimestamps()
             ->orderBy('category_product.sort_order')
             ->orderBy('category_product.id');
@@ -171,6 +172,7 @@ class Category extends Model
 
         $currentSortOrders = DB::table('category_product')
             ->where('product_id', $product->id)
+            ->where('item_type', 'product')
             ->whereIn('category_id', $normalizedCategoryIds)
             ->pluck('sort_order', 'category_id')
             ->mapWithKeys(fn ($sortOrder, $categoryId) => [(int) $categoryId => $sortOrder === null ? null : (int) $sortOrder]);
@@ -194,7 +196,13 @@ class Category extends Model
                 $nextSortOrders->put($categoryId, $sortOrder);
             }
 
-            $payload[$categoryId] = ['sort_order' => $sortOrder];
+            $payload[$categoryId] = [
+                'sort_order' => $sortOrder,
+                'item_type' => 'product',
+                'bundle_option_key' => '',
+                'bundle_option_post_id' => null,
+                'bundle_option_title' => null,
+            ];
         }
 
         return $payload;
@@ -228,7 +236,8 @@ class Category extends Model
             ->select('products.id')
             ->leftJoin('category_product', function ($join) use ($categoryId) {
                 $join->on('products.id', '=', 'category_product.product_id')
-                    ->where('category_product.category_id', '=', $categoryId);
+                    ->where('category_product.category_id', '=', $categoryId)
+                    ->where('category_product.item_type', '=', 'product');
             })
             ->where('products.category_id', $categoryId)
             ->whereNull('category_product.id')
@@ -247,6 +256,10 @@ class Category extends Model
             $insertRows[] = [
                 'product_id' => (int) $productId,
                 'category_id' => $categoryId,
+                'item_type' => 'product',
+                'bundle_option_key' => '',
+                'bundle_option_post_id' => null,
+                'bundle_option_title' => null,
                 'sort_order' => $nextSortOrder++,
                 'created_at' => $timestamp,
                 'updated_at' => $timestamp,

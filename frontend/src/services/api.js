@@ -132,6 +132,8 @@ export const productApi = {
     bulkForceDelete: (ids) => api.delete('/products/bulk-force-delete', { data: { ids } }),
     bulkUpdateAttributes: (data) => api.post('/products/bulk-update-attributes', data),
     bulkUpdateUndo: (logId) => api.post('/products/bulk-update-undo', { log_id: logId }),
+    getSortItems: () => api.get('/products/sort-items'),
+    reorder: (productIds) => api.post('/products/reorder', { product_ids: productIds }),
 };
 
 export const productImageApi = {
@@ -155,7 +157,15 @@ export const categoryApi = {
     destroy: (id) => api.delete(`/categories/${id}`),
     bulkDelete: (ids) => api.delete('/categories/bulk-delete', { data: { ids } }),
     reorder: (items) => api.post('/categories/reorder', { items }),
-    reorderProducts: (id, productIds) => api.post(`/categories/${id}/products/reorder`, { product_ids: productIds }),
+    reorderProducts: (id, items) => {
+        const normalizedItems = Array.isArray(items) ? items : [];
+
+        if (normalizedItems.every((item) => typeof item === 'number')) {
+            return api.post(`/categories/${id}/products/reorder`, { product_ids: normalizedItems });
+        }
+
+        return api.post(`/categories/${id}/products/reorder`, { items: normalizedItems });
+    },
 };
 
 export const attributeApi = {

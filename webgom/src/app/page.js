@@ -1,30 +1,160 @@
-import Image from 'next/image';
-import Link from 'next/link';
-import styles from './page.module.css';
-import { getStorefrontData } from '@/lib/api';
-import config from '@/lib/config';
+import Image from "next/image";
+import Link from "next/link";
+import styles from "./page.module.css";
+import { getStorefrontData, getWebCategories, getWebProducts } from "@/lib/api";
+import { HomeDesktopCatalog, HomeDesktopHero } from "@/components/HomeDesktopHomepage";
+import HomeMobileCatalog from "@/components/HomeMobileCatalog";
+import { resolveImageObjectUrl, resolveMediaUrl } from "@/lib/media";
 
-export default async function Home() {
-  let homepageData = null;
-  try {
-    const data = await getStorefrontData();
-    homepageData = data;
-  } catch (error) {
-    console.error("Failed to load homepage data:", error);
+const FALLBACK_CATEGORY_BANNER = "/banner-store.png";
+const FALLBACK_PRODUCT_IMAGE = "/logo-dai-thanh.png";
+const DESKTOP_PRODUCT_BATCH = 8;
+const categoryNameSorter = new Intl.Collator("vi");
+
+const FALLBACK_CATEGORIES = [
+  { name: "Gốm Men Lam", slug: "gom-men-lam" },
+  { name: "Gốm Men Rạn", slug: "gom-men-ran" },
+  { name: "Bộ Ấm Trà Đạo", slug: "bo-am-tra-dao" },
+  { name: "Tượng Nghệ Thuật", slug: "tuong-phong-thuy" },
+  { name: "Gia Dụng Sang Trọng", slug: "gia-dung" },
+  { name: "Đèn Trang Trí", slug: "den-trang-tri" },
+  { name: "Quà Tặng Doanh Nghiệp", slug: "qua-tang" },
+];
+
+function uniqueBySlug(items = []) {
+  const seenSlugs = new Set();
+
+  return items.filter((item) => {
+    if (!item?.slug || seenSlugs.has(item.slug)) {
+      return false;
+    }
+
+    seenSlugs.add(item.slug);
+    return true;
+  });
+}
+
+function normalizeCategory(category, index) {
+  const slug = String(category?.slug || "").trim();
+  const name = String(category?.name || "").trim();
+
+  if (!slug || !name) {
+    return null;
   }
 
-  // Fallback categories if API fails
-  const categories = homepageData?.categories || [
-    { name: 'Gốm Men Lam', slug: 'gom-men-lam' },
-    { name: 'Gốm Men Rạn', slug: 'gom-men-ran' },
-    { name: 'Bộ Trà Cao Cấp', slug: 'bo-am-tra-dao' },
-    { name: 'Tượng Nghệ Thuật', slug: 'tuong-phong-thuy' },
-    { name: 'Gia Dụng Sang Trọng', slug: 'gia-dung' },
-    { name: 'Đèn Trang Trí', slug: 'den-trang-tri' },
-    { name: 'Quà Tặng Doanh Nghiệp', slug: 'qua-tang' },
-  ];
+  return {
+    id: category?.id ?? `${slug}-${index}`,
+    name,
+    slug,
+    href: `/category/${slug}`,
+    description: String(category?.description || "").trim(),
+    productsCount: Number(category?.products_count || 0),
+    bannerSrc: (
+      resolveImageObjectUrl(
+        category?.banner_image,
+        "large",
+        resolveMediaUrl(category?.banner_path) || FALLBACK_CATEGORY_BANNER
+      ) || FALLBACK_CATEGORY_BANNER
+    ),
+    order: Number(category?.order ?? index),
+  };
+}
 
-  const featuredProducts = homepageData?.featured_products || [];
+function normalizeProduct(product) {
+  return {
+    id: product?.id,
+    name: String(product?.name || "").trim() || "Sản phẩm gốm sứ",
+    slug: String(product?.slug || product?.id || "").trim(),
+    price: product?.price ?? product?.current_price ?? 0,
+    currentPrice: product?.current_price ?? product?.price ?? 0,
+    primaryImage: product?.primary_image || null,
+    imageSrc: resolveMediaUrl(product?.main_image) || FALLBACK_PRODUCT_IMAGE,
+    isFeatured: Boolean(product?.is_featured),
+    isNew: Boolean(product?.is_new),
+  };
+}
+
+function getTopLevelCategories(source = []) {
+  const categories = Array.isArray(source) ? source : [];
+  const topLevelCategories = categories.filter((category) => category?.parent_id == null);
+  return topLevelCategories.length ? topLevelCategories : categories;
+}
+
+export default async function Home() {
+  const [homepageResult, categoriesResult] = await Promise.allSettled([
+    getStorefrontData(),
+    getWebCategories(),
+  ]);
+
+  let homepageData = null;
+  let fetchedCategories = [];
+
+  if (homepageResult.status === "fulfilled") {
+    homepageData = homepageResult.value;
+  } else {
+    console.error("Failed to load homepage data:", homepageResult.reason);
+  }
+
+  if (categoriesResult.status === "fulfilled") {
+    fetchedCategories = Array.isArray(categoriesResult.value) ? categoriesResult.value : [];
+  } else {
+    console.error("Failed to load homepage categories:", categoriesResult.reason);
+  }
+
+  const rawCategories = fetchedCategories.length
+    ? fetchedCategories
+    : (Array.isArray(homepageData?.categories) ? homepageData.categories : FALLBACK_CATEGORIES);
+
+  const categories = uniqueBySlug(
+    getTopLevelCategories(rawCategories)
+      .map(normalizeCategory)
+      .filter(Boolean)
+  ).sort((left, right) => {
+    if (left.order !== right.order) {
+      return left.order - right.order;
+    }
+
+    return categoryNameSorter.compare(left.name, right.name);
+  });
+
+  const categorySectionResults = await Promise.allSettled(
+    categories.map(async (category) => {
+      const productsResponse = await getWebProducts({
+        category: category.slug,
+        page: 1,
+        per_page: Math.max(category.productsCount || 0, DESKTOP_PRODUCT_BATCH),
+        sort: "popular",
+      });
+
+      const products = Array.isArray(productsResponse?.data)
+        ? productsResponse.data.map(normalizeProduct)
+        : [];
+
+      return {
+        ...category,
+        products,
+        totalProducts: Number(productsResponse?.total || products.length || category.productsCount || 0),
+      };
+    })
+  );
+
+  const desktopCategorySections = categorySectionResults.map((result, index) => {
+    if (result.status === "fulfilled") {
+      return result.value;
+    }
+
+    console.error(`Failed to load products for homepage category "${categories[index]?.slug || index}":`, result.reason);
+
+    return {
+      ...categories[index],
+      products: [],
+      totalProducts: categories[index]?.productsCount || 0,
+    };
+  });
+
+  const visibleDesktopCategorySections = desktopCategorySections.filter((category) => category.totalProducts > 0);
+  const visibleCategories = visibleDesktopCategorySections.map(({ products, totalProducts, ...category }) => category);
+  const bannerCategories = visibleDesktopCategorySections;
 
   return (
     <main>
@@ -35,47 +165,36 @@ export default async function Home() {
             <h2>DANH MỤC</h2>
           </div>
           <nav className={styles.categoryNav}>
-            {categories.map((cat, idx) => (
-              <Link key={idx} href={`/category/${cat.slug}`}>
-                {cat.name} <span className="material-symbols-outlined">chevron_right</span>
+            {visibleCategories.map((category) => (
+              <Link key={category.slug} href={category.href}>
+                {category.name} <span className="material-symbols-outlined">chevron_right</span>
               </Link>
             ))}
           </nav>
         </aside>
 
-        <section className={styles.heroSection}>
+        <HomeDesktopHero bannerCategories={bannerCategories} />
+
+        <section className={`${styles.heroSection} ${styles.mobileOnly}`}>
           <div className={styles.heroBanner}>
-            <Image 
-              src="/hero.png" 
-              alt="GÔM ĐẠI THÀNH Hero" 
-              fill 
+            <Image
+              src="/hero.png"
+              alt="GỐM ĐẠI THÀNH Hero"
+              fill
               sizes="100vw"
-              style={{ objectFit: 'cover' }}
+              style={{ objectFit: "cover" }}
               priority
             />
             <div className={styles.heroOverlay}></div>
             <div className={styles.heroContent}>
               <p className={styles.heroSubtitle}>BỘ SƯU TẬP ĐỘC BẢN</p>
-              <h2 className={styles.heroTitle}>TINH HOA<br/>ĐẤT VIÊT</h2>
-              <Link href="/products" className="btn-primary" style={{ display: 'inline-block' }}>KHÁM PHÁ NGAY</Link>
+              <h2 className={styles.heroTitle}>TINH HOA<br />ĐẤT VIỆT</h2>
+              <Link href="/products" className="btn-primary" style={{ display: "inline-block" }}>
+                KHÁM PHÁ NGAY
+              </Link>
             </div>
           </div>
         </section>
-
-        <div className={styles.heroSideBanners}>
-          <div className={`${styles.sideBanner}`} style={{ backgroundImage: "url('https://lh3.googleusercontent.com/aida-public/AB6AXuDuJs7AEMW5BhRiTSb6HeuhqnehDWIXBJds5S-R4L7gDvpu9iRvjXOGw9G0PFNgaxhJe-p-uoJgHcdw0wwn3HpBgOH_Awt-IyHbfEmm8ztyGUOqQXdci4NRkuWvSQbvzr6-OYszJLUl47ZUdhbLMdy_U1dAubiH8hgKD_LwNLAGjbSde-MB-ZNygaaXRRKVh17dSQ_yVPq6WWaZSP7fGSDoPVIECAtWjokE2NQrJngScemh2Thmj0rIrgpd62eaP0brQZqTXTA7eY4')" }}>
-            <div className={styles.bannerText}>
-              <p>SẢN PHẨM NỔI BẬT</p>
-              <h3>Bình Gốm Nghệ Thuật</h3>
-            </div>
-          </div>
-          <div className={`${styles.sideBanner}`} style={{ backgroundImage: "url('https://lh3.googleusercontent.com/aida-public/AB6AXuCL8CT-l51lMCT946rK_56c6yrKRQ8qNjsmozS76KD5fPP74uXgux_dU0p7MJgArP1VLoqrMQP89W1Eh21bbMcszzGkdVT5U6-W11iE_PJzV4n9QKhekz7xbBJltqVgf7a84MqOIF0mGJ77l0NHY8qjRlFk5I1a4Dgdw39k0oQgGzK7P8SPlmTLOriljINStY_J-2Y6E9QypdKeQS5LkcdKgI0AXE54mnWyDVJ1qOSQ2nDhhNnHj-Johvt9IAA7tyqBitaY2d-ZZ0k')" }}>
-            <div className={styles.bannerText}>
-              <p>QUÀ TẶNG ĐẶC BIỆT</p>
-              <h3>Ấm Chén Trà Đạo</h3>
-            </div>
-          </div>
-        </div>
       </div>
 
       <section className={`container ${styles.valuesSection}`}>
@@ -101,107 +220,9 @@ export default async function Home() {
         </div>
       </section>
 
-      {/* Dynamic Products Group 1 */}
-      {featuredProducts.length > 0 && (
-        <section className={`container ${styles.productsSection}`}>
-          <div className={styles.sectionHeader}>
-            <div className={styles.headerLeft}>
-              <h2 className={styles.sectionTitle}>SẢN PHẨM NỔI BẬT</h2>
-              <div className={styles.sectionTabs}>
-                <button className={styles.active}>TẤT CẢ</button>
-              </div>
-            </div>
-            <Link href="/products" className={styles.viewAll}>
-              Xem tất cả <span className="material-symbols-outlined">arrow_forward</span>
-            </Link>
-          </div>
-          
-          <div className={styles.productsGrid}>
-            {featuredProducts.map((product) => (
-              <Link href={`/product/${product.slug || product.id}`} key={product.id} className={styles.productCard}>
-                <div className={styles.productImage}>
-                  {(() => {
-                    const img = product.primary_image;
-                    let src = 'https://placehold.co/400';
-                    if (img) {
-                      if (img.url && img.url.startsWith('http')) src = img.url;
-                      else if (img.path && img.path !== 'undefined' && img.path !== 'null') {
-                        const cleanPath = img.path.startsWith('/') ? img.path.substring(1) : img.path;
-                        src = `${config.storageUrl}/${cleanPath}`;
-                      } else if (img.url) src = img.url;
-                    }
-                    return (
-                      <Image 
-                        src={src} 
-                        alt={product.name} 
-                        fill 
-                        sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 25vw"
-                        style={{ objectFit: 'cover' }}
-                        unoptimized
-                      />
-                    );
-                  })()}
-                  {product.is_featured && <span className={`${styles.badge} ${styles.badgeHot}`}>HOT</span>}
-                </div>
-                <div className={styles.productInfo}>
-                  <div className={styles.stars}>
-                    {[...Array(5)].map((_, s) => (
-                      <span key={s} className="material-symbols-outlined star">star</span>
-                    ))}
-                  </div>
-                  <h4 className={styles.productName}>{product.name}</h4>
-                  <div className={styles.productPrice}>
-                    <span className={styles.currentPrice}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(product.price)}</span>
-                  </div>
-                </div>
-              </Link>
-            ))}
-          </div>
-        </section>
-      )}
+      <HomeDesktopCatalog categorySections={visibleDesktopCategorySections} />
 
-      {/* Static Fallback if no featured products */}
-      {featuredProducts.length === 0 && (
-         <section className={`container ${styles.productsSection}`}>
-         <div className={styles.sectionHeader}>
-           <div className={styles.headerLeft}>
-             <h2 className={styles.sectionTitle}>GỐM SỨ CAO CẤP</h2>
-             <div className={styles.sectionTabs}>
-               <a href="#" className={styles.active}>Mới nhất</a>
-               <a href="#">Xem nhiều</a>
-               <a href="#">Khuyến mãi</a>
-             </div>
-           </div>
-           <a href="#" className={styles.viewAll}>
-             Xem tất cả <span className="material-symbols-outlined">arrow_forward</span>
-           </a>
-         </div>
-         
-         <div className={styles.productsGrid}>
-           {[1, 2, 3, 4].map((i) => (
-             <div key={i} className={styles.productCard}>
-               <div className={styles.productImage}>
-                 <div className={styles.imagePlaceholder}></div>
-                 {i === 1 && <span className={`${styles.badge} ${styles.badgeHot}`}>HOT</span>}
-                 {i === 2 && <span className={`${styles.badge} ${styles.badgeSale}`}>-15%</span>}
-               </div>
-               <div className={styles.productInfo}>
-                 <div className={styles.stars}>
-                   {[...Array(5)].map((_, s) => (
-                     <span key={s} className="material-symbols-outlined star" style={{ color: 'var(--accent)' }}>star</span>
-                   ))}
-                 </div>
-                 <h4 className={styles.productName}>Bình Tỳ Bà Men Lam Vẽ Tay Cao Cấp Bát Tràng</h4>
-                 <div className={styles.productPrice}>
-                   <span className={styles.currentPrice}>2.850.000đ</span>
-                   {i < 3 && <span className={styles.oldPrice}>3.500.000đ</span>}
-                 </div>
-               </div>
-             </div>
-           ))}
-         </div>
-       </section>
-      )}
+      <HomeMobileCatalog categorySections={visibleDesktopCategorySections} />
     </main>
   );
 }

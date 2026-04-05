@@ -24,17 +24,17 @@ class OrderAiAssistantService
 
     private const KNOWN_ITEM_ALIASES = [
         'de bat huong' => ['de bat huong', 'de bat', 'chan de bat huong', 'de bat tho'],
-        'bat huong' => ['bat', 'bat huong', 'bat tho', 'bát', 'bát hương', 'bát thờ'],
-        'ong huong' => ['ong', 'ong huong', 'ong tho', 'ống', 'ống hương', 'ống thờ'],
-        'den tho' => ['den', 'den tho', 'đèn', 'đèn thờ'],
-        'choe' => ['choe', 'chóe'],
-        'nam' => ['nam', 'nậm'],
-        'mam bong' => ['mam bong', 'mâm bồng', 'dia qua', 'đĩa quả'],
-        'lo hoa' => ['lo hoa', 'lọ hoa'],
-        'luc binh' => ['luc binh', 'lục bình'],
-        'ky ngai 5' => ['ky ngai', 'ky ngai 5', 'ky 5 chen', 'kỷ ngai', 'kỷ ngai 5', 'kỷ 5 chén'],
-        'bo am tra' => ['bo am tra', 'bộ ấm trà', 'am tra', 'ấm trà', 'bo am chen', 'bộ ấm chén'],
-        'chen' => ['chen', 'chén'],
+        'bat huong' => ['bat', 'bat huong', 'bat tho'],
+        'ong huong' => ['ong', 'ong huong', 'ong tho'],
+        'den tho' => ['den', 'den tho'],
+        'choe' => ['choe'],
+        'nam' => ['nam'],
+        'mam bong' => ['mam bong', 'dia qua'],
+        'lo hoa' => ['lo hoa'],
+        'luc binh' => ['luc binh'],
+        'ky ngai 5' => ['ky ngai', 'ky ngai 5', 'ky 5 chen'],
+        'bo am tra' => ['bo am tra', 'am tra', 'bo am chen'],
+        'chen' => ['chen'],
     ];
 
     private const KNOWN_ATTRIBUTE_QUALIFIERS = [
@@ -51,42 +51,48 @@ class OrderAiAssistantService
 
     public function __construct(
         private readonly GeminiService $geminiService,
+        private readonly OrderAiTrainingService $orderAiTrainingService,
     ) {
     }
 
     public function getRules(int $accountId): array
     {
-        return $this->normalizeRules($this->readStoredRules($accountId));
+        return $this->normalizeRules($this->orderAiTrainingService->buildRuleGroups($accountId));
     }
 
     public function saveRules(int $accountId, array $rules): array
     {
-        $normalizedRules = $this->normalizeRules($rules);
-
-        SiteSetting::setValue(
-            self::RULES_SETTING_KEY,
-            json_encode($normalizedRules, JSON_UNESCAPED_UNICODE),
-            $accountId
+        return $this->normalizeRules(
+            $this->orderAiTrainingService->replaceFromRuleGroups($accountId, $rules)
         );
-
-        return $normalizedRules;
     }
 
-    public function preview(int $accountId, ?string $message, ?UploadedFile $attachment = null): array
+    public function preview(
+        int $accountId,
+        ?string $message,
+        ?UploadedFile $attachment = null,
+        ?string $preferredRuleKey = null
+    ): array
     {
         $normalizedMessage = trim((string) $message);
-        if ($normalizedMessage === '' && $attachment === null) {
+        $resolvedPreferredRuleKey = trim((string) $preferredRuleKey);
+        $rules = $this->getRules($accountId);
+        $preferredRuleGroup = $this->resolvePreferredRuleGroup($accountId, $resolvedPreferredRuleKey, $rules);
+        if ($normalizedMessage === '' && $attachment === null && $preferredRuleGroup === null) {
             throw ValidationException::withMessages([
                 'message' => 'Cần nhập nội dung hoặc gửi ảnh để AI đọc đơn hàng.',
             ]);
         }
 
-        $rules = $this->getRules($accountId);
-        $extraction = $this->extractRequestedItems($accountId, $normalizedMessage, $attachment, $rules);
+        $extraction = ($normalizedMessage === '' && $attachment === null)
+            ? ['items' => [], 'raw_text' => '', 'provider' => null]
+            : $this->extractRequestedItems($accountId, $normalizedMessage, $attachment, $rules);
         $rawText = trim((string) ($extraction['raw_text'] ?? $normalizedMessage));
-        $altarSignal = $this->extractAltarSizeSignal($extraction['altar_size'] ?? null)
-            ?? $this->extractAltarSizeSignal($rawText);
-        $altarContext = $this->matchAltarRuleGroup($rules, $altarSignal, $rawText);
+        $altarSignal = $preferredRuleGroup !== null
+            ? $this->extractAltarSizeSignal($preferredRuleGroup['altar_size_label'] ?? null)
+            : ($this->extractAltarSizeSignal($extraction['altar_size'] ?? null)
+                ?? $this->extractAltarSizeSignal($rawText));
+        $altarContext = $preferredRuleGroup ?? $this->matchAltarRuleGroup($rules, $altarSignal, $rawText);
         $globalQualifiers = $this->extractLeadingGlobalQualifiers($rawText);
         $requestedItems = collect($extraction['items'] ?? [])
             ->map(function ($item, $index) use ($globalQualifiers) {
@@ -180,20 +186,20 @@ class OrderAiAssistantService
         $normalizedAltarSizeLabel = trim($altarSizeLabel);
         if ($normalizedAltarSizeLabel === '') {
             throw ValidationException::withMessages([
-                'altar_size_label' => 'Cần nhập kích thước ban thờ trước khi dạy AI.',
+                'altar_size_label' => "C\u{1ea7}n nh\u{1ead}p k\u{ed}ch th\u{1b0}\u{1edbc} ban th\u{1edd} tr\u{1b0}\u{1edbc} khi d\u{1ea1}y AI.",
             ]);
         }
 
         if ($attachment === null) {
             throw ValidationException::withMessages([
-                'attachment' => 'Cần tải ảnh hoặc tệp để AI học nhanh bộ sản phẩm.',
+                'attachment' => "C\u{1ea7}n t\u{1ea3}i \u{1ea3}nh ho\u{1eb7}c t\u{1ec7}p \u{111}\u{1ec3} AI h\u{1ecdc} nhanh b\u{1ed9} s\u{1ea3}n ph\u{1ea9}m.",
             ]);
         }
 
         $normalizedMessage = trim((string) $message);
         $rules = $this->getRules($accountId);
         $contextMessage = trim(implode("\n", array_filter([
-            "Kích thước ban thờ cần học: {$normalizedAltarSizeLabel}",
+            "K\u{ed}ch th\u{1b0}\u{1edbc} ban th\u{1edd} c\u{1ea7}n h\u{1ecdc}: {$normalizedAltarSizeLabel}",
             $normalizedMessage,
         ])));
         $extraction = $this->extractRequestedItems($accountId, $contextMessage, $attachment, $rules);
@@ -250,12 +256,15 @@ class OrderAiAssistantService
                 'suggestions' => array_slice($item['suggestions'] ?? [], 0, 3),
             ])
             ->values();
+        $contextAliases = $this->suggestRuleContextAliases($normalizedMessage, $rawText);
 
-        return [
+        $previewPayload = [
+            'rule_key_suggestion' => $this->suggestTrainingRuleKey($normalizedAltarSizeLabel, $contextAliases),
             'altar_size' => [
                 'label' => $normalizedAltarSizeLabel,
                 'aliases' => $this->normalizeAliasList([$normalizedAltarSizeLabel], 12),
             ],
+            'context_aliases' => $contextAliases,
             'provider' => $extraction['provider'] ?? null,
             'raw_text' => $rawText,
             'source' => [
@@ -263,6 +272,18 @@ class OrderAiAssistantService
                 'name' => trim((string) $attachment->getClientOriginalName()),
                 'note' => $normalizedMessage,
             ],
+            'extracted_items' => $requestedItems
+                ->map(fn (array $item) => [
+                    'line_key' => $item['line_key'],
+                    'source_phrase' => $item['source_phrase'],
+                    'quantity' => $item['quantity'],
+                    'parsed_name' => $item['parsed_name'],
+                    'canonical_name' => $item['canonical_name'],
+                    'qualifiers' => $item['qualifiers'],
+                    'size' => $item['size'],
+                ])
+                ->values()
+                ->all(),
             'items' => $ruleItems->all(),
             'unresolved_items' => $unresolvedItems->all(),
             'summary' => [
@@ -272,6 +293,155 @@ class OrderAiAssistantService
                 'unresolved' => $unresolvedItems->count(),
             ],
         ];
+        $previewPayload['parsed_result'] = [
+            'provider' => $previewPayload['provider'],
+            'raw_text' => $previewPayload['raw_text'],
+            'altar_size' => $previewPayload['altar_size'],
+            'context_aliases' => $previewPayload['context_aliases'],
+            'extracted_items' => $previewPayload['extracted_items'],
+            'items' => $previewPayload['items'],
+            'unresolved_items' => $previewPayload['unresolved_items'],
+            'summary' => $previewPayload['summary'],
+        ];
+
+        return $previewPayload;
+    }
+
+    public function buildTrainingPreview(
+        int $accountId,
+        string $altarSizeLabel,
+        ?string $message,
+        ?UploadedFile $attachment = null,
+        string $inputType = 'image'
+    ): array {
+        $normalizedInputType = trim($inputType) === 'image' ? 'image' : 'text';
+
+        if ($normalizedInputType === 'image') {
+            return $this->trainRulePreview($accountId, $altarSizeLabel, $message, $attachment);
+        }
+
+        $normalizedAltarSizeLabel = trim($altarSizeLabel);
+        if ($normalizedAltarSizeLabel === '') {
+            throw ValidationException::withMessages([
+                'altar_size_label' => "C\u{1ea7}n nh\u{1ead}p k\u{ed}ch th\u{1b0}\u{1edbc} ban th\u{1edd} tr\u{1b0}\u{1edbc} khi d\u{1ea1}y AI.",
+            ]);
+        }
+
+        $normalizedMessage = trim((string) $message);
+        if ($normalizedMessage === '') {
+            throw ValidationException::withMessages([
+                'input_text' => "C\u{1ea7}n nh\u{1ead}p text \u{111}\u{1ec3} AI ph\u{e2}n t\u{ed}ch v\u{e0} l\u{1b0}u rule.",
+            ]);
+        }
+
+        $rules = $this->getRules($accountId);
+        $contextMessage = trim(implode("\n", array_filter([
+            "K\u{ed}ch th\u{1b0}\u{1edbc} ban th\u{1edd} c\u{1ea7}n h\u{1ecdc}: {$normalizedAltarSizeLabel}",
+            $normalizedMessage,
+        ])));
+        $extraction = $this->extractRequestedItems($accountId, $contextMessage, null, $rules);
+        $rawText = trim((string) ($extraction['raw_text'] ?? $normalizedMessage));
+        $globalQualifiers = $this->extractLeadingGlobalQualifiers($rawText);
+        $requestedItems = collect($extraction['items'] ?? [])
+            ->map(function ($item, $index) use ($globalQualifiers) {
+                if ($globalQualifiers !== []) {
+                    $item['qualifiers'] = [
+                        ...$globalQualifiers,
+                        ...(is_array($item['qualifiers'] ?? null) ? $item['qualifiers'] : []),
+                    ];
+                }
+
+                return $this->normalizeRequestedItem($item, (int) $index);
+            })
+            ->filter(fn (array $item) => $item['parsed_name'] !== '')
+            ->values();
+
+        if ($requestedItems->isEmpty() && $rawText !== '') {
+            $requestedItems = collect($this->fallbackExtractFromText($rawText))
+                ->map(function ($item, $index) use ($globalQualifiers) {
+                    if ($globalQualifiers !== []) {
+                        $item['qualifiers'] = [
+                            ...$globalQualifiers,
+                            ...(is_array($item['qualifiers'] ?? null) ? $item['qualifiers'] : []),
+                        ];
+                    }
+
+                    return $this->normalizeRequestedItem($item, (int) $index);
+                })
+                ->filter(fn (array $item) => $item['parsed_name'] !== '')
+                ->values();
+        }
+
+        $requestedItems = $this->expandCompositeRequestedItems($requestedItems);
+        $catalogEntries = $this->loadCatalogEntries($accountId);
+        $mappedItems = $requestedItems
+            ->map(fn (array $item) => $this->mapRequestedItem($catalogEntries, $item, null))
+            ->values();
+
+        $ruleItems = $mappedItems
+            ->map(fn (array $item, int $index) => $this->buildRulePreviewItemFromMappedLine($item, $index))
+            ->filter()
+            ->values();
+        $unresolvedItems = $mappedItems
+            ->filter(fn (array $item) => empty($item['selected_entry']))
+            ->map(fn (array $item) => [
+                'line_key' => $item['line_key'],
+                'source_phrase' => $item['source_phrase'],
+                'parsed_name' => $item['parsed_name'],
+                'confidence' => (int) ($item['confidence'] ?? 0),
+                'confidence_label' => $item['confidence_label'] ?? $this->confidenceLabel((int) ($item['confidence'] ?? 0)),
+                'suggestions' => array_slice($item['suggestions'] ?? [], 0, 3),
+            ])
+            ->values();
+        $contextAliases = $this->suggestRuleContextAliases($normalizedMessage, $rawText);
+
+        $previewPayload = [
+            'rule_key_suggestion' => $this->suggestTrainingRuleKey($normalizedAltarSizeLabel, $contextAliases),
+            'altar_size' => [
+                'label' => $normalizedAltarSizeLabel,
+                'aliases' => $this->normalizeAliasList([$normalizedAltarSizeLabel], 12),
+            ],
+            'context_aliases' => $contextAliases,
+            'provider' => $extraction['provider'] ?? null,
+            'raw_text' => $rawText,
+            'source' => [
+                'type' => 'text',
+                'name' => "N\u{1ed9}i dung nh\u{1ead}p tay",
+                'note' => $normalizedMessage,
+            ],
+            'extracted_items' => $requestedItems
+                ->map(fn (array $item) => [
+                    'line_key' => $item['line_key'],
+                    'source_phrase' => $item['source_phrase'],
+                    'quantity' => $item['quantity'],
+                    'parsed_name' => $item['parsed_name'],
+                    'canonical_name' => $item['canonical_name'],
+                    'qualifiers' => $item['qualifiers'],
+                    'size' => $item['size'],
+                ])
+                ->values()
+                ->all(),
+            'items' => $ruleItems->all(),
+            'unresolved_items' => $unresolvedItems->all(),
+            'summary' => [
+                'total' => $requestedItems->count(),
+                'mapped' => $ruleItems->count(),
+                'review' => $ruleItems->where('match_status', 'review')->count(),
+                'unresolved' => $unresolvedItems->count(),
+            ],
+        ];
+        $previewPayload['parsed_result'] = [
+            'provider' => $previewPayload['provider'],
+            'raw_text' => $previewPayload['raw_text'],
+            'altar_size' => $previewPayload['altar_size'],
+            'context_aliases' => $previewPayload['context_aliases'],
+            'extracted_items' => $previewPayload['extracted_items'],
+            'items' => $previewPayload['items'],
+            'unresolved_items' => $previewPayload['unresolved_items'],
+            'summary' => $previewPayload['summary'],
+        ];
+
+        return $previewPayload;
     }
 
     private function readStoredRules(int $accountId): array
@@ -302,6 +472,8 @@ class OrderAiAssistantService
                     $label,
                     ...$this->normalizeAliasList($group['altar_size_aliases'] ?? []),
                 ], 12);
+                $contextAliases = $this->normalizeAliasList($group['context_aliases'] ?? [], 16);
+                $ruleKey = trim((string) ($group['rule_key'] ?? ''));
 
                 $items = collect($group['items'] ?? [])
                     ->map(function ($item, $itemIndex) {
@@ -328,6 +500,7 @@ class OrderAiAssistantService
                             'default_quantity' => $defaultQuantity,
                             'target_product_id' => $targetProductId,
                             'parent_product_id' => $parentProductId > 0 ? $parentProductId : null,
+                            'parent_product_name' => trim((string) ($item['parent_product_name'] ?? '')),
                             'entry_kind' => $entryKind === self::SEARCH_ENTRY_VARIATION ? self::SEARCH_ENTRY_VARIATION : self::SEARCH_ENTRY_PRODUCT,
                             'display_name' => trim((string) ($item['display_name'] ?? $item['name'] ?? '')),
                             'display_sku' => trim((string) ($item['display_sku'] ?? $item['sku'] ?? '')),
@@ -345,8 +518,10 @@ class OrderAiAssistantService
 
                 return [
                     'id' => trim((string) ($group['id'] ?? '')) ?: "order-ai-rule-group-" . ($groupIndex + 1),
+                    'rule_key' => $ruleKey !== '' ? $ruleKey : Str::slug(implode('-', array_filter([$label, $contextAliases[0] ?? ''])), '-'),
                     'altar_size_label' => $label,
                     'altar_size_aliases' => $aliases,
+                    'context_aliases' => $contextAliases,
                     'training_source_type' => in_array(trim((string) ($group['training_source_type'] ?? '')), ['manual', 'image'], true)
                         ? trim((string) ($group['training_source_type'] ?? ''))
                         : null,
@@ -736,6 +911,7 @@ PROMPT;
                     'id' => $matchedRuleItem['id'],
                     'alias' => $matchedRuleItem['aliases'][0] ?? $matchedRuleItem['display_name'] ?? '',
                     'altar_size_label' => $altarContext['altar_size_label'] ?? '',
+                    'context_label' => $altarContext['_resolved_context_alias'] ?? ($altarContext['context_aliases'][0] ?? ''),
                 ]
                 : null,
         ];
@@ -792,6 +968,7 @@ PROMPT;
                         'id' => $ruleItem['id'] ?? '',
                         'alias' => $ruleItem['aliases'][0] ?? $ruleItem['display_name'] ?? '',
                         'altar_size_label' => $altarContext['altar_size_label'] ?? '',
+                        'context_label' => $altarContext['_resolved_context_alias'] ?? ($altarContext['context_aliases'][0] ?? ''),
                     ],
                 ];
             })
@@ -912,8 +1089,10 @@ PROMPT;
             return null;
         }
 
-        $bestGroup = null;
-        $bestScore = 0;
+        $normalizedRawText = $this->normalizeText($rawText);
+        $rawTokens = $this->tokenize($normalizedRawText);
+        $rawContextTerms = $this->suggestRuleContextAliases('', $rawText);
+        $scoredGroups = [];
 
         foreach ($rules as $group) {
             $groupAliases = [
@@ -926,6 +1105,7 @@ PROMPT;
                 ->unique()
                 ->values()
                 ->all();
+            $sizeScore = 0;
 
             foreach ($candidates as $candidate) {
                 $candidateKey = $this->normalizeAltarSizeToken($candidate['label'] ?? '');
@@ -934,19 +1114,124 @@ PROMPT;
                 }
 
                 if (in_array($candidateKey, $groupKeys, true)) {
-                    return $group;
+                    $sizeScore = max($sizeScore, 100);
+                    continue;
                 }
 
                 foreach ($groupKeys as $groupKey) {
                     if ($groupKey !== '' && str_contains($groupKey, $candidateKey)) {
-                        $bestScore = max($bestScore, 72);
-                        $bestGroup = $group;
+                        $sizeScore = max($sizeScore, 72);
                     }
                 }
             }
+
+            if ($sizeScore <= 0) {
+                continue;
+            }
+
+            $groupContextAliases = collect($group['context_aliases'] ?? [])
+                ->map(fn ($value) => trim((string) $value))
+                ->filter()
+                ->unique(fn ($value) => $this->normalizeText($value))
+                ->values()
+                ->all();
+            $contextScore = 0;
+            $matchedContextAlias = '';
+
+            if ($groupContextAliases !== []) {
+                foreach ($groupContextAliases as $contextAlias) {
+                    $normalizedAlias = $this->normalizeText($contextAlias);
+                    if ($normalizedAlias === '') {
+                        continue;
+                    }
+
+                    if (str_contains($normalizedRawText, $normalizedAlias)) {
+                        $contextScore = max($contextScore, 64 + min(16, count($this->tokenize($normalizedAlias)) * 4));
+                        $matchedContextAlias = $contextAlias;
+                        continue;
+                    }
+
+                    $overlap = count(array_intersect($this->tokenize($normalizedAlias), $rawTokens));
+                    if ($overlap > 0) {
+                        $contextScore = max($contextScore, 18 + ($overlap * 12));
+                        if ($matchedContextAlias === '') {
+                            $matchedContextAlias = $contextAlias;
+                        }
+                    }
+                }
+
+                if ($contextScore === 0) {
+                    $contextScore = -38;
+                }
+            } else {
+                $contextScore = $rawContextTerms === [] ? 14 : -6;
+            }
+
+            $scoredGroups[] = [
+                'group' => $group,
+                'score' => $sizeScore + $contextScore,
+                'size_score' => $sizeScore,
+                'context_score' => $contextScore,
+                'matched_context_alias' => $matchedContextAlias,
+                'has_context_aliases' => $groupContextAliases !== [],
+            ];
         }
 
-        return $bestScore >= 70 ? $bestGroup : null;
+        if ($scoredGroups === []) {
+            return null;
+        }
+
+        usort($scoredGroups, fn (array $left, array $right) => ($right['score'] <=> $left['score']));
+        $bestGroup = $scoredGroups[0] ?? null;
+        $secondGroup = $scoredGroups[1] ?? null;
+        if ($bestGroup === null) {
+            return null;
+        }
+
+        $bestScore = (int) ($bestGroup['score'] ?? 0);
+        $gapScore = $bestScore - (int) ($secondGroup['score'] ?? 0);
+        $sameSizeCandidatesCount = count(array_filter($scoredGroups, fn (array $entry) => (int) ($entry['size_score'] ?? 0) >= 72));
+
+        if ($bestScore < 80 && !($sameSizeCandidatesCount === 1 && $bestScore >= 60)) {
+            return null;
+        }
+
+        if ($sameSizeCandidatesCount > 1 && $gapScore <= 8 && (int) ($bestGroup['context_score'] ?? 0) <= 0) {
+            return null;
+        }
+
+        $resolvedGroup = $bestGroup['group'];
+        $resolvedGroup['_resolved_context_alias'] = trim((string) ($bestGroup['matched_context_alias'] ?? ''));
+
+        return $resolvedGroup;
+    }
+
+    private function resolvePreferredRuleGroup(int $accountId, string $preferredRuleKey, array $rules): ?array
+    {
+        if ($preferredRuleKey === '') {
+            return null;
+        }
+
+        $directMatch = collect($rules)
+            ->first(fn (array $group) => trim((string) ($group['rule_key'] ?? '')) === $preferredRuleKey);
+
+        if (is_array($directMatch)) {
+            $directMatch['_resolved_context_alias'] = trim((string) (($directMatch['context_aliases'][0] ?? '')));
+            return $directMatch;
+        }
+
+        $datasetRule = $this->orderAiTrainingService->findRuleGroupByKey($accountId, $preferredRuleKey);
+        if (!is_array($datasetRule)) {
+            return null;
+        }
+
+        $resolvedRule = $this->normalizeRules([$datasetRule])[0] ?? null;
+        if (!is_array($resolvedRule)) {
+            return null;
+        }
+
+        $resolvedRule['_resolved_context_alias'] = trim((string) (($resolvedRule['context_aliases'][0] ?? '')));
+        return $resolvedRule;
     }
 
     private function extractAltarSizeSignal(mixed $value): ?array
@@ -965,11 +1250,13 @@ PROMPT;
             return null;
         }
 
-        if (preg_match('/(?:ban|bàn)(?:\s+th[oơ])?\s*(\d+(?:[.,]\d+)?\s*m\s*\d{0,2}|\d{3})/iu', $text, $matches) === 1) {
+        $normalizedText = $this->normalizeText($text);
+
+        if (preg_match('/(?:ban)(?:\s+tho)?\s*(\d+(?:[.,]\d+)?\s*m\s*\d{0,2}|\d{3})/u', $normalizedText, $matches) === 1) {
             return ['label' => trim((string) $matches[1])];
         }
 
-        if (preg_match('/\b(\d\s*[.,]?\s*\d{0,2}\s*m\s*\d{1,2})\b/iu', $text, $matches) === 1) {
+        if (preg_match('/\b(\d\s*[.,]?\s*\d{0,2}\s*m\s*\d{1,2})\b/u', $normalizedText, $matches) === 1) {
             return ['label' => trim((string) $matches[1])];
         }
 

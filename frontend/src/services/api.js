@@ -295,6 +295,15 @@ export const orderApi = {
     getConnectedCarriers: () => api.get('/orders/connected-carriers'),
 };
 
+export const orderAiTrainingApi = {
+    getAll: (params) => api.get('/orders/ai/training', { params }),
+    getOne: (id) => api.get(`/orders/ai/training/${id}`),
+    preview: (data) => api.post('/orders/ai/training/preview', data, multipartConfig(data)),
+    create: (data) => api.post('/orders/ai/training', data, multipartConfig(data)),
+    update: (id, data) => api.post(`/orders/ai/training/${id}`, data, multipartConfig(data)),
+    destroy: (id) => api.delete(`/orders/ai/training/${id}`),
+};
+
 export const leadApi = {
     getAll: (params, signal) => api.get('/leads', { params, signal }),
     getOne: (id) => api.get(`/leads/${id}`),

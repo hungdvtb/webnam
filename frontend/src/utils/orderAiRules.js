@@ -104,6 +104,7 @@ export const createOrderAiRuleGroup = () => ({
     id: `order-ai-rule-group-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     altar_size_label: '',
     altar_size_aliases: [],
+    context_aliases: [],
     training_source_type: '',
     training_source_name: '',
     training_note: '',
@@ -132,6 +133,7 @@ export const normalizeOrderAiRules = (value) => (
                     altarSizeLabel,
                     ...normalizeOrderAiRuleAliasList(group?.altar_size_aliases ?? []),
                 ]),
+                context_aliases: normalizeOrderAiRuleAliasList(group?.context_aliases ?? []),
                 training_source_type: normalizeText(group?.training_source_type),
                 training_source_name: normalizeText(group?.training_source_name),
                 training_note: normalizeText(group?.training_note),
@@ -202,4 +204,72 @@ export const buildOrderAiPickerEntries = (products = []) => {
     });
 
     return entries;
+};
+
+const normalizePhrasePart = (value) => normalizeText(value).replace(/\s+/g, ' ');
+
+const extractRuleSizeLabel = (value) => {
+    const match = normalizePhrasePart(value).match(/(\d+\s*m\s*\d+|\d+\s*cm|\d{3,4})/i);
+    if (!match) return '';
+
+    return match[1].replace(/\s+/g, '').toLowerCase();
+};
+
+const buildOrderAiQuickRuleLabel = (rule) => {
+    const contextLabel = normalizePhrasePart((normalizeOrderAiRuleAliasList(rule?.context_aliases || [])[0]) || '');
+    const altarAliases = normalizeOrderAiRuleAliasList(rule?.altar_size_aliases || []);
+    const preferredAltarPhrase = normalizePhrasePart(
+        altarAliases.find((alias) => normalizePhrasePart(alias).toLowerCase() !== extractRuleSizeLabel(alias) && extractRuleSizeLabel(alias))
+        || rule?.altar_size_label
+        || altarAliases[0]
+        || ''
+    );
+    const sizeLabel = extractRuleSizeLabel(preferredAltarPhrase) || extractRuleSizeLabel(rule?.altar_size_label) || preferredAltarPhrase;
+
+    if (contextLabel && sizeLabel) {
+        return `${contextLabel} ${sizeLabel}`.trim();
+    }
+
+    return contextLabel || preferredAltarPhrase || normalizePhrasePart(rule?.rule_key || '') || 'Mẫu train AI';
+};
+
+export const buildOrderAiQuickRuleOptions = (rules = []) => {
+    const seenValues = new Set();
+
+    return (Array.isArray(rules) ? rules : [])
+        .map((rule, index) => {
+            const value = normalizeText(rule?.rule_key ?? rule?.id);
+            if (!value || seenValues.has(value)) return null;
+
+            seenValues.add(value);
+
+            const label = buildOrderAiQuickRuleLabel(rule);
+            const itemCount = Math.max(0, Number(rule?.items_count ?? rule?.items?.length ?? 0) || 0);
+            const searchText = [
+                label,
+                value,
+                normalizeText(rule?.altar_size_label),
+                ...normalizeOrderAiRuleAliasList(rule?.altar_size_aliases || []),
+                ...normalizeOrderAiRuleAliasList(rule?.context_aliases || []),
+                normalizeText(rule?.training_note),
+                normalizeText(rule?.training_source_name ?? rule?.source_name),
+            ]
+                .filter(Boolean)
+                .join(' | ');
+
+            return {
+                id: `order-ai-quick-rule-${index + 1}`,
+                value,
+                name: label,
+                search_text: searchText,
+                subtitle: [
+                    itemCount > 0 ? `${itemCount} sản phẩm map` : '',
+                    normalizeText(rule?.altar_size_label),
+                ].filter(Boolean).join(' • '),
+                item_count: itemCount,
+                altar_size_label: normalizeText(rule?.altar_size_label),
+                context_label: normalizeOrderAiRuleAliasList(rule?.context_aliases || [])[0] || '',
+            };
+        })
+        .filter(Boolean);
 };

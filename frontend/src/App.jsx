@@ -44,6 +44,7 @@ import BlogList from './pages/admin/BlogList';
 import BlogForm from './pages/admin/BlogForm';
 import SiteSettings from './pages/admin/SiteSettings';
 import ShippingSettingsPage from './pages/admin/ShippingSettingsPage';
+import AiTrainingManager from './pages/admin/AiTrainingManager';
 import UserList from './pages/admin/UserList';
 import OrderStatusSettings from './pages/admin/OrderStatusSettings';
 import LeadList from './pages/admin/LeadList';
@@ -173,6 +174,7 @@ function App() {
                 <Route path="blog/edit/:id" element={<BlogForm />} />
                 <Route path="settings" element={<SiteSettings />} />
                 <Route path="shipping-settings" element={<ShippingSettingsPage />} />
+                <Route path="ai-training" element={<AiTrainingManager />} />
                 <Route path="users" element={<UserList />} />
                 <Route path="reports" element={<SalesReportPage />} />
                 <Route path="finance" element={<FinanceTracking />} />

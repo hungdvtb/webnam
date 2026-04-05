@@ -20,13 +20,15 @@ class OrderAiController extends Controller
         $request->validate([
             'message' => 'nullable|string',
             'attachment' => 'nullable|file|max:12288|mimes:jpg,jpeg,png,webp,pdf,heic,heif',
+            'preferred_rule_key' => 'nullable|string|max:160',
         ]);
 
         return response()->json(
             $this->orderAiAssistantService->preview(
                 $this->resolveAccountId($request),
                 (string) $request->input('message', ''),
-                $request->file('attachment')
+                $request->file('attachment'),
+                (string) $request->input('preferred_rule_key', '')
             )
         );
     }
@@ -64,6 +66,8 @@ class OrderAiController extends Controller
             'rules.*.altar_size_label' => 'required|string|max:120',
             'rules.*.altar_size_aliases' => 'nullable|array|max:12',
             'rules.*.altar_size_aliases.*' => 'nullable|string|max:120',
+            'rules.*.context_aliases' => 'nullable|array|max:16',
+            'rules.*.context_aliases.*' => 'nullable|string|max:160',
             'rules.*.training_source_type' => 'nullable|string|in:manual,image',
             'rules.*.training_source_name' => 'nullable|string|max:255',
             'rules.*.training_note' => 'nullable|string|max:5000',

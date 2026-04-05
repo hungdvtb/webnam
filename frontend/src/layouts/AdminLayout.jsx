@@ -24,6 +24,7 @@ const AdminLayout = () => {
     const location = useLocation();
     const isSettingsRoute =
         location.pathname.startsWith('/admin/attributes') ||
+        location.pathname.startsWith('/admin/ai-training') ||
         location.pathname.startsWith('/admin/carrier-mappings') ||
         location.pathname.startsWith('/admin/order-status-settings') ||
         location.pathname.startsWith('/admin/users') ||
@@ -143,6 +144,7 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/finance')) return 'reports';
         if (path.startsWith('/admin/warehouses')) return 'warehouses';
         if (path.startsWith('/admin/attributes')) return 'attributes';
+        if (path.startsWith('/admin/ai-training')) return 'orders';
         if (path.startsWith('/admin/carrier-mappings')) return 'settings';
         if (path.startsWith('/admin/shipping-settings')) return 'settings';
         if (path.startsWith('/admin/settings')) return 'settings';
@@ -269,6 +271,18 @@ const AdminLayout = () => {
                                                 <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/users' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>manage_accounts</span>
                                                 <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
                                                     Quản lý nhân sự
+                                                </SidebarText>
+                                            </Link>
+                                        )}
+                                        {canAccess('orders') && (
+                                            <Link
+                                                to="/admin/ai-training"
+                                                title="Dữ liệu train AI"
+                                                className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/ai-training' ? 'bg-gold/10 text-gold' : 'text-stone/80 hover:bg-white/5 hover:text-white'}`}
+                                            >
+                                                <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/ai-training' ? 'text-gold' : 'group-hover:text-gold'}`}>school</span>
+                                                <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                    Dữ liệu train AI
                                                 </SidebarText>
                                             </Link>
                                         )}

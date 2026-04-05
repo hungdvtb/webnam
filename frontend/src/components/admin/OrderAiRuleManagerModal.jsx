@@ -146,12 +146,18 @@ const RuleGroupCard = ({ group, index, onChange, onRemove, showModal }) => {
             showModal?.({ title: 'Chưa có gợi ý', content: 'AI chưa gợi ý được sản phẩm nào để lưu vào rule.', type: 'info' });
             return;
         }
+        const previewContextAliases = normalizeOrderAiRuleAliasList(trainPreview?.context_aliases ?? []);
         const normalized = previewItems.map((item) => createOrderAiRuleItem({
             ...item,
             aliases: normalizeOrderAiRuleAliasList([...(item?.aliases || []), item?.parsed_name, item?.source_phrase, item?.display_name]),
         }));
         updateGroup({
             items: mode === 'append' ? mergeRuleItems(group?.items || [], normalized) : normalized,
+            context_aliases: previewContextAliases.length > 0
+                ? (mode === 'append'
+                    ? normalizeOrderAiRuleAliasList([...(group?.context_aliases || []), ...previewContextAliases])
+                    : previewContextAliases)
+                : (group?.context_aliases || []),
             training_source_type: 'image',
             training_source_name: String(trainPreview?.source?.name || selectedTrainFileName || group?.training_source_name || '').trim(),
             training_note: String(group?.training_note || trainPreview?.source?.note || '').trim(),
@@ -170,6 +176,7 @@ const RuleGroupCard = ({ group, index, onChange, onRemove, showModal }) => {
                     <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Rule Ban Thờ #{index + 1}</div>
                     <div className="mt-1 flex flex-wrap items-center gap-2">
                         <div className="text-[15px] font-black text-primary">{group?.altar_size_label || 'Chưa đặt tên kích thước'}</div>
+                        {group?.context_aliases?.[0] && <span className="rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.08em] text-primary/65">{group.context_aliases[0]}</span>}
                         {group?.training_source_type === 'image' && <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700">Đã học từ ảnh</span>}
                     </div>
                     {(group?.training_source_name || group?.trained_at) && <div className="mt-1 text-[11px] font-semibold text-primary/55">{`${group?.training_source_name ? `Nguồn: ${group.training_source_name}` : 'Nguồn: AI học từ ảnh'}${group?.trained_at ? ` • ${formatTrainedAt(group.trained_at)}` : ''}`}</div>}
@@ -180,17 +187,22 @@ const RuleGroupCard = ({ group, index, onChange, onRemove, showModal }) => {
                 </button>
             </div>
 
-            <div className="space-y-4 p-4">
-                <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-                    <div className="space-y-2">
-                        <label className="block text-[11px] font-black uppercase tracking-[0.14em] text-primary/55">Kích thước ban thờ</label>
-                        <input type="text" value={group?.altar_size_label || ''} onChange={(event) => updateGroup({ altar_size_label: event.target.value })} placeholder="Ví dụ: 1m97" className={inputClassName} />
+                <div className="space-y-4 p-4">
+                    <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+                        <div className="space-y-2">
+                            <label className="block text-[11px] font-black uppercase tracking-[0.14em] text-primary/55">Kích thước ban thờ</label>
+                            <input type="text" value={group?.altar_size_label || ''} onChange={(event) => updateGroup({ altar_size_label: event.target.value })} placeholder="Ví dụ: 1m97" className={inputClassName} />
                     </div>
                     <div className="space-y-2">
-                        <label className="block text-[11px] font-black uppercase tracking-[0.14em] text-primary/55">Alias kích thước</label>
-                        <textarea value={formatOrderAiRuleAliases(group?.altar_size_aliases || [])} onChange={(event) => updateGroup({ altar_size_aliases: normalizeOrderAiRuleAliasList(event.target.value) })} placeholder="Ví dụ: 1m97, 197, bàn 1m97" className={textareaClassName} />
+                            <label className="block text-[11px] font-black uppercase tracking-[0.14em] text-primary/55">Alias kích thước</label>
+                            <textarea value={formatOrderAiRuleAliases(group?.altar_size_aliases || [])} onChange={(event) => updateGroup({ altar_size_aliases: normalizeOrderAiRuleAliasList(event.target.value) })} placeholder="Ví dụ: 1m97, 197, bàn 1m97" className={textareaClassName} />
+                        </div>
                     </div>
-                </div>
+                    <div className="space-y-2">
+                        <label className="block text-[11px] font-black uppercase tracking-[0.14em] text-primary/55">Dòng men / thuộc tính áp dụng</label>
+                        <textarea value={formatOrderAiRuleAliases(group?.context_aliases || [])} onChange={(event) => updateGroup({ context_aliases: normalizeOrderAiRuleAliasList(event.target.value) })} placeholder="Ví dụ: men lam, men rạn, vẽ vàng, hàng kỹ..." className={textareaClassName} />
+                        <div className="text-[11px] font-semibold text-primary/45">Dùng để tách nhiều rule cùng một kích thước. Ví dụ: bàn 1m97 men lam sẽ khác bàn 1m97 men rạn.</div>
+                    </div>
 
                 <div className="grid gap-4 xl:grid-cols-2">
                     <div className="rounded-sm border border-primary/10 bg-white p-3 shadow-sm">
@@ -259,6 +271,7 @@ const RuleGroupCard = ({ group, index, onChange, onRemove, showModal }) => {
                             <div className="mt-3 rounded-sm border border-sky-200 bg-sky-50 p-3">
                                 <div className="text-[10px] font-black uppercase tracking-[0.14em] text-sky-700">Gợi ý từ ảnh</div>
                                 <div className="mt-1 text-[12px] font-semibold text-slate-700">{`AI gợi ý ${trainPreview?.summary?.mapped || 0} sản phẩm${trainPreview?.summary?.review ? `, ${trainPreview.summary.review} dòng cần rà` : ''}${trainPreview?.summary?.unresolved ? `, ${trainPreview.summary.unresolved} dòng chưa ghép` : ''}.`}</div>
+                                {(trainPreview?.context_aliases || []).length > 0 && <div className="mt-2 flex flex-wrap gap-2">{trainPreview.context_aliases.map((contextAlias) => <span key={contextAlias} className="rounded-full border border-sky-200 bg-white px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.08em] text-sky-700">{contextAlias}</span>)}</div>}
                                 {trainPreview?.raw_text && <div className="mt-1 line-clamp-2 text-[11px] font-semibold text-slate-500">{trainPreview.raw_text}</div>}
                                 <div className="mt-3 max-h-[220px] space-y-2 overflow-auto">
                                     {(trainPreview?.items || []).map((item) => (

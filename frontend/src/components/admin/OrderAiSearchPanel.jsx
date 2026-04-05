@@ -1,4 +1,5 @@
 import React from 'react';
+import SearchableSelect from '../SearchableSelect';
 
 const OrderAiSearchPanel = ({
     show,
@@ -14,6 +15,11 @@ const OrderAiSearchPanel = ({
     onRun,
     loading,
     lastRun,
+    trainingRuleOptions = [],
+    selectedTrainingRuleValue = '',
+    selectedTrainingRule = null,
+    onTrainingRuleChange,
+    trainingRulesLoading = false,
 }) => {
     if (!show) return null;
 
@@ -22,7 +28,7 @@ const OrderAiSearchPanel = ({
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-primary/10 bg-primary/[0.02] px-3 py-3">
                 <div>
                     <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/45">
-                        Tìm Nhanh Bằng AI
+                        Tìm nhanh bằng AI
                     </div>
                     <div className="mt-1 text-[12px] font-semibold text-primary/70">
                         AI sẽ đọc nội dung, tự ghép sản phẩm và đổ thẳng vào bảng hàng.
@@ -35,7 +41,7 @@ const OrderAiSearchPanel = ({
                         className="inline-flex h-9 items-center gap-1 rounded-sm border border-primary/15 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-primary/65 transition-all hover:border-primary/30 hover:text-primary"
                     >
                         <span className="material-symbols-outlined text-[14px]">school</span>
-                        Dạy AI
+                        Dữ liệu train AI
                     </button>
                     <button
                         type="button"
@@ -49,6 +55,38 @@ const OrderAiSearchPanel = ({
             </div>
 
             <div className="space-y-3 p-3">
+                <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                    <SearchableSelect
+                        variant="admin"
+                        options={trainingRuleOptions}
+                        value={selectedTrainingRuleValue}
+                        name="order_ai_training_rule"
+                        placeholder={trainingRulesLoading ? 'Đang tải mẫu train AI...' : 'Chọn nhanh mẫu train AI đã lưu...'}
+                        disabled={trainingRulesLoading || trainingRuleOptions.length === 0}
+                        getOptionValue={(option) => option?.value || ''}
+                        getOptionSearchText={(option) => option?.search_text || option?.name || ''}
+                        onChange={(event) => onTrainingRuleChange?.(event.target.value)}
+                    />
+                    {selectedTrainingRuleValue ? (
+                        <button
+                            type="button"
+                            onClick={() => onTrainingRuleChange?.('')}
+                            className="inline-flex h-10 items-center justify-center gap-1 rounded-sm border border-primary/10 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-primary/45 transition-all hover:border-primary/25 hover:text-brick"
+                        >
+                            <span className="material-symbols-outlined text-[14px]">close</span>
+                            Bỏ mẫu
+                        </button>
+                    ) : (
+                        <div className="hidden md:block" />
+                    )}
+                </div>
+
+                <div className="rounded-sm border border-primary/10 bg-primary/[0.02] px-3 py-2 text-[11px] font-semibold text-primary/55">
+                    {selectedTrainingRule
+                        ? `Đang ưu tiên map theo mẫu "${selectedTrainingRule.name}"${selectedTrainingRule.subtitle ? ` • ${selectedTrainingRule.subtitle}` : ''}. Bạn có thể nhập thêm như "lọ hoa, mâm bồng" để AI ghép đúng theo bộ này.`
+                        : 'Để trống nếu muốn AI tự suy đoán như hiện tại. Chọn mẫu trước nếu cần ép AI map theo đúng bộ đã train.'}
+                </div>
+
                 <textarea
                     value={inputValue}
                     onChange={(event) => onInputChange(event.target.value)}

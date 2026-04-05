@@ -16,6 +16,8 @@ const SearchableSelect = ({
     options = [],
     value,
     onChange,
+    getOptionValue = getOptionLabel,
+    getOptionSearchText = null,
     placeholder = 'Chọn một mục...',
     label,
     name,
@@ -23,32 +25,42 @@ const SearchableSelect = ({
     required = false,
     compact = false,
     className = '',
-    variant = 'storefront'
+    variant = 'storefront',
 }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
     const containerRef = useRef(null);
+    const resolvedValue = String(value ?? '');
+
+    const selectedOption = useMemo(
+        () => options.find((option) => String(getOptionValue(option) ?? '') === resolvedValue) || null,
+        [getOptionValue, options, resolvedValue]
+    );
+
+    const selectedLabel = selectedOption ? getOptionLabel(selectedOption) : resolvedValue;
 
     const filteredOptions = useMemo(() => {
+        const normalizedSearch = removeAccents(searchTerm).toLowerCase();
         const filtered = options.filter((option) => {
-            const target = getOptionLabel(option);
+            const target = typeof getOptionSearchText === 'function'
+                ? String(getOptionSearchText(option) ?? '')
+                : getOptionLabel(option);
             const normalizedTarget = removeAccents(target).toLowerCase();
-            const normalizedSearch = removeAccents(searchTerm).toLowerCase();
 
             return normalizedTarget.includes(normalizedSearch);
         });
 
-        if (!value) return filtered;
+        if (!selectedOption) return filtered;
 
-        const selectedIndex = filtered.findIndex((option) => getOptionLabel(option) === value);
+        const selectedIndex = filtered.findIndex((option) => String(getOptionValue(option) ?? '') === resolvedValue);
         if (selectedIndex <= 0) return filtered;
 
         return [
             filtered[selectedIndex],
             ...filtered.slice(0, selectedIndex),
-            ...filtered.slice(selectedIndex + 1)
+            ...filtered.slice(selectedIndex + 1),
         ];
-    }, [options, searchTerm, value]);
+    }, [getOptionLabel, getOptionSearchText, getOptionValue, options, resolvedValue, searchTerm, selectedOption]);
 
     useEffect(() => {
         const handleClickOutside = (event) => {
@@ -63,7 +75,7 @@ const SearchableSelect = ({
     }, []);
 
     const handleSelect = (option) => {
-        const selectedValue = getOptionLabel(option);
+        const selectedValue = getOptionValue(option);
         onChange({ target: { name, value: selectedValue } });
         setIsOpen(false);
         setSearchTerm('');
@@ -85,10 +97,10 @@ const SearchableSelect = ({
             : `${disabled ? 'bg-stone/5 opacity-50 cursor-not-allowed' : 'hover:border-primary'} ${isOpen ? 'border-primary shadow-lg ring-1 ring-primary/10' : ''} ${compact ? 'border-none p-0 font-display text-[11.5px] font-bold' : 'border border-gold/20 p-4 font-body cursor-pointer'} w-full bg-white flex items-center justify-between transition-all`;
 
     const valueClassName = isAdmin
-        ? `min-w-0 flex-1 leading-tight ${!value ? 'text-primary/35' : 'text-[#0F172A]'} truncate`
+        ? `min-w-0 flex-1 leading-tight ${!selectedLabel ? 'text-primary/35' : 'text-[#0F172A]'} truncate`
         : isLegacyMobile
-            ? `min-w-0 flex-1 truncate text-sm leading-snug ${!value ? 'text-stone-400' : 'text-stone-900'}`
-            : `${compact ? '' : 'text-sm tracking-tight'} ${!value ? 'text-stone/50 italic' : 'text-primary uppercase font-bold'}`;
+            ? `min-w-0 flex-1 truncate text-sm leading-snug ${!selectedLabel ? 'text-stone-400' : 'text-stone-900'}`
+            : `${compact ? '' : 'text-sm tracking-tight'} ${!selectedLabel ? 'text-stone/50 italic' : 'text-primary uppercase font-bold'}`;
 
     const iconClassName = isAdmin
         ? `material-symbols-outlined text-primary/40 text-[18px] transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`
@@ -147,7 +159,7 @@ const SearchableSelect = ({
             )}
 
             <div className={controlClassName} onClick={() => !disabled && setIsOpen((prev) => !prev)}>
-                <span className={valueClassName} title={value || placeholder}>{value || placeholder}</span>
+                <span className={valueClassName} title={selectedLabel || placeholder}>{selectedLabel || placeholder}</span>
                 <span className={iconClassName}>expand_more</span>
             </div>
 
@@ -163,7 +175,7 @@ const SearchableSelect = ({
                                 className={searchInputClassName}
                                 placeholder={isAdmin ? 'Tìm nhanh...' : 'Tìm kiếm nhanh...'}
                                 value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
+                                onChange={(event) => setSearchTerm(event.target.value)}
                                 autoFocus
                             />
                         </div>
@@ -172,16 +184,19 @@ const SearchableSelect = ({
                     <div className={`max-h-[250px] overflow-y-auto ${isAdmin ? 'custom-scrollbar' : isLegacyMobile ? 'custom-scrollbar' : 'scrollbar-thin scrollbar-thumb-gold/20 scrollbar-track-transparent'}`}>
                         {filteredOptions.length > 0 ? (
                             filteredOptions.map((option, index) => {
-                                const optionValue = getOptionLabel(option);
+                                const optionLabel = getOptionLabel(option);
+                                const optionValue = String(getOptionValue(option) ?? '');
+                                const optionKey = optionValue || `${optionLabel}-${index}`;
+                                const isSelected = optionValue === resolvedValue;
 
                                 return (
                                     <div
-                                        key={`${optionValue}-${index}`}
-                                        className={`${optionClassName} ${value === optionValue ? optionActiveClassName : isAdmin ? 'text-[#0F172A]' : 'text-stone hover:text-primary'}`}
+                                        key={optionKey}
+                                        className={`${optionClassName} ${isSelected ? optionActiveClassName : isAdmin ? 'text-[#0F172A]' : 'text-stone hover:text-primary'}`}
                                         onClick={() => handleSelect(option)}
                                     >
-                                        <span className={isAdmin ? 'truncate' : isLegacyMobile ? 'truncate leading-snug' : 'uppercase tracking-tight'}>{optionValue}</span>
-                                        {value === optionValue && (
+                                        <span className={isAdmin ? 'truncate' : isLegacyMobile ? 'truncate leading-snug' : 'uppercase tracking-tight'}>{optionLabel}</span>
+                                        {isSelected && (
                                             <span className={`material-symbols-outlined ${isAdmin ? 'text-primary text-[16px]' : isLegacyMobile ? 'text-primary text-[18px]' : 'text-gold text-sm animate-in fade-in scale-in duration-300'}`}>
                                                 check
                                             </span>

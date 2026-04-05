@@ -1234,20 +1234,10 @@ PROMPT;
     private function mapRequestedItem(Collection $catalogEntries, array $item, ?array $altarContext): array
     {
         $matchedRuleItem = $this->resolveMatchedRuleItem($item, $altarContext);
-        $forceRuleGroup = (bool) ($altarContext['_force_rule_group'] ?? false);
-        $groupTargetIds = collect($altarContext['items'] ?? [])
-            ->map(fn (array $ruleItem) => (int) ($ruleItem['target_product_id'] ?? 0))
-            ->filter(fn (int $targetProductId) => $targetProductId > 0)
-            ->values()
-            ->all();
-        $candidateEntries = $forceRuleGroup && $groupTargetIds !== []
-            ? $catalogEntries
-                ->filter(fn (array $entry) => in_array((int) ($entry['target_product_id'] ?? 0), $groupTargetIds, true))
-                ->values()
-            : $catalogEntries;
-        $scoredCandidates = $candidateEntries
-            ->map(function (array $entry) use ($item, $matchedRuleItem) {
-                $scored = $this->scoreCatalogEntryWithFamilyGuard($entry, $item, $matchedRuleItem);
+        $contextProfile = $this->buildAltarContextProfile($catalogEntries, $altarContext);
+        $scoredCandidates = $catalogEntries
+            ->map(function (array $entry) use ($item, $matchedRuleItem, $contextProfile) {
+                $scored = $this->scoreCatalogEntryWithFamilyGuard($entry, $item, $matchedRuleItem, $contextProfile);
 
                 return [
                     ...$entry,
@@ -1454,9 +1444,11 @@ PROMPT;
 
         $bestItem = null;
         $bestScore = 0;
+        $bestSizeCompatibility = 'unknown';
 
         foreach ($altarContext['items'] as $ruleItem) {
             $score = 0;
+            $sizeCompatibility = 'unknown';
 
             foreach (($ruleItem['aliases'] ?? []) as $alias) {
                 $normalizedAlias = $this->normalizeText($alias);
@@ -1501,25 +1493,44 @@ PROMPT;
             if ($itemSizeRaw !== '') {
                 $ruleSize = $this->extractDimensionInfo($ruleText);
                 $ruleSizeCm = $ruleSize['normalized_cm'] ?? null;
+                $ruleHasSizeSignal = $ruleSizeCm !== null || !empty($ruleSize['tokens']);
 
                 if ($itemSizeCm !== null && $ruleSizeCm !== null) {
                     if (abs((float) $itemSizeCm - (float) $ruleSizeCm) < 0.1) {
                         $score += 48;
+                        $sizeCompatibility = 'match';
                     } else {
-                        $score -= 18;
+                        $score -= 42;
+                        $sizeCompatibility = 'mismatch';
                     }
                 } elseif (in_array($itemSizeRaw, $ruleSize['tokens'] ?? [], true)) {
                     $score += 40;
+                    $sizeCompatibility = 'match';
+                } elseif ($ruleHasSizeSignal) {
+                    $score -= 42;
+                    $sizeCompatibility = 'mismatch';
                 }
             }
 
-            if ($score > $bestScore) {
+            if (
+                $score > $bestScore
+                || ($score === $bestScore && $sizeCompatibility === 'match' && $bestSizeCompatibility !== 'match')
+            ) {
                 $bestScore = $score;
                 $bestItem = $ruleItem;
+                $bestSizeCompatibility = $sizeCompatibility;
             }
         }
 
-        return $bestScore >= 42 ? $bestItem : null;
+        if ($bestScore < 42) {
+            return null;
+        }
+
+        if ($itemSizeRaw !== '' && $bestSizeCompatibility === 'mismatch') {
+            return null;
+        }
+
+        return $bestItem;
     }
 
     private function matchAltarRuleGroup(array $rules, mixed $altarSignal, string $rawText): ?array
@@ -1853,12 +1864,85 @@ PROMPT;
             ->implode(' / ');
     }
 
-    private function scoreCatalogEntry(array $entry, array $item, ?array $matchedRuleItem): array
+    private function buildAltarContextProfile(Collection $catalogEntries, ?array $altarContext): array
+    {
+        $preferredTargetIds = collect($altarContext['items'] ?? [])
+            ->map(fn (array $ruleItem) => (int) ($ruleItem['target_product_id'] ?? 0))
+            ->filter(fn (int $targetProductId) => $targetProductId > 0)
+            ->unique()
+            ->values()
+            ->all();
+        $contextEntries = $preferredTargetIds === []
+            ? collect()
+            : $catalogEntries
+                ->filter(fn (array $entry) => in_array((int) ($entry['target_product_id'] ?? 0), $preferredTargetIds, true))
+                ->values();
+        $categoryTerms = $contextEntries
+            ->flatMap(fn (array $entry) => $this->normalizeEntryCategories($entry))
+            ->countBy()
+            ->sortDesc()
+            ->keys()
+            ->take(8)
+            ->values()
+            ->all();
+        $attributeTerms = collect([
+            trim((string) ($altarContext['_resolved_context_alias'] ?? '')),
+            ...($altarContext['context_aliases'] ?? []),
+            ...$contextEntries
+                ->flatMap(fn (array $entry) => [
+                    $entry['attribute_summary'] ?? '',
+                    $entry['option_label'] ?? '',
+                ])
+                ->all(),
+        ])
+            ->map(fn ($value) => $this->normalizeText((string) $value))
+            ->filter(fn (string $value) => $value !== '' && strlen($value) >= 3)
+            ->unique()
+            ->take(12)
+            ->values()
+            ->all();
+
+        return [
+            'preferred_target_ids' => $preferredTargetIds,
+            'attribute_terms' => $attributeTerms,
+            'category_terms' => $categoryTerms,
+            'force_rule_group' => (bool) ($altarContext['_force_rule_group'] ?? false),
+        ];
+    }
+
+    private function normalizeEntryCategories(array $entry): array
+    {
+        return collect($entry['categories'] ?? [])
+            ->map(fn ($value) => $this->normalizeText((string) $value))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function scoreCatalogEntry(array $entry, array $item, ?array $matchedRuleItem, array $contextProfile = []): array
     {
         $score = 0;
         $reasons = [];
         $searchText = $entry['search_text'] ?? '';
         $attributeText = $entry['attribute_text'] ?? '';
+        $entryTargetId = (int) ($entry['target_product_id'] ?? 0);
+        $preferredTargetIds = collect($contextProfile['preferred_target_ids'] ?? [])
+            ->map(fn ($value) => (int) $value)
+            ->filter()
+            ->values()
+            ->all();
+        $contextAttributeTerms = collect($contextProfile['attribute_terms'] ?? [])
+            ->map(fn ($value) => $this->normalizeText((string) $value))
+            ->filter()
+            ->values()
+            ->all();
+        $contextCategoryTerms = collect($contextProfile['category_terms'] ?? [])
+            ->map(fn ($value) => $this->normalizeText((string) $value))
+            ->filter()
+            ->values()
+            ->all();
+        $entryCategories = $this->normalizeEntryCategories($entry);
         $itemName = $this->normalizeText($item['parsed_name']);
         $canonicalName = $this->normalizeText($item['canonical_name'] ?? '');
         $categoryHint = $this->normalizeText($item['category_hint']);
@@ -1915,6 +1999,30 @@ PROMPT;
             $reasons[] = 'Khớp nhóm/tên phụ';
         }
 
+        if ($matchedRuleItem === null && in_array($entryTargetId, $preferredTargetIds, true)) {
+            $score += (bool) ($contextProfile['force_rule_group'] ?? false) ? 18 : 12;
+            $reasons[] = 'Có trong dữ liệu train';
+        }
+
+        if ($matchedRuleItem === null && $contextAttributeTerms !== []) {
+            foreach ($contextAttributeTerms as $contextAttributeTerm) {
+                if ($contextAttributeTerm === '' || str_contains($itemName, $contextAttributeTerm)) {
+                    continue;
+                }
+
+                if (str_contains($attributeText, $contextAttributeTerm) || str_contains($searchText, $contextAttributeTerm)) {
+                    $score += str_contains($attributeText, $contextAttributeTerm) ? 18 : 10;
+                    $reasons[] = 'Cùng thuộc tính bộ train';
+                    break;
+                }
+            }
+        }
+
+        if ($matchedRuleItem === null && $contextCategoryTerms !== [] && array_intersect($entryCategories, $contextCategoryTerms) !== []) {
+            $score += 14;
+            $reasons[] = 'Cùng danh mục bộ train';
+        }
+
         foreach ($queryTokens as $token) {
             if (str_contains($searchText, $token)) {
                 $score += 4;
@@ -1933,11 +2041,11 @@ PROMPT;
                 $score += 28;
                 $reasons[] = 'Khớp size text';
             } else {
-                $score -= 12;
+                $score -= 24;
             }
         }
 
-        if ($matchedRuleItem !== null && (int) ($matchedRuleItem['target_product_id'] ?? 0) === (int) ($entry['target_product_id'] ?? 0)) {
+        if ($matchedRuleItem !== null && (int) ($matchedRuleItem['target_product_id'] ?? 0) === $entryTargetId) {
             $score += 66;
             $reasons[] = 'Theo rule ban thờ';
         }
@@ -1956,13 +2064,24 @@ PROMPT;
         ];
     }
 
-    private function scoreCatalogEntryWithFamilyGuard(array $entry, array $item, ?array $matchedRuleItem): array
+    private function scoreCatalogEntryWithFamilyGuard(array $entry, array $item, ?array $matchedRuleItem, array $contextProfile = []): array
     {
-        $scored = $this->scoreCatalogEntry($entry, $item, $matchedRuleItem);
+        $scored = $this->scoreCatalogEntry($entry, $item, $matchedRuleItem, $contextProfile);
         $searchText = $entry['search_text'] ?? '';
         $canonicalName = $this->normalizeText((string) ($item['canonical_name'] ?? ''));
 
         if ($canonicalName === '') {
+            return $scored;
+        }
+
+        $entryCanonicalName = $this->detectKnownItemCanonicalName([
+            $entry['display_name'] ?? '',
+            $entry['name'] ?? '',
+            $entry['parent_product_name'] ?? '',
+        ]);
+
+        if ($entryCanonicalName !== null && $entryCanonicalName !== $canonicalName) {
+            $scored['score'] = 0;
             return $scored;
         }
 

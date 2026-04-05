@@ -6,6 +6,8 @@ import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
 import SearchableSelect from '../../components/SearchableSelect';
 import OrderSupplementItemsSection from '../../components/admin/OrderSupplementItemsSection';
+import OrderAiSearchPanel from '../../components/admin/OrderAiSearchPanel';
+import OrderAiRuleManagerModal from '../../components/admin/OrderAiRuleManagerModal';
 import {
     ORDER_TYPE_OPTIONS,
     ORDER_TYPE_EXCHANGE_RETURN,
@@ -36,6 +38,7 @@ import {
     formatRoundedImportCost,
     normalizeRoundedImportCostNumber,
 } from '../../utils/money';
+import { buildOrderAiPickerEntries, normalizeOrderAiRules } from '../../utils/orderAiRules';
 
 const AdminSection = ({ icon, title, children, className = '', bodyClassName = '' }) => (
     <section className={`bg-white border border-primary/10 shadow-sm rounded-sm overflow-hidden ${className}`}>
@@ -812,6 +815,73 @@ const buildVariationDisplayName = (parentName, variationName, optionLabel) => {
 
     return normalizedVariationName || normalizedParentName || 'Biến thể sản phẩm';
 };
+const normalizeOrderLineOptions = (options) => {
+    if (!options || typeof options !== 'object') {
+        return undefined;
+    }
+
+    const normalizedOptions = Object.fromEntries(
+        Object.entries(options).filter(([, value]) => value !== null && value !== undefined && value !== '')
+    );
+
+    return Object.keys(normalizedOptions).length > 0 ? normalizedOptions : undefined;
+};
+const mergeOrderLineOptions = (...optionGroups) => {
+    let mergedOptions = {};
+
+    optionGroups.forEach((optionGroup) => {
+        const normalizedOptions = normalizeOrderLineOptions(optionGroup);
+        if (!normalizedOptions) return;
+        mergedOptions = {
+            ...mergedOptions,
+            ...normalizedOptions,
+        };
+    });
+
+    return Object.keys(mergedOptions).length > 0 ? mergedOptions : undefined;
+};
+const extractOrderItemOptionsFromProductPayload = (product) => {
+    if (!product || typeof product !== 'object') {
+        return undefined;
+    }
+
+    const parentProductId = Number(product?.parent_product_id) || undefined;
+    const parentProductName = normalizeCanvasText(product?.parent_product_name);
+    const optionLabel = normalizeCanvasText(product?.option_label);
+    const variantName = normalizeCanvasText(product?.variant_name || product?.name);
+    const entryKind = normalizeCanvasText(product?.entry_kind);
+
+    if (!parentProductId && !parentProductName && !optionLabel && entryKind !== SEARCH_ENTRY_VARIATION) {
+        return undefined;
+    }
+
+    return normalizeOrderLineOptions({
+        variant_parent_id: parentProductId,
+        variant_parent_name: parentProductName,
+        variant_label: optionLabel,
+        variant_name: variantName,
+        search_entry_kind: entryKind || SEARCH_ENTRY_VARIATION,
+    });
+};
+const resolveOrderLineItemDisplayName = ({ name, options, fallbackName = '' }) => {
+    const normalizedName = normalizeCanvasText(name);
+    const normalizedFallbackName = normalizeCanvasText(fallbackName);
+    const normalizedOptions = normalizeOrderLineOptions(options);
+
+    if (normalizedOptions) {
+        const variationDisplayName = buildVariationDisplayName(
+            normalizedOptions?.variant_parent_name,
+            normalizeCanvasText(normalizedOptions?.variant_name) || normalizedName || normalizedFallbackName,
+            normalizedOptions?.variant_label
+        );
+
+        if (variationDisplayName) {
+            return variationDisplayName;
+        }
+    }
+
+    return normalizedName || normalizedFallbackName || 'Sản phẩm';
+};
 const resolveBundleOptionTitle = (bundleOption) => normalizeCanvasText(
     bundleOption?.option_post_title
     || bundleOption?.option_title
@@ -831,6 +901,55 @@ const resolveBundleOptionKey = (bundleOption) => {
         ? `post-${optionPostId}`
         : `title-${compactProductSearchText(optionTitle) || 'default'}`;
 };
+const normalizeOrderAiItemMeta = (value = null) => {
+    if (!value || typeof value !== 'object') {
+        return undefined;
+    }
+
+    const matchReasons = Array.isArray(value?.match_reasons)
+        ? value.match_reasons.map((reason) => normalizeCanvasText(reason)).filter(Boolean).slice(0, 4)
+        : [];
+    const confidence = Math.max(0, Math.min(99, Number(value?.confidence ?? 0) || 0));
+    const reviewState = normalizeCanvasText(value?.review_state).toLowerCase() === 'confirmed'
+        ? 'confirmed'
+        : 'pending';
+
+    return {
+        source: 'order_ai',
+        session_id: normalizeCanvasText(value?.session_id),
+        review_state: reviewState,
+        source_phrase: normalizeCanvasText(value?.source_phrase),
+        confidence,
+        confidence_label: normalizeCanvasText(value?.confidence_label) || (confidence >= 85 ? 'Rất cao' : confidence >= 70 ? 'Cao' : confidence >= 50 ? 'Cần rà' : 'Thấp'),
+        match_status: normalizeCanvasText(value?.match_status) || 'review',
+        matched_rule_label: normalizeCanvasText(value?.matched_rule_label),
+        matched_rule_alias: normalizeCanvasText(value?.matched_rule_alias),
+        bonus: Boolean(value?.bonus),
+        match_reasons: matchReasons,
+        inserted_at: normalizeCanvasText(value?.inserted_at) || new Date().toISOString(),
+        confirmed_at: normalizeCanvasText(value?.confirmed_at),
+    };
+};
+const mergeOrderAiItemMeta = (existingMeta, incomingMeta) => {
+    const normalizedIncoming = normalizeOrderAiItemMeta(incomingMeta);
+    if (!normalizedIncoming) {
+        return normalizeOrderAiItemMeta(existingMeta);
+    }
+
+    const normalizedExisting = normalizeOrderAiItemMeta(existingMeta);
+
+    return {
+        ...(normalizedExisting || {}),
+        ...normalizedIncoming,
+        review_state: normalizedIncoming.review_state || normalizedExisting?.review_state || 'pending',
+        match_reasons: Array.from(new Set([
+            ...(normalizedExisting?.match_reasons || []),
+            ...(normalizedIncoming.match_reasons || []),
+        ])).slice(0, 4),
+    };
+};
+const isOrderAiItem = (item) => Boolean(item?.ai_meta?.source === 'order_ai');
+const isPendingOrderAiItem = (item) => isOrderAiItem(item) && item?.ai_meta?.review_state !== 'confirmed';
 const createOrderLineItem = ({
     line_id,
     product_id,
@@ -843,22 +962,20 @@ const createOrderLineItem = ({
     pending_export_quantity = null,
     available_to_sell = null,
     options = undefined,
+    ai_meta = undefined,
 }) => {
-    const normalizedOptions = options && typeof options === 'object'
-        ? Object.fromEntries(
-            Object.entries(options).filter(([, value]) => value !== null && value !== undefined && value !== '')
-        )
-        : undefined;
+    const normalizedOptions = normalizeOrderLineOptions(options);
     const inventorySnapshot = resolveInventorySnapshot({
         computed_stock,
         pending_export_quantity,
         available_to_sell,
     });
+    const normalizedAiMeta = normalizeOrderAiItemMeta(ai_meta);
 
     return {
         line_id: normalizeCanvasText(line_id) || createOrderLineId('order-item'),
         product_id: Number(product_id) || 0,
-        name: normalizeCanvasText(name),
+        name: resolveOrderLineItemDisplayName({ name, options: normalizedOptions }),
         sku: normalizeCanvasText(sku) || 'N/A',
         quantity: Math.max(1, Number(quantity) || 1),
         price: Number(price) || 0,
@@ -867,6 +984,7 @@ const createOrderLineItem = ({
         pending_export_quantity: inventorySnapshot.pending_export_quantity,
         available_to_sell: inventorySnapshot.available_to_sell,
         options: normalizedOptions && Object.keys(normalizedOptions).length > 0 ? normalizedOptions : undefined,
+        ai_meta: normalizedAiMeta,
     };
 };
 const buildOrderItemMergeKey = (item) => {
@@ -882,22 +1000,20 @@ const buildOrderItemMergeKey = (item) => {
     ].join('::');
 };
 const resolveLatestOrderItemName = (item, latest = null) => {
-    const variantParentName = normalizeCanvasText(item?.options?.variant_parent_name);
-    const variantLabel = normalizeCanvasText(item?.options?.variant_label);
-    const latestName = normalizeCanvasText(latest?.name || item?.name);
+    const mergedOptions = mergeOrderLineOptions(
+        item?.options,
+        extractOrderItemOptionsFromProductPayload(latest)
+    );
 
-    if (variantParentName && variantLabel) {
-        return `${variantParentName} - ${variantLabel}`;
-    }
-
-    if (variantParentName && latestName) {
-        return `${variantParentName} - ${latestName}`;
-    }
-
-    return latestName || normalizeCanvasText(item?.name) || 'Sản phẩm';
+    return resolveOrderLineItemDisplayName({
+        name: latest?.display_name || latest?.name || item?.name,
+        options: mergedOptions,
+        fallbackName: item?.name,
+    });
 };
-const appendOrderItemsWithMerge = (currentItems = [], additions = [], { incrementExisting = false } = {}) => {
+const appendOrderItemsWithMergeResult = (currentItems = [], additions = [], { incrementExisting = false } = {}) => {
     const nextItems = Array.isArray(currentItems) ? [...currentItems] : [];
+    const touchedLineIds = [];
 
     (Array.isArray(additions) ? additions : []).forEach((addition) => {
         const normalizedAddition = createOrderLineItem(addition || {});
@@ -914,23 +1030,43 @@ const appendOrderItemsWithMerge = (currentItems = [], additions = [], { incremen
             }
 
             const existingItem = nextItems[existingIndex];
+            const mergedOptions = mergeOrderLineOptions(existingItem.options, normalizedAddition.options);
+            const mergedInventorySnapshot = resolveInventorySnapshot(normalizedAddition, existingItem);
+            const incomingSku = normalizeCanvasText(normalizedAddition.sku);
             nextItems[existingIndex] = {
                 ...existingItem,
+                name: resolveOrderLineItemDisplayName({
+                    name: normalizedAddition.name || existingItem.name,
+                    options: mergedOptions,
+                    fallbackName: existingItem.name,
+                }),
+                sku: incomingSku && incomingSku !== 'N/A' ? incomingSku : existingItem.sku,
                 quantity: Math.max(1, (Number(existingItem.quantity) || 0) + (Number(normalizedAddition.quantity) || 0)),
                 price: Number(normalizedAddition.price ?? existingItem.price ?? 0) || 0,
                 cost_price: resolveRoundedImportCostValue(
                     normalizedAddition.cost_price ?? existingItem.cost_price ?? 0,
                     0
                 ),
+                computed_stock: mergedInventorySnapshot.computed_stock,
+                pending_export_quantity: mergedInventorySnapshot.pending_export_quantity,
+                available_to_sell: mergedInventorySnapshot.available_to_sell,
+                options: mergedOptions,
+                ai_meta: mergeOrderAiItemMeta(existingItem.ai_meta, normalizedAddition.ai_meta),
             };
+            touchedLineIds.push(nextItems[existingIndex].line_id);
             return;
         }
 
         nextItems.push(normalizedAddition);
+        touchedLineIds.push(normalizedAddition.line_id);
     });
 
-    return nextItems;
+    return {
+        items: nextItems,
+        touchedLineIds: Array.from(new Set(touchedLineIds.map((lineId) => normalizeCanvasText(lineId)).filter(Boolean))),
+    };
 };
+const appendOrderItemsWithMerge = (currentItems = [], additions = [], options = {}) => appendOrderItemsWithMergeResult(currentItems, additions, options).items;
 const buildOrderItemsFromSearchEntry = (entry) => {
     if (!entry || typeof entry !== 'object') {
         return [];
@@ -1646,6 +1782,27 @@ const OrderFormHeaderLabel = ({ label, tooltip = '' }) => (
     </div>
 );
 
+const normalizeOrderAiPreviewItem = (item, index) => ({
+    ...item,
+    line_key: item?.line_key || `order-ai-preview-${index + 1}`,
+    quantity: Math.max(1, Number(item?.quantity ?? 1) || 1),
+    suggestions: Array.isArray(item?.suggestions) ? item.suggestions : [],
+    selected_entry: item?.selected_entry || null,
+});
+const createOrderAiLineMeta = (item, sessionId) => normalizeOrderAiItemMeta({
+    session_id: sessionId,
+    review_state: 'pending',
+    source_phrase: item?.source_phrase || item?.parsed_name || '',
+    confidence: Number(item?.confidence ?? 0) || 0,
+    confidence_label: item?.confidence_label || '',
+    match_status: item?.match_status || 'review',
+    matched_rule_label: item?.matched_rule?.altar_size_label || '',
+    matched_rule_alias: item?.matched_rule?.alias || '',
+    bonus: Boolean(item?.bonus),
+    match_reasons: Array.isArray(item?.match_reasons) ? item.match_reasons : [],
+    inserted_at: new Date().toISOString(),
+});
+
 const OrderForm = () => {
     const { id } = useParams();
     const location = useLocation();
@@ -1674,6 +1831,21 @@ const OrderForm = () => {
     const [showSearchDropdown, setShowSearchDropdown] = useState(false);
     const [showSearchHistory, setShowSearchHistory] = useState(false);
     const [searchHistory, setSearchHistory] = useState(() => getStoredProductSearchHistory());
+    const [orderAiRules, setOrderAiRules] = useState([]);
+    const [showOrderAiPanel, setShowOrderAiPanel] = useState(false);
+    const [showOrderAiRulesModal, setShowOrderAiRulesModal] = useState(false);
+    const [orderAiInput, setOrderAiInput] = useState('');
+    const [orderAiFile, setOrderAiFile] = useState(null);
+    const [orderAiFilePreviewUrl, setOrderAiFilePreviewUrl] = useState('');
+    const [orderAiPreview, setOrderAiPreview] = useState(null);
+    const [orderAiLastRun, setOrderAiLastRun] = useState(null);
+    const [orderAiLoading, setOrderAiLoading] = useState(false);
+    const [orderAiApplying, setOrderAiApplying] = useState(false);
+    const [orderAiSavingRules, setOrderAiSavingRules] = useState(false);
+    const [orderAiManualPickerLineId, setOrderAiManualPickerLineId] = useState('');
+    const [orderAiManualSearchTerm, setOrderAiManualSearchTerm] = useState('');
+    const [orderAiManualSearchResults, setOrderAiManualSearchResults] = useState([]);
+    const [orderAiManualSearchLoading, setOrderAiManualSearchLoading] = useState(false);
     const [productQuickFilterAttributes, setProductQuickFilterAttributes] = useState([]);
     const [productQuickFilterAttributeId, setProductQuickFilterAttributeId] = useState(() => getStoredProductQuickFilterAttributeId());
     const [productQuickFilterValues, setProductQuickFilterValues] = useState([]);
@@ -1710,6 +1882,7 @@ const OrderForm = () => {
     const productQuickSetupListRef = useRef(null);
     const productQuickSetupSearchInputRef = useRef(null);
     const pendingProductQuickSetupViewportRef = useRef(null);
+    const orderAiFileInputRef = useRef(null);
     const activeProductQuickFilterAttribute = useMemo(
         () => productQuickFilterAttributes.find((attribute) => String(attribute.id) === String(productQuickFilterAttributeId)) || null,
         [productQuickFilterAttributeId, productQuickFilterAttributes]
@@ -1805,13 +1978,18 @@ const OrderForm = () => {
             const nextItems = prev.items.map((item) => {
                 const latest = refreshedMap.get(Number(item.product_id));
                 if (!latest) return item;
+                const mergedOptions = mergeOrderLineOptions(
+                    item.options,
+                    extractOrderItemOptionsFromProductPayload(latest)
+                );
 
                 return {
                     ...item,
-                    name: resolveLatestOrderItemName(item, latest),
-                    sku: latest.sku ?? item.sku,
-                    price: Number(latest.price ?? 0),
+                    name: resolveLatestOrderItemName({ ...item, options: mergedOptions }, latest),
+                    sku: normalizeCanvasText(latest.display_sku || latest.sku) || item.sku,
+                    price: Number(latest.price ?? item.price ?? 0) || 0,
                     cost_price: resolveProductCostPrice(latest, item.cost_price),
+                    options: mergedOptions,
                     ...resolveInventorySnapshot(latest, item),
                 };
             });
@@ -2301,6 +2479,343 @@ const OrderForm = () => {
         copyNotificationTimeoutRef.current = window.setTimeout(() => setNotification(null), duration);
     }, []);
 
+    const clearOrderAiFile = useCallback(() => {
+        setOrderAiFile(null);
+        setOrderAiFilePreviewUrl('');
+        if (orderAiFileInputRef.current) {
+            orderAiFileInputRef.current.value = '';
+        }
+    }, []);
+
+    const resetOrderAiPreviewState = useCallback(() => {
+        setOrderAiPreview(null);
+        setOrderAiManualPickerLineId('');
+        setOrderAiManualSearchTerm('');
+        setOrderAiManualSearchResults([]);
+    }, []);
+
+    const toggleOrderAiPanel = useCallback(() => {
+        setShowOrderAiPanel((prev) => !prev);
+        setShowSearchDropdown(false);
+        setShowSearchHistory(false);
+        setShowProductQuickSetupPanel(false);
+        setShowProductQuickFilterPanel(false);
+    }, []);
+
+    const handleOrderAiFileSelected = useCallback((file) => {
+        if (!file) return;
+        setOrderAiFile(file);
+        resetOrderAiPreviewState();
+    }, [resetOrderAiPreviewState]);
+
+    const handleOrderAiFileChange = useCallback((event) => {
+        const nextFile = event.target.files?.[0];
+        if (!nextFile) return;
+        handleOrderAiFileSelected(nextFile);
+    }, [handleOrderAiFileSelected]);
+
+    const handleOrderAiPaste = useCallback((event) => {
+        const clipboardItems = Array.from(event.clipboardData?.items || []);
+        const imageItem = clipboardItems.find((item) => item.type?.startsWith('image/'));
+        if (!imageItem) return;
+
+        const imageFile = imageItem.getAsFile();
+        if (!imageFile) return;
+
+        event.preventDefault();
+        handleOrderAiFileSelected(imageFile);
+        showTransientNotification('success', 'Đã gắn ảnh từ clipboard vào ô tìm nhanh bằng AI.');
+    }, [handleOrderAiFileSelected, showTransientNotification]);
+
+    const updateOrderAiPreviewItem = useCallback((lineKey, patch) => {
+        setOrderAiPreview((prev) => {
+            if (!prev || !Array.isArray(prev.items)) return prev;
+
+            return {
+                ...prev,
+                items: prev.items.map((item) => (
+                    item.line_key === lineKey
+                        ? { ...item, ...patch }
+                        : item
+                )),
+            };
+        });
+    }, []);
+
+    const handleSelectOrderAiSuggestion = useCallback((lineKey, entry) => {
+        if (!entry) return;
+
+        updateOrderAiPreviewItem(lineKey, {
+            selected_entry: entry,
+            match_status: 'review',
+            confidence: Math.max(60, Number(entry?.confidence ?? 60)),
+            confidence_label: entry?.confidence_label || 'Cần rà',
+        });
+        setOrderAiManualPickerLineId('');
+        setOrderAiManualSearchTerm('');
+        setOrderAiManualSearchResults([]);
+    }, [updateOrderAiPreviewItem]);
+
+    const handleOpenOrderAiManualPicker = useCallback((lineKey, seedTerm = '') => {
+        setOrderAiManualPickerLineId(lineKey);
+        setOrderAiManualSearchTerm(seedTerm || '');
+        setOrderAiManualSearchResults([]);
+    }, []);
+
+    const handleRunOrderAiPreview = useCallback(async () => {
+        if (!orderAiInput.trim() && !orderAiFile) {
+            showTransientNotification('error', 'Nhập nội dung hoặc chọn ảnh để AI xử lý.');
+            return;
+        }
+
+        setOrderAiLoading(true);
+        setOrderAiManualPickerLineId('');
+        setOrderAiManualSearchResults([]);
+
+        try {
+            const payload = new FormData();
+            if (orderAiInput.trim()) {
+                payload.append('message', orderAiInput.trim());
+            }
+            if (orderAiFile) {
+                payload.append('attachment', orderAiFile);
+            }
+
+            const response = await orderApi.aiPreview(payload);
+            const preview = response.data || {};
+            const normalizedPreviewItems = Array.isArray(preview.items)
+                ? preview.items.map(normalizeOrderAiPreviewItem)
+                : [];
+            const readyItems = normalizedPreviewItems.filter((item) => item?.selected_entry && Number(item?.quantity) > 0);
+            const unresolvedItems = normalizedPreviewItems.filter((item) => !item?.selected_entry);
+            const sessionId = `order-ai-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+            setOrderAiPreview({
+                ...preview,
+                items: normalizedPreviewItems,
+            });
+
+            if (readyItems.length === 0) {
+                setOrderAiLastRun({
+                    addedCount: 0,
+                    touchedCount: 0,
+                    reviewCount: 0,
+                    unresolvedCount: unresolvedItems.length,
+                    unresolvedLabels: unresolvedItems.map((item) => item?.source_phrase || item?.parsed_name || '').filter(Boolean).slice(0, 3),
+                });
+                showTransientNotification('error', 'AI chưa ghép được sản phẩm nào để đưa vào bảng hàng.');
+                return;
+            }
+
+            const additions = readyItems.flatMap((item) => (
+                buildOrderItemsFromSearchEntry(item.selected_entry).map((addition) => ({
+                    ...addition,
+                    quantity: Math.max(1, Number(addition?.quantity ?? 1) || 1) * Math.max(1, Number(item.quantity) || 1),
+                    ai_meta: createOrderAiLineMeta(item, sessionId),
+                }))
+            ));
+
+            if (additions.length === 0) {
+                showTransientNotification('error', 'AI chưa tạo được dòng sản phẩm hợp lệ.');
+                return;
+            }
+
+            let touchedLineIds = [];
+            setFormData((prev) => {
+                const mergeResult = appendOrderItemsWithMergeResult(prev.items, additions, { incrementExisting: true });
+                touchedLineIds = mergeResult.touchedLineIds;
+                const costTotal = calculateItemsCostTotal(mergeResult.items);
+
+                return {
+                    ...prev,
+                    items: mergeResult.items,
+                    cost_total: costTotal,
+                };
+            });
+
+            const needsInventorySnapshot = additions.some((item) => !hasInventorySnapshot(item));
+            if (needsInventorySnapshot) {
+                await refreshOrderItemInventorySnapshot(additions);
+            }
+
+            const reviewCount = readyItems.filter((item) => item?.match_status !== 'matched').length;
+            const bonusCount = readyItems.filter((item) => item?.bonus).length;
+
+            setOrderAiLastRun({
+                addedCount: readyItems.length,
+                touchedCount: touchedLineIds.length || additions.length,
+                reviewCount,
+                unresolvedCount: unresolvedItems.length,
+                unresolvedLabels: unresolvedItems.map((item) => item?.source_phrase || item?.parsed_name || '').filter(Boolean).slice(0, 3),
+                altarSizeLabel: preview?.altar_size?.label || '',
+                bonusCount,
+            });
+
+            setOrderAiInput('');
+            clearOrderAiFile();
+            resetOrderAiPreviewState();
+            setShowOrderAiPanel(false);
+
+            showTransientNotification(
+                'success',
+                reviewCount > 0
+                    ? `AI đã thêm/cập nhật ${touchedLineIds.length || additions.length} dòng. Có ${reviewCount} dòng cần rà nhanh trong bảng hàng.`
+                    : `AI đã thêm/cập nhật ${touchedLineIds.length || additions.length} dòng vào bảng hàng.`
+            );
+        } catch (error) {
+            console.error('Error running order AI preview', error);
+            showModal({
+                title: 'Không thể đọc nội dung',
+                content: error?.response?.data?.message || 'AI chưa xử lý được nội dung vừa gửi. Hãy thử lại với câu rõ hơn hoặc ảnh nét hơn.',
+                type: 'error',
+            });
+        } finally {
+            setOrderAiLoading(false);
+        }
+    }, [
+        clearOrderAiFile,
+        orderAiFile,
+        orderAiInput,
+        refreshOrderItemInventorySnapshot,
+        resetOrderAiPreviewState,
+        showModal,
+        showTransientNotification,
+    ]);
+
+    const handleSaveOrderAiRules = useCallback(async (nextRules) => {
+        setOrderAiSavingRules(true);
+
+        try {
+            const response = await orderApi.updateAiRules({ rules: nextRules });
+            const savedRules = normalizeOrderAiRules(response.data?.rules || []);
+
+            setOrderAiRules(savedRules);
+            setShowOrderAiRulesModal(false);
+            orderApi.invalidateBootstrap({ mode: 'form' });
+            showTransientNotification('success', response.data?.message || 'Đã lưu rule AI.');
+        } catch (error) {
+            console.error('Error saving order AI rules', error);
+            showModal({
+                title: 'Không thể lưu rule AI',
+                content: error?.response?.data?.message || 'Vui lòng kiểm tra lại dữ liệu rule và thử lại.',
+                type: 'error',
+            });
+        } finally {
+            setOrderAiSavingRules(false);
+        }
+    }, [showModal, showTransientNotification]);
+
+    const handleApplyOrderAiPreview = useCallback(async () => {
+        if (!orderAiPreview || !Array.isArray(orderAiPreview.items) || orderAiPreview.items.length === 0) {
+            showTransientNotification('error', 'Chưa có kết quả AI để đưa vào đơn.');
+            return;
+        }
+
+        const readyItems = orderAiPreview.items.filter((item) => item?.selected_entry && Number(item?.quantity) > 0);
+        if (readyItems.length === 0) {
+            showTransientNotification('error', 'Không có dòng nào đã chọn sản phẩm hợp lệ.');
+            return;
+        }
+
+        setOrderAiApplying(true);
+
+        try {
+            const additions = readyItems.flatMap((item) => (
+                buildOrderItemsFromSearchEntry(item.selected_entry).map((addition) => ({
+                    ...addition,
+                    quantity: Math.max(1, Number(addition?.quantity ?? 1) || 1) * Math.max(1, Number(item.quantity) || 1),
+                }))
+            ));
+
+            if (additions.length === 0) {
+                showTransientNotification('error', 'AI chưa ghép được sản phẩm để thêm vào đơn.');
+                return;
+            }
+
+            setFormData((prev) => {
+                const nextItems = appendOrderItemsWithMerge(prev.items, additions, { incrementExisting: true });
+                const costTotal = calculateItemsCostTotal(nextItems);
+
+                return {
+                    ...prev,
+                    items: nextItems,
+                    cost_total: costTotal,
+                };
+            });
+
+            const needsInventorySnapshot = additions.some((item) => !hasInventorySnapshot(item));
+            if (needsInventorySnapshot) {
+                await refreshOrderItemInventorySnapshot(additions);
+            }
+
+            const bonusCount = readyItems.filter((item) => item?.bonus).length;
+            showTransientNotification(
+                'success',
+                bonusCount > 0
+                    ? `Đã thêm ${readyItems.length} dòng vào đơn. Có ${bonusCount} dòng đánh dấu tặng kèm, nếu cần hãy sửa giá bằng tay.`
+                    : `Đã thêm ${readyItems.length} dòng vào đơn.`
+            );
+        } catch (error) {
+            console.error('Error applying order AI preview', error);
+            showTransientNotification('error', 'Không thể thêm kết quả AI vào đơn.');
+        } finally {
+            setOrderAiApplying(false);
+        }
+    }, [orderAiPreview, refreshOrderItemInventorySnapshot, showTransientNotification]);
+
+    useEffect(() => {
+        if (!orderAiFile) {
+            setOrderAiFilePreviewUrl('');
+            return undefined;
+        }
+
+        if (!orderAiFile.type?.startsWith('image/')) {
+            setOrderAiFilePreviewUrl('');
+            return undefined;
+        }
+
+        const previewUrl = URL.createObjectURL(orderAiFile);
+        setOrderAiFilePreviewUrl(previewUrl);
+
+        return () => {
+            URL.revokeObjectURL(previewUrl);
+        };
+    }, [orderAiFile]);
+
+    useEffect(() => {
+        if (!orderAiManualPickerLineId || orderAiManualSearchTerm.trim().length < 2) {
+            setOrderAiManualSearchResults([]);
+            setOrderAiManualSearchLoading(false);
+            return undefined;
+        }
+
+        let cancelled = false;
+        setOrderAiManualSearchLoading(true);
+
+        const timerId = window.setTimeout(() => {
+            productApi.getAll({ picker: 1, per_page: 20, search: orderAiManualSearchTerm.trim() })
+                .then((response) => {
+                    if (cancelled) return;
+                    setOrderAiManualSearchResults(buildOrderAiPickerEntries(response.data?.data || []));
+                })
+                .catch((error) => {
+                    if (cancelled) return;
+                    console.error('Error fetching manual AI products', error);
+                    setOrderAiManualSearchResults([]);
+                })
+                .finally(() => {
+                    if (!cancelled) {
+                        setOrderAiManualSearchLoading(false);
+                    }
+                });
+        }, 250);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timerId);
+        };
+    }, [orderAiManualPickerLineId, orderAiManualSearchTerm]);
+
     const saveColumnSettings = () => {
         writeOrderFormStorageJson(orderFormColumnOrderStorageKey, normalizeStoredOrderFormColumnOrder(columnOrder));
         writeOrderFormStorageJson(orderFormVisibleColumnsStorageKey, normalizeStoredOrderFormVisibleColumns(visibleColumns));
@@ -2772,7 +3287,10 @@ const OrderForm = () => {
 
     const fetchInitialData = useCallback(async () => {
         try {
-            const response = await orderApi.getBootstrapCached({ mode: 'form' });
+            const [response, aiRulesResponse] = await Promise.all([
+                orderApi.getBootstrapCached({ mode: 'form' }),
+                orderApi.getAiRules().catch(() => ({ data: { rules: [] } })),
+            ]);
             const bootstrap = response.data || {};
 
             setOrderStatuses(bootstrap.order_statuses || []);
@@ -2780,8 +3298,10 @@ const OrderForm = () => {
             setProductQuickFilterAttributes(buildProductQuickFilterAttributes(bootstrap.product_attributes || []));
             setQuoteSettings((prev) => ({ ...prev, ...(bootstrap.quote_settings || {}) }));
             setQuoteTemplates(sortQuoteTemplates(bootstrap.quote_templates || []));
+            setOrderAiRules(normalizeOrderAiRules(aiRulesResponse?.data?.rules || []));
         } catch (error) {
             setProductQuickFilterAttributes([]);
+            setOrderAiRules([]);
             console.error("Error fetching order form bootstrap", error);
         }
     }, []);
@@ -2822,8 +3342,12 @@ const OrderForm = () => {
             const shouldUseCurrentProductCost = (isDuplicating ? requestedOrderKind : nextOrderKind) === MAIN_ORDER_KIND;
             const mappedItems = order.items?.map(item => ({
                 product_id: item.product_id,
-                name: item.product?.name || item.product_name_snapshot || `Sản phẩm #${item.product_id}`,
-                sku: item.product?.sku || item.product_sku_snapshot || `N/A`,
+                name: resolveOrderLineItemDisplayName({
+                    name: item.product_name_snapshot || item.product?.name || `Sản phẩm #${item.product_id}`,
+                    options: item.options || {},
+                    fallbackName: item.product?.name || `Sản phẩm #${item.product_id}`,
+                }),
+                sku: item.product_sku_snapshot || item.product?.sku || `N/A`,
                 quantity: parseMoneyNumber(item.quantity, 0) || 0,
                 price: parseMoneyNumber(item.price, 0) || 0,
                 cost_price: resolveOrderItemCostPrice(item, shouldUseCurrentProductCost)
@@ -2831,8 +3355,12 @@ const OrderForm = () => {
             const normalizedMappedItems = order.items?.map((item, index) => createOrderLineItem({
                 line_id: item?.id ? `saved-${item.id}` : `saved-${Number(item?.product_id) || 0}-${index + 1}`,
                 product_id: item.product_id,
-                name: item.product_name_snapshot || item.product?.name || `Sản phẩm #${item.product_id}`,
-                sku: item.product?.sku || item.product_sku_snapshot || 'N/A',
+                name: resolveOrderLineItemDisplayName({
+                    name: item.product_name_snapshot || item.product?.name || `Sản phẩm #${item.product_id}`,
+                    options: item.options || {},
+                    fallbackName: item.product?.name || `Sản phẩm #${item.product_id}`,
+                }),
+                sku: item.product_sku_snapshot || item.product?.sku || 'N/A',
                 quantity: parseMoneyNumber(item.quantity, 0) || 0,
                 price: parseMoneyNumber(item.price, 0) || 0,
                 cost_price: resolveOrderItemCostPrice(item, shouldUseCurrentProductCost),
@@ -3175,6 +3703,37 @@ const OrderForm = () => {
             };
         });
     }, []);
+
+    const pendingOrderAiItems = useMemo(
+        () => formData.items.filter((item) => isPendingOrderAiItem(item)),
+        [formData.items]
+    );
+    const confirmedOrderAiItems = useMemo(
+        () => formData.items.filter((item) => isOrderAiItem(item) && !isPendingOrderAiItem(item)),
+        [formData.items]
+    );
+    const handleConfirmPendingOrderAiItems = useCallback(() => {
+        if (pendingOrderAiItems.length === 0) return;
+
+        const confirmedAt = new Date().toISOString();
+        setFormData((prev) => ({
+            ...prev,
+            items: prev.items.map((item) => (
+                isPendingOrderAiItem(item)
+                    ? {
+                        ...item,
+                        ai_meta: {
+                            ...item.ai_meta,
+                            review_state: 'confirmed',
+                            confirmed_at: confirmedAt,
+                        },
+                    }
+                    : item
+            )),
+        }));
+        setOrderAiLastRun(null);
+        showTransientNotification('success', `Đã xác nhận nhanh ${pendingOrderAiItems.length} dòng AI.`);
+    }, [pendingOrderAiItems.length, showTransientNotification]);
 
     const calculateSubtotal = () => {
         return formData.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
@@ -4020,6 +4579,14 @@ const OrderForm = () => {
                                         >
                                             <span className={`material-symbols-outlined text-xs ${isRefreshingItems ? 'animate-refresh-spin' : ''}`}>refresh</span>
                                         </button>
+                                        <button
+                                            type="button"
+                                            onClick={toggleOrderAiPanel}
+                                            className={`ml-3 border-l border-primary/10 pl-3 transition-all ${showOrderAiPanel ? 'text-primary' : 'text-primary/30 hover:text-primary'}`}
+                                            title={'Tìm nhanh bằng AI'}
+                                        >
+                                            <span className="material-symbols-outlined text-[15px]">auto_awesome</span>
+                                        </button>
                                         {productQuickFilterAttributes.length > 0 && (
                                             <button
                                                 type="button"
@@ -4036,6 +4603,40 @@ const OrderForm = () => {
                                             </button>
                                         )}
                                     </div>
+
+                                    <OrderAiSearchPanel
+                                        show={showOrderAiPanel}
+                                        fileInputRef={orderAiFileInputRef}
+                                        inputValue={orderAiInput}
+                                        onInputChange={setOrderAiInput}
+                                        onPaste={handleOrderAiPaste}
+                                        onOpenRules={() => setShowOrderAiRulesModal(true)}
+                                        onReset={() => {
+                                            setOrderAiInput('');
+                                            clearOrderAiFile();
+                                            resetOrderAiPreviewState();
+                                        }}
+                                        onFileChange={handleOrderAiFileChange}
+                                        file={orderAiFile}
+                                        filePreviewUrl={orderAiFilePreviewUrl}
+                                        onClearFile={clearOrderAiFile}
+                                        onRun={handleRunOrderAiPreview}
+                                        loading={orderAiLoading}
+                                        lastRun={orderAiLastRun}
+                                        preview={orderAiPreview}
+                                        onUpdateItem={updateOrderAiPreviewItem}
+                                        onOpenManualPicker={handleOpenOrderAiManualPicker}
+                                        manualPickerLineId={orderAiManualPickerLineId}
+                                        manualSearchTerm={orderAiManualSearchTerm}
+                                        onManualSearchTermChange={setOrderAiManualSearchTerm}
+                                        manualSearchResults={orderAiManualSearchResults}
+                                        manualSearchLoading={orderAiManualSearchLoading}
+                                        onSelectSuggestion={handleSelectOrderAiSuggestion}
+                                        onResetPreview={resetOrderAiPreviewState}
+                                        onApplyPreview={handleApplyOrderAiPreview}
+                                        applying={orderAiApplying}
+                                        currencyFormatter={quoteCurrencyFormatter}
+                                    />
 
                                     {hasActiveProductQuickFilter && activeProductQuickFilterSummary && (
                                         <div className="mt-2 grid items-start gap-2 lg:grid-cols-[max-content_minmax(0,1fr)_max-content]">
@@ -4295,6 +4896,11 @@ const OrderForm = () => {
                                             <div className="flex items-center gap-2 overflow-hidden">
                                                 <span className="text-[10px] text-orange-600/40 font-bold leading-none">{index + 1}.</span>
                                                 <span className="text-[11px] text-orange-600 font-bold leading-none whitespace-nowrap tracking-tight">{item.sku || 'N/A'}</span>
+                                                {isOrderAiItem(item) && (
+                                                    <span className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${isPendingOrderAiItem(item) ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
+                                                        AI
+                                                    </span>
+                                                )}
                                             </div>
                                             <button type="button" onClick={() => removeItem(item.line_id)} className="text-orange-400 hover:text-brick transition-all leading-none transform hover:scale-125">
                                                 <span className="material-symbols-outlined text-[12px]">close</span>
@@ -4316,6 +4922,42 @@ const OrderForm = () => {
                                     {/* Small spacer to ensure last item is visible */}
                                     <div className="w-4 shrink-0 h-full"></div>
                                 </div>
+                                {(pendingOrderAiItems.length > 0 || (orderAiLastRun && orderAiLastRun.unresolvedCount > 0)) && (
+                                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-sky-200 bg-sky-50 px-4 py-3">
+                                        <div className="min-w-0">
+                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-sky-700">
+                                                AI đã đổ vào bảng sản phẩm
+                                            </div>
+                                            <div className="mt-1 text-[12px] font-semibold text-slate-700">
+                                                {orderAiLastRun
+                                                    ? `Lần gần nhất: thêm/cập nhật ${orderAiLastRun.touchedCount || 0} dòng${orderAiLastRun.reviewCount ? `, ${orderAiLastRun.reviewCount} dòng cần rà nhanh` : ''}${orderAiLastRun.unresolvedCount ? `, ${orderAiLastRun.unresolvedCount} dòng chưa ghép` : ''}.`
+                                                    : `Có ${pendingOrderAiItems.length} dòng AI đang chờ duyệt nhanh.`}
+                                            </div>
+                                            {orderAiLastRun?.unresolvedCount > 0 && (
+                                                <div className="mt-1 text-[11px] font-semibold text-slate-500">
+                                                    {`Chưa ghép: ${(orderAiLastRun.unresolvedLabels || []).join(', ')}`}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            {confirmedOrderAiItems.length > 0 && (
+                                                <span className="rounded-full border border-sky-200 bg-white px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-sky-700">
+                                                    {confirmedOrderAiItems.length} dòng AI đã xác nhận
+                                                </span>
+                                            )}
+                                            {pendingOrderAiItems.length > 0 && (
+                                                <button
+                                                    type="button"
+                                                    onClick={handleConfirmPendingOrderAiItems}
+                                                    className="inline-flex h-9 items-center gap-2 rounded-sm bg-sky-700 px-4 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-all hover:bg-sky-800"
+                                                >
+                                                    <span className="material-symbols-outlined text-[14px]">verified</span>
+                                                    {`Xác nhận nhanh ${pendingOrderAiItems.length} dòng AI`}
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
                                 </div>
                             </div>
                         </div>
@@ -4427,7 +5069,7 @@ const OrderForm = () => {
                                                 key={item.line_id || `${item.product_id}-${index}`}
                                                 value={item}
                                                 as="tr"
-                                                className="hover:bg-primary/[0.01] transition-colors group cursor-grab active:cursor-grabbing active:border-primary/20 bg-white"
+                                                className={`transition-colors group cursor-grab active:cursor-grabbing active:border-primary/20 ${isPendingOrderAiItem(item) ? 'bg-amber-50/50 hover:bg-amber-50/70' : isOrderAiItem(item) ? 'bg-sky-50/40 hover:bg-sky-50/60' : 'bg-white hover:bg-primary/[0.01]'}`}
                                             >
                                                 <td className="border border-primary/10 bg-primary/5 text-center">
                                                     <span className="material-symbols-outlined text-[16px] text-primary/10 group-hover:text-primary/30 font-bold">drag_indicator</span>
@@ -4465,6 +5107,21 @@ const OrderForm = () => {
                                                                     <div className="flex items-center gap-2 overflow-hidden">
                                                                         <div className="flex-1 min-w-0">
                                                                             <p className="text-primary font-bold text-[13px] leading-tight truncate">{item.name}</p>
+                                                                            {isOrderAiItem(item) && (
+                                                                       <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                                                           <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${isPendingOrderAiItem(item) ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
+                                                                               {isPendingOrderAiItem(item) ? 'AI chờ duyệt' : 'AI'}
+                                                                           </span>
+                                                                                    <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary/60">
+                                                                                        {item.ai_meta?.confidence_label || 'AI'} {Number(item.ai_meta?.confidence || 0) > 0 ? `${item.ai_meta.confidence}%` : ''}
+                                                                                    </span>
+                                                                            {item.ai_meta?.matched_rule_label && (
+                                                                                <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary/55">
+                                                                                   Bàn {item.ai_meta.matched_rule_label}
+                                                                                </span>
+                                                                            )}
+                                                                                </div>
+                                                                            )}
                                                                             {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
                                                                                 <div className="mt-1 truncate text-[11px] font-semibold text-primary/55">
                                                                                     {item.options?.bundle_parent_name ? `Từ bundle: ${item.options.bundle_parent_name}` : 'Từ bundle'}
@@ -4486,6 +5143,11 @@ const OrderForm = () => {
                                                                     </div>
                                                                     <div className="absolute bottom-full left-4 mb-2 bg-slate-900 text-white p-3 rounded shadow-2xl opacity-0 group-hover/cell:opacity-100 pointer-events-none transition-all z-50 w-80 text-[12px] font-bold border border-white/10 scale-95 group-hover/cell:scale-100 origin-bottom-left leading-relaxed">
                                                                         <div>{item.name}</div>
+                                                                {isOrderAiItem(item) && (
+                                                                    <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/80">
+                                                                        {`AI: ${item.ai_meta?.source_phrase || 'Tự động ghép'}${item.ai_meta?.match_reasons?.length ? ` - ${item.ai_meta.match_reasons.join(', ')}` : ''}`}
+                                                                    </div>
+                                                                )}
                                                                         {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
                                                                             <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/80">
                                                                                 {item.options?.bundle_parent_name ? `Bundle gốc: ${item.options.bundle_parent_name}` : 'Bundle gốc'}
@@ -5108,6 +5770,16 @@ const OrderForm = () => {
                     </>
                 )}
             </AnimatePresence>
+
+            {showOrderAiRulesModal && (
+                <OrderAiRuleManagerModal
+                    rules={orderAiRules}
+                    onClose={() => setShowOrderAiRulesModal(false)}
+                    onSave={handleSaveOrderAiRules}
+                    saving={orderAiSavingRules}
+                    showModal={showModal}
+                />
+            )}
 
             {quoteCaptureTemplate && (
                 <div className="fixed left-[-20000px] top-0 z-[-1]">

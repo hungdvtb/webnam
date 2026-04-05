@@ -1,0 +1,1532 @@
+<?php
+
+namespace App\Services\Orders;
+
+use App\Models\Product;
+use App\Models\SiteSetting;
+use App\Services\AI\GeminiService;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
+
+class OrderAiAssistantService
+{
+    public const RULES_SETTING_KEY = 'order_ai_altar_rules';
+
+    private const SEARCH_ENTRY_PRODUCT = 'product';
+    private const SEARCH_ENTRY_VARIATION = 'variation';
+    private const MAX_RULE_GROUPS = 24;
+    private const MAX_RULE_ITEMS_PER_GROUP = 40;
+    private const MAX_SUGGESTIONS = 5;
+    private const AUTO_SELECT_MIN_SCORE = 18;
+    private const AI_MODEL = 'gemini-2.5-flash';
+
+    private const KNOWN_ITEM_ALIASES = [
+        'de bat huong' => ['de bat huong', 'de bat', 'chan de bat huong', 'de bat tho'],
+        'bat huong' => ['bat', 'bat huong', 'bat tho', 'bát', 'bát hương', 'bát thờ'],
+        'ong huong' => ['ong', 'ong huong', 'ong tho', 'ống', 'ống hương', 'ống thờ'],
+        'den tho' => ['den', 'den tho', 'đèn', 'đèn thờ'],
+        'choe' => ['choe', 'chóe'],
+        'nam' => ['nam', 'nậm'],
+        'mam bong' => ['mam bong', 'mâm bồng', 'dia qua', 'đĩa quả'],
+        'lo hoa' => ['lo hoa', 'lọ hoa'],
+        'luc binh' => ['luc binh', 'lục bình'],
+        'ky ngai 5' => ['ky ngai', 'ky ngai 5', 'ky 5 chen', 'kỷ ngai', 'kỷ ngai 5', 'kỷ 5 chén'],
+        'bo am tra' => ['bo am tra', 'bộ ấm trà', 'am tra', 'ấm trà', 'bo am chen', 'bộ ấm chén'],
+        'chen' => ['chen', 'chén'],
+    ];
+
+    private const KNOWN_ATTRIBUTE_QUALIFIERS = [
+        'men lam' => ['men lam'],
+        'men ran' => ['men ran'],
+        've vang' => ['ve vang'],
+        'men ngoc' => ['men ngoc'],
+        'men nau' => ['men nau'],
+        'men xanh' => ['men xanh'],
+        'men trang' => ['men trang'],
+        'men hoang thach' => ['men hoang thach'],
+        'ca de' => ['ca de', 'kem de', 'co de'],
+    ];
+
+    public function __construct(
+        private readonly GeminiService $geminiService,
+    ) {
+    }
+
+    public function getRules(int $accountId): array
+    {
+        return $this->normalizeRules($this->readStoredRules($accountId));
+    }
+
+    public function saveRules(int $accountId, array $rules): array
+    {
+        $normalizedRules = $this->normalizeRules($rules);
+
+        SiteSetting::setValue(
+            self::RULES_SETTING_KEY,
+            json_encode($normalizedRules, JSON_UNESCAPED_UNICODE),
+            $accountId
+        );
+
+        return $normalizedRules;
+    }
+
+    public function preview(int $accountId, ?string $message, ?UploadedFile $attachment = null): array
+    {
+        $normalizedMessage = trim((string) $message);
+        if ($normalizedMessage === '' && $attachment === null) {
+            throw ValidationException::withMessages([
+                'message' => 'Cần nhập nội dung hoặc gửi ảnh để AI đọc đơn hàng.',
+            ]);
+        }
+
+        $rules = $this->getRules($accountId);
+        $extraction = $this->extractRequestedItems($accountId, $normalizedMessage, $attachment, $rules);
+        $rawText = trim((string) ($extraction['raw_text'] ?? $normalizedMessage));
+        $altarSignal = $this->extractAltarSizeSignal($extraction['altar_size'] ?? null)
+            ?? $this->extractAltarSizeSignal($rawText);
+        $altarContext = $this->matchAltarRuleGroup($rules, $altarSignal, $rawText);
+        $globalQualifiers = $this->extractLeadingGlobalQualifiers($rawText);
+        $requestedItems = collect($extraction['items'] ?? [])
+            ->map(function ($item, $index) use ($globalQualifiers) {
+                if ($globalQualifiers !== []) {
+                    $item['qualifiers'] = [
+                        ...$globalQualifiers,
+                        ...(is_array($item['qualifiers'] ?? null) ? $item['qualifiers'] : []),
+                    ];
+                }
+
+                return $this->normalizeRequestedItem($item, (int) $index);
+            })
+            ->filter(fn (array $item) => $item['parsed_name'] !== '')
+            ->values();
+
+        if ($requestedItems->isEmpty() && $normalizedMessage !== '') {
+            $requestedItems = collect($this->fallbackExtractFromText($normalizedMessage))
+                ->map(function ($item, $index) use ($globalQualifiers) {
+                    if ($globalQualifiers !== []) {
+                        $item['qualifiers'] = [
+                            ...$globalQualifiers,
+                            ...(is_array($item['qualifiers'] ?? null) ? $item['qualifiers'] : []),
+                        ];
+                    }
+
+                    return $this->normalizeRequestedItem($item, (int) $index);
+                })
+                ->filter(fn (array $item) => $item['parsed_name'] !== '')
+                ->values();
+        }
+
+        $requestedItems = $this->expandCompositeRequestedItems($requestedItems);
+
+        if ($requestedItems->isEmpty() && $altarContext && !empty($altarContext['items'])) {
+            $mappedItems = $this->buildMappedItemsFromRuleGroup($altarContext);
+
+            return [
+                'raw_text' => $rawText,
+                'provider' => $extraction['provider'] ?? null,
+                'altar_size' => $this->formatAltarContext($altarContext, $altarSignal),
+                'items' => $mappedItems->all(),
+                'summary' => [
+                    'total' => $mappedItems->count(),
+                    'matched' => $mappedItems->where('match_status', 'matched')->count(),
+                    'needs_review' => 0,
+                    'unresolved' => 0,
+                ],
+            ];
+        }
+
+        if ($requestedItems->isEmpty()) {
+            return [
+                'raw_text' => $rawText,
+                'provider' => $extraction['provider'] ?? null,
+                'altar_size' => $this->formatAltarContext($altarContext, $altarSignal),
+                'items' => [],
+                'summary' => [
+                    'total' => 0,
+                    'matched' => 0,
+                    'needs_review' => 0,
+                    'unresolved' => 0,
+                ],
+            ];
+        }
+
+        $catalogEntries = $this->loadCatalogEntries($accountId);
+        $mappedItems = $requestedItems
+            ->map(fn (array $item) => $this->mapRequestedItem($catalogEntries, $item, $altarContext))
+            ->values();
+
+        return [
+            'raw_text' => $rawText,
+            'provider' => $extraction['provider'] ?? null,
+            'altar_size' => $this->formatAltarContext($altarContext, $altarSignal),
+            'items' => $mappedItems->all(),
+            'summary' => [
+                'total' => $mappedItems->count(),
+                'matched' => $mappedItems->where('match_status', 'matched')->count(),
+                'needs_review' => $mappedItems->where('match_status', 'review')->count(),
+                'unresolved' => $mappedItems->where('match_status', 'unresolved')->count(),
+            ],
+        ];
+    }
+
+    public function trainRulePreview(
+        int $accountId,
+        string $altarSizeLabel,
+        ?string $message,
+        ?UploadedFile $attachment = null
+    ): array {
+        $normalizedAltarSizeLabel = trim($altarSizeLabel);
+        if ($normalizedAltarSizeLabel === '') {
+            throw ValidationException::withMessages([
+                'altar_size_label' => 'Cần nhập kích thước ban thờ trước khi dạy AI.',
+            ]);
+        }
+
+        if ($attachment === null) {
+            throw ValidationException::withMessages([
+                'attachment' => 'Cần tải ảnh hoặc tệp để AI học nhanh bộ sản phẩm.',
+            ]);
+        }
+
+        $normalizedMessage = trim((string) $message);
+        $rules = $this->getRules($accountId);
+        $contextMessage = trim(implode("\n", array_filter([
+            "Kích thước ban thờ cần học: {$normalizedAltarSizeLabel}",
+            $normalizedMessage,
+        ])));
+        $extraction = $this->extractRequestedItems($accountId, $contextMessage, $attachment, $rules);
+        $rawText = trim((string) ($extraction['raw_text'] ?? $normalizedMessage));
+        $globalQualifiers = $this->extractLeadingGlobalQualifiers($rawText);
+        $requestedItems = collect($extraction['items'] ?? [])
+            ->map(function ($item, $index) use ($globalQualifiers) {
+                if ($globalQualifiers !== []) {
+                    $item['qualifiers'] = [
+                        ...$globalQualifiers,
+                        ...(is_array($item['qualifiers'] ?? null) ? $item['qualifiers'] : []),
+                    ];
+                }
+
+                return $this->normalizeRequestedItem($item, (int) $index);
+            })
+            ->filter(fn (array $item) => $item['parsed_name'] !== '')
+            ->values();
+
+        if ($requestedItems->isEmpty() && $rawText !== '') {
+            $requestedItems = collect($this->fallbackExtractFromText($rawText))
+                ->map(function ($item, $index) use ($globalQualifiers) {
+                    if ($globalQualifiers !== []) {
+                        $item['qualifiers'] = [
+                            ...$globalQualifiers,
+                            ...(is_array($item['qualifiers'] ?? null) ? $item['qualifiers'] : []),
+                        ];
+                    }
+
+                    return $this->normalizeRequestedItem($item, (int) $index);
+                })
+                ->filter(fn (array $item) => $item['parsed_name'] !== '')
+                ->values();
+        }
+
+        $requestedItems = $this->expandCompositeRequestedItems($requestedItems);
+        $catalogEntries = $this->loadCatalogEntries($accountId);
+        $mappedItems = $requestedItems
+            ->map(fn (array $item) => $this->mapRequestedItem($catalogEntries, $item, null))
+            ->values();
+
+        $ruleItems = $mappedItems
+            ->map(fn (array $item, int $index) => $this->buildRulePreviewItemFromMappedLine($item, $index))
+            ->filter()
+            ->values();
+        $unresolvedItems = $mappedItems
+            ->filter(fn (array $item) => empty($item['selected_entry']))
+            ->map(fn (array $item) => [
+                'line_key' => $item['line_key'],
+                'source_phrase' => $item['source_phrase'],
+                'parsed_name' => $item['parsed_name'],
+                'confidence' => (int) ($item['confidence'] ?? 0),
+                'confidence_label' => $item['confidence_label'] ?? $this->confidenceLabel((int) ($item['confidence'] ?? 0)),
+                'suggestions' => array_slice($item['suggestions'] ?? [], 0, 3),
+            ])
+            ->values();
+
+        return [
+            'altar_size' => [
+                'label' => $normalizedAltarSizeLabel,
+                'aliases' => $this->normalizeAliasList([$normalizedAltarSizeLabel], 12),
+            ],
+            'provider' => $extraction['provider'] ?? null,
+            'raw_text' => $rawText,
+            'source' => [
+                'type' => 'image',
+                'name' => trim((string) $attachment->getClientOriginalName()),
+                'note' => $normalizedMessage,
+            ],
+            'items' => $ruleItems->all(),
+            'unresolved_items' => $unresolvedItems->all(),
+            'summary' => [
+                'total' => $requestedItems->count(),
+                'mapped' => $ruleItems->count(),
+                'review' => $ruleItems->where('match_status', 'review')->count(),
+                'unresolved' => $unresolvedItems->count(),
+            ],
+        ];
+    }
+
+    private function readStoredRules(int $accountId): array
+    {
+        $rawValue = SiteSetting::getValue(self::RULES_SETTING_KEY, $accountId, '[]');
+        if (is_array($rawValue)) {
+            return $rawValue;
+        }
+
+        $decoded = json_decode((string) $rawValue, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function normalizeRules(array $rules): array
+    {
+        return collect($rules)
+            ->map(function ($group, $groupIndex) {
+                if (!is_array($group)) {
+                    return null;
+                }
+
+                $label = trim((string) ($group['altar_size_label'] ?? $group['size_label'] ?? ''));
+                if ($label === '') {
+                    return null;
+                }
+
+                $aliases = $this->normalizeAliasList([
+                    $label,
+                    ...$this->normalizeAliasList($group['altar_size_aliases'] ?? []),
+                ], 12);
+
+                $items = collect($group['items'] ?? [])
+                    ->map(function ($item, $itemIndex) {
+                        if (!is_array($item)) {
+                            return null;
+                        }
+
+                        $targetProductId = (int) ($item['target_product_id'] ?? $item['product_id'] ?? 0);
+                        if ($targetProductId <= 0) {
+                            return null;
+                        }
+
+                        $parentProductId = (int) ($item['parent_product_id'] ?? 0);
+                        $entryKind = trim((string) ($item['entry_kind'] ?? $item['type'] ?? self::SEARCH_ENTRY_PRODUCT));
+                        $defaultQuantity = max(1, (int) ($item['default_quantity'] ?? $item['quantity'] ?? 1));
+
+                        return [
+                            'id' => trim((string) ($item['id'] ?? '')) ?: "order-ai-rule-item-{$targetProductId}-" . ($itemIndex + 1),
+                            'aliases' => $this->normalizeAliasList([
+                                ...$this->normalizeAliasList($item['aliases'] ?? [], 12),
+                                $item['display_name'] ?? '',
+                                $item['option_label'] ?? '',
+                            ], 12),
+                            'default_quantity' => $defaultQuantity,
+                            'target_product_id' => $targetProductId,
+                            'parent_product_id' => $parentProductId > 0 ? $parentProductId : null,
+                            'entry_kind' => $entryKind === self::SEARCH_ENTRY_VARIATION ? self::SEARCH_ENTRY_VARIATION : self::SEARCH_ENTRY_PRODUCT,
+                            'display_name' => trim((string) ($item['display_name'] ?? $item['name'] ?? '')),
+                            'display_sku' => trim((string) ($item['display_sku'] ?? $item['sku'] ?? '')),
+                            'option_label' => trim((string) ($item['option_label'] ?? '')),
+                            'main_image' => trim((string) ($item['main_image'] ?? '')),
+                            'price' => round((float) ($item['price'] ?? 0), 2),
+                            'cost_price' => round((float) ($item['cost_price'] ?? 0), 2),
+                            'order' => $itemIndex + 1,
+                        ];
+                    })
+                    ->filter()
+                    ->take(self::MAX_RULE_ITEMS_PER_GROUP)
+                    ->values()
+                    ->all();
+
+                return [
+                    'id' => trim((string) ($group['id'] ?? '')) ?: "order-ai-rule-group-" . ($groupIndex + 1),
+                    'altar_size_label' => $label,
+                    'altar_size_aliases' => $aliases,
+                    'training_source_type' => in_array(trim((string) ($group['training_source_type'] ?? '')), ['manual', 'image'], true)
+                        ? trim((string) ($group['training_source_type'] ?? ''))
+                        : null,
+                    'training_source_name' => trim((string) ($group['training_source_name'] ?? '')),
+                    'training_note' => trim((string) ($group['training_note'] ?? '')),
+                    'training_raw_text' => trim((string) ($group['training_raw_text'] ?? '')),
+                    'trained_at' => trim((string) ($group['trained_at'] ?? '')),
+                    'items' => $items,
+                ];
+            })
+            ->filter()
+            ->take(self::MAX_RULE_GROUPS)
+            ->values()
+            ->all();
+    }
+
+    private function normalizeAliasList(mixed $value, int $maxItems = 16): array
+    {
+        $values = [];
+
+        if (is_array($value)) {
+            $values = $value;
+        } elseif (is_string($value)) {
+            $values = preg_split('/[,;\n]+/u', $value) ?: [];
+        } elseif ($value !== null && $value !== '') {
+            $values = [(string) $value];
+        }
+
+        return collect($values)
+            ->map(fn ($item) => trim((string) $item))
+            ->filter()
+            ->unique(fn ($item) => $this->normalizeText($item))
+            ->take($maxItems)
+            ->values()
+            ->all();
+    }
+
+    private function extractRequestedItems(int $accountId, string $message, ?UploadedFile $attachment, array $rules): array
+    {
+        if ($attachment !== null) {
+            $bytes = $attachment->get();
+            if ($bytes === false) {
+                throw ValidationException::withMessages([
+                    'attachment' => 'Không thể đọc ảnh/tệp vừa tải lên.',
+                ]);
+            }
+
+            $result = $this->geminiService->readImage(
+                base64_encode($bytes),
+                $attachment->getMimeType() ?: 'image/png',
+                $this->buildExtractionPrompt($message, $rules, true),
+                $accountId,
+                self::AI_MODEL
+            );
+
+            $decoded = $this->decodeAiJson((string) ($result['text'] ?? ''));
+            $decoded['provider'] = $result['model'] ?? null;
+            $decoded['raw_text'] = trim((string) ($decoded['raw_text'] ?? $message));
+
+            return $decoded;
+        }
+
+        try {
+            $result = $this->geminiService->generateText(
+                $this->buildExtractionPrompt($message, $rules, false),
+                $accountId,
+                self::AI_MODEL
+            );
+            $decoded = $this->decodeAiJson((string) ($result['text'] ?? ''));
+            $decoded['provider'] = $result['model'] ?? null;
+            $decoded['raw_text'] = trim((string) ($decoded['raw_text'] ?? $message));
+
+            return $decoded;
+        } catch (\Throwable $exception) {
+            $fallbackItems = $this->fallbackExtractFromText($message);
+            if ($fallbackItems !== []) {
+                return [
+                    'provider' => 'fallback_text_parser',
+                    'raw_text' => $message,
+                    'altar_size' => $this->extractAltarSizeSignal($message),
+                    'items' => $fallbackItems,
+                ];
+            }
+
+            throw $exception;
+        }
+    }
+
+    private function buildExtractionPrompt(string $message, array $rules, bool $hasAttachment): string
+    {
+        $ruleHints = collect($rules)
+            ->take(12)
+            ->map(function (array $group) {
+                $aliases = collect($group['items'] ?? [])
+                    ->flatMap(fn (array $item) => $item['aliases'] ?? [])
+                    ->filter()
+                    ->take(16)
+                    ->implode(', ');
+
+                return "- {$group['altar_size_label']}: {$aliases}";
+            })
+            ->filter()
+            ->implode("\n");
+
+        $inputHint = $hasAttachment
+            ? "Ban can OCR noi dung trong anh/tai lieu dinh kem roi parse thanh cau truc du lieu."
+            : "Ban can doc noi dung van ban nguoi dung vua nhap va parse thanh cau truc du lieu.";
+
+        $messageBlock = $message !== ''
+            ? "Noi dung nguoi dung bo sung:\n{$message}\n"
+            : "Nguoi dung khong go them van ban.\n";
+
+        return <<<PROMPT
+Ban la tro ly nhap don hang do tho.
+{$inputHint}
+Tra ve DUY NHAT mot JSON hop le, khong markdown, khong giai thich.
+
+Schema:
+{
+  "raw_text": "string",
+  "altar_size": {
+    "raw": "string|null",
+    "normalized_label": "string|null"
+  },
+  "items": [
+    {
+      "source_phrase": "string",
+      "quantity": 1,
+      "quantity_specified": true,
+      "name": "string",
+      "normalized_name": "string|null",
+      "category_hint": "string|null",
+      "size_text": "string|null",
+      "size_kind": "diameter|height|width|depth|altar|unknown",
+      "qualifiers": ["string"],
+      "bonus": false,
+      "notes": "string|null"
+    }
+  ]
+}
+
+Quy tac:
+- Tach tung dong san pham, khong gop nhieu mon vao 1 dong.
+- quantity phai la so nguyen duong.
+- quantity_specified=true neu khach co ghi ro so luong; neu khong ghi thi quantity=1 va quantity_specified=false.
+- Cac thuoc tinh xuat hien truoc danh sach mon, vi du "men lam, 2 bat 18 ca de", phai duoc ap dung cho cac mon phia sau neu phu hop.
+- Neu gap cum nhu "ca de", "kem de" voi bat huong thi tach thanh 2 dong: bat huong va de bat huong, giu nguyen size/men/so luong.
+- Neu thay "ban 1m27", "ban 1m53", "ban 1m75", "ban 1m97"... thi dua vao altar_size, khong dua vao size cua mon hang.
+- Neu size cua mon duoc viet kieu "20", "phi 20", "cao 35", "35cm" thi dua vao size_text va size_kind phu hop.
+- Neu dong la qua tang/bonus/tang kem thi dat bonus=true nhung van giu quantity va name.
+- Neu khong chac chan category_hint thi de null.
+- Neu khong chac chan size_text thi de null.
+
+Rule ban tho da hoc:
+{$ruleHints}
+
+{$messageBlock}
+PROMPT;
+    }
+
+    private function decodeAiJson(string $text): array
+    {
+        $normalized = trim($text);
+        $normalized = preg_replace('/^```json\s*/i', '', $normalized) ?? $normalized;
+        $normalized = preg_replace('/```$/', '', $normalized) ?? $normalized;
+
+        $decoded = json_decode($normalized, true);
+        if (is_array($decoded)) {
+            return $decoded;
+        }
+
+        if (preg_match('/\{.*\}/s', $normalized, $matches) === 1) {
+            $decoded = json_decode($matches[0], true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        throw ValidationException::withMessages([
+            'message' => 'AI trả về dữ liệu chưa hợp lệ, vui lòng thử lại.',
+        ]);
+    }
+
+    private function fallbackExtractFromText(string $message): array
+    {
+        $segments = collect(preg_split('/[\n,;]+/u', $message) ?: [])
+            ->map(fn ($segment) => trim((string) $segment))
+            ->filter()
+            ->values();
+
+        return $segments->map(function (string $segment) {
+            $normalizedSegment = $this->normalizeText($segment);
+            if ($normalizedSegment === '') {
+                return null;
+            }
+
+            $segmentQualifiers = $this->extractImplicitQualifiersFromText($segment);
+            if (
+                $segmentQualifiers !== []
+                && $this->detectKnownItemCanonicalName([$segment]) === null
+                && preg_match('/\d/u', $segment) !== 1
+            ) {
+                return null;
+            }
+
+            if (preg_match('/\bban\b/u', $normalizedSegment) === 1 && preg_match('/\d/', $normalizedSegment) === 1 && !preg_match('/^\d+\s+/u', $normalizedSegment)) {
+                return null;
+            }
+
+            $quantity = 1;
+            $quantitySpecified = false;
+            $body = $segment;
+
+            if (preg_match('/^(?:tang\s+)?(\d+)\s+(.+)$/iu', $segment, $matches) === 1) {
+                $quantity = max(1, (int) $matches[1]);
+                $quantitySpecified = true;
+                $body = trim((string) $matches[2]);
+            }
+
+            $bonus = str_contains($normalizedSegment, 'tang ') || str_contains($normalizedSegment, 'qua tang');
+            $sizeMatch = [];
+            if (preg_match('/(?:phi|dk|duong kinh|cao|size)\s*(\d+(?:[.,]\d+)?(?:\s*m\s*\d{1,2})?)/iu', $body, $sizeMatch) !== 1) {
+                preg_match('/\b(\d{2,3})(?:\s*cm)?\b/u', $body, $sizeMatch);
+            }
+            $sizeText = isset($sizeMatch[1]) ? trim((string) $sizeMatch[1]) : null;
+            $name = $body;
+            if ($sizeText) {
+                $name = trim((string) preg_replace(
+                    '/(?:phi|dk|duong kinh|cao|size)?\s*' . preg_quote((string) $sizeMatch[1], '/') . '(?:\s*cm)?/iu',
+                    '',
+                    $body,
+                    1
+                ));
+                $name = preg_replace('/\s+/u', ' ', $name) ?: $name;
+            }
+
+            return [
+                'source_phrase' => $segment,
+                'quantity' => $quantity,
+                'quantity_specified' => $quantitySpecified,
+                'name' => $name,
+                'normalized_name' => $name,
+                'category_hint' => null,
+                'size_text' => $sizeText,
+                'size_kind' => str_contains($this->normalizeText($body), 'cao') ? 'height' : 'unknown',
+                'qualifiers' => [],
+                'bonus' => $bonus,
+                'notes' => null,
+            ];
+        })
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    private function normalizeRequestedItem(mixed $item, int $index): array
+    {
+        $source = is_array($item) ? $item : [];
+        $sourcePhrase = trim((string) ($source['source_phrase'] ?? ''));
+        $parsedName = trim((string) ($source['name'] ?? $source['normalized_name'] ?? ''));
+        $canonicalName = $this->detectKnownItemCanonicalName([
+            $parsedName,
+            $source['normalized_name'] ?? '',
+            $source['category_hint'] ?? '',
+            $sourcePhrase,
+        ]);
+        $resolvedName = $parsedName !== '' ? $parsedName : ($canonicalName ?? '');
+        $sizeInfo = $this->extractDimensionInfo((string) ($source['size_text'] ?? ''));
+        $qualifiers = collect([
+            ...(is_array($source['qualifiers'] ?? null) ? $source['qualifiers'] : []),
+            ...$this->extractImplicitQualifiersFromText(implode(' ', array_filter([
+                $sourcePhrase,
+                $parsedName,
+                (string) ($source['notes'] ?? ''),
+            ]))),
+        ])
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->unique(fn ($value) => $this->normalizeText($value))
+            ->values()
+            ->all();
+        $quantitySpecified = $this->inferQuantitySpecified($source, $sourcePhrase);
+
+        return [
+            'line_key' => trim((string) ($source['line_key'] ?? '')) ?: 'ai-line-' . ($index + 1),
+            'source_phrase' => trim((string) ($sourcePhrase ?: $resolvedName)),
+            'quantity' => max(1, (int) ($source['quantity'] ?? 1)),
+            'quantity_specified' => $quantitySpecified,
+            'parsed_name' => $resolvedName,
+            'canonical_name' => $canonicalName,
+            'normalized_name' => $this->normalizeText($resolvedName),
+            'category_hint' => trim((string) ($source['category_hint'] ?? '')),
+            'qualifiers' => $qualifiers,
+            'bonus' => (bool) ($source['bonus'] ?? false),
+            'notes' => trim((string) ($source['notes'] ?? '')),
+            'size' => [
+                'raw' => trim((string) ($source['size_text'] ?? '')),
+                'kind' => $this->normalizeSizeKind((string) ($source['size_kind'] ?? 'unknown')),
+                'normalized_cm' => $sizeInfo['normalized_cm'],
+                'tokens' => $sizeInfo['tokens'],
+            ],
+            'aliases' => $this->expandKnownAliases([
+                $resolvedName,
+                $canonicalName ?? '',
+                $source['normalized_name'] ?? '',
+                $source['category_hint'] ?? '',
+                $sourcePhrase,
+            ]),
+        ];
+    }
+
+    private function mapRequestedItem(Collection $catalogEntries, array $item, ?array $altarContext): array
+    {
+        $matchedRuleItem = $this->resolveMatchedRuleItem($item, $altarContext);
+        $scoredCandidates = $catalogEntries
+            ->map(function (array $entry) use ($item, $matchedRuleItem) {
+                $scored = $this->scoreCatalogEntry($entry, $item, $matchedRuleItem);
+
+                return [
+                    ...$entry,
+                    'match_score' => $scored['score'],
+                    'match_reasons' => $scored['reasons'],
+                ];
+            })
+            ->filter(fn (array $entry) => $entry['match_score'] > 0)
+            ->sortByDesc('match_score')
+            ->values();
+
+        $topCandidate = $scoredCandidates->get(0);
+        $secondCandidate = $scoredCandidates->get(1);
+        $topScore = (int) ($topCandidate['match_score'] ?? 0);
+        $gapScore = $topScore - (int) ($secondCandidate['match_score'] ?? 0);
+        $confidence = $this->resolveConfidence($topScore, $gapScore, $matchedRuleItem !== null);
+        $isConfidentMatch = $confidence >= 76 || ($matchedRuleItem !== null && $confidence >= 64);
+
+        $selectedEntry = null;
+        $matchStatus = 'unresolved';
+
+        if ($topCandidate !== null && $topScore >= self::AUTO_SELECT_MIN_SCORE) {
+            $selectedEntry = $this->trimCatalogEntry($topCandidate);
+            $matchStatus = $isConfidentMatch ? 'matched' : 'review';
+        }
+
+        $resolvedQuantity = $item['quantity'];
+        if (
+            !$item['quantity_specified']
+            && $matchedRuleItem !== null
+            && (int) ($matchedRuleItem['default_quantity'] ?? 0) > 0
+        ) {
+            $resolvedQuantity = max(1, (int) ($matchedRuleItem['default_quantity'] ?? 1));
+        }
+
+        return [
+            'line_key' => $item['line_key'],
+            'source_phrase' => $item['source_phrase'],
+            'quantity' => $resolvedQuantity,
+            'bonus' => $item['bonus'],
+            'notes' => $item['notes'],
+            'parsed_name' => $item['parsed_name'],
+            'parsed_size' => [
+                'raw' => $item['size']['raw'],
+                'kind' => $item['size']['kind'],
+                'normalized_cm' => $item['size']['normalized_cm'],
+            ],
+            'match_status' => $matchStatus,
+            'confidence' => $confidence,
+            'confidence_label' => $this->confidenceLabel($confidence),
+            'selected_entry' => $selectedEntry,
+            'match_reasons' => $topCandidate['match_reasons'] ?? [],
+            'suggestions' => $scoredCandidates
+                ->take(self::MAX_SUGGESTIONS)
+                ->map(function (array $entry) {
+                    $confidence = min(99, max(10, (int) round($entry['match_score'])));
+
+                    return [
+                        ...$this->trimCatalogEntry($entry),
+                        'confidence' => $confidence,
+                        'confidence_label' => $this->confidenceLabel($confidence),
+                        'match_score' => (int) $entry['match_score'],
+                        'match_reasons' => $entry['match_reasons'],
+                    ];
+                })
+                ->values()
+                ->all(),
+            'matched_rule' => $matchedRuleItem
+                ? [
+                    'id' => $matchedRuleItem['id'],
+                    'alias' => $matchedRuleItem['aliases'][0] ?? $matchedRuleItem['display_name'] ?? '',
+                    'altar_size_label' => $altarContext['altar_size_label'] ?? '',
+                ]
+                : null,
+        ];
+    }
+
+    private function buildMappedItemsFromRuleGroup(array $altarContext): Collection
+    {
+        return collect($altarContext['items'] ?? [])
+            ->map(function (array $ruleItem, int $index) use ($altarContext) {
+                $quantity = max(1, (int) ($ruleItem['default_quantity'] ?? 1));
+                $seedLabel = trim((string) ($ruleItem['aliases'][0] ?? $ruleItem['display_name'] ?? $ruleItem['option_label'] ?? ''));
+                $sizeInfo = $this->extractDimensionInfo(implode(' ', array_filter([
+                    $ruleItem['display_name'] ?? '',
+                    $ruleItem['option_label'] ?? '',
+                    $seedLabel,
+                ])));
+
+                return [
+                    'line_key' => trim((string) ($ruleItem['id'] ?? '')) ?: 'altar-rule-line-' . ($index + 1),
+                    'source_phrase' => $seedLabel !== '' ? $seedLabel : trim((string) ($ruleItem['display_name'] ?? '')),
+                    'quantity' => $quantity,
+                    'bonus' => false,
+                    'notes' => '',
+                    'parsed_name' => $seedLabel !== '' ? $seedLabel : trim((string) ($ruleItem['display_name'] ?? '')),
+                    'parsed_size' => [
+                        'raw' => trim((string) ($ruleItem['option_label'] ?? '')),
+                        'kind' => 'unknown',
+                        'normalized_cm' => $sizeInfo['normalized_cm'],
+                    ],
+                    'match_status' => 'matched',
+                    'confidence' => 99,
+                    'confidence_label' => $this->confidenceLabel(99),
+                    'selected_entry' => [
+                        'entry_kind' => $ruleItem['entry_kind'] ?? self::SEARCH_ENTRY_PRODUCT,
+                        'target_product_id' => (int) ($ruleItem['target_product_id'] ?? 0),
+                        'parent_product_id' => !empty($ruleItem['parent_product_id']) ? (int) $ruleItem['parent_product_id'] : null,
+                        'parent_product_name' => $ruleItem['parent_product_name'] ?? '',
+                        'name' => $ruleItem['display_name'] ?? '',
+                        'display_name' => $ruleItem['display_name'] ?? '',
+                        'sku' => $ruleItem['display_sku'] ?? '',
+                        'display_sku' => $ruleItem['display_sku'] ?? '',
+                        'option_label' => $ruleItem['option_label'] ?? '',
+                        'attribute_summary' => $ruleItem['option_label'] ?? '',
+                        'price' => round((float) ($ruleItem['price'] ?? 0), 2),
+                        'cost_price' => round((float) ($ruleItem['cost_price'] ?? 0), 2),
+                        'expected_cost' => isset($ruleItem['cost_price']) ? round((float) ($ruleItem['cost_price'] ?? 0), 2) : null,
+                        'main_image' => $ruleItem['main_image'] ?? '',
+                        'attribute_values' => [],
+                        'categories' => [],
+                    ],
+                    'match_reasons' => ['Theo rule ban thờ đã học'],
+                    'suggestions' => [],
+                    'matched_rule' => [
+                        'id' => $ruleItem['id'] ?? '',
+                        'alias' => $ruleItem['aliases'][0] ?? $ruleItem['display_name'] ?? '',
+                        'altar_size_label' => $altarContext['altar_size_label'] ?? '',
+                    ],
+                ];
+            })
+            ->filter(fn (array $item) => !empty($item['selected_entry']['target_product_id']))
+            ->values();
+    }
+
+    private function buildRulePreviewItemFromMappedLine(array $mappedItem, int $index): ?array
+    {
+        $selectedEntry = $mappedItem['selected_entry'] ?? null;
+        $targetProductId = (int) ($selectedEntry['target_product_id'] ?? 0);
+        if ($targetProductId <= 0) {
+            return null;
+        }
+
+        $sourcePhrase = trim((string) ($mappedItem['source_phrase'] ?? ''));
+        $parsedName = trim((string) ($mappedItem['parsed_name'] ?? ''));
+        $optionLabel = trim((string) ($selectedEntry['option_label'] ?? ''));
+        $displayName = trim((string) ($selectedEntry['display_name'] ?? $selectedEntry['name'] ?? ''));
+
+        return [
+            'id' => trim((string) ($mappedItem['line_key'] ?? '')) ?: "order-ai-rule-preview-" . ($index + 1),
+            'aliases' => $this->normalizeAliasList([
+                $parsedName,
+                $sourcePhrase,
+                $displayName,
+                $optionLabel,
+            ], 12),
+            'default_quantity' => max(1, (int) ($mappedItem['quantity'] ?? 1)),
+            'target_product_id' => $targetProductId,
+            'parent_product_id' => !empty($selectedEntry['parent_product_id']) ? (int) $selectedEntry['parent_product_id'] : null,
+            'entry_kind' => trim((string) ($selectedEntry['entry_kind'] ?? self::SEARCH_ENTRY_PRODUCT)) === self::SEARCH_ENTRY_VARIATION
+                ? self::SEARCH_ENTRY_VARIATION
+                : self::SEARCH_ENTRY_PRODUCT,
+            'display_name' => $displayName,
+            'display_sku' => trim((string) ($selectedEntry['display_sku'] ?? $selectedEntry['sku'] ?? '')),
+            'option_label' => $optionLabel,
+            'main_image' => trim((string) ($selectedEntry['main_image'] ?? '')),
+            'price' => round((float) ($selectedEntry['price'] ?? 0), 2),
+            'cost_price' => round((float) ($selectedEntry['cost_price'] ?? 0), 2),
+            'confidence' => (int) ($mappedItem['confidence'] ?? 0),
+            'confidence_label' => $mappedItem['confidence_label'] ?? $this->confidenceLabel((int) ($mappedItem['confidence'] ?? 0)),
+            'match_status' => $mappedItem['match_status'] ?? 'matched',
+            'source_phrase' => $sourcePhrase,
+            'parsed_name' => $parsedName,
+        ];
+    }
+
+    private function resolveMatchedRuleItem(array $item, ?array $altarContext): ?array
+    {
+        if (!$altarContext || empty($altarContext['items'])) {
+            return null;
+        }
+
+        $queryTerms = collect([
+            $item['parsed_name'],
+            $item['normalized_name'],
+            $item['canonical_name'],
+            $item['category_hint'],
+            ...$item['aliases'],
+        ])
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->unique(fn ($value) => $this->normalizeText($value))
+            ->values();
+
+        $bestItem = null;
+        $bestScore = 0;
+
+        foreach ($altarContext['items'] as $ruleItem) {
+            $score = 0;
+
+            foreach (($ruleItem['aliases'] ?? []) as $alias) {
+                $normalizedAlias = $this->normalizeText($alias);
+                if ($normalizedAlias === '') {
+                    continue;
+                }
+
+                foreach ($queryTerms as $queryTerm) {
+                    $normalizedQuery = $this->normalizeText($queryTerm);
+                    if ($normalizedQuery === '') {
+                        continue;
+                    }
+
+                    if ($normalizedAlias === $normalizedQuery) {
+                        $score = max($score, 100);
+                        break 2;
+                    }
+
+                    if (str_contains($normalizedAlias, $normalizedQuery) || str_contains($normalizedQuery, $normalizedAlias)) {
+                        $score = max($score, 72);
+                    } else {
+                        $overlap = count(array_intersect($this->tokenize($normalizedAlias), $this->tokenize($normalizedQuery)));
+                        if ($overlap > 0) {
+                            $score = max($score, 30 + ($overlap * 12));
+                        }
+                    }
+                }
+            }
+
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $bestItem = $ruleItem;
+            }
+        }
+
+        return $bestScore >= 42 ? $bestItem : null;
+    }
+
+    private function matchAltarRuleGroup(array $rules, mixed $altarSignal, string $rawText): ?array
+    {
+        $candidates = array_filter([
+            $this->extractAltarSizeSignal($altarSignal),
+            $this->extractAltarSizeSignal($rawText),
+        ]);
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        $bestGroup = null;
+        $bestScore = 0;
+
+        foreach ($rules as $group) {
+            $groupAliases = [
+                $group['altar_size_label'] ?? '',
+                ...($group['altar_size_aliases'] ?? []),
+            ];
+            $groupKeys = collect($groupAliases)
+                ->map(fn ($value) => $this->normalizeAltarSizeToken($value))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            foreach ($candidates as $candidate) {
+                $candidateKey = $this->normalizeAltarSizeToken($candidate['label'] ?? '');
+                if ($candidateKey === '') {
+                    continue;
+                }
+
+                if (in_array($candidateKey, $groupKeys, true)) {
+                    return $group;
+                }
+
+                foreach ($groupKeys as $groupKey) {
+                    if ($groupKey !== '' && str_contains($groupKey, $candidateKey)) {
+                        $bestScore = max($bestScore, 72);
+                        $bestGroup = $group;
+                    }
+                }
+            }
+        }
+
+        return $bestScore >= 70 ? $bestGroup : null;
+    }
+
+    private function extractAltarSizeSignal(mixed $value): ?array
+    {
+        if (is_array($value)) {
+            $raw = trim((string) ($value['raw'] ?? $value['normalized_label'] ?? $value['label'] ?? ''));
+            if ($raw !== '') {
+                return ['label' => $raw];
+            }
+
+            return null;
+        }
+
+        $text = trim((string) $value);
+        if ($text === '') {
+            return null;
+        }
+
+        if (preg_match('/(?:ban|bàn)(?:\s+th[oơ])?\s*(\d+(?:[.,]\d+)?\s*m\s*\d{0,2}|\d{3})/iu', $text, $matches) === 1) {
+            return ['label' => trim((string) $matches[1])];
+        }
+
+        if (preg_match('/\b(\d\s*[.,]?\s*\d{0,2}\s*m\s*\d{1,2})\b/iu', $text, $matches) === 1) {
+            return ['label' => trim((string) $matches[1])];
+        }
+
+        return null;
+    }
+
+    private function normalizeAltarSizeToken(mixed $value): string
+    {
+        $text = $this->normalizeText((string) $value);
+        if ($text === '') {
+            return '';
+        }
+
+        if (preg_match('/(\d)\s*m\s*(\d{1,2})/u', $text, $matches) === 1) {
+            return (string) (((int) $matches[1]) * 100 + ((int) $matches[2]));
+        }
+
+        $digits = preg_replace('/\D+/', '', $text) ?: '';
+        if (strlen($digits) >= 3 && strlen($digits) <= 4) {
+            return ltrim($digits, '0');
+        }
+
+        return $digits;
+    }
+
+    private function loadCatalogEntries(int $accountId): Collection
+    {
+        $products = Product::query()
+            ->where('account_id', $accountId)
+            ->whereDoesntHave('parentConfigurable')
+            ->with([
+                'images:id,product_id,image_url,is_primary,sort_order',
+                'categories:id,name',
+                'attributeValues:id,product_id,attribute_id,value',
+                'variations:id,sku,name,price,cost_price,expected_cost,type',
+                'variations.attributeValues:id,product_id,attribute_id,value',
+                'variations.images:id,product_id,image_url,is_primary,sort_order',
+            ])
+            ->get();
+
+        $entries = [];
+
+        foreach ($products as $product) {
+            $baseEntry = $this->makeCatalogEntry($product);
+            $hasVariations = $product->type === 'configurable' && $product->variations->isNotEmpty();
+
+            if (!$hasVariations) {
+                $entries[] = $baseEntry;
+            }
+
+            foreach ($product->variations as $variation) {
+                $entries[] = $this->makeCatalogEntry($variation, $product);
+            }
+        }
+
+        return collect($entries);
+    }
+
+    private function makeCatalogEntry(Product $product, ?Product $parentProduct = null): array
+    {
+        $attributeSummary = $this->attributeSummary($product);
+        $displayName = $parentProduct
+            ? trim($parentProduct->name . ($attributeSummary !== '' ? " - {$attributeSummary}" : ''))
+            : trim((string) $product->name);
+        $categories = $parentProduct
+            ? $parentProduct->categories->pluck('name')->filter()->values()->all()
+            : $product->categories->pluck('name')->filter()->values()->all();
+        $sizeSource = implode(' ', array_filter([
+            $displayName,
+            $attributeSummary,
+            trim((string) $product->name),
+        ]));
+        $sizeInfo = $this->extractDimensionInfo($sizeSource);
+
+        return [
+            'entry_kind' => $parentProduct ? self::SEARCH_ENTRY_VARIATION : self::SEARCH_ENTRY_PRODUCT,
+            'target_product_id' => (int) $product->id,
+            'parent_product_id' => $parentProduct ? (int) $parentProduct->id : null,
+            'parent_product_name' => $parentProduct ? trim((string) $parentProduct->name) : '',
+            'name' => trim((string) $product->name),
+            'display_name' => $displayName,
+            'sku' => trim((string) $product->sku),
+            'display_sku' => trim((string) ($product->sku ?: $parentProduct?->sku)),
+            'option_label' => $parentProduct ? $attributeSummary : '',
+            'attribute_summary' => $attributeSummary,
+            'attribute_text' => $this->normalizeText($attributeSummary),
+            'price' => round((float) ($product->price ?? 0), 2),
+            'cost_price' => round((float) ($product->cost_price ?? $product->expected_cost ?? 0), 2),
+            'expected_cost' => $product->expected_cost !== null ? round((float) $product->expected_cost, 2) : null,
+            'main_image' => $this->primaryImage($product) ?: ($parentProduct ? $this->primaryImage($parentProduct) : ''),
+            'attribute_values' => $this->attributePayload($product),
+            'categories' => $categories,
+            'search_text' => $this->normalizeText(implode(' ', array_filter([
+                $displayName,
+                $product->name,
+                $product->sku,
+                $attributeSummary,
+                implode(' ', $categories),
+            ]))),
+            'size_tokens' => $sizeInfo['tokens'],
+            'size_cm' => $sizeInfo['normalized_cm'],
+        ];
+    }
+
+    private function primaryImage(Product $product): string
+    {
+        $primaryImage = $product->images->firstWhere('is_primary', true)
+            ?: $product->images->sortBy('sort_order')->first();
+
+        return trim((string) ($primaryImage?->image_url ?? ''));
+    }
+
+    private function attributePayload(Product $product): array
+    {
+        return $product->attributeValues
+            ->map(fn ($attributeValue) => [
+                'attribute_id' => (int) $attributeValue->attribute_id,
+                'value' => $attributeValue->value,
+            ])
+            ->values()
+            ->all();
+    }
+
+    private function attributeSummary(Product $product): string
+    {
+        return collect($this->attributePayload($product))
+            ->flatMap(function (array $attributeValue) {
+                $rawValue = $attributeValue['value'] ?? null;
+
+                if (is_string($rawValue)) {
+                    $trimmed = trim($rawValue);
+                    if ($trimmed !== '' && (
+                        (str_starts_with($trimmed, '[') && str_ends_with($trimmed, ']'))
+                        || (str_starts_with($trimmed, '{') && str_ends_with($trimmed, '}'))
+                    )) {
+                        $decoded = json_decode($trimmed, true);
+                        if (is_array($decoded)) {
+                            return collect($decoded)->flatten(1)->map(fn ($value) => trim((string) $value))->filter();
+                        }
+                    }
+                }
+
+                return [trim((string) $rawValue)];
+            })
+            ->filter()
+            ->unique()
+            ->implode(' / ');
+    }
+
+    private function scoreCatalogEntry(array $entry, array $item, ?array $matchedRuleItem): array
+    {
+        $score = 0;
+        $reasons = [];
+        $searchText = $entry['search_text'] ?? '';
+        $attributeText = $entry['attribute_text'] ?? '';
+        $itemName = $this->normalizeText($item['parsed_name']);
+        $canonicalName = $this->normalizeText($item['canonical_name'] ?? '');
+        $categoryHint = $this->normalizeText($item['category_hint']);
+        $qualifiers = collect($item['qualifiers'] ?? [])
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->unique(fn ($value) => $this->normalizeText($value))
+            ->values()
+            ->all();
+        $queryTokens = collect([
+            ...$this->tokenize($itemName),
+            ...$this->tokenize($canonicalName),
+            ...$this->tokenize($categoryHint),
+            ...collect($qualifiers)->flatMap(fn ($value) => $this->tokenize($value))->all(),
+        ])->filter()->unique()->values()->all();
+
+        if ($itemName !== '' && str_contains($searchText, $itemName)) {
+            $score += 42;
+            $reasons[] = 'Trùng tên chính';
+        } else {
+            $nameOverlap = count(array_intersect($this->tokenize($searchText), $this->tokenize($itemName)));
+            if ($nameOverlap > 0) {
+                $score += 14 + ($nameOverlap * 8);
+                $reasons[] = 'Khớp token tên';
+            }
+        }
+
+        foreach ($item['aliases'] as $alias) {
+            $normalizedAlias = $this->normalizeText($alias);
+            if ($normalizedAlias !== '' && str_contains($searchText, $normalizedAlias)) {
+                $score += 12;
+                $reasons[] = 'Khớp alias';
+                break;
+            }
+        }
+
+        if ($canonicalName !== '' && $canonicalName !== $itemName && str_contains($searchText, $canonicalName)) {
+            $score += 18;
+            $reasons[] = 'Khớp tên chuẩn';
+        }
+
+        foreach ($qualifiers as $qualifier) {
+            $normalizedQualifier = $this->normalizeText($qualifier);
+            if ($normalizedQualifier === '' || !str_contains($searchText, $normalizedQualifier)) {
+                continue;
+            }
+
+            $score += str_contains($attributeText, $normalizedQualifier) ? 18 : 10;
+            $reasons[] = 'Khớp thuộc tính';
+        }
+
+        if ($categoryHint !== '' && str_contains($searchText, $categoryHint)) {
+            $score += 10;
+            $reasons[] = 'Khớp nhóm/tên phụ';
+        }
+
+        foreach ($queryTokens as $token) {
+            if (str_contains($searchText, $token)) {
+                $score += 4;
+            }
+        }
+
+        $sizeRaw = $this->normalizeText($item['size']['raw'] ?? '');
+        $entrySizeTokens = collect($entry['size_tokens'] ?? [])->map(fn ($value) => $this->normalizeText($value))->filter()->all();
+        $entrySizeCm = $entry['size_cm'] ?? null;
+
+        if ($sizeRaw !== '') {
+            if ($item['size']['normalized_cm'] !== null && $entrySizeCm !== null && abs((float) $item['size']['normalized_cm'] - (float) $entrySizeCm) < 0.1) {
+                $score += 34;
+                $reasons[] = 'Khớp kích thước';
+            } elseif (in_array($sizeRaw, $entrySizeTokens, true)) {
+                $score += 28;
+                $reasons[] = 'Khớp size text';
+            } else {
+                $score -= 12;
+            }
+        }
+
+        if ($matchedRuleItem !== null && (int) ($matchedRuleItem['target_product_id'] ?? 0) === (int) ($entry['target_product_id'] ?? 0)) {
+            $score += 66;
+            $reasons[] = 'Theo rule ban thờ';
+        }
+
+        if ($item['size']['kind'] === 'height' && str_contains($searchText, 'cao')) {
+            $score += 8;
+        }
+
+        if ($entry['entry_kind'] === self::SEARCH_ENTRY_VARIATION && $sizeRaw !== '') {
+            $score += 6;
+        }
+
+        return [
+            'score' => max(0, $score),
+            'reasons' => collect($reasons)->unique()->values()->all(),
+        ];
+    }
+
+    private function resolveConfidence(int $topScore, int $gapScore, bool $hasRuleMatch): int
+    {
+        $base = min(96, max(8, $topScore));
+
+        if ($gapScore >= 20) {
+            $base += 8;
+        } elseif ($gapScore >= 10) {
+            $base += 4;
+        } elseif ($gapScore <= 2) {
+            $base -= 8;
+        }
+
+        if ($hasRuleMatch) {
+            $base += 6;
+        }
+
+        return max(0, min(99, $base));
+    }
+
+    private function confidenceLabel(int $confidence): string
+    {
+        return match (true) {
+            $confidence >= 85 => 'Rất cao',
+            $confidence >= 70 => 'Cao',
+            $confidence >= 50 => 'Cần rà',
+            $confidence > 0 => 'Thấp',
+            default => 'Chưa rõ',
+        };
+    }
+
+    private function trimCatalogEntry(array $entry): array
+    {
+        return [
+            'entry_kind' => $entry['entry_kind'],
+            'target_product_id' => (int) ($entry['target_product_id'] ?? 0),
+            'parent_product_id' => !empty($entry['parent_product_id']) ? (int) $entry['parent_product_id'] : null,
+            'parent_product_name' => $entry['parent_product_name'] ?? '',
+            'name' => $entry['name'] ?? '',
+            'display_name' => $entry['display_name'] ?? '',
+            'sku' => $entry['sku'] ?? '',
+            'display_sku' => $entry['display_sku'] ?? '',
+            'option_label' => $entry['option_label'] ?? '',
+            'attribute_summary' => $entry['attribute_summary'] ?? '',
+            'price' => round((float) ($entry['price'] ?? 0), 2),
+            'cost_price' => round((float) ($entry['cost_price'] ?? 0), 2),
+            'expected_cost' => isset($entry['expected_cost']) ? round((float) ($entry['expected_cost'] ?? 0), 2) : null,
+            'main_image' => $entry['main_image'] ?? '',
+            'attribute_values' => $entry['attribute_values'] ?? [],
+            'categories' => $entry['categories'] ?? [],
+        ];
+    }
+
+    private function formatAltarContext(?array $altarContext, ?array $altarSignal = null): ?array
+    {
+        if ($altarContext) {
+            return [
+                'label' => $altarContext['altar_size_label'] ?? '',
+                'aliases' => $altarContext['altar_size_aliases'] ?? [],
+            ];
+        }
+
+        $signalLabel = trim((string) ($altarSignal['label'] ?? ''));
+        if ($signalLabel === '') {
+            return null;
+        }
+
+        return [
+            'label' => $signalLabel,
+            'aliases' => [],
+        ];
+    }
+
+    private function expandKnownAliases(array $values): array
+    {
+        $expanded = collect($values)
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->values()
+            ->all();
+
+        foreach ($expanded as $value) {
+            $canonicalName = $this->detectKnownItemCanonicalName([$value]);
+            if ($canonicalName !== null) {
+                $expanded = [
+                    ...$expanded,
+                    $canonicalName,
+                    ...(self::KNOWN_ITEM_ALIASES[$canonicalName] ?? []),
+                ];
+            }
+        }
+
+        return collect($expanded)
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->unique(fn ($value) => $this->normalizeText($value))
+            ->values()
+            ->all();
+    }
+
+    private function extractLeadingGlobalQualifiers(string $rawText): array
+    {
+        $segments = collect(preg_split('/[\n,;]+/u', $rawText) ?: [])
+            ->map(fn ($segment) => trim((string) $segment))
+            ->filter()
+            ->values();
+
+        $qualifiers = [];
+
+        foreach ($segments as $segment) {
+            $segmentQualifiers = $this->extractImplicitQualifiersFromText($segment);
+            $hasKnownItem = $this->detectKnownItemCanonicalName([$segment]) !== null;
+            $hasSizeOrQuantitySignal = preg_match('/\d/u', $segment) === 1;
+
+            if ($segmentQualifiers === [] || $hasKnownItem || $hasSizeOrQuantitySignal) {
+                break;
+            }
+
+            $qualifiers = [...$qualifiers, ...$segmentQualifiers];
+        }
+
+        return collect($qualifiers)
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->unique(fn ($value) => $this->normalizeText($value))
+            ->values()
+            ->all();
+    }
+
+    private function extractImplicitQualifiersFromText(string $text): array
+    {
+        $normalizedText = $this->normalizeText($text);
+        if ($normalizedText === '') {
+            return [];
+        }
+
+        $qualifiers = [];
+
+        foreach (self::KNOWN_ATTRIBUTE_QUALIFIERS as $label => $aliases) {
+            foreach ($aliases as $alias) {
+                $normalizedAlias = $this->normalizeText($alias);
+                if ($normalizedAlias !== '' && str_contains($normalizedText, $normalizedAlias)) {
+                    $qualifiers[] = $label;
+                    break;
+                }
+            }
+        }
+
+        return collect($qualifiers)
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->unique(fn ($value) => $this->normalizeText($value))
+            ->values()
+            ->all();
+    }
+
+    private function expandCompositeRequestedItems(Collection $items): Collection
+    {
+        return $items
+            ->flatMap(function (array $item) {
+                $expandedItems = [$item];
+                $normalizedSource = $this->normalizeText(implode(' ', array_filter([
+                    $item['source_phrase'] ?? '',
+                    $item['parsed_name'] ?? '',
+                    implode(' ', $item['qualifiers'] ?? []),
+                ])));
+                $hasBaseQualifier = str_contains($normalizedSource, 'ca de')
+                    || str_contains($normalizedSource, 'kem de')
+                    || str_contains($normalizedSource, 'co de');
+
+                if (($item['canonical_name'] ?? '') === 'bat huong' && $hasBaseQualifier) {
+                    $expandedItems[] = [
+                        ...$item,
+                        'line_key' => trim((string) $item['line_key']) . '-de',
+                        'source_phrase' => trim((string) ($item['source_phrase'] ?? '')) . ' - de',
+                        'parsed_name' => 'de bat huong',
+                        'canonical_name' => 'de bat huong',
+                        'normalized_name' => $this->normalizeText('de bat huong'),
+                        'aliases' => $this->expandKnownAliases([
+                            'de bat huong',
+                            'de bat',
+                            ...($item['qualifiers'] ?? []),
+                            $item['source_phrase'] ?? '',
+                        ]),
+                    ];
+                }
+
+                return $expandedItems;
+            })
+            ->values();
+    }
+
+    private function detectKnownItemCanonicalName(array $values): ?string
+    {
+        $normalizedValues = collect($values)
+            ->map(fn ($value) => $this->normalizeText((string) $value))
+            ->filter()
+            ->values()
+            ->all();
+
+        if ($normalizedValues === []) {
+            return null;
+        }
+
+        $bestCanonical = null;
+        $bestAliasLength = 0;
+
+        foreach (self::KNOWN_ITEM_ALIASES as $canonicalName => $aliases) {
+            foreach (array_unique([$canonicalName, ...$aliases]) as $alias) {
+                $normalizedAlias = $this->normalizeText($alias);
+                if ($normalizedAlias === '') {
+                    continue;
+                }
+
+                foreach ($normalizedValues as $normalizedValue) {
+                    if ($normalizedValue === $normalizedAlias || str_contains($normalizedValue, $normalizedAlias)) {
+                        $aliasLength = strlen($normalizedAlias);
+                        if ($aliasLength > $bestAliasLength) {
+                            $bestAliasLength = $aliasLength;
+                            $bestCanonical = $canonicalName;
+                        }
+                    }
+                }
+            }
+        }
+
+        return $bestCanonical;
+    }
+
+    private function extractDimensionInfo(string $text): array
+    {
+        $normalizedText = $this->normalizeText($text);
+        $tokens = [];
+        $normalizedCm = null;
+
+        if ($normalizedText === '') {
+            return [
+                'tokens' => [],
+                'normalized_cm' => null,
+            ];
+        }
+
+        if (preg_match('/(\d)\s*m\s*(\d{1,2})/u', $normalizedText, $matches) === 1) {
+            $normalizedCm = ((int) $matches[1] * 100) + (int) $matches[2];
+            $tokens[] = (string) $normalizedCm;
+            $tokens[] = trim((string) $matches[0]);
+        }
+
+        if (preg_match('/(?:phi|dk|duong kinh|cao|cm|size)\s*(\d+(?:[.,]\d+)?)/u', $normalizedText, $matches) === 1) {
+            $normalizedCm = (float) str_replace(',', '.', (string) $matches[1]);
+            $tokens[] = (string) $normalizedCm;
+            $tokens[] = trim((string) $matches[0]);
+        } elseif ($normalizedCm === null && preg_match('/\b(\d{2,3})(?:cm)?\b/u', $normalizedText, $matches) === 1) {
+            $normalizedCm = (float) $matches[1];
+            $tokens[] = (string) $normalizedCm;
+        }
+
+        return [
+            'tokens' => collect($tokens)
+                ->map(fn ($token) => $this->normalizeText((string) $token))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all(),
+            'normalized_cm' => $normalizedCm,
+        ];
+    }
+
+    private function normalizeSizeKind(string $value): string
+    {
+        $normalized = $this->normalizeText($value);
+
+        return match ($normalized) {
+            'diameter' => 'diameter',
+            'height' => 'height',
+            'width' => 'width',
+            'depth' => 'depth',
+            'altar' => 'altar',
+            default => 'unknown',
+        };
+    }
+
+    private function tokenize(string $value): array
+    {
+        return collect(explode(' ', $this->normalizeText($value)))
+            ->map(fn ($token) => trim((string) $token))
+            ->filter(fn ($token) => strlen($token) >= 2)
+            ->values()
+            ->all();
+    }
+
+    private function inferQuantitySpecified(array $source, string $sourcePhrase): bool
+    {
+        if (array_key_exists('quantity_specified', $source)) {
+            return (bool) $source['quantity_specified'];
+        }
+
+        return preg_match('/^\s*(?:tang\s+)?\d+\b/iu', $sourcePhrase) === 1;
+    }
+
+    private function normalizeText(string $value): string
+    {
+        return (string) Str::of($value)
+            ->ascii()
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/u', ' ')
+            ->squish();
+    }
+}

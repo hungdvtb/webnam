@@ -4865,6 +4865,37 @@ class ProductController extends Controller
             ->implode(' / ');
     }
 
+    protected function buildOrderItemDisplayName(Product $product, ?Product $parentProduct = null): string
+    {
+        $resolvedParent = $parentProduct ?: $product->parentConfigurable->first();
+        $productName = trim((string) $product->name);
+
+        if (!$resolvedParent) {
+            return $productName;
+        }
+
+        $parentName = trim((string) $resolvedParent->name);
+        $optionLabel = $this->pickerAttributeSummary($product);
+
+        if ($optionLabel !== '') {
+            return trim($parentName . ' - ' . $optionLabel);
+        }
+
+        if (
+            $productName !== ''
+            && $parentName !== ''
+            && Str::contains(Str::lower($productName), Str::lower($parentName))
+        ) {
+            return $productName;
+        }
+
+        if ($parentName !== '' && $productName !== '') {
+            return $parentName . ' - ' . $productName;
+        }
+
+        return $productName !== '' ? $productName : $parentName;
+    }
+
     protected function pickerBundleOptions(Product $product): array
     {
         if ($product->type !== 'bundle' || !$product->relationLoaded('bundleItems')) {
@@ -8399,6 +8430,12 @@ class ProductController extends Controller
 
         $products = Product::withTrashed()
             ->select(['id', 'sku', 'name', 'price', 'cost_price', 'expected_cost', 'status', 'deleted_at'])
+            ->with([
+                'attributeValues:id,product_id,attribute_id,value',
+                'parentConfigurable' => fn ($query) => $query
+                    ->withTrashed()
+                    ->select('products.id', 'products.name'),
+            ])
             ->whereIn('id', $requestedItems->pluck('product_id')->all())
             ->get()
             ->keyBy('id');
@@ -8426,10 +8463,21 @@ class ProductController extends Controller
                 continue;
             }
 
+            $parentProduct = $product->parentConfigurable->first();
+            $optionLabel = $parentProduct ? $this->pickerAttributeSummary($product) : '';
+            $displayName = $this->buildOrderItemDisplayName($product, $parentProduct);
+
             $items[] = [
                 'product_id' => (int) $product->id,
                 'sku' => $product->sku,
+                'display_sku' => $product->sku,
                 'name' => $product->name,
+                'display_name' => $displayName,
+                'entry_kind' => $parentProduct ? 'variation' : 'product',
+                'parent_product_id' => $parentProduct?->id ? (int) $parentProduct->id : null,
+                'parent_product_name' => $parentProduct ? (string) $parentProduct->name : '',
+                'option_label' => $optionLabel,
+                'variant_name' => $product->name,
                 'price' => (float) ($product->price ?? 0),
                 'expected_cost' => $product->expected_cost !== null ? (float) $product->expected_cost : null,
                 'cost_price' => (float) ($product->cost_price ?? $product->expected_cost ?? 0),
@@ -8441,7 +8489,7 @@ class ProductController extends Controller
                 $issues[] = [
                     'product_id' => (int) $product->id,
                     'sku' => $product->sku,
-                    'name' => $product->name,
+                    'name' => $displayName !== '' ? $displayName : $product->name,
                     'reason' => 'deleted',
                     'message' => 'Sản phẩm đã bị xóa khỏi kho.',
                 ];
@@ -8819,11 +8867,29 @@ class ProductController extends Controller
         // ─── Sync snapshots on all linked order_items (batch UPDATE) ────────────
         // Runs one SQL query regardless of how many orders reference this product.
         if ($nameChanged || $skuChanged) {
+            $product->loadMissing([
+                'attributeValues:id,product_id,attribute_id,value',
+                'parentConfigurable' => fn ($query) => $query
+                    ->withTrashed()
+                    ->select('products.id', 'products.name'),
+            ]);
+            $snapshotName = $product->name;
+            $parentProduct = $product->parentConfigurable->first();
+
+            if ($parentProduct) {
+                $snapshotName = $this->buildOrderItemDisplayName($product, $parentProduct);
+            }
+
             \App\Models\OrderItem::where('product_id', $product->id)
                 ->update([
-                'product_name_snapshot' => $product->name,
-                'product_sku_snapshot' => $product->sku,
-            ]);
+                    'product_name_snapshot' => $snapshotName,
+                    'product_sku_snapshot' => $product->sku,
+                ]);
+            \App\Models\OrderSupplementItem::where('product_id', $product->id)
+                ->update([
+                    'product_name_snapshot' => $snapshotName,
+                    'product_sku_snapshot' => $product->sku,
+                ]);
         }
         // ────────────────────────────────────────────────────────────────────────
         // Sync categories

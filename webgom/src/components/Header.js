@@ -1151,7 +1151,7 @@ export default function Header({
           appearance: none;
           -webkit-appearance: none;
           outline: none;
-          transition: width 0.3s ease, background-color 0.3s ease;
+          transition: background-color 0.3s ease;
           min-width: 0;
         }
 
@@ -1163,7 +1163,7 @@ export default function Header({
         }
 
         .search-input:focus {
-          width: clamp(340px, 31vw, 450px);
+          width: clamp(320px, 29vw, 420px);
           background-color: #e2e8f0;
         }
 
@@ -1398,7 +1398,7 @@ export default function Header({
           }
 
           .search-input:focus {
-            width: clamp(180px, 36vw, 240px);
+            width: clamp(160px, 32vw, 220px);
           }
         }
 

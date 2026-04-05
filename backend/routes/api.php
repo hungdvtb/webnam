@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\FinanceController;
 use App\Http\Controllers\Api\FinanceReceiptController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\OrderController;
+use App\Http\Controllers\Api\OrderAiController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductGroupController;
 use App\Http\Controllers\Api\ProductImageController;
@@ -137,6 +138,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/orders', [\App\Http\Controllers\Api\OrderController::class , 'index']);
     Route::post('/orders', [\App\Http\Controllers\Api\OrderController::class , 'store']);
     Route::post('/orders/quick-select', [\App\Http\Controllers\Api\OrderController::class , 'quickSelect']);
+    Route::post('/orders/ai/preview', [OrderAiController::class, 'preview']);
+    Route::post('/orders/ai/rules/train-preview', [OrderAiController::class, 'trainPreview']);
+    Route::get('/orders/ai/rules', [OrderAiController::class, 'rules']);
+    Route::put('/orders/ai/rules', [OrderAiController::class, 'updateRules']);
     Route::get('/orders/connected-carriers', [\App\Http\Controllers\Api\OrderController::class , 'connectedCarriers']);
     Route::get('/orders/shipping-alerts', [\App\Http\Controllers\Api\OrderController::class , 'shippingAlerts']);
     Route::post('/orders/dispatch/preview', [\App\Http\Controllers\Api\OrderController::class , 'dispatchPreview']);

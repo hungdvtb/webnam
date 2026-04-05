@@ -420,8 +420,8 @@ class InventoryService
             $orderItem = $order->items()->create([
                 'account_id' => $order->account_id,
                 'product_id' => $product->id,
-                'product_name_snapshot' => $product->name,
-                'product_sku_snapshot' => $product->sku,
+                'product_name_snapshot' => filled($item['name'] ?? null) ? (string) $item['name'] : $product->name,
+                'product_sku_snapshot' => filled($item['sku'] ?? null) ? (string) $item['sku'] : $product->sku,
                 'quantity' => $quantity,
                 'price' => $sellingPrice,
                 'cost_price' => $avgUnitCost,

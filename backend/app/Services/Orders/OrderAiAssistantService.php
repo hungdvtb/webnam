@@ -559,6 +559,78 @@ class OrderAiAssistantService
             ->all();
     }
 
+    private function suggestRuleContextAliases(?string $message, ?string $rawText): array
+    {
+        $preferredSource = trim((string) $message);
+        $fallbackSource = trim((string) $rawText);
+
+        $knownAliases = $this->normalizeAliasList([
+            ...$this->extractImplicitQualifiersFromText($preferredSource),
+            ...$this->extractImplicitQualifiersFromText($fallbackSource),
+        ], 16);
+        if ($knownAliases !== []) {
+            return $knownAliases;
+        }
+
+        $source = $preferredSource !== '' ? $preferredSource : $fallbackSource;
+
+        return collect(preg_split('/[\n,;]+/u', $source) ?: [])
+            ->map(fn ($segment) => $this->sanitizeContextAliasCandidate($segment))
+            ->filter()
+            ->unique(fn ($value) => $this->normalizeText((string) $value))
+            ->take(16)
+            ->values()
+            ->all();
+    }
+
+    private function sanitizeContextAliasCandidate(mixed $value): ?string
+    {
+        $segment = trim((string) $value);
+        if ($segment === '') {
+            return null;
+        }
+
+        $cleaned = preg_replace('/\bkich\s*thuoc\s*ban\s*tho\s*can\s*hoc\s*:?\s*/iu', ' ', $segment) ?? $segment;
+        $cleaned = preg_replace('/\bban(?:\s+tho)?\s*\d+(?:[.,]\d+)?\s*m\s*\d{0,2}\b/iu', ' ', $cleaned) ?? $cleaned;
+        $cleaned = preg_replace('/\b\d+(?:[.,]\d+)?\s*m\s*\d{0,2}\b/iu', ' ', $cleaned) ?? $cleaned;
+        $cleaned = preg_replace('/\b\d{3,4}\b/u', ' ', $cleaned) ?? $cleaned;
+        $cleaned = preg_replace('/\s+/u', ' ', $cleaned) ?? $cleaned;
+        $cleaned = trim($cleaned);
+
+        if ($cleaned === '') {
+            return null;
+        }
+
+        if (preg_match('/\d/u', $cleaned) === 1) {
+            return null;
+        }
+
+        if (count($this->tokenize($cleaned)) > 4) {
+            return null;
+        }
+
+        if ($this->detectKnownItemCanonicalName([$cleaned]) !== null) {
+            return null;
+        }
+
+        return $this->normalizeAliasList([$cleaned], 1)[0] ?? null;
+    }
+
+    private function suggestTrainingRuleKey(string $altarSizeLabel, array $contextAliases): string
+    {
+        $parts = [
+            trim($altarSizeLabel),
+            ...collect($this->normalizeAliasList($contextAliases, 16))
+                ->sortBy(fn ($value) => $this->normalizeText((string) $value))
+                ->values()
+                ->all(),
+        ];
+
+        $candidate = Str::slug(implode('-', array_filter($parts)), '-');
+
+        return Str::limit($candidate !== '' ? $candidate : 'order-ai-rule-' . Str::lower(Str::random(8)), 160, '');
+    }
+
     private function extractRequestedItems(int $accountId, string $message, ?UploadedFile $attachment, array $rules): array
     {
         if ($attachment !== null) {

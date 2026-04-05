@@ -16,6 +16,8 @@ use Illuminate\Validation\ValidationException;
 
 class OrderAiTrainingService
 {
+    public const SHARED_DEFINITION_SETTING_KEY = 'order_ai_shared_definition_glossary';
+
     private const IMAGE_DISK = 'public';
     private const IMAGE_DIRECTORY = 'order-ai-training';
     private const MAX_DATASETS = 24;
@@ -44,7 +46,8 @@ class OrderAiTrainingService
                     ->orWhere('source_name', 'like', '%' . $search . '%')
                     ->orWhere('input_text', 'like', '%' . $search . '%')
                     ->orWhere('parsed_raw_text', 'like', '%' . $search . '%')
-                    ->orWhere('training_note', 'like', '%' . $search . '%');
+                    ->orWhere('training_note', 'like', '%' . $search . '%')
+                    ->orWhere('definition_text', 'like', '%' . $search . '%');
             });
         }
 
@@ -125,6 +128,9 @@ class OrderAiTrainingService
                 'input_type' => $this->normalizeInputType($payload['input_type'] ?? 'text'),
                 'source_name' => Utf8Sanitizer::normalizeString($sourceName),
                 'training_note' => Utf8Sanitizer::normalizeString(trim((string) ($payload['training_note'] ?? ''))),
+                'definition_text' => array_key_exists('definition_text', $payload)
+                    ? Utf8Sanitizer::normalizeString(trim((string) ($payload['definition_text'] ?? '')))
+                    : Utf8Sanitizer::normalizeString(trim((string) ($existingRecord?->definition_text ?? $targetRecord->definition_text ?? ''))),
                 'input_text' => Utf8Sanitizer::normalizeString(trim((string) ($payload['input_text'] ?? ''))),
                 'input_image_path' => $imagePath,
                 'input_image_mime' => $imageMime,
@@ -192,6 +198,47 @@ class OrderAiTrainingService
         return $dataset ? $this->serializeRuleGroup($dataset) : null;
     }
 
+    public function getSharedDefinitionPayload(int $accountId): array
+    {
+        $setting = $this->resolveSharedDefinitionSetting($accountId);
+        $definitionText = Utf8Sanitizer::normalizeString(trim((string) ($setting?->value ?? '')));
+
+        return [
+            'definition_text' => $definitionText,
+            'entries_count' => $this->countDefinitionEntries($definitionText),
+            'updated_at' => optional($setting?->updated_at)->toIso8601String(),
+        ];
+    }
+
+    public function updateSharedDefinitionPayload(int $accountId, ?string $definitionText): array
+    {
+        $normalizedDefinitionText = Utf8Sanitizer::normalizeString(trim((string) $definitionText));
+
+        SiteSetting::setValue(
+            self::SHARED_DEFINITION_SETTING_KEY,
+            $normalizedDefinitionText,
+            $accountId
+        );
+
+        return $this->getSharedDefinitionPayload($accountId);
+    }
+
+    public function getSharedDefinitionText(int $accountId): string
+    {
+        return (string) ($this->getSharedDefinitionPayload($accountId)['definition_text'] ?? '');
+    }
+
+    public function mergeDefinitionTexts(?string ...$texts): string
+    {
+        return collect($texts)
+            ->flatMap(fn ($text) => preg_split('/[\r\n]+/u', trim((string) $text)) ?: [])
+            ->map(fn ($line) => Utf8Sanitizer::normalizeString(trim((string) $line)))
+            ->filter()
+            ->unique()
+            ->values()
+            ->implode("\n");
+    }
+
     public function replaceFromRuleGroups(int $accountId, array $groups): array
     {
         DB::transaction(function () use ($accountId, $groups) {
@@ -232,6 +279,7 @@ class OrderAiTrainingService
                     'input_type' => trim((string) ($group['training_source_type'] ?? '')) === 'image' ? 'image' : 'text',
                     'source_name' => trim((string) ($group['training_source_name'] ?? '')),
                     'training_note' => trim((string) ($group['training_note'] ?? '')),
+                    'definition_text' => trim((string) ($group['definition_text'] ?? '')),
                     'input_text' => trim((string) ($group['training_raw_text'] ?? '')),
                     'parsed_raw_text' => trim((string) ($group['training_raw_text'] ?? '')),
                     'parsed_provider' => trim((string) ($group['parsed_provider'] ?? '')),
@@ -282,6 +330,7 @@ class OrderAiTrainingService
             'training_source_type' => $dataset->input_type === 'image' ? 'image' : 'manual',
             'training_source_name' => Utf8Sanitizer::normalizeString(trim((string) ($dataset->source_name ?? ''))),
             'training_note' => Utf8Sanitizer::normalizeString(trim((string) ($dataset->training_note ?? ''))),
+            'definition_text' => Utf8Sanitizer::normalizeString(trim((string) ($dataset->definition_text ?? ''))),
             'training_raw_text' => Utf8Sanitizer::normalizeString(trim((string) ($dataset->parsed_raw_text ?? $dataset->input_text ?? ''))),
             'trained_at' => optional($dataset->trained_at)->toIso8601String() ?: optional($dataset->updated_at)->toIso8601String(),
             'items' => $dataset->items
@@ -363,6 +412,7 @@ class OrderAiTrainingService
             'input_type' => trim((string) $dataset->input_type),
             'source_name' => Utf8Sanitizer::normalizeString(trim((string) ($dataset->source_name ?? ''))),
             'training_note' => Utf8Sanitizer::normalizeString(trim((string) ($dataset->training_note ?? ''))),
+            'definition_text' => Utf8Sanitizer::normalizeString(trim((string) ($dataset->definition_text ?? ''))),
             'input_text' => $inputText,
             'input_excerpt' => $this->buildInputExcerpt($dataset),
             'input_image_url' => $imageUrl,
@@ -446,7 +496,13 @@ class OrderAiTrainingService
             return Utf8Sanitizer::normalizeString(trim((string) ($dataset->source_name ?: 'Ảnh train AI')));
         }
 
-        $source = Utf8Sanitizer::normalizeString(trim((string) ($dataset->input_text ?: $dataset->parsed_raw_text ?: $dataset->training_note ?: '')));
+        $source = Utf8Sanitizer::normalizeString(trim((string) (
+            $dataset->input_text
+            ?: $dataset->parsed_raw_text
+            ?: $dataset->definition_text
+            ?: $dataset->training_note
+            ?: ''
+        )));
         return Str::limit($source, 140, '...');
     }
 
@@ -537,6 +593,22 @@ class OrderAiTrainingService
         }
 
         $this->replaceFromRuleGroups($accountId, $legacyRules);
+    }
+
+    private function resolveSharedDefinitionSetting(int $accountId): ?SiteSetting
+    {
+        return SiteSetting::query()
+            ->where('account_id', $accountId)
+            ->where('key', self::SHARED_DEFINITION_SETTING_KEY)
+            ->first();
+    }
+
+    private function countDefinitionEntries(string $definitionText): int
+    {
+        return collect(preg_split('/[\r\n;]+/u', $definitionText) ?: [])
+            ->map(fn ($line) => trim((string) $line))
+            ->filter()
+            ->count();
     }
 
     private function deleteDatasetModel(OrderAiTrainingDataset $dataset): void

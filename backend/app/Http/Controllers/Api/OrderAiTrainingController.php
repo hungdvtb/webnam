@@ -46,6 +46,7 @@ class OrderAiTrainingController extends Controller
             'altar_size_label' => 'required|string|max:120',
             'input_type' => ['required', Rule::in(['text', 'image'])],
             'input_text' => 'nullable|string|max:20000',
+            'definition_text' => 'nullable|string|max:10000',
             'attachment' => 'nullable|file|max:12288|mimes:jpg,jpeg,png,webp,heic,heif',
         ])->validate();
 
@@ -55,9 +56,32 @@ class OrderAiTrainingController extends Controller
                 (string) $validated['altar_size_label'],
                 (string) ($validated['input_text'] ?? ''),
                 $request->file('attachment'),
-                (string) $validated['input_type']
+                (string) $validated['input_type'],
+                (string) ($validated['definition_text'] ?? '')
             )
         );
+    }
+
+    public function definitions(Request $request): JsonResponse
+    {
+        return response()->json([
+            'data' => $this->orderAiTrainingService->getSharedDefinitionPayload($this->resolveAccountId($request)),
+        ]);
+    }
+
+    public function updateDefinitions(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'definition_text' => 'nullable|string|max:20000',
+        ]);
+
+        return response()->json([
+            'message' => 'Đã lưu từ điển AI dùng chung.',
+            'data' => $this->orderAiTrainingService->updateSharedDefinitionPayload(
+                $this->resolveAccountId($request),
+                (string) ($validated['definition_text'] ?? '')
+            ),
+        ]);
     }
 
     public function store(Request $request): JsonResponse
@@ -108,6 +132,7 @@ class OrderAiTrainingController extends Controller
             'input_type' => ['required', Rule::in(['text', 'image'])],
             'source_name' => 'nullable|string|max:255',
             'training_note' => 'nullable|string|max:5000',
+            'definition_text' => 'nullable|string|max:10000',
             'input_text' => 'nullable|string|max:20000',
             'attachment' => 'nullable|file|max:12288|mimes:jpg,jpeg,png,webp,heic,heif',
             'parsed_result' => 'nullable|array',

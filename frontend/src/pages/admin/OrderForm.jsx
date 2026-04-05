@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
 import SearchableSelect from '../../components/SearchableSelect';
+import Modal from '../../components/Modal';
 import OrderSupplementItemsSection from '../../components/admin/OrderSupplementItemsSection';
 import OrderAiSearchPanel from '../../components/admin/OrderAiSearchPanel';
 import OrderAiRuleManagerModal from '../../components/admin/OrderAiRuleManagerModal';
@@ -1805,6 +1806,90 @@ const createOrderAiLineMeta = (item, sessionId) => normalizeOrderAiItemMeta({
     inserted_at: new Date().toISOString(),
 });
 
+const OrderAiLineReplacePanel = ({
+    show,
+    searchTerm,
+    onSearchTermChange,
+    onClose,
+    results = [],
+    loading = false,
+    onSelect,
+    currencyFormatter,
+}) => {
+    if (!show) return null;
+
+    return (
+        <div
+            className="mt-2 rounded-sm border border-primary/15 bg-white p-2 shadow-[0_18px_40px_rgba(15,23,42,0.12)]"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+        >
+            <div className="flex items-center gap-2">
+                <div className="flex h-9 flex-1 items-center gap-2 rounded-sm border border-primary/10 bg-primary/[0.03] px-2.5">
+                    <span className="material-symbols-outlined text-[16px] text-primary/35">search</span>
+                    <input
+                        type="text"
+                        value={searchTerm}
+                        onChange={(event) => onSearchTermChange(event.target.value)}
+                        placeholder="Tìm sản phẩm để đổi nhanh..."
+                        className="h-full w-full bg-transparent text-[12px] font-semibold text-[#0F172A] placeholder:text-primary/25 focus:outline-none"
+                        autoFocus
+                    />
+                </div>
+                <button
+                    type="button"
+                    onClick={onClose}
+                    className="inline-flex size-9 items-center justify-center rounded-sm border border-primary/10 text-primary/35 transition-all hover:text-brick"
+                >
+                    <span className="material-symbols-outlined text-[16px]">close</span>
+                </button>
+            </div>
+
+            <div className="mt-2 max-h-56 overflow-y-auto rounded-sm border border-primary/10 bg-white">
+                {loading ? (
+                    <div className="px-3 py-6 text-center text-[11px] font-semibold text-primary/45">
+                        Đang tìm sản phẩm...
+                    </div>
+                ) : results.length > 0 ? (
+                    results.map((entry, index) => (
+                        <button
+                            key={`${entry?.target_product_id || entry?.sku || 'order-ai-replace'}-${index}`}
+                            type="button"
+                            onClick={() => onSelect(entry)}
+                            className="flex w-full items-start justify-between gap-3 border-b border-primary/5 px-3 py-2 text-left transition-all hover:bg-primary/[0.03] last:border-b-0"
+                        >
+                            <div className="min-w-0">
+                                <div className="truncate text-[12px] font-bold text-primary">
+                                    {entry?.display_name || entry?.name || 'Sản phẩm'}
+                                </div>
+                                <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-primary/45">
+                                    {entry?.display_sku && (
+                                        <span className="rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5">
+                                            {entry.display_sku}
+                                        </span>
+                                    )}
+                                    {entry?.option_label && (
+                                        <span className="rounded-full border border-primary/10 bg-white px-2 py-0.5">
+                                            {entry.option_label}
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="shrink-0 text-right text-[11px] font-black text-primary/65">
+                                {currencyFormatter?.format(Number(entry?.price ?? 0) || 0)}đ
+                            </div>
+                        </button>
+                    ))
+                ) : (
+                    <div className="px-3 py-6 text-center text-[11px] font-semibold text-primary/40">
+                        Gõ ít nhất 2 ký tự để tìm sản phẩm thay thế.
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 const OrderForm = () => {
     const { id } = useParams();
     const location = useLocation();
@@ -1844,6 +1929,7 @@ const OrderForm = () => {
     const [orderAiFilePreviewUrl, setOrderAiFilePreviewUrl] = useState('');
     const [orderAiPreview, setOrderAiPreview] = useState(null);
     const [orderAiLastRun, setOrderAiLastRun] = useState(null);
+    const [showOrderAiInputReviewModal, setShowOrderAiInputReviewModal] = useState(false);
     const [orderAiLoading, setOrderAiLoading] = useState(false);
     const [orderAiApplying, setOrderAiApplying] = useState(false);
     const [orderAiSavingRules, setOrderAiSavingRules] = useState(false);
@@ -1851,6 +1937,10 @@ const OrderForm = () => {
     const [orderAiManualSearchTerm, setOrderAiManualSearchTerm] = useState('');
     const [orderAiManualSearchResults, setOrderAiManualSearchResults] = useState([]);
     const [orderAiManualSearchLoading, setOrderAiManualSearchLoading] = useState(false);
+    const [orderAiReplaceLineId, setOrderAiReplaceLineId] = useState('');
+    const [orderAiReplaceSearchTerm, setOrderAiReplaceSearchTerm] = useState('');
+    const [orderAiReplaceResults, setOrderAiReplaceResults] = useState([]);
+    const [orderAiReplaceLoading, setOrderAiReplaceLoading] = useState(false);
     const [productQuickFilterAttributes, setProductQuickFilterAttributes] = useState([]);
     const [productQuickFilterAttributeId, setProductQuickFilterAttributeId] = useState(() => getStoredProductQuickFilterAttributeId());
     const [productQuickFilterValues, setProductQuickFilterValues] = useState([]);
@@ -1888,6 +1978,7 @@ const OrderForm = () => {
     const productQuickSetupSearchInputRef = useRef(null);
     const pendingProductQuickSetupViewportRef = useRef(null);
     const orderAiFileInputRef = useRef(null);
+    const orderAiLastInputPreviewUrlRef = useRef('');
     const orderAiQuickRuleOptions = useMemo(
         () => buildOrderAiQuickRuleOptions(orderAiTrainingRules.length > 0 ? orderAiTrainingRules : orderAiRules),
         [orderAiRules, orderAiTrainingRules]
@@ -2480,6 +2571,10 @@ const OrderForm = () => {
         if (copyNotificationTimeoutRef.current) {
             window.clearTimeout(copyNotificationTimeoutRef.current);
         }
+        if (orderAiLastInputPreviewUrlRef.current) {
+            URL.revokeObjectURL(orderAiLastInputPreviewUrlRef.current);
+            orderAiLastInputPreviewUrlRef.current = '';
+        }
     }, []);
 
     const showTransientNotification = useCallback((type, message, duration = 2000) => {
@@ -2491,6 +2586,36 @@ const OrderForm = () => {
 
         copyNotificationTimeoutRef.current = window.setTimeout(() => setNotification(null), duration);
     }, []);
+
+    const revokeOrderAiLastInputPreview = useCallback(() => {
+        if (!orderAiLastInputPreviewUrlRef.current) {
+            return;
+        }
+
+        URL.revokeObjectURL(orderAiLastInputPreviewUrlRef.current);
+        orderAiLastInputPreviewUrlRef.current = '';
+    }, []);
+
+    const buildOrderAiLastRunInputSnapshot = useCallback(() => {
+        revokeOrderAiLastInputPreview();
+
+        const trimmedText = orderAiInput.trim();
+        const inputSnapshot = {
+            text: trimmedText,
+            image_preview_url: '',
+            file_name: orderAiFile?.name || '',
+            file_type: orderAiFile?.type || '',
+            preferred_rule_label: selectedOrderAiQuickRule?.name || '',
+        };
+
+        if (orderAiFile && orderAiFile.type?.startsWith('image/')) {
+            const previewUrl = URL.createObjectURL(orderAiFile);
+            orderAiLastInputPreviewUrlRef.current = previewUrl;
+            inputSnapshot.image_preview_url = previewUrl;
+        }
+
+        return inputSnapshot;
+    }, [orderAiFile, orderAiInput, revokeOrderAiLastInputPreview, selectedOrderAiQuickRule]);
 
     const clearOrderAiFile = useCallback(() => {
         setOrderAiFile(null);
@@ -2507,13 +2632,21 @@ const OrderForm = () => {
         setOrderAiManualSearchResults([]);
     }, []);
 
+    const closeOrderAiReplacePicker = useCallback(() => {
+        setOrderAiReplaceLineId('');
+        setOrderAiReplaceSearchTerm('');
+        setOrderAiReplaceResults([]);
+        setOrderAiReplaceLoading(false);
+    }, []);
+
     const toggleOrderAiPanel = useCallback(() => {
         setShowOrderAiPanel((prev) => !prev);
         setShowSearchDropdown(false);
         setShowSearchHistory(false);
         setShowProductQuickSetupPanel(false);
         setShowProductQuickFilterPanel(false);
-    }, []);
+        closeOrderAiReplacePicker();
+    }, [closeOrderAiReplacePicker]);
 
     const handleOrderAiSelectedRuleChange = useCallback((nextRuleKey) => {
         setOrderAiSelectedRuleKey(String(nextRuleKey || '').trim());
@@ -2580,8 +2713,111 @@ const OrderForm = () => {
         setOrderAiManualSearchResults([]);
     }, []);
 
+    const handleOpenOrderAiReplacePicker = useCallback((lineId, seedTerm = '') => {
+        setOrderAiReplaceLineId(lineId);
+        setOrderAiReplaceSearchTerm(seedTerm || '');
+        setOrderAiReplaceResults([]);
+    }, []);
+
+    const handleClearLatestOrderAiRun = useCallback(() => {
+        const latestSessionId = normalizeCanvasText(orderAiLastRun?.sessionId);
+        const latestLineIds = new Set(
+            Array.isArray(orderAiLastRun?.sessionLineIds)
+                ? orderAiLastRun.sessionLineIds.map((lineId) => normalizeCanvasText(lineId)).filter(Boolean)
+                : []
+        );
+
+        if (!latestSessionId && latestLineIds.size === 0) {
+            showTransientNotification('error', 'KhÃ´ng cÃ³ káº¿t quáº£ AI gáº§n nháº¥t Ä‘á»ƒ xÃ³a.');
+            return;
+        }
+
+        let removedCount = 0;
+        setFormData((prev) => {
+            const nextItems = prev.items.filter((item) => {
+                const lineId = normalizeCanvasText(item?.line_id);
+                const sessionId = normalizeCanvasText(item?.ai_meta?.session_id);
+                const shouldRemove = isOrderAiItem(item)
+                    && (latestLineIds.has(lineId) || (latestSessionId && sessionId === latestSessionId));
+
+                if (shouldRemove) {
+                    removedCount += 1;
+                    return false;
+                }
+
+                return true;
+            });
+
+            return {
+                ...prev,
+                items: nextItems,
+                cost_total: calculateItemsCostTotal(nextItems),
+            };
+        });
+
+        closeOrderAiReplacePicker();
+        if (removedCount > 0) {
+            setOrderAiLastRun(null);
+        }
+        showTransientNotification(
+            removedCount > 0 ? 'success' : 'error',
+            removedCount > 0
+                ? `ÄÃ£ xÃ³a ${removedCount} dÃ²ng AI cá»§a láº§n cháº¡y gáº§n nháº¥t.`
+                : 'KhÃ´ng tÃ¬m tháº¥y dÃ²ng AI gáº§n nháº¥t Ä‘á»ƒ xÃ³a.'
+        );
+    }, [closeOrderAiReplacePicker, orderAiLastRun, showTransientNotification]);
+
+    const handleSelectOrderAiLineReplacement = useCallback(async (lineId, entry) => {
+        if (!entry) return;
+
+        const replacement = buildOrderItemsFromSearchEntry(entry)[0];
+        if (!replacement) {
+            showTransientNotification('error', 'KhÃ´ng thá»ƒ Ä‘á»•i sang sáº£n pháº©m Ä‘Ã£ chá»n.');
+            return;
+        }
+
+        let nextReplacement = null;
+        setFormData((prev) => {
+            const nextItems = prev.items.map((item) => {
+                if (normalizeCanvasText(item?.line_id) !== normalizeCanvasText(lineId)) {
+                    return item;
+                }
+
+                nextReplacement = createOrderLineItem({
+                    ...replacement,
+                    line_id: item.line_id,
+                    quantity: Math.max(1, Number(item.quantity) || 1),
+                    ai_meta: mergeOrderAiItemMeta(item.ai_meta, {
+                        review_state: item?.ai_meta?.review_state || 'pending',
+                        match_status: 'review',
+                        confidence: 0,
+                        confidence_label: 'ÄÃ£ Ä‘á»•i tay',
+                        match_reasons: ['Äá»•i sáº£n pháº©m táº¡i dÃ²ng AI'],
+                    }),
+                });
+
+                return nextReplacement;
+            });
+
+            return {
+                ...prev,
+                items: nextItems,
+                cost_total: calculateItemsCostTotal(nextItems),
+            };
+        });
+
+        closeOrderAiReplacePicker();
+
+        if (nextReplacement && !hasInventorySnapshot(nextReplacement)) {
+            await refreshOrderItemInventorySnapshot([nextReplacement]);
+        }
+
+        showTransientNotification('success', 'ÄÃ£ Ä‘á»•i nhanh sáº£n pháº©m cho dÃ²ng AI.');
+    }, [closeOrderAiReplacePicker, refreshOrderItemInventorySnapshot, showTransientNotification]);
+
     const handleRunOrderAiPreview = useCallback(async () => {
         const preferredRuleKey = orderAiSelectedRuleKey.trim();
+        const inputSnapshot = buildOrderAiLastRunInputSnapshot();
 
         if (!orderAiInput.trim() && !orderAiFile && !preferredRuleKey) {
             showTransientNotification('error', 'Nhập nội dung hoặc chọn ảnh để AI xử lý.');
@@ -2620,19 +2856,23 @@ const OrderForm = () => {
 
             if (readyItems.length === 0) {
                 setOrderAiLastRun({
+                    sessionId: '',
+                    sessionLineIds: [],
                     addedCount: 0,
                     touchedCount: 0,
                     reviewCount: 0,
                     unresolvedCount: unresolvedItems.length,
                     unresolvedLabels: unresolvedItems.map((item) => item?.source_phrase || item?.parsed_name || '').filter(Boolean).slice(0, 3),
+                    input: inputSnapshot,
                 });
                 showTransientNotification('error', 'AI chưa ghép được sản phẩm nào để đưa vào bảng hàng.');
                 return;
             }
 
             const additions = readyItems.flatMap((item) => (
-                buildOrderItemsFromSearchEntry(item.selected_entry).map((addition) => ({
+                buildOrderItemsFromSearchEntry(item.selected_entry).map((addition, additionIndex) => ({
                     ...addition,
+                    line_id: addition?.line_id || `${sessionId}-${item.line_key}-${additionIndex + 1}`,
                     quantity: Math.max(1, Number(addition?.quantity ?? 1) || 1) * Math.max(1, Number(item.quantity) || 1),
                     ai_meta: createOrderAiLineMeta(item, sessionId),
                 }))
@@ -2643,35 +2883,38 @@ const OrderForm = () => {
                 return;
             }
 
-            let touchedLineIds = [];
+            const sessionAdditions = additions.map((addition) => createOrderLineItem(addition));
+            const sessionLineIds = sessionAdditions.map((item) => normalizeCanvasText(item?.line_id)).filter(Boolean);
             setFormData((prev) => {
-                const mergeResult = appendOrderItemsWithMergeResult(prev.items, additions, { incrementExisting: true });
-                touchedLineIds = mergeResult.touchedLineIds;
-                const costTotal = calculateItemsCostTotal(mergeResult.items);
+                const nextItems = [...prev.items, ...sessionAdditions];
+                const costTotal = calculateItemsCostTotal(nextItems);
 
                 return {
                     ...prev,
-                    items: mergeResult.items,
+                    items: nextItems,
                     cost_total: costTotal,
                 };
             });
 
-            const needsInventorySnapshot = additions.some((item) => !hasInventorySnapshot(item));
+            const needsInventorySnapshot = sessionAdditions.some((item) => !hasInventorySnapshot(item));
             if (needsInventorySnapshot) {
-                await refreshOrderItemInventorySnapshot(additions);
+                await refreshOrderItemInventorySnapshot(sessionAdditions);
             }
 
             const reviewCount = readyItems.filter((item) => item?.match_status !== 'matched').length;
             const bonusCount = readyItems.filter((item) => item?.bonus).length;
 
             setOrderAiLastRun({
+                sessionId,
+                sessionLineIds,
                 addedCount: readyItems.length,
-                touchedCount: touchedLineIds.length || additions.length,
+                touchedCount: sessionLineIds.length || sessionAdditions.length,
                 reviewCount,
                 unresolvedCount: unresolvedItems.length,
                 unresolvedLabels: unresolvedItems.map((item) => item?.source_phrase || item?.parsed_name || '').filter(Boolean).slice(0, 3),
                 altarSizeLabel: preview?.altar_size?.label || '',
                 bonusCount,
+                input: inputSnapshot,
             });
 
             setOrderAiInput('');
@@ -2683,8 +2926,8 @@ const OrderForm = () => {
             showTransientNotification(
                 'success',
                 reviewCount > 0
-                    ? `AI đã thêm/cập nhật ${touchedLineIds.length || additions.length} dòng. Có ${reviewCount} dòng cần rà nhanh trong bảng hàng.`
-                    : `AI đã thêm/cập nhật ${touchedLineIds.length || additions.length} dòng vào bảng hàng.`
+                    ? `AI đã thêm ${sessionLineIds.length || sessionAdditions.length} dòng. Có ${reviewCount} dòng cần rà nhanh trong bảng hàng.`
+                    : `AI đã thêm ${sessionLineIds.length || sessionAdditions.length} dòng vào bảng hàng.`
             );
         } catch (error) {
             console.error('Error running order AI preview', error);
@@ -2697,6 +2940,7 @@ const OrderForm = () => {
             setOrderAiLoading(false);
         }
     }, [
+        buildOrderAiLastRunInputSnapshot,
         clearOrderAiFile,
         orderAiFile,
         orderAiInput,
@@ -2840,6 +3084,40 @@ const OrderForm = () => {
             window.clearTimeout(timerId);
         };
     }, [orderAiManualPickerLineId, orderAiManualSearchTerm]);
+
+    useEffect(() => {
+        if (!orderAiReplaceLineId || orderAiReplaceSearchTerm.trim().length < 2) {
+            setOrderAiReplaceResults([]);
+            setOrderAiReplaceLoading(false);
+            return undefined;
+        }
+
+        let cancelled = false;
+        setOrderAiReplaceLoading(true);
+
+        const timerId = window.setTimeout(() => {
+            productApi.getAll({ picker: 1, per_page: 20, search: orderAiReplaceSearchTerm.trim() })
+                .then((response) => {
+                    if (cancelled) return;
+                    setOrderAiReplaceResults(buildOrderAiPickerEntries(response.data?.data || []));
+                })
+                .catch((error) => {
+                    if (cancelled) return;
+                    console.error('Error fetching replacement AI products', error);
+                    setOrderAiReplaceResults([]);
+                })
+                .finally(() => {
+                    if (!cancelled) {
+                        setOrderAiReplaceLoading(false);
+                    }
+                });
+        }, 250);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timerId);
+        };
+    }, [orderAiReplaceLineId, orderAiReplaceSearchTerm]);
 
     const saveColumnSettings = () => {
         writeOrderFormStorageJson(orderFormColumnOrderStorageKey, normalizeStoredOrderFormColumnOrder(columnOrder));
@@ -3775,6 +4053,18 @@ const OrderForm = () => {
         () => formData.items.filter((item) => isOrderAiItem(item) && !isPendingOrderAiItem(item)),
         [formData.items]
     );
+    const hasLatestOrderAiInput = Boolean(
+        normalizeCanvasText(orderAiLastRun?.input?.text)
+        || normalizeCanvasText(orderAiLastRun?.input?.image_preview_url)
+        || normalizeCanvasText(orderAiLastRun?.input?.file_name)
+        || normalizeCanvasText(orderAiLastRun?.input?.preferred_rule_label)
+    );
+    const canClearLatestOrderAiRun = Boolean(
+        normalizeCanvasText(orderAiLastRun?.sessionId)
+        || (Array.isArray(orderAiLastRun?.sessionLineIds)
+            && orderAiLastRun.sessionLineIds.some((lineId) => normalizeCanvasText(lineId)))
+    );
+    const shouldShowOrderAiSummary = pendingOrderAiItems.length > 0 || Boolean(orderAiLastRun);
     const handleConfirmPendingOrderAiItems = useCallback(() => {
         if (pendingOrderAiItems.length === 0) return;
 
@@ -3794,7 +4084,14 @@ const OrderForm = () => {
                     : item
             )),
         }));
-        setOrderAiLastRun(null);
+        setOrderAiLastRun((prev) => (
+            prev
+                ? {
+                    ...prev,
+                    reviewCount: 0,
+                }
+                : prev
+        ));
         showTransientNotification('success', `Đã xác nhận nhanh ${pendingOrderAiItems.length} dòng AI.`);
     }, [pendingOrderAiItems.length, showTransientNotification]);
 
@@ -4991,7 +5288,7 @@ const OrderForm = () => {
                                         {/* Small spacer to ensure last item is visible */}
                                         <div className="w-4 shrink-0 h-full"></div>
                                     </div>
-                                    {(pendingOrderAiItems.length > 0 || (orderAiLastRun && orderAiLastRun.unresolvedCount > 0)) && (
+                                    {shouldShowOrderAiSummary && (
                                         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-sky-200 bg-sky-50 px-4 py-3">
                                             <div className="min-w-0">
                                                 <div className="text-[10px] font-black uppercase tracking-[0.14em] text-sky-700">
@@ -5013,6 +5310,26 @@ const OrderForm = () => {
                                                     <span className="rounded-full border border-sky-200 bg-white px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-sky-700">
                                                         {confirmedOrderAiItems.length} dòng AI đã xác nhận
                                                     </span>
+                                                )}
+                                                {hasLatestOrderAiInput && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShowOrderAiInputReviewModal(true)}
+                                                        className="inline-flex h-9 items-center gap-2 rounded-sm border border-sky-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.12em] text-sky-700 transition-all hover:border-sky-300 hover:bg-sky-100/70"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[14px]">history</span>
+                                                        Xem input AI
+                                                    </button>
+                                                )}
+                                                {canClearLatestOrderAiRun && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleClearLatestOrderAiRun}
+                                                        className="inline-flex h-9 items-center gap-2 rounded-sm border border-rose-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.12em] text-rose-700 transition-all hover:border-rose-300 hover:bg-rose-50"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[14px]">delete_sweep</span>
+                                                        Xóa toàn bộ kết quả AI
+                                                    </button>
                                                 )}
                                                 {pendingOrderAiItems.length > 0 && (
                                                     <button
@@ -5215,7 +5532,7 @@ const OrderForm = () => {
                                                                             </button>
                                                                         )}
                                                                     </div>
-                                                                    <div className="absolute bottom-full left-4 mb-2 bg-slate-900 text-white p-3 rounded shadow-2xl opacity-0 group-hover/cell:opacity-100 pointer-events-none transition-all z-50 w-80 text-[12px] font-bold border border-white/10 scale-95 group-hover/cell:scale-100 origin-bottom-left leading-relaxed">
+                                                                    <div className={`absolute left-4 bg-slate-900 text-white p-3 rounded shadow-2xl opacity-0 group-hover/cell:opacity-100 pointer-events-none transition-all z-50 w-80 text-[12px] font-bold border border-white/10 scale-95 group-hover/cell:scale-100 leading-relaxed ${index === 0 ? 'top-full mt-2 origin-top-left' : 'bottom-full mb-2 origin-bottom-left'}`}>
                                                                         <div>{item.name}</div>
                                                                         {isOrderAiItem(item) && (
                                                                             <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/80">
@@ -5228,7 +5545,7 @@ const OrderForm = () => {
                                                                                 {item.options?.bundle_option_title ? ` - ${item.options.bundle_option_title}` : ''}
                                                                             </div>
                                                                         ) : null}
-                                                                        <div className="absolute top-full left-4 w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-t-[5px] border-t-slate-900"></div>
+                                                                        <div className={`absolute left-4 w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent ${index === 0 ? 'bottom-full border-b-[5px] border-b-slate-900' : 'top-full border-t-[5px] border-t-slate-900'}`}></div>
                                                                     </div>
                                                                 </td>
                                                             );
@@ -5301,10 +5618,44 @@ const OrderForm = () => {
                                                             );
                                                         case 'actions':
                                                             return (
-                                                                <td key={colId} className="py-2.5 text-center border border-primary/10">
-                                                                    <button type="button" onClick={() => removeItem(item.line_id)} className="text-primary/10 hover:text-brick transition-all transform hover:scale-125">
-                                                                        <span className="material-symbols-outlined text-[20px]">delete_outline</span>
-                                                                    </button>
+                                                                <td key={colId} className="py-2.5 px-2 text-center border border-primary/10 align-top">
+                                                                    <div className="flex flex-col items-center gap-2">
+                                                                        <div className="flex items-center gap-1">
+                                                                            {isOrderAiItem(item) && (
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onPointerDown={(event) => event.stopPropagation()}
+                                                                                    onClick={() => handleOpenOrderAiReplacePicker(
+                                                                                        item.line_id,
+                                                                                        item.ai_meta?.source_phrase || item.name || ''
+                                                                                    )}
+                                                                                    className="inline-flex size-8 items-center justify-center rounded-sm border border-sky-200 bg-sky-50 text-sky-700 transition-all hover:border-sky-300 hover:bg-sky-100"
+                                                                                    title="Đổi sản phẩm AI"
+                                                                                >
+                                                                                    <span className="material-symbols-outlined text-[16px]">swap_horiz</span>
+                                                                                </button>
+                                                                            )}
+                                                                            <button
+                                                                                type="button"
+                                                                                onPointerDown={(event) => event.stopPropagation()}
+                                                                                onClick={() => removeItem(item.line_id)}
+                                                                                className="inline-flex size-8 items-center justify-center rounded-sm text-primary/20 transition-all hover:bg-rose-50 hover:text-brick"
+                                                                                title="Xóa dòng"
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[18px]">delete_outline</span>
+                                                                            </button>
+                                                                        </div>
+                                                                        <OrderAiLineReplacePanel
+                                                                            show={orderAiReplaceLineId === normalizeCanvasText(item.line_id)}
+                                                                            searchTerm={orderAiReplaceSearchTerm}
+                                                                            onSearchTermChange={setOrderAiReplaceSearchTerm}
+                                                                            onClose={closeOrderAiReplacePicker}
+                                                                            results={orderAiReplaceResults}
+                                                                            loading={orderAiReplaceLoading}
+                                                                            onSelect={(entry) => handleSelectOrderAiLineReplacement(item.line_id, entry)}
+                                                                            currencyFormatter={quoteCurrencyFormatter}
+                                                                        />
+                                                                    </div>
                                                                 </td>
                                                             );
                                                         default:
@@ -5734,6 +6085,54 @@ const OrderForm = () => {
                 }))}
                 onClose={() => setShowSupplementItemsModal(false)}
             />
+
+            <Modal
+                show={showOrderAiInputReviewModal}
+                onClose={() => setShowOrderAiInputReviewModal(false)}
+                title="Input đã gửi cho AI"
+            >
+                <div className="space-y-4">
+                    {orderAiLastRun?.input?.preferred_rule_label && (
+                        <div className="rounded-sm border border-sky-200 bg-sky-50 px-3 py-2 text-[11px] font-semibold text-sky-700">
+                            {`Mẫu train ưu tiên: ${orderAiLastRun.input.preferred_rule_label}`}
+                        </div>
+                    )}
+                    {orderAiLastRun?.input?.file_name && (
+                        <div className="rounded-sm border border-primary/10 bg-primary/[0.03] px-3 py-2 text-[11px] font-semibold text-primary/60">
+                            {`Tệp đã gửi: ${orderAiLastRun.input.file_name}`}
+                        </div>
+                    )}
+                    {orderAiLastRun?.input?.text && (
+                        <div>
+                            <div className="mb-1 text-[10px] font-black uppercase tracking-[0.12em] text-primary/45">
+                                Nội dung text
+                            </div>
+                            <div className="max-h-60 overflow-auto whitespace-pre-wrap rounded-sm border border-primary/10 bg-primary/[0.02] px-3 py-2 text-[12px] font-semibold leading-relaxed text-slate-700">
+                                {orderAiLastRun.input.text}
+                            </div>
+                        </div>
+                    )}
+                    {orderAiLastRun?.input?.image_preview_url && (
+                        <div>
+                            <div className="mb-1 text-[10px] font-black uppercase tracking-[0.12em] text-primary/45">
+                                Ảnh đã gửi
+                            </div>
+                            <div className="overflow-hidden rounded-sm border border-primary/10 bg-primary/[0.02] p-2">
+                                <img
+                                    src={orderAiLastRun.input.image_preview_url}
+                                    alt="AI input"
+                                    className="max-h-[60vh] w-full object-contain"
+                                />
+                            </div>
+                        </div>
+                    )}
+                    {!hasLatestOrderAiInput && (
+                        <div className="text-[12px] font-semibold text-primary/45">
+                            Chưa có input AI gần nhất để xem lại.
+                        </div>
+                    )}
+                </div>
+            </Modal>
 
             <AnimatePresence>
                 {showQuoteTemplatePicker && (

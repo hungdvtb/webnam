@@ -49,6 +49,21 @@ class OrderAiAssistantService
         'ca de' => ['ca de', 'kem de', 'co de'],
     ];
 
+    private const CANONICAL_ITEM_DISPLAY_NAMES = [
+        'de bat huong' => 'de bat huong',
+        'bat huong' => 'bat huong',
+        'ong huong' => 'ong huong',
+        'den tho' => 'den tho',
+        'choe' => 'choe',
+        'nam' => 'nam',
+        'mam bong' => 'mam bong',
+        'lo hoa' => 'lo hoa',
+        'luc binh' => 'luc binh',
+        'ky ngai 5' => 'ky ngai 5',
+        'bo am tra' => 'bo am tra',
+        'chen' => 'chen',
+    ];
+
     public function __construct(
         private readonly GeminiService $geminiService,
         private readonly OrderAiTrainingService $orderAiTrainingService,
@@ -77,25 +92,47 @@ class OrderAiAssistantService
         $normalizedMessage = trim((string) $message);
         $resolvedPreferredRuleKey = trim((string) $preferredRuleKey);
         $rules = $this->getRules($accountId);
+        $sharedDefinitionText = $this->orderAiTrainingService->getSharedDefinitionText($accountId);
         $preferredRuleGroup = $this->resolvePreferredRuleGroup($accountId, $resolvedPreferredRuleKey, $rules);
+        $promptRules = $preferredRuleGroup === null
+            ? $rules
+            : [
+                $preferredRuleGroup,
+                ...collect($rules)
+                    ->reject(fn (array $group) => trim((string) ($group['rule_key'] ?? '')) === trim((string) ($preferredRuleGroup['rule_key'] ?? '')))
+                    ->values()
+                    ->all(),
+            ];
         if ($normalizedMessage === '' && $attachment === null && $preferredRuleGroup === null) {
             throw ValidationException::withMessages([
                 'message' => 'Cần nhập nội dung hoặc gửi ảnh để AI đọc đơn hàng.',
             ]);
         }
 
+        $promptDefinitionText = $this->orderAiTrainingService->mergeDefinitionTexts(
+            $sharedDefinitionText,
+            (string) ($preferredRuleGroup['definition_text'] ?? '')
+        );
         $extraction = ($normalizedMessage === '' && $attachment === null)
             ? ['items' => [], 'raw_text' => '', 'provider' => null]
-            : $this->extractRequestedItems($accountId, $normalizedMessage, $attachment, $rules);
+            : $this->extractRequestedItems($accountId, $normalizedMessage, $attachment, $promptRules, $promptDefinitionText);
         $rawText = trim((string) ($extraction['raw_text'] ?? $normalizedMessage));
         $altarSignal = $preferredRuleGroup !== null
             ? $this->extractAltarSizeSignal($preferredRuleGroup['altar_size_label'] ?? null)
             : ($this->extractAltarSizeSignal($extraction['altar_size'] ?? null)
                 ?? $this->extractAltarSizeSignal($rawText));
         $altarContext = $preferredRuleGroup ?? $this->matchAltarRuleGroup($rules, $altarSignal, $rawText);
-        $globalQualifiers = $this->extractLeadingGlobalQualifiers($rawText);
+        $contextDefinitionEntries = $this->parseDefinitionEntries(
+            $this->orderAiTrainingService->mergeDefinitionTexts(
+                $sharedDefinitionText,
+                (string) ($altarContext['definition_text'] ?? '')
+            )
+        );
+        $globalQualifiers = $this->extractLeadingGlobalQualifiers(
+            $this->applyDefinitionEntriesToText($rawText, $contextDefinitionEntries)
+        );
         $requestedItems = collect($extraction['items'] ?? [])
-            ->map(function ($item, $index) use ($globalQualifiers) {
+            ->map(function ($item, $index) use ($contextDefinitionEntries, $globalQualifiers) {
                 if ($globalQualifiers !== []) {
                     $item['qualifiers'] = [
                         ...$globalQualifiers,
@@ -103,14 +140,14 @@ class OrderAiAssistantService
                     ];
                 }
 
-                return $this->normalizeRequestedItem($item, (int) $index);
+                return $this->normalizeRequestedItem($item, (int) $index, $contextDefinitionEntries);
             })
             ->filter(fn (array $item) => $item['parsed_name'] !== '')
             ->values();
 
         if ($requestedItems->isEmpty() && $normalizedMessage !== '') {
             $requestedItems = collect($this->fallbackExtractFromText($normalizedMessage))
-                ->map(function ($item, $index) use ($globalQualifiers) {
+                ->map(function ($item, $index) use ($contextDefinitionEntries, $globalQualifiers) {
                     if ($globalQualifiers !== []) {
                         $item['qualifiers'] = [
                             ...$globalQualifiers,
@@ -118,7 +155,7 @@ class OrderAiAssistantService
                         ];
                     }
 
-                    return $this->normalizeRequestedItem($item, (int) $index);
+                    return $this->normalizeRequestedItem($item, (int) $index, $contextDefinitionEntries);
                 })
                 ->filter(fn (array $item) => $item['parsed_name'] !== '')
                 ->values();
@@ -181,7 +218,8 @@ class OrderAiAssistantService
         int $accountId,
         string $altarSizeLabel,
         ?string $message,
-        ?UploadedFile $attachment = null
+        ?UploadedFile $attachment = null,
+        ?string $definitionText = null
     ): array {
         $normalizedAltarSizeLabel = trim($altarSizeLabel);
         if ($normalizedAltarSizeLabel === '') {
@@ -197,16 +235,20 @@ class OrderAiAssistantService
         }
 
         $normalizedMessage = trim((string) $message);
+        $normalizedDefinitionText = trim((string) $definitionText);
+        $definitionEntries = $this->parseDefinitionEntries($normalizedDefinitionText);
         $rules = $this->getRules($accountId);
         $contextMessage = trim(implode("\n", array_filter([
             "K\u{ed}ch th\u{1b0}\u{1edbc} ban th\u{1edd} c\u{1ea7}n h\u{1ecdc}: {$normalizedAltarSizeLabel}",
             $normalizedMessage,
         ])));
-        $extraction = $this->extractRequestedItems($accountId, $contextMessage, $attachment, $rules);
+        $extraction = $this->extractRequestedItems($accountId, $contextMessage, $attachment, $rules, $normalizedDefinitionText);
         $rawText = trim((string) ($extraction['raw_text'] ?? $normalizedMessage));
-        $globalQualifiers = $this->extractLeadingGlobalQualifiers($rawText);
+        $globalQualifiers = $this->extractLeadingGlobalQualifiers(
+            $this->applyDefinitionEntriesToText($rawText, $definitionEntries)
+        );
         $requestedItems = collect($extraction['items'] ?? [])
-            ->map(function ($item, $index) use ($globalQualifiers) {
+            ->map(function ($item, $index) use ($definitionEntries, $globalQualifiers) {
                 if ($globalQualifiers !== []) {
                     $item['qualifiers'] = [
                         ...$globalQualifiers,
@@ -214,14 +256,14 @@ class OrderAiAssistantService
                     ];
                 }
 
-                return $this->normalizeRequestedItem($item, (int) $index);
+                return $this->normalizeRequestedItem($item, (int) $index, $definitionEntries);
             })
             ->filter(fn (array $item) => $item['parsed_name'] !== '')
             ->values();
 
         if ($requestedItems->isEmpty() && $rawText !== '') {
             $requestedItems = collect($this->fallbackExtractFromText($rawText))
-                ->map(function ($item, $index) use ($globalQualifiers) {
+                ->map(function ($item, $index) use ($definitionEntries, $globalQualifiers) {
                     if ($globalQualifiers !== []) {
                         $item['qualifiers'] = [
                             ...$globalQualifiers,
@@ -229,7 +271,7 @@ class OrderAiAssistantService
                         ];
                     }
 
-                    return $this->normalizeRequestedItem($item, (int) $index);
+                    return $this->normalizeRequestedItem($item, (int) $index, $definitionEntries);
                 })
                 ->filter(fn (array $item) => $item['parsed_name'] !== '')
                 ->values();
@@ -265,6 +307,7 @@ class OrderAiAssistantService
                 'aliases' => $this->normalizeAliasList([$normalizedAltarSizeLabel], 12),
             ],
             'context_aliases' => $contextAliases,
+            'definition_text' => $normalizedDefinitionText,
             'provider' => $extraction['provider'] ?? null,
             'raw_text' => $rawText,
             'source' => [
@@ -298,6 +341,7 @@ class OrderAiAssistantService
             'raw_text' => $previewPayload['raw_text'],
             'altar_size' => $previewPayload['altar_size'],
             'context_aliases' => $previewPayload['context_aliases'],
+            'definition_text' => $previewPayload['definition_text'],
             'extracted_items' => $previewPayload['extracted_items'],
             'items' => $previewPayload['items'],
             'unresolved_items' => $previewPayload['unresolved_items'],
@@ -312,12 +356,13 @@ class OrderAiAssistantService
         string $altarSizeLabel,
         ?string $message,
         ?UploadedFile $attachment = null,
-        string $inputType = 'image'
+        string $inputType = 'image',
+        ?string $definitionText = null
     ): array {
         $normalizedInputType = trim($inputType) === 'image' ? 'image' : 'text';
 
         if ($normalizedInputType === 'image') {
-            return $this->trainRulePreview($accountId, $altarSizeLabel, $message, $attachment);
+            return $this->trainRulePreview($accountId, $altarSizeLabel, $message, $attachment, $definitionText);
         }
 
         $normalizedAltarSizeLabel = trim($altarSizeLabel);
@@ -328,6 +373,8 @@ class OrderAiAssistantService
         }
 
         $normalizedMessage = trim((string) $message);
+        $normalizedDefinitionText = trim((string) $definitionText);
+        $definitionEntries = $this->parseDefinitionEntries($normalizedDefinitionText);
         if ($normalizedMessage === '') {
             throw ValidationException::withMessages([
                 'input_text' => "C\u{1ea7}n nh\u{1ead}p text \u{111}\u{1ec3} AI ph\u{e2}n t\u{ed}ch v\u{e0} l\u{1b0}u rule.",
@@ -339,11 +386,13 @@ class OrderAiAssistantService
             "K\u{ed}ch th\u{1b0}\u{1edbc} ban th\u{1edd} c\u{1ea7}n h\u{1ecdc}: {$normalizedAltarSizeLabel}",
             $normalizedMessage,
         ])));
-        $extraction = $this->extractRequestedItems($accountId, $contextMessage, null, $rules);
+        $extraction = $this->extractRequestedItems($accountId, $contextMessage, null, $rules, $normalizedDefinitionText);
         $rawText = trim((string) ($extraction['raw_text'] ?? $normalizedMessage));
-        $globalQualifiers = $this->extractLeadingGlobalQualifiers($rawText);
+        $globalQualifiers = $this->extractLeadingGlobalQualifiers(
+            $this->applyDefinitionEntriesToText($rawText, $definitionEntries)
+        );
         $requestedItems = collect($extraction['items'] ?? [])
-            ->map(function ($item, $index) use ($globalQualifiers) {
+            ->map(function ($item, $index) use ($definitionEntries, $globalQualifiers) {
                 if ($globalQualifiers !== []) {
                     $item['qualifiers'] = [
                         ...$globalQualifiers,
@@ -351,14 +400,14 @@ class OrderAiAssistantService
                     ];
                 }
 
-                return $this->normalizeRequestedItem($item, (int) $index);
+                return $this->normalizeRequestedItem($item, (int) $index, $definitionEntries);
             })
             ->filter(fn (array $item) => $item['parsed_name'] !== '')
             ->values();
 
         if ($requestedItems->isEmpty() && $rawText !== '') {
             $requestedItems = collect($this->fallbackExtractFromText($rawText))
-                ->map(function ($item, $index) use ($globalQualifiers) {
+                ->map(function ($item, $index) use ($definitionEntries, $globalQualifiers) {
                     if ($globalQualifiers !== []) {
                         $item['qualifiers'] = [
                             ...$globalQualifiers,
@@ -366,7 +415,7 @@ class OrderAiAssistantService
                         ];
                     }
 
-                    return $this->normalizeRequestedItem($item, (int) $index);
+                    return $this->normalizeRequestedItem($item, (int) $index, $definitionEntries);
                 })
                 ->filter(fn (array $item) => $item['parsed_name'] !== '')
                 ->values();
@@ -402,6 +451,7 @@ class OrderAiAssistantService
                 'aliases' => $this->normalizeAliasList([$normalizedAltarSizeLabel], 12),
             ],
             'context_aliases' => $contextAliases,
+            'definition_text' => $normalizedDefinitionText,
             'provider' => $extraction['provider'] ?? null,
             'raw_text' => $rawText,
             'source' => [
@@ -435,6 +485,7 @@ class OrderAiAssistantService
             'raw_text' => $previewPayload['raw_text'],
             'altar_size' => $previewPayload['altar_size'],
             'context_aliases' => $previewPayload['context_aliases'],
+            'definition_text' => $previewPayload['definition_text'],
             'extracted_items' => $previewPayload['extracted_items'],
             'items' => $previewPayload['items'],
             'unresolved_items' => $previewPayload['unresolved_items'],
@@ -527,6 +578,7 @@ class OrderAiAssistantService
                         : null,
                     'training_source_name' => trim((string) ($group['training_source_name'] ?? '')),
                     'training_note' => trim((string) ($group['training_note'] ?? '')),
+                    'definition_text' => trim((string) ($group['definition_text'] ?? '')),
                     'training_raw_text' => trim((string) ($group['training_raw_text'] ?? '')),
                     'trained_at' => trim((string) ($group['trained_at'] ?? '')),
                     'items' => $items,
@@ -631,7 +683,13 @@ class OrderAiAssistantService
         return Str::limit($candidate !== '' ? $candidate : 'order-ai-rule-' . Str::lower(Str::random(8)), 160, '');
     }
 
-    private function extractRequestedItems(int $accountId, string $message, ?UploadedFile $attachment, array $rules): array
+    private function extractRequestedItems(
+        int $accountId,
+        string $message,
+        ?UploadedFile $attachment,
+        array $rules,
+        ?string $definitionText = null
+    ): array
     {
         if ($attachment !== null) {
             $bytes = $attachment->get();
@@ -644,7 +702,7 @@ class OrderAiAssistantService
             $result = $this->geminiService->readImage(
                 base64_encode($bytes),
                 $attachment->getMimeType() ?: 'image/png',
-                $this->buildExtractionPrompt($message, $rules, true),
+                $this->buildExtractionPrompt($message, $rules, true, $definitionText),
                 $accountId,
                 self::AI_MODEL
             );
@@ -656,9 +714,19 @@ class OrderAiAssistantService
             return $decoded;
         }
 
+        $structuredTextItems = $this->fallbackExtractFromText($message);
+        if ($this->shouldPreferStructuredTextParser($message, $structuredTextItems)) {
+            return [
+                'provider' => 'structured_text_parser',
+                'raw_text' => $message,
+                'altar_size' => $this->extractAltarSizeSignal($message),
+                'items' => $structuredTextItems,
+            ];
+        }
+
         try {
             $result = $this->geminiService->generateText(
-                $this->buildExtractionPrompt($message, $rules, false),
+                $this->buildExtractionPrompt($message, $rules, false, $definitionText),
                 $accountId,
                 self::AI_MODEL
             );
@@ -682,7 +750,52 @@ class OrderAiAssistantService
         }
     }
 
-    private function buildExtractionPrompt(string $message, array $rules, bool $hasAttachment): string
+    private function shouldPreferStructuredTextParser(string $message, array $fallbackItems): bool
+    {
+        if ($fallbackItems === []) {
+            return false;
+        }
+
+        $segments = collect(preg_split('/[\n,;]+/u', $message) ?: [])
+            ->map(fn ($segment) => trim((string) $segment))
+            ->filter()
+            ->values();
+
+        if ($segments->isEmpty()) {
+            return false;
+        }
+
+        $structuredCount = 0;
+        $qualifierOnlyCount = 0;
+
+        foreach ($segments as $segment) {
+            $hasExplicitQuantity = preg_match('/^\s*(?:tang\s+)?\d+\b/iu', $segment) === 1;
+            $hasKnownItem = $this->detectKnownItemCanonicalName([$segment]) !== null;
+            $hasAnyDigit = preg_match('/\d/u', $segment) === 1;
+            $segmentQualifiers = $this->extractImplicitQualifiersFromText($segment);
+
+            if ($hasExplicitQuantity || ($hasKnownItem && $hasAnyDigit)) {
+                $structuredCount += 1;
+                continue;
+            }
+
+            if ($segmentQualifiers !== [] && !$hasKnownItem && !$hasAnyDigit) {
+                $qualifierOnlyCount += 1;
+            }
+        }
+
+        $relevantSegmentCount = max(1, $segments->count() - $qualifierOnlyCount);
+        $requiredStructuredCount = max(1, (int) ceil($relevantSegmentCount * 0.6));
+
+        return $structuredCount >= $requiredStructuredCount;
+    }
+
+    private function buildExtractionPrompt(
+        string $message,
+        array $rules,
+        bool $hasAttachment,
+        ?string $definitionText = null
+    ): string
     {
         $ruleHints = collect($rules)
             ->take(12)
@@ -697,6 +810,7 @@ class OrderAiAssistantService
             })
             ->filter()
             ->implode("\n");
+        $definitionHints = $this->buildDefinitionPromptBlock($rules, $definitionText);
 
         $inputHint = $hasAttachment
             ? "Ban can OCR noi dung trong anh/tai lieu dinh kem roi parse thanh cau truc du lieu."
@@ -746,12 +860,202 @@ Quy tac:
 - Neu dong la qua tang/bonus/tang kem thi dat bonus=true nhung van giu quantity va name.
 - Neu khong chac chan category_hint thi de null.
 - Neu khong chac chan size_text thi de null.
+- Neu co "Dinh nghia tu goi/viet tat", hay quy doi ve ten chuan truoc khi parse va map.
+
+Dinh nghia tu goi / viet tat:
+{$definitionHints}
 
 Rule ban tho da hoc:
 {$ruleHints}
 
 {$messageBlock}
 PROMPT;
+    }
+
+    private function buildDefinitionPromptBlock(array $rules, ?string $definitionText = null): string
+    {
+        $lines = [];
+        $normalizedAdHocDefinitions = trim((string) $definitionText);
+
+        if ($normalizedAdHocDefinitions !== '') {
+            $lines[] = '- Tu dien dang ap dung: ' . $this->condenseDefinitionText($normalizedAdHocDefinitions);
+        }
+
+        foreach (collect($rules)->filter(fn (array $group) => trim((string) ($group['definition_text'] ?? '')) !== '')->take(8) as $group) {
+            $labelParts = array_filter([
+                trim((string) ($group['altar_size_label'] ?? '')),
+                trim((string) (($group['context_aliases'][0] ?? ''))),
+            ]);
+            $label = implode(' / ', $labelParts);
+            $lines[] = '- ' . ($label !== '' ? $label : 'Rule da hoc') . ': ' . $this->condenseDefinitionText((string) ($group['definition_text'] ?? ''));
+        }
+
+        return $lines === [] ? '- Khong co khai bao bo sung.' : implode("\n", $lines);
+    }
+
+    private function condenseDefinitionText(string $text): string
+    {
+        return Str::limit(
+            collect(preg_split('/[\r\n;]+/u', $text) ?: [])
+                ->map(fn ($line) => trim((string) $line))
+                ->filter()
+                ->implode(' | '),
+            420,
+            '...'
+        );
+    }
+
+    private function parseDefinitionEntries(?string $text): array
+    {
+        $segments = collect(preg_split('/[\r\n;]+/u', trim((string) $text)) ?: [])
+            ->map(fn ($segment) => trim((string) $segment))
+            ->filter()
+            ->values();
+
+        if ($segments->isEmpty()) {
+            return [];
+        }
+
+        $entries = [];
+
+        foreach ($segments as $segment) {
+            if (preg_match('/^(.+?)\s*(?:=|=>|->|:|la|là|nghia la|nghĩa là|co nghia la|có nghĩa là)\s*(.+)$/iu', $segment, $matches) !== 1) {
+                continue;
+            }
+
+            $aliases = collect(preg_split('/[,|\/]+/u', trim((string) ($matches[1] ?? ''))) ?: [])
+                ->map(fn ($alias) => trim((string) $alias))
+                ->filter()
+                ->values()
+                ->all();
+            $canonical = trim((string) ($matches[2] ?? ''));
+
+            if ($canonical === '' || $aliases === []) {
+                continue;
+            }
+
+            $entries[] = [
+                'canonical' => $canonical,
+                'aliases' => $this->normalizeAliasList($aliases, 24),
+            ];
+        }
+
+        return collect($entries)
+            ->filter(fn (array $entry) => $entry['canonical'] !== '' && $entry['aliases'] !== [])
+            ->values()
+            ->all();
+    }
+
+    private function applyDefinitionEntriesToText(string $text, array $definitionEntries): string
+    {
+        $resolved = trim($text);
+        if ($resolved === '' || $definitionEntries === []) {
+            return $resolved;
+        }
+
+        $replacements = collect($definitionEntries)
+            ->flatMap(fn (array $entry) => collect($entry['aliases'] ?? [])->map(fn ($alias) => [
+                'alias' => trim((string) $alias),
+                'canonical' => trim((string) ($entry['canonical'] ?? '')),
+            ]))
+            ->filter(fn (array $entry) => $entry['alias'] !== '' && $entry['canonical'] !== '')
+            ->sortByDesc(fn (array $entry) => mb_strlen($entry['alias']))
+            ->values();
+
+        foreach ($replacements as $replacement) {
+            $pattern = '/(?<![\pL\pN])' . preg_quote($replacement['alias'], '/') . '(?![\pL\pN])/iu';
+            $resolved = preg_replace($pattern, $replacement['canonical'], $resolved) ?? $resolved;
+        }
+
+        return trim($resolved);
+    }
+
+    private function expandValuesWithDefinitionEntries(array $values, array $definitionEntries): array
+    {
+        if ($definitionEntries === []) {
+            return collect($values)->map(fn ($value) => trim((string) $value))->filter()->values()->all();
+        }
+
+        $expanded = [];
+
+        foreach ($values as $value) {
+            $normalizedValue = trim((string) $value);
+            if ($normalizedValue === '') {
+                continue;
+            }
+
+            $expanded[] = $normalizedValue;
+            $replacedValue = $this->applyDefinitionEntriesToText($normalizedValue, $definitionEntries);
+            if ($replacedValue !== '' && $replacedValue !== $normalizedValue) {
+                $expanded[] = $replacedValue;
+            }
+
+            foreach ($definitionEntries as $entry) {
+                foreach (($entry['aliases'] ?? []) as $alias) {
+                    if ($this->containsNormalizedPhrase($normalizedValue, (string) $alias)) {
+                        $expanded[] = trim((string) ($entry['canonical'] ?? ''));
+                    }
+                }
+            }
+        }
+
+        return collect($expanded)
+            ->map(fn ($value) => trim((string) $value))
+            ->filter()
+            ->unique(fn ($value) => $this->normalizeText($value))
+            ->values()
+            ->all();
+    }
+
+    private function resolveDefinitionCanonicalPhrase(array $values, array $definitionEntries): ?string
+    {
+        if ($definitionEntries === []) {
+            return null;
+        }
+
+        $normalizedValues = collect($values)
+            ->map(fn ($value) => $this->normalizeText((string) $value))
+            ->filter()
+            ->values()
+            ->all();
+
+        foreach ($definitionEntries as $entry) {
+            $canonical = trim((string) ($entry['canonical'] ?? ''));
+            if ($canonical === '') {
+                continue;
+            }
+
+            foreach (($entry['aliases'] ?? []) as $alias) {
+                $normalizedAlias = $this->normalizeText((string) $alias);
+                if ($normalizedAlias === '') {
+                    continue;
+                }
+
+                foreach ($normalizedValues as $normalizedValue) {
+                    if ($normalizedValue === $normalizedAlias) {
+                        return $canonical;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function containsNormalizedPhrase(string $haystack, string $needle): bool
+    {
+        $normalizedHaystack = $this->normalizeText($haystack);
+        $normalizedNeedle = $this->normalizeText($needle);
+        if ($normalizedHaystack === '' || $normalizedNeedle === '') {
+            return false;
+        }
+
+        if ($normalizedHaystack === $normalizedNeedle) {
+            return true;
+        }
+
+        return preg_match('/(?<![a-z0-9])' . preg_quote($normalizedNeedle, '/') . '(?![a-z0-9])/u', $normalizedHaystack) === 1
+            || str_contains($normalizedHaystack, $normalizedNeedle);
     }
 
     private function decodeAiJson(string $text): array
@@ -849,24 +1153,44 @@ PROMPT;
             ->all();
     }
 
-    private function normalizeRequestedItem(mixed $item, int $index): array
+    private function normalizeRequestedItem(mixed $item, int $index, array $definitionEntries = []): array
     {
         $source = is_array($item) ? $item : [];
         $sourcePhrase = trim((string) ($source['source_phrase'] ?? ''));
-        $parsedName = trim((string) ($source['name'] ?? $source['normalized_name'] ?? ''));
-        $canonicalName = $this->detectKnownItemCanonicalName([
+        $rawParsedName = trim((string) ($source['name'] ?? $source['normalized_name'] ?? ''));
+        $parsedName = $this->sanitizeRequestedNameText($rawParsedName !== '' ? $rawParsedName : $sourcePhrase);
+        $definitionExpandedValues = $this->expandValuesWithDefinitionEntries([
             $parsedName,
+            $rawParsedName,
             $source['normalized_name'] ?? '',
             $source['category_hint'] ?? '',
             $sourcePhrase,
+            (string) ($source['notes'] ?? ''),
+        ], $definitionEntries);
+        $canonicalName = $this->detectKnownItemCanonicalName([
+            $parsedName,
+            $rawParsedName,
+            $source['normalized_name'] ?? '',
+            $source['category_hint'] ?? '',
+            $sourcePhrase,
+            ...$definitionExpandedValues,
         ]);
-        $resolvedName = $parsedName !== '' ? $parsedName : ($canonicalName ?? '');
+        $definitionResolvedName = $this->resolveDefinitionCanonicalPhrase([
+            $parsedName,
+            $rawParsedName,
+            $source['normalized_name'] ?? '',
+            $sourcePhrase,
+        ], $definitionEntries);
+        $resolvedName = $definitionResolvedName
+            ?: $this->resolveRequestedItemName($parsedName, $canonicalName);
         $sizeInfo = $this->extractDimensionInfo((string) ($source['size_text'] ?? ''));
         $qualifiers = collect([
             ...(is_array($source['qualifiers'] ?? null) ? $source['qualifiers'] : []),
             ...$this->extractImplicitQualifiersFromText(implode(' ', array_filter([
                 $sourcePhrase,
+                $rawParsedName,
                 $parsedName,
+                ...$definitionExpandedValues,
                 (string) ($source['notes'] ?? ''),
             ]))),
         ])
@@ -898,9 +1222,11 @@ PROMPT;
             'aliases' => $this->expandKnownAliases([
                 $resolvedName,
                 $canonicalName ?? '',
+                $rawParsedName,
                 $source['normalized_name'] ?? '',
                 $source['category_hint'] ?? '',
                 $sourcePhrase,
+                ...$definitionExpandedValues,
             ]),
         ];
     }
@@ -908,9 +1234,20 @@ PROMPT;
     private function mapRequestedItem(Collection $catalogEntries, array $item, ?array $altarContext): array
     {
         $matchedRuleItem = $this->resolveMatchedRuleItem($item, $altarContext);
-        $scoredCandidates = $catalogEntries
+        $forceRuleGroup = (bool) ($altarContext['_force_rule_group'] ?? false);
+        $groupTargetIds = collect($altarContext['items'] ?? [])
+            ->map(fn (array $ruleItem) => (int) ($ruleItem['target_product_id'] ?? 0))
+            ->filter(fn (int $targetProductId) => $targetProductId > 0)
+            ->values()
+            ->all();
+        $candidateEntries = $forceRuleGroup && $groupTargetIds !== []
+            ? $catalogEntries
+                ->filter(fn (array $entry) => in_array((int) ($entry['target_product_id'] ?? 0), $groupTargetIds, true))
+                ->values()
+            : $catalogEntries;
+        $scoredCandidates = $candidateEntries
             ->map(function (array $entry) use ($item, $matchedRuleItem) {
-                $scored = $this->scoreCatalogEntry($entry, $item, $matchedRuleItem);
+                $scored = $this->scoreCatalogEntryWithFamilyGuard($entry, $item, $matchedRuleItem);
 
                 return [
                     ...$entry,
@@ -1106,6 +1443,14 @@ PROMPT;
             ->filter()
             ->unique(fn ($value) => $this->normalizeText($value))
             ->values();
+        $itemQualifiers = collect($item['qualifiers'] ?? [])
+            ->map(fn ($value) => $this->normalizeText((string) $value))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+        $itemSizeRaw = $this->normalizeText((string) ($item['size']['raw'] ?? ''));
+        $itemSizeCm = $item['size']['normalized_cm'] ?? null;
 
         $bestItem = null;
         $bestScore = 0;
@@ -1138,6 +1483,33 @@ PROMPT;
                             $score = max($score, 30 + ($overlap * 12));
                         }
                     }
+                }
+            }
+
+            $ruleText = $this->normalizeText(implode(' ', array_filter([
+                $ruleItem['display_name'] ?? '',
+                $ruleItem['option_label'] ?? '',
+                implode(' ', $ruleItem['aliases'] ?? []),
+            ])));
+
+            foreach ($itemQualifiers as $qualifier) {
+                if ($qualifier !== '' && str_contains($ruleText, $qualifier)) {
+                    $score += 18;
+                }
+            }
+
+            if ($itemSizeRaw !== '') {
+                $ruleSize = $this->extractDimensionInfo($ruleText);
+                $ruleSizeCm = $ruleSize['normalized_cm'] ?? null;
+
+                if ($itemSizeCm !== null && $ruleSizeCm !== null) {
+                    if (abs((float) $itemSizeCm - (float) $ruleSizeCm) < 0.1) {
+                        $score += 48;
+                    } else {
+                        $score -= 18;
+                    }
+                } elseif (in_array($itemSizeRaw, $ruleSize['tokens'] ?? [], true)) {
+                    $score += 40;
                 }
             }
 
@@ -1274,6 +1646,7 @@ PROMPT;
 
         $resolvedGroup = $bestGroup['group'];
         $resolvedGroup['_resolved_context_alias'] = trim((string) ($bestGroup['matched_context_alias'] ?? ''));
+        $resolvedGroup['_force_rule_group'] = false;
 
         return $resolvedGroup;
     }
@@ -1289,6 +1662,7 @@ PROMPT;
 
         if (is_array($directMatch)) {
             $directMatch['_resolved_context_alias'] = trim((string) (($directMatch['context_aliases'][0] ?? '')));
+            $directMatch['_force_rule_group'] = true;
             return $directMatch;
         }
 
@@ -1303,6 +1677,7 @@ PROMPT;
         }
 
         $resolvedRule['_resolved_context_alias'] = trim((string) (($resolvedRule['context_aliases'][0] ?? '')));
+        $resolvedRule['_force_rule_group'] = true;
         return $resolvedRule;
     }
 
@@ -1581,6 +1956,35 @@ PROMPT;
         ];
     }
 
+    private function scoreCatalogEntryWithFamilyGuard(array $entry, array $item, ?array $matchedRuleItem): array
+    {
+        $scored = $this->scoreCatalogEntry($entry, $item, $matchedRuleItem);
+        $searchText = $entry['search_text'] ?? '';
+        $canonicalName = $this->normalizeText((string) ($item['canonical_name'] ?? ''));
+
+        if ($canonicalName === '') {
+            return $scored;
+        }
+
+        $hasFamilyMatch = str_contains($searchText, $canonicalName);
+
+        if (!$hasFamilyMatch) {
+            foreach ($this->canonicalFamilyPhrases($canonicalName) as $alias) {
+                $normalizedAlias = $this->normalizeText((string) $alias);
+                if ($normalizedAlias !== '' && str_contains($searchText, $normalizedAlias)) {
+                    $hasFamilyMatch = true;
+                    break;
+                }
+            }
+        }
+
+        if (!$hasFamilyMatch) {
+            $scored['score'] = max(0, (int) ($scored['score'] ?? 0) - 48);
+        }
+
+        return $scored;
+    }
+
     private function resolveConfidence(int $topScore, int $gapScore, bool $hasRuleMatch): int
     {
         $base = min(96, max(8, $topScore));
@@ -1651,6 +2055,65 @@ PROMPT;
             'label' => $signalLabel,
             'aliases' => [],
         ];
+    }
+
+    private function sanitizeRequestedNameText(string $value): string
+    {
+        $normalized = $this->normalizeText($value);
+        if ($normalized === '') {
+            return '';
+        }
+
+        $normalized = preg_replace('/\b(?:ca de|kem de|co de)\b/u', ' ', $normalized) ?? $normalized;
+        $normalized = preg_replace('/\s+/u', ' ', $normalized) ?? $normalized;
+        $normalized = trim($normalized);
+
+        return match ($normalized) {
+            'ong' => 'ong huong',
+            'den' => 'den tho',
+            'am tra', 'bo am chen', 'am chen' => 'bo am tra',
+            default => $normalized,
+        };
+    }
+
+    private function resolveRequestedItemName(string $parsedName, ?string $canonicalName): string
+    {
+        $normalizedParsedName = $this->normalizeText($parsedName);
+        if ($canonicalName === null) {
+            return $normalizedParsedName;
+        }
+
+        if (
+            $normalizedParsedName === ''
+            || count($this->tokenize($normalizedParsedName)) <= 2
+            || in_array($normalizedParsedName, ['ong', 'den', 'am tra', 'bo am chen', 'am chen'], true)
+            || (
+                $canonicalName === 'bat huong'
+                && !str_contains($normalizedParsedName, 'huong')
+            )
+        ) {
+            return $this->canonicalDisplayName($canonicalName);
+        }
+
+        return $normalizedParsedName;
+    }
+
+    private function canonicalDisplayName(string $canonicalName): string
+    {
+        return self::CANONICAL_ITEM_DISPLAY_NAMES[$canonicalName] ?? $canonicalName;
+    }
+
+    private function canonicalFamilyPhrases(string $canonicalName): array
+    {
+        return collect([
+            $canonicalName,
+            ...(self::KNOWN_ITEM_ALIASES[$canonicalName] ?? []),
+        ])
+            ->map(fn ($value) => $this->normalizeText((string) $value))
+            ->filter(fn ($value) => $value !== '' && (count($this->tokenize($value)) > 1 || strlen($value) >= 8))
+            ->unique()
+            ->values()
+            ->all();
     }
 
     private function expandKnownAliases(array $values): array
@@ -1761,8 +2224,7 @@ PROMPT;
                         'aliases' => $this->expandKnownAliases([
                             'de bat huong',
                             'de bat',
-                            ...($item['qualifiers'] ?? []),
-                            $item['source_phrase'] ?? '',
+                            'chan de bat huong',
                         ]),
                     ];
                 }
@@ -1873,11 +2335,32 @@ PROMPT;
 
     private function inferQuantitySpecified(array $source, string $sourcePhrase): bool
     {
+        if ($this->hasExplicitQuantitySignal($source, $sourcePhrase)) {
+            return true;
+        }
+
         if (array_key_exists('quantity_specified', $source)) {
             return (bool) $source['quantity_specified'];
         }
 
-        return preg_match('/^\s*(?:tang\s+)?\d+\b/iu', $sourcePhrase) === 1;
+        return false;
+    }
+
+    private function hasExplicitQuantitySignal(array $source, string $sourcePhrase): bool
+    {
+        $candidates = array_filter([
+            $sourcePhrase,
+            trim((string) ($source['source_phrase'] ?? '')),
+            trim((string) ($source['normalized_name'] ?? '')),
+        ]);
+
+        foreach ($candidates as $candidate) {
+            if (preg_match('/^\s*(?:tang\s+)?\d+\b/iu', $candidate) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function normalizeText(string $value): string

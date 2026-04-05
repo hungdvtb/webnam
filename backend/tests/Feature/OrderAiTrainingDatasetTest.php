@@ -15,6 +15,27 @@ class OrderAiTrainingDatasetTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_can_store_shared_ai_definition_glossary(): void
+    {
+        [$account] = $this->authenticate();
+
+        $payload = [
+            'definition_text' => "binh bong = lo hoa\nml = men lam",
+        ];
+
+        $this->withHeaders($this->headers($account))
+            ->putJson('/api/orders/ai/training/definitions', $payload)
+            ->assertOk()
+            ->assertJsonPath('data.definition_text', $payload['definition_text'])
+            ->assertJsonPath('data.entries_count', 2);
+
+        $this->withHeaders($this->headers($account))
+            ->getJson('/api/orders/ai/training/definitions')
+            ->assertOk()
+            ->assertJsonPath('data.definition_text', $payload['definition_text'])
+            ->assertJsonPath('data.entries_count', 2);
+    }
+
     public function test_can_create_overwrite_and_delete_ai_training_dataset(): void
     {
         [$account] = $this->authenticate();
@@ -38,6 +59,7 @@ class OrderAiTrainingDatasetTest extends TestCase
                 'input_type' => 'text',
                 'source_name' => 'Nhap tay',
                 'training_note' => 'Bo men lam cho ban 1m97',
+                'definition_text' => "binh bong = lo hoa\nml = men lam",
                 'input_text' => 'ban 1m97, bat huong men lam',
                 'parsed_raw_text' => 'ban 1m97, bat huong men lam',
                 'parsed_result' => [
@@ -61,6 +83,7 @@ class OrderAiTrainingDatasetTest extends TestCase
         $createResponse
             ->assertOk()
             ->assertJsonPath('data.rule_key', 'ban-1m97-men-lam')
+            ->assertJsonPath('data.definition_text', "binh bong = lo hoa\nml = men lam")
             ->assertJsonPath('data.items_count', 1)
             ->assertJsonCount(1, 'data.mapping_items');
 
@@ -89,6 +112,7 @@ class OrderAiTrainingDatasetTest extends TestCase
                 'input_type' => 'text',
                 'source_name' => 'Nhap tay moi',
                 'training_note' => 'Ghi de rule cu',
+                'definition_text' => 'binh hoa = lo hoa',
                 'input_text' => 'ban 1m97, bat huong men lam size 20',
                 'parsed_raw_text' => 'ban 1m97, bat huong men lam size 20',
                 'parsed_result' => [
@@ -112,6 +136,7 @@ class OrderAiTrainingDatasetTest extends TestCase
         $overwriteResponse
             ->assertOk()
             ->assertJsonPath('data.rule_key', 'ban-1m97-men-lam')
+            ->assertJsonPath('data.definition_text', 'binh hoa = lo hoa')
             ->assertJsonPath('data.mapping_items.0.target_product_id', $replacementProduct->id);
 
         $this->withHeaders($this->headers($account))
@@ -122,7 +147,8 @@ class OrderAiTrainingDatasetTest extends TestCase
         $this->withHeaders($this->headers($account))
             ->getJson('/api/orders/ai/rules')
             ->assertOk()
-            ->assertJsonPath('rules.0.items.0.target_product_id', $replacementProduct->id);
+            ->assertJsonPath('rules.0.items.0.target_product_id', $replacementProduct->id)
+            ->assertJsonPath('rules.0.definition_text', 'binh hoa = lo hoa');
 
         $this->withHeaders($this->headers($account))
             ->deleteJson('/api/orders/ai/training/' . $datasetId)

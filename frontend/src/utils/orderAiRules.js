@@ -108,6 +108,7 @@ export const createOrderAiRuleGroup = () => ({
     training_source_type: '',
     training_source_name: '',
     training_note: '',
+    definition_text: '',
     training_raw_text: '',
     trained_at: '',
     items: [],
@@ -137,6 +138,7 @@ export const normalizeOrderAiRules = (value) => (
                 training_source_type: normalizeText(group?.training_source_type),
                 training_source_name: normalizeText(group?.training_source_name),
                 training_note: normalizeText(group?.training_note),
+                definition_text: normalizeText(group?.definition_text),
                 training_raw_text: normalizeText(group?.training_raw_text),
                 trained_at: normalizeText(group?.trained_at),
                 items: normalizeOrderAiRuleItems(group?.items),
@@ -251,6 +253,7 @@ export const buildOrderAiQuickRuleOptions = (rules = []) => {
                 normalizeText(rule?.altar_size_label),
                 ...normalizeOrderAiRuleAliasList(rule?.altar_size_aliases || []),
                 ...normalizeOrderAiRuleAliasList(rule?.context_aliases || []),
+                normalizeText(rule?.definition_text),
                 normalizeText(rule?.training_note),
                 normalizeText(rule?.training_source_name ?? rule?.source_name),
             ]

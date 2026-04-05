@@ -145,6 +145,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/orders/ai/rules', [OrderAiController::class, 'updateRules']);
     Route::get('/orders/ai/training', [OrderAiTrainingController::class, 'index']);
     Route::post('/orders/ai/training/preview', [OrderAiTrainingController::class, 'preview']);
+    Route::get('/orders/ai/training/definitions', [OrderAiTrainingController::class, 'definitions']);
+    Route::put('/orders/ai/training/definitions', [OrderAiTrainingController::class, 'updateDefinitions']);
     Route::get('/orders/ai/training/{datasetId}', [OrderAiTrainingController::class, 'show'])->whereNumber('datasetId');
     Route::post('/orders/ai/training', [OrderAiTrainingController::class, 'store']);
     Route::post('/orders/ai/training/{datasetId}', [OrderAiTrainingController::class, 'update'])->whereNumber('datasetId');

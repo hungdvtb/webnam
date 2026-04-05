@@ -53,6 +53,15 @@ const buildRulePhrase = (record) => {
         .join(', ');
 };
 
+const splitDefinitionLines = (value) => String(value || '')
+    .split(/\r?\n+/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+const mergeDefinitionTexts = (...values) => Array.from(new Set(
+    values.flatMap((value) => splitDefinitionLines(value))
+)).join('\n');
+
 const createEmptyForm = (inputType = 'text') => ({
     id: null,
     rule_phrase: '',
@@ -63,6 +72,7 @@ const createEmptyForm = (inputType = 'text') => ({
     input_type: inputType,
     source_name: '',
     training_note: '',
+    definition_text: '',
     input_text: '',
     input_image_url: '',
     input_image_mime: '',
@@ -85,6 +95,7 @@ const hydrateForm = (record) => ({
     input_type: record?.input_type === 'image' ? 'image' : 'text',
     source_name: String(record?.source_name || '').trim(),
     training_note: String(record?.training_note || '').trim(),
+    definition_text: String(record?.definition_text || '').trim(),
     input_text: String(record?.input_text || '').trim(),
     input_image_url: String(record?.input_image_url || '').trim(),
     input_image_mime: String(record?.input_image_mime || '').trim(),
@@ -137,6 +148,11 @@ const AiTrainingManager = () => {
     const [previewing, setPreviewing] = useState(false);
     const [saving, setSaving] = useState(false);
     const [deleting, setDeleting] = useState(false);
+    const [definitionText, setDefinitionText] = useState('');
+    const [definitionSavedText, setDefinitionSavedText] = useState('');
+    const [definitionUpdatedAt, setDefinitionUpdatedAt] = useState('');
+    const [definitionLoading, setDefinitionLoading] = useState(true);
+    const [definitionSaving, setDefinitionSaving] = useState(false);
 
     const loadList = useCallback(async (activeFilters) => {
         setLoading(true);
@@ -185,6 +201,26 @@ const AiTrainingManager = () => {
         }
     }, []);
 
+    const loadDefinitionGlossary = useCallback(async () => {
+        setDefinitionLoading(true);
+        try {
+            const response = await orderAiTrainingApi.getDefinitions();
+            const payload = response.data?.data || {};
+            const nextDefinitionText = String(payload.definition_text || '').trim();
+
+            setDefinitionText(nextDefinitionText);
+            setDefinitionSavedText(nextDefinitionText);
+            setDefinitionUpdatedAt(String(payload.updated_at || '').trim());
+        } catch (error) {
+            console.error('Error fetching shared AI definitions', error);
+            setDefinitionText('');
+            setDefinitionSavedText('');
+            setDefinitionUpdatedAt('');
+        } finally {
+            setDefinitionLoading(false);
+        }
+    }, []);
+
     useEffect(() => {
         const timerId = window.setTimeout(() => loadList(filters), 220);
         return () => window.clearTimeout(timerId);
@@ -194,12 +230,27 @@ const AiTrainingManager = () => {
         loadDetail(selectedId);
     }, [selectedId, loadDetail]);
 
+    useEffect(() => {
+        loadDefinitionGlossary();
+    }, [loadDefinitionGlossary]);
+
     const canSave = useMemo(() => (
         String(form?.rule_key || '').trim()
         && String(form?.altar_size_label || '').trim()
         && Array.isArray(form?.mapping_items)
         && form.mapping_items.length > 0
     ), [form]);
+    const definitionEntriesCount = useMemo(
+        () => splitDefinitionLines(definitionText).length,
+        [definitionText]
+    );
+    const hasDefinitionChanges = definitionText.trim() !== definitionSavedText.trim();
+
+    const appendLegacyDefinitions = useCallback((value) => {
+        const mergedText = mergeDefinitionTexts(definitionText, value);
+        setDefinitionText(mergedText);
+        showToast?.({ type: 'success', message: 'Đã nạp định nghĩa cũ vào khu từ điển chung. Hãy bấm lưu để áp dụng.' });
+    }, [definitionText, showToast]);
 
     const openCreateDrawer = (inputType) => {
         setForm(createEmptyForm(inputType));
@@ -249,6 +300,7 @@ const AiTrainingManager = () => {
                     ? String(form?.input_text || '').trim()
                     : String(form?.training_note || form?.rule_phrase || '').trim()
             );
+            payload.append('definition_text', mergeDefinitionTexts(definitionText, form?.definition_text));
 
             if (form?.attachment instanceof File) {
                 payload.append('attachment', form.attachment);
@@ -284,6 +336,31 @@ const AiTrainingManager = () => {
             });
         } finally {
             setPreviewing(false);
+        }
+    };
+
+    const handleSaveDefinitions = async () => {
+        setDefinitionSaving(true);
+        try {
+            const response = await orderAiTrainingApi.updateDefinitions({
+                definition_text: definitionText,
+            });
+            const payload = response.data?.data || {};
+            const nextDefinitionText = String(payload.definition_text || '').trim();
+
+            setDefinitionText(nextDefinitionText);
+            setDefinitionSavedText(nextDefinitionText);
+            setDefinitionUpdatedAt(String(payload.updated_at || '').trim());
+            showToast?.({ type: 'success', message: response.data?.message || 'Đã lưu từ điển AI dùng chung.' });
+        } catch (error) {
+            console.error('Error saving shared AI definitions', error);
+            showModal?.({
+                title: 'Không thể lưu từ điển AI',
+                content: error?.response?.data?.message || 'Vui lòng kiểm tra lại phần định nghĩa và thử lại.',
+                type: 'error',
+            });
+        } finally {
+            setDefinitionSaving(false);
         }
     };
 
@@ -371,6 +448,75 @@ const AiTrainingManager = () => {
                         <span className="material-symbols-outlined text-[16px]">add_photo_alternate</span>
                         Thêm ảnh train
                     </button>
+                </div>
+            </div>
+
+            <div className={`${panelClassName} p-4`}>
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_320px]">
+                    <div className="space-y-3">
+                        <div>
+                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/45">Từ điển AI dùng chung</div>
+                            <div className="mt-1 text-[18px] font-black text-primary">Quản lý từ gọi vùng miền / viết tắt / tên quen</div>
+                            <p className="mt-2 text-[13px] font-semibold leading-6 text-primary/60">
+                                Khu này áp dụng chung cho lúc train dữ liệu và lúc “Tìm nhanh bằng AI”. Ví dụ: <span className="font-black text-primary/70">bình bông = lọ hoa</span>, <span className="font-black text-primary/70">ml = men lam</span>.
+                            </p>
+                        </div>
+                        <textarea
+                            value={definitionText}
+                            onChange={(event) => setDefinitionText(event.target.value)}
+                            placeholder={`Ví dụ:\nbình bông = lọ hoa\nml = men lam\nmâm trái cây = mâm bồng`}
+                            className="min-h-[176px] w-full rounded-sm border border-primary/15 bg-[#FAF8F3] px-3 py-3 text-[13px] font-semibold leading-6 text-[#0F172A] shadow-sm transition-all focus:border-primary/35 focus:outline-none resize-y"
+                        />
+                    </div>
+
+                    <div className="rounded-sm border border-primary/10 bg-[#FAF8F3] p-4">
+                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Áp dụng</div>
+                        <div className="mt-2 text-[13px] font-semibold leading-6 text-primary/65">
+                            Train text
+                            <br />
+                            Train ảnh
+                            <br />
+                            Tìm nhanh bằng AI
+                        </div>
+
+                        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                            <div className="rounded-sm border border-primary/10 bg-white px-3 py-3">
+                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Số dòng định nghĩa</div>
+                                <div className="mt-1 text-[22px] font-black text-primary">{definitionEntriesCount}</div>
+                            </div>
+                            <div className="rounded-sm border border-primary/10 bg-white px-3 py-3">
+                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Cập nhật gần nhất</div>
+                                <div className="mt-1 text-[12px] font-semibold leading-5 text-primary/60">
+                                    {definitionLoading ? 'Đang tải...' : formatDateTime(definitionUpdatedAt)}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="mt-4 text-[11px] font-semibold leading-5 text-primary/45">
+                            Mỗi dòng theo dạng <span className="font-black text-primary/65">từ khách hay gọi = tên chuẩn</span>. Khi sửa xong, bấm lưu để toàn bộ AI dùng ngay.
+                        </div>
+
+                        <div className="mt-4 flex flex-wrap items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={handleSaveDefinitions}
+                                disabled={definitionLoading || definitionSaving || !hasDefinitionChanges}
+                                className="inline-flex h-10 items-center gap-2 rounded-sm bg-primary px-4 text-[11px] font-black uppercase tracking-[0.12em] text-white transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <span className={`material-symbols-outlined text-[16px] ${definitionSaving ? 'animate-spin' : ''}`}>{definitionSaving ? 'progress_activity' : 'save'}</span>
+                                {definitionSaving ? 'Đang lưu' : 'Lưu từ điển AI'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={loadDefinitionGlossary}
+                                disabled={definitionLoading || definitionSaving}
+                                className="inline-flex h-10 items-center gap-2 rounded-sm border border-primary/15 bg-white px-4 text-[11px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/30 hover:bg-primary/[0.04] disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <span className="material-symbols-outlined text-[16px]">refresh</span>
+                                Tải lại
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -522,6 +668,30 @@ const AiTrainingManager = () => {
                                         </div>
                                     )}
                                 </div>
+
+                                {String(selectedRecord.definition_text || '').trim() && (
+                                    <div className="rounded-sm border border-amber-200 bg-amber-50 p-4">
+                                        <div className="flex flex-wrap items-center justify-between gap-3">
+                                            <div>
+                                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-amber-800/70">Định nghĩa riêng theo mẫu cũ</div>
+                                                <div className="mt-1 text-[12px] font-semibold leading-6 text-amber-900/80">
+                                                    Bản ghi này đang có định nghĩa riêng từ dữ liệu cũ. Phần quản lý chính hiện nằm ở khu “Từ điển AI dùng chung”.
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => appendLegacyDefinitions(selectedRecord.definition_text)}
+                                                className="inline-flex h-9 items-center gap-2 rounded-sm border border-amber-300 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-amber-800 transition-all hover:bg-amber-100"
+                                            >
+                                                <span className="material-symbols-outlined text-[14px]">playlist_add</span>
+                                                Nạp lên từ điển chung
+                                            </button>
+                                        </div>
+                                        <div className="mt-3 whitespace-pre-wrap rounded-sm border border-amber-200 bg-white px-3 py-3 text-[12px] font-semibold leading-6 text-[#0F172A]">
+                                            {selectedRecord.definition_text}
+                                        </div>
+                                    </div>
+                                )}
 
                                 <div className="rounded-sm border border-primary/10 bg-white p-4">
                                     <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Sản phẩm đã map</div>

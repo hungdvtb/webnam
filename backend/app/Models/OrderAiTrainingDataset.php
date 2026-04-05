@@ -21,6 +21,7 @@ class OrderAiTrainingDataset extends Model
         'input_type',
         'source_name',
         'training_note',
+        'definition_text',
         'input_text',
         'input_image_path',
         'input_image_mime',

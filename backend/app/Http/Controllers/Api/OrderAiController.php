@@ -71,6 +71,7 @@ class OrderAiController extends Controller
             'rules.*.training_source_type' => 'nullable|string|in:manual,image',
             'rules.*.training_source_name' => 'nullable|string|max:255',
             'rules.*.training_note' => 'nullable|string|max:5000',
+            'rules.*.definition_text' => 'nullable|string|max:10000',
             'rules.*.training_raw_text' => 'nullable|string|max:10000',
             'rules.*.trained_at' => 'nullable|string|max:80',
             'rules.*.items' => 'nullable|array|max:40',

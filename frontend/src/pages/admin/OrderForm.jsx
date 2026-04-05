@@ -1809,6 +1809,7 @@ const createOrderAiLineMeta = (item, sessionId) => normalizeOrderAiItemMeta({
 const OrderAiLineReplacePanel = ({
     show,
     currentLine = null,
+    anchorElement = null,
     searchTerm,
     onSearchTermChange,
     onClose,
@@ -1817,8 +1818,6 @@ const OrderAiLineReplacePanel = ({
     onSelect,
     currencyFormatter,
 }) => {
-    if (!show) return null;
-
     const currentSourceLabel = currentLine?.ai_meta?.source_phrase || currentLine?.name || '';
     const currentVariantLabel = currentLine?.options?.variant_label || '';
     const currentSku = currentLine?.sku || '';
@@ -1826,12 +1825,58 @@ const OrderAiLineReplacePanel = ({
     const emptyStateMessage = hasSearchTerm
         ? 'Không thấy sản phẩm phù hợp, thử đổi từ khóa tìm kiếm.'
         : 'Gõ ít nhất 2 ký tự để tìm sản phẩm thay thế.';
+    const [panelPosition, setPanelPosition] = useState({
+        left: 16,
+        top: 88,
+        width: 460,
+        maxHeight: 560,
+    });
+
+    useLayoutEffect(() => {
+        if (!show || typeof window === 'undefined') return undefined;
+
+        const updatePosition = () => {
+            const viewportWidth = window.innerWidth || 1280;
+            const viewportHeight = window.innerHeight || 720;
+            const panelWidth = Math.min(460, Math.max(340, viewportWidth - 24));
+            const anchorRect = anchorElement?.getBoundingClientRect?.() || null;
+            const preferredLeft = anchorRect ? anchorRect.right + 12 : viewportWidth - panelWidth - 16;
+            const left = Math.max(12, Math.min(preferredLeft, viewportWidth - panelWidth - 12));
+            const preferredTop = anchorRect ? anchorRect.top - 18 : 88;
+            const top = Math.max(76, Math.min(preferredTop, viewportHeight - 320));
+            const maxHeight = Math.max(300, viewportHeight - top - 20);
+
+            setPanelPosition({
+                left,
+                top,
+                width: panelWidth,
+                maxHeight,
+            });
+        };
+
+        updatePosition();
+        window.addEventListener('resize', updatePosition);
+        window.addEventListener('scroll', updatePosition, true);
+
+        return () => {
+            window.removeEventListener('resize', updatePosition);
+            window.removeEventListener('scroll', updatePosition, true);
+        };
+    }, [anchorElement, show]);
+
+    if (!show) return null;
 
     const panelContent = (
         <>
-            <div className="fixed inset-0 z-[250] bg-slate-950/10" onClick={onClose} />
+            <div className="fixed inset-0 z-[2500] bg-slate-950/10" onClick={onClose} />
             <div
-                className="fixed right-3 top-20 z-[260] flex max-h-[calc(100vh-6rem)] w-[min(480px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-sm border border-primary/15 bg-white shadow-[0_22px_48px_rgba(15,23,42,0.18)]"
+                className="fixed z-[2510] flex flex-col overflow-hidden rounded-sm border border-primary/15 bg-white shadow-[0_22px_48px_rgba(15,23,42,0.18)]"
+                style={{
+                    left: `${panelPosition.left}px`,
+                    top: `${panelPosition.top}px`,
+                    width: `${panelPosition.width}px`,
+                    maxHeight: `${panelPosition.maxHeight}px`,
+                }}
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => event.stopPropagation()}
             >
@@ -2023,6 +2068,7 @@ const OrderForm = () => {
     const pendingProductQuickSetupViewportRef = useRef(null);
     const orderAiFileInputRef = useRef(null);
     const orderAiLastInputPreviewUrlRef = useRef('');
+    const orderAiReplaceAnchorRef = useRef(null);
     const orderAiQuickRuleOptions = useMemo(
         () => buildOrderAiQuickRuleOptions(orderAiTrainingRules.length > 0 ? orderAiTrainingRules : orderAiRules),
         [orderAiRules, orderAiTrainingRules]
@@ -2692,6 +2738,7 @@ const OrderForm = () => {
     }, []);
 
     const closeOrderAiReplacePicker = useCallback(() => {
+        orderAiReplaceAnchorRef.current = null;
         setOrderAiReplaceLineId('');
         setOrderAiReplaceSearchTerm('');
         setOrderAiReplaceResults([]);
@@ -2772,7 +2819,8 @@ const OrderForm = () => {
         setOrderAiManualSearchResults([]);
     }, []);
 
-    const handleOpenOrderAiReplacePicker = useCallback((lineId, seedTerm = '') => {
+    const handleOpenOrderAiReplacePicker = useCallback((lineId, seedTerm = '', triggerElement = null) => {
+        orderAiReplaceAnchorRef.current = triggerElement;
         setOrderAiReplaceLineId(lineId);
         setOrderAiReplaceSearchTerm(seedTerm || '');
         setOrderAiReplaceResults([]);
@@ -5685,9 +5733,10 @@ const OrderForm = () => {
                                                                                 <button
                                                                                     type="button"
                                                                                     onPointerDown={(event) => event.stopPropagation()}
-                                                                                    onClick={() => handleOpenOrderAiReplacePicker(
+                                                                                    onClick={(event) => handleOpenOrderAiReplacePicker(
                                                                                         item.line_id,
-                                                                                        item.ai_meta?.source_phrase || item.name || ''
+                                                                                        item.ai_meta?.source_phrase || item.name || '',
+                                                                                        event.currentTarget
                                                                                     )}
                                                                                     className="inline-flex size-8 items-center justify-center rounded-sm border border-sky-200 bg-sky-50 text-sky-700 transition-all hover:border-sky-300 hover:bg-sky-100"
                                                                                     title="Đổi sản phẩm AI"
@@ -6188,6 +6237,7 @@ const OrderForm = () => {
             <OrderAiLineReplacePanel
                 show={Boolean(orderAiReplaceLineId)}
                 currentLine={activeOrderAiReplaceLine}
+                anchorElement={orderAiReplaceAnchorRef.current}
                 searchTerm={orderAiReplaceSearchTerm}
                 onSearchTermChange={setOrderAiReplaceSearchTerm}
                 onClose={closeOrderAiReplacePicker}

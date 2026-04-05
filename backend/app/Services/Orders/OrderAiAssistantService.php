@@ -19,7 +19,10 @@ class OrderAiAssistantService
     private const MAX_RULE_GROUPS = 24;
     private const MAX_RULE_ITEMS_PER_GROUP = 40;
     private const MAX_SUGGESTIONS = 5;
-    private const AUTO_SELECT_MIN_SCORE = 18;
+    private const AUTO_SELECT_MIN_SCORE = 60;           // Ngưỡng tối thiểu để auto-select (đã tăng mạnh)
+    private const TRAIN_PRIORITY_BONUS = 200;             // Bonus tuyệt đối khi khớp chính xác trong train
+    private const WRONG_FAMILY_PENALTY = 100;             // Phạt nặng khi sai loại sản phẩm
+    private const CONFIDENT_MATCH_THRESHOLD = 90;         // Ngưỡng để tự động thêm vào đơn (tăng lên 90)
     private const AI_MODEL = 'gemini-2.5-flash';
 
     private const KNOWN_ITEM_ALIASES = [
@@ -1235,34 +1238,46 @@ PROMPT;
     {
         $matchedRuleItem = $this->resolveMatchedRuleItem($item, $altarContext);
         $contextProfile = $this->buildAltarContextProfile($catalogEntries, $altarContext);
+        // Cham diem tat ca entries, kem tier uu tien
         $scoredCandidates = $catalogEntries
             ->map(function (array $entry) use ($item, $matchedRuleItem, $contextProfile) {
                 $scored = $this->scoreCatalogEntryWithFamilyGuard($entry, $item, $matchedRuleItem, $contextProfile);
 
                 return [
                     ...$entry,
-                    'match_score' => $scored['score'],
+                    'match_score'   => $scored['score'],
                     'match_reasons' => $scored['reasons'],
+                    'tier'          => $scored['tier'] ?? 3,
                 ];
             })
             ->filter(fn (array $entry) => $entry['match_score'] > 0)
-            ->sortByDesc('match_score')
+            // Sap xep: tier thap truoc (1=train, 2=cung nhom, 3=ngoai), roi score cao truoc
+            ->sortBy([['tier', 'asc'], ['match_score', 'desc']])
             ->values();
 
-        $topCandidate = $scoredCandidates->get(0);
+        $topCandidate    = $scoredCandidates->get(0);
         $secondCandidate = $scoredCandidates->get(1);
-        $topScore = (int) ($topCandidate['match_score'] ?? 0);
-        $gapScore = $topScore - (int) ($secondCandidate['match_score'] ?? 0);
-        $confidence = $this->resolveConfidence($topScore, $gapScore, $matchedRuleItem !== null);
-        $isConfidentMatch = $confidence >= 76 || ($matchedRuleItem !== null && $confidence >= 64);
+        $topScore        = (int) ($topCandidate['match_score'] ?? 0);
+        $topTier         = (int) ($topCandidate['tier'] ?? 3);
+        $gapScore        = $topScore - (int) ($secondCandidate['match_score'] ?? 0);
+        $confidence      = $this->resolveConfidence($topScore, $gapScore, $matchedRuleItem !== null, $topTier);
+
+        // Chi danh dau matched khi vuot nguong confidence cao.
+        // Cac ket qua nam trong tier uu tien (rule/train hoac cung nhom train)
+        // van duoc giu selected_entry o trang thai review de nguoi dung xac nhan.
+        $isConfidentMatch = $confidence >= self::CONFIDENT_MATCH_THRESHOLD;
+        $shouldKeepReviewedSelection = $topCandidate !== null
+            && $topScore >= self::AUTO_SELECT_MIN_SCORE
+            && ($matchedRuleItem !== null || $topTier <= 2);
 
         $selectedEntry = null;
-        $matchStatus = 'unresolved';
+        $matchStatus   = 'unresolved';
 
-        if ($topCandidate !== null && $topScore >= self::AUTO_SELECT_MIN_SCORE) {
+        if ($topCandidate !== null && $topScore >= self::AUTO_SELECT_MIN_SCORE && ($isConfidentMatch || $shouldKeepReviewedSelection)) {
             $selectedEntry = $this->trimCatalogEntry($topCandidate);
-            $matchStatus = $isConfidentMatch ? 'matched' : 'review';
+            $matchStatus   = $isConfidentMatch ? 'matched' : 'review';
         }
+        // Cac ket qua ngoai tier uu tien van de unresolved de nguoi dung tu them tay.
 
         $resolvedQuantity = $item['quantity'];
         if (
@@ -1920,38 +1935,70 @@ PROMPT;
             ->all();
     }
 
+    private function resolveKnownAttributeQualifierLabel(string $normalizedQualifier): ?string
+    {
+        $needle = trim($normalizedQualifier);
+        if ($needle === '') {
+            return null;
+        }
+
+        foreach (self::KNOWN_ATTRIBUTE_QUALIFIERS as $label => $aliases) {
+            foreach ([$label, ...$aliases] as $candidate) {
+                if ($this->normalizeText((string) $candidate) === $needle) {
+                    return $this->normalizeText($label);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Cham diem voi he thong uu tien 3 tang:
+     * Tier 1: Train data chinh xac (matchedRuleItem hoac preferredTargetIds)
+     * Tier 2: Cung danh muc / thuoc tinh voi bo train
+     * Tier 3: Ngoai nhom (fallback)
+     *
+     * Phat nang khi sai size (tra 0 diem) hoac sai attribute (tra 0 diem).
+     */
     private function scoreCatalogEntry(array $entry, array $item, ?array $matchedRuleItem, array $contextProfile = []): array
     {
-        $score = 0;
-        $reasons = [];
-        $searchText = $entry['search_text'] ?? '';
+        $score         = 0;
+        $reasons       = [];
+        $tier          = 3;
+        $searchText    = $entry['search_text'] ?? '';
         $attributeText = $entry['attribute_text'] ?? '';
         $entryTargetId = (int) ($entry['target_product_id'] ?? 0);
+
         $preferredTargetIds = collect($contextProfile['preferred_target_ids'] ?? [])
             ->map(fn ($value) => (int) $value)
             ->filter()
             ->values()
             ->all();
+
         $contextAttributeTerms = collect($contextProfile['attribute_terms'] ?? [])
             ->map(fn ($value) => $this->normalizeText((string) $value))
             ->filter()
             ->values()
             ->all();
+
         $contextCategoryTerms = collect($contextProfile['category_terms'] ?? [])
             ->map(fn ($value) => $this->normalizeText((string) $value))
             ->filter()
             ->values()
             ->all();
+
         $entryCategories = $this->normalizeEntryCategories($entry);
-        $itemName = $this->normalizeText($item['parsed_name']);
-        $canonicalName = $this->normalizeText($item['canonical_name'] ?? '');
-        $categoryHint = $this->normalizeText($item['category_hint']);
-        $qualifiers = collect($item['qualifiers'] ?? [])
+        $itemName        = $this->normalizeText($item['parsed_name']);
+        $canonicalName   = $this->normalizeText($item['canonical_name'] ?? '');
+        $categoryHint    = $this->normalizeText($item['category_hint']);
+        $qualifiers      = collect($item['qualifiers'] ?? [])
             ->map(fn ($value) => trim((string) $value))
             ->filter()
             ->unique(fn ($value) => $this->normalizeText($value))
             ->values()
             ->all();
+
         $queryTokens = collect([
             ...$this->tokenize($itemName),
             ...$this->tokenize($canonicalName),
@@ -1959,95 +2006,169 @@ PROMPT;
             ...collect($qualifiers)->flatMap(fn ($value) => $this->tokenize($value))->all(),
         ])->filter()->unique()->values()->all();
 
+        // ===== KIEM TRA SIZE: Phat nang neu sai size =====
+        $sizeRaw         = $this->normalizeText($item['size']['raw'] ?? '');
+        $itemSizeCm      = $item['size']['normalized_cm'] ?? null;
+        $entrySizeTokens = collect($entry['size_tokens'] ?? [])
+            ->map(fn ($value) => $this->normalizeText($value))
+            ->filter()
+            ->all();
+        $entrySizeCm     = $entry['size_cm'] ?? null;
+        $entryHasSize    = $entrySizeCm !== null || !empty($entrySizeTokens);
+
+        $sizeMatched    = false;
+        $sizeMismatched = false;
+
+        if ($sizeRaw !== '') {
+            if ($itemSizeCm !== null && $entrySizeCm !== null) {
+                if (abs((float) $itemSizeCm - (float) $entrySizeCm) < 0.1) {
+                    $sizeMatched = true;
+                } else {
+                    $sizeMismatched = true;
+                }
+            } elseif (in_array($sizeRaw, $entrySizeTokens, true)) {
+                $sizeMatched = true;
+            } elseif ($entryHasSize) {
+                $sizeMismatched = true;
+            }
+        }
+
+        if ($sizeMismatched) {
+            return ['score' => 0, 'reasons' => ['Sai kich thuoc - bo qua'], 'tier' => 3];
+        }
+
+        if ($sizeMatched) {
+            $score    += 50;
+            $reasons[] = 'Khop kich thuoc';
+        }
+
+        // ===== KIEM TRA ATTRIBUTE: Phat nang neu sai attribute =====
+        $itemQualifierNorms = collect($qualifiers)
+            ->map(fn ($value) => $this->normalizeText($value))
+            ->filter()
+            ->values()
+            ->all();
+
+        $attributeMismatch = false;
+        $attributeMatch    = false;
+
+        if ($itemQualifierNorms !== []) {
+            foreach ($itemQualifierNorms as $qNorm) {
+                if (str_contains($attributeText, $qNorm) || str_contains($searchText, $qNorm)) {
+                    $attributeMatch = true;
+                    $score    += 30;
+                    $reasons[] = 'Khop thuoc tinh';
+                } else {
+                    $matchedQualifierLabel = $this->resolveKnownAttributeQualifierLabel($qNorm);
+                    if ($matchedQualifierLabel === null || $matchedQualifierLabel === 'ca de') {
+                        continue;
+                    }
+
+                    $hasConflictingAttribute = false;
+                    foreach (self::KNOWN_ATTRIBUTE_QUALIFIERS as $attrLabel => $attrAliases) {
+                        if ($this->normalizeText($attrLabel) === $matchedQualifierLabel) {
+                            continue;
+                        }
+                        foreach ($attrAliases as $attrAlias) {
+                            $normalizedAttrAlias = $this->normalizeText($attrAlias);
+                            if ($normalizedAttrAlias !== '' && str_contains($attributeText, $normalizedAttrAlias)) {
+                                $hasConflictingAttribute = true;
+                                break 2;
+                            }
+                        }
+                    }
+
+                    if ($hasConflictingAttribute) {
+                        $attributeMismatch = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if ($attributeMismatch) {
+            return ['score' => 0, 'reasons' => ['Sai thuoc tinh (men/mau) - bo qua'], 'tier' => 3];
+        }
+
+        // ===== MATCHING TEN =====
         if ($itemName !== '' && str_contains($searchText, $itemName)) {
-            $score += 42;
-            $reasons[] = 'Trùng tên chính';
+            $score    += 60;
+            $reasons[] = 'Trung ten chinh';
         } else {
             $nameOverlap = count(array_intersect($this->tokenize($searchText), $this->tokenize($itemName)));
             if ($nameOverlap > 0) {
-                $score += 14 + ($nameOverlap * 8);
-                $reasons[] = 'Khớp token tên';
+                $score    += 20 + ($nameOverlap * 10);
+                $reasons[] = 'Khop token ten';
             }
         }
 
         foreach ($item['aliases'] as $alias) {
             $normalizedAlias = $this->normalizeText($alias);
             if ($normalizedAlias !== '' && str_contains($searchText, $normalizedAlias)) {
-                $score += 12;
-                $reasons[] = 'Khớp alias';
+                $score    += 15;
+                $reasons[] = 'Khop alias';
                 break;
             }
         }
 
         if ($canonicalName !== '' && $canonicalName !== $itemName && str_contains($searchText, $canonicalName)) {
-            $score += 18;
-            $reasons[] = 'Khớp tên chuẩn';
-        }
-
-        foreach ($qualifiers as $qualifier) {
-            $normalizedQualifier = $this->normalizeText($qualifier);
-            if ($normalizedQualifier === '' || !str_contains($searchText, $normalizedQualifier)) {
-                continue;
-            }
-
-            $score += str_contains($attributeText, $normalizedQualifier) ? 18 : 10;
-            $reasons[] = 'Khớp thuộc tính';
+            $score    += 25;
+            $reasons[] = 'Khop ten chuan';
         }
 
         if ($categoryHint !== '' && str_contains($searchText, $categoryHint)) {
-            $score += 10;
-            $reasons[] = 'Khớp nhóm/tên phụ';
+            $score    += 12;
+            $reasons[] = 'Khop nhom/ten phu';
         }
 
-        if ($matchedRuleItem === null && in_array($entryTargetId, $preferredTargetIds, true)) {
-            $score += (bool) ($contextProfile['force_rule_group'] ?? false) ? 18 : 12;
-            $reasons[] = 'Có trong dữ liệu train';
+        // ===== UU TIEN 1: Train data - bonus tuyet doi =====
+        $isInTrainData = false;
+
+        if ($matchedRuleItem !== null && (int) ($matchedRuleItem['target_product_id'] ?? 0) === $entryTargetId) {
+            $score        += self::TRAIN_PRIORITY_BONUS;
+            $tier          = 1;
+            $reasons[]     = 'Theo rule ban tho (train chinh xac)';
+            $isInTrainData = true;
+        } elseif ($matchedRuleItem === null && in_array($entryTargetId, $preferredTargetIds, true)) {
+            $trainBonus    = (bool) ($contextProfile['force_rule_group'] ?? false) ? 80 : 60;
+            $score        += $trainBonus;
+            $tier          = 1;
+            $reasons[]     = 'Co trong du lieu train';
+            $isInTrainData = true;
         }
 
-        if ($matchedRuleItem === null && $contextAttributeTerms !== []) {
-            foreach ($contextAttributeTerms as $contextAttributeTerm) {
-                if ($contextAttributeTerm === '' || str_contains($itemName, $contextAttributeTerm)) {
-                    continue;
-                }
+        // ===== UU TIEN 2: Cung danh muc / thuoc tinh voi bo train =====
+        if (!$isInTrainData) {
+            $hasSameCategoryAsTrain  = $contextCategoryTerms !== [] && array_intersect($entryCategories, $contextCategoryTerms) !== [];
+            $hasSameAttributeAsTrain = false;
 
-                if (str_contains($attributeText, $contextAttributeTerm) || str_contains($searchText, $contextAttributeTerm)) {
-                    $score += str_contains($attributeText, $contextAttributeTerm) ? 18 : 10;
-                    $reasons[] = 'Cùng thuộc tính bộ train';
-                    break;
+            if ($contextAttributeTerms !== []) {
+                foreach ($contextAttributeTerms as $contextAttributeTerm) {
+                    if ($contextAttributeTerm === '' || str_contains($itemName, $contextAttributeTerm)) {
+                        continue;
+                    }
+                    if (str_contains($attributeText, $contextAttributeTerm) || str_contains($searchText, $contextAttributeTerm)) {
+                        $hasSameAttributeAsTrain = true;
+                        $score    += str_contains($attributeText, $contextAttributeTerm) ? 25 : 15;
+                        $reasons[] = 'Cung thuoc tinh bo train';
+                        break;
+                    }
                 }
             }
-        }
 
-        if ($matchedRuleItem === null && $contextCategoryTerms !== [] && array_intersect($entryCategories, $contextCategoryTerms) !== []) {
-            $score += 14;
-            $reasons[] = 'Cùng danh mục bộ train';
+            if ($hasSameCategoryAsTrain) {
+                $score    += 20;
+                $tier      = 2;
+                $reasons[] = 'Cung danh muc bo train';
+            } elseif ($hasSameAttributeAsTrain) {
+                $tier = 2;
+            }
         }
 
         foreach ($queryTokens as $token) {
             if (str_contains($searchText, $token)) {
-                $score += 4;
+                $score += 3;
             }
-        }
-
-        $sizeRaw = $this->normalizeText($item['size']['raw'] ?? '');
-        $entrySizeTokens = collect($entry['size_tokens'] ?? [])->map(fn ($value) => $this->normalizeText($value))->filter()->all();
-        $entrySizeCm = $entry['size_cm'] ?? null;
-
-        if ($sizeRaw !== '') {
-            if ($item['size']['normalized_cm'] !== null && $entrySizeCm !== null && abs((float) $item['size']['normalized_cm'] - (float) $entrySizeCm) < 0.1) {
-                $score += 34;
-                $reasons[] = 'Khớp kích thước';
-            } elseif (in_array($sizeRaw, $entrySizeTokens, true)) {
-                $score += 28;
-                $reasons[] = 'Khớp size text';
-            } else {
-                $score -= 24;
-            }
-        }
-
-        if ($matchedRuleItem !== null && (int) ($matchedRuleItem['target_product_id'] ?? 0) === $entryTargetId) {
-            $score += 66;
-            $reasons[] = 'Theo rule ban thờ';
         }
 
         if ($item['size']['kind'] === 'height' && str_contains($searchText, 'cao')) {
@@ -2059,29 +2180,33 @@ PROMPT;
         }
 
         return [
-            'score' => max(0, $score),
+            'score'   => max(0, $score),
             'reasons' => collect($reasons)->unique()->values()->all(),
+            'tier'    => $tier,
         ];
     }
 
     private function scoreCatalogEntryWithFamilyGuard(array $entry, array $item, ?array $matchedRuleItem, array $contextProfile = []): array
     {
-        $scored = $this->scoreCatalogEntry($entry, $item, $matchedRuleItem, $contextProfile);
-        $searchText = $entry['search_text'] ?? '';
+        $scored        = $this->scoreCatalogEntry($entry, $item, $matchedRuleItem, $contextProfile);
+        $searchText    = $entry['search_text'] ?? '';
         $canonicalName = $this->normalizeText((string) ($item['canonical_name'] ?? ''));
 
         if ($canonicalName === '') {
             return $scored;
         }
 
+        // Phát hiện loại sản phẩm của entry (canonical family)
         $entryCanonicalName = $this->detectKnownItemCanonicalName([
             $entry['display_name'] ?? '',
             $entry['name'] ?? '',
             $entry['parent_product_name'] ?? '',
         ]);
 
+        // Sai loại sản phẩm (vd: tìm đèn nhưng entry là bát hương) → loại hoàn toàn
         if ($entryCanonicalName !== null && $entryCanonicalName !== $canonicalName) {
             $scored['score'] = 0;
+            $scored['tier']  = 3;
             return $scored;
         }
 
@@ -2098,26 +2223,44 @@ PROMPT;
         }
 
         if (!$hasFamilyMatch) {
-            $scored['score'] = max(0, (int) ($scored['score'] ?? 0) - 48);
+            // Phạt nặng hơn khi không thuộc cùng family (sai loại)
+            $scored['score'] = max(0, (int) ($scored['score'] ?? 0) - self::WRONG_FAMILY_PENALTY);
         }
 
         return $scored;
     }
 
-    private function resolveConfidence(int $topScore, int $gapScore, bool $hasRuleMatch): int
+    private function resolveConfidence(int $topScore, int $gapScore, bool $hasRuleMatch, int $tier = 3): int
     {
-        $base = min(96, max(8, $topScore));
+        // Score toi da theo tier:
+        // Tier 1 (train): max ~400 (TRAIN_PRIORITY_BONUS=200 + matching ~200)
+        // Tier 2 (cung nhom): max ~150
+        // Tier 3 (ngoai nhom): max ~100
+        $maxPossibleScore = match ($tier) {
+            1 => 400,
+            2 => 150,
+            default => 100,
+        };
 
-        if ($gapScore >= 20) {
-            $base += 8;
-        } elseif ($gapScore >= 10) {
-            $base += 4;
-        } elseif ($gapScore <= 2) {
+        $normalizedScore = min(100, max(0, (int) round(($topScore / $maxPossibleScore) * 100)));
+
+        // Gioi han toi da confidence theo tier
+        $base = match ($tier) {
+            1 => min(99, max(10, $normalizedScore)),
+            2 => min(85, max(10, $normalizedScore)),
+            default => min(75, max(10, $normalizedScore)),
+        };
+
+        if ($gapScore >= 30) {
+            $base += 5;
+        } elseif ($gapScore >= 15) {
+            $base += 2;
+        } elseif ($gapScore <= 5 && $topScore < 150) {
             $base -= 8;
         }
 
         if ($hasRuleMatch) {
-            $base += 6;
+            $base += 4;
         }
 
         return max(0, min(99, $base));

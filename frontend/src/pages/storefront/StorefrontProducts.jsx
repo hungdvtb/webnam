@@ -238,7 +238,7 @@ const ProductCard = ({ product, onConsult }) => {
         <article className="group flex h-full flex-col overflow-hidden rounded-[24px] border border-[#eee2d1] bg-white shadow-[0_18px_38px_-28px_rgba(27,54,93,0.42)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_26px_42px_-22px_rgba(27,54,93,0.34)]">
             <Link
                 to={`/san-pham/${product.slug || product.id}`}
-                className="relative block aspect-[4/5.28] overflow-hidden bg-[linear-gradient(180deg,#f7f0e6_0%,#efe3d3_100%)] md:aspect-[4/5.42]"
+                className="relative block aspect-square overflow-hidden bg-[linear-gradient(180deg,#f7f0e6_0%,#efe3d3_100%)] md:aspect-[4/5.42]"
             >
                 {!imgLoaded ? <div className="absolute inset-0 animate-pulse bg-stone-200/80" /> : null}
                 <img
@@ -513,7 +513,7 @@ const LoadingGrid = ({ compact = false }) => (
     <div className={`grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 ${compact ? 'md:gap-5' : 'md:gap-4'}`}>
         {Array.from({ length: 8 }).map((_, index) => (
             <div key={index} className="overflow-hidden rounded-[24px] border border-stone-100 bg-white">
-                <div className="aspect-[4/5.28] animate-pulse bg-stone-200 md:aspect-[4/5.42]" />
+                <div className="aspect-square animate-pulse bg-stone-200 md:aspect-[4/5.42]" />
                 <div className="space-y-2 p-3.5 md:p-4">
                     <div className="h-4 w-4/5 animate-pulse rounded bg-stone-200" />
                     <div className="h-4 w-2/5 animate-pulse rounded bg-stone-200" />

@@ -3958,6 +3958,21 @@
   backdrop-filter: blur(8px);
 }
 
+.productMediaStageSwipeable {
+  overscroll-behavior-x: contain;
+  touch-action: pan-y;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.productMediaStageSwipeable :global(img) {
+  -webkit-user-drag: none;
+}
+
+.productMediaStageDragging {
+  cursor: grabbing;
+}
+
 .productMediaVisual,
 .productMediaVideoShell {
   position: absolute;
@@ -4092,6 +4107,10 @@
   text-overflow: ellipsis;
 }
 
+.productMediaThumbImageLabel {
+  visibility: visible;
+}
+
 .productMediaThumbVideo {
   background: linear-gradient(180deg, rgba(255, 250, 250, 0.98), rgba(255, 246, 246, 0.94));
 }
@@ -4115,6 +4134,21 @@
 
 .productMediaThumbVideoOverlay .material-symbols-outlined {
   font-size: 1.2rem;
+}
+
+@media (max-width: 768px) {
+  .productMediaBadge[data-media-kind='image'] {
+    display: none;
+  }
+
+  .productMediaThumb {
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .productMediaThumbLabel {
+    display: none;
+  }
 }
 
 @media (min-width: 768px) {

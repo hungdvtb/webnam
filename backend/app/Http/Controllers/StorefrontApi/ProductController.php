@@ -433,7 +433,10 @@ class ProductController extends Controller
         $accountId = $this->getAccountId($request);
         $product = Product::query()
             ->when($accountId, fn($q) => $q->where('products.account_id', $accountId))
-            ->with('categories:id')
+            ->with([
+                'category:id,name,slug',
+                'categories:id,name,slug',
+            ])
             ->where(function ($q) use ($slug) {
                 $q->where('slug', $slug);
                 if (is_numeric($slug)) {
@@ -443,15 +446,27 @@ class ProductController extends Controller
             ->firstOrFail();
 
         $limit = 8;
+        $fallbackCategory = $this->resolvePrimaryCategory($product);
 
         $explicitRelated = $product->relatedProducts()
             ->when($accountId, fn($q) => $q->where('products.account_id', $accountId))
             ->where('products.status', true)
-            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->orderBy('sort_order')])
+            ->with([
+                'images' => fn($q) => $q->orderBy('is_primary', 'desc')->orderBy('sort_order'),
+                'category:id,name,slug',
+                'categories:id,name,slug',
+            ])
             ->get();
 
         if ($explicitRelated->isNotEmpty()) {
-            return response()->json($this->formatRelatedProductsResponse($explicitRelated));
+            return response()->json([
+                'items' => $this->formatRelatedProductsResponse($explicitRelated),
+                'meta' => [
+                    'source' => 'explicit',
+                    'has_explicit_related' => true,
+                    'fallback_category' => $fallbackCategory,
+                ],
+            ]);
         }
 
         $categoryIds = collect([$product->category_id])
@@ -462,7 +477,14 @@ class ProductController extends Controller
             ->values();
 
         if ($categoryIds->isEmpty()) {
-            return response()->json([]);
+            return response()->json([
+                'items' => [],
+                'meta' => [
+                    'source' => 'empty',
+                    'has_explicit_related' => false,
+                    'fallback_category' => $fallbackCategory,
+                ],
+            ]);
         }
 
         $fallback = Product::query()
@@ -476,25 +498,82 @@ class ProductController extends Controller
                         $categoryQuery->whereIn('categories.id', $categoryIds);
                     });
             })
-            ->with(['images' => fn($q) => $q->orderBy('is_primary', 'desc')->orderBy('sort_order')])
+            ->with([
+                'images' => fn($q) => $q->orderBy('is_primary', 'desc')->orderBy('sort_order'),
+                'category:id,name,slug',
+                'categories:id,name,slug',
+            ])
             ->inRandomOrder()
             ->limit($limit)
             ->get();
 
-        return response()->json($this->formatRelatedProductsResponse($fallback));
+        return response()->json([
+            'items' => $this->formatRelatedProductsResponse($fallback),
+            'meta' => [
+                'source' => 'category',
+                'has_explicit_related' => false,
+                'fallback_category' => $fallbackCategory,
+            ],
+        ]);
     }
 
     private function formatRelatedProductsResponse($products)
     {
-        return $products->map(fn ($product) => [
-            'id' => $product->id,
-            'name' => $product->name,
-            'slug' => $product->slug,
-            'price' => $product->price,
-            'current_price' => $product->current_price,
-            'main_image' => $product->main_image,
-            'average_rating' => round($product->average_rating, 1),
-            'primary_image' => $product->primary_image,
-        ])->values();
+        return $products->map(function ($product) {
+            $images = $this->mapProductImages($product);
+            $primaryImage = collect($images)->firstWhere('is_primary', true) ?? ($images[0] ?? null);
+
+            return [
+                'id' => $product->id,
+                'name' => $product->name,
+                'slug' => $product->slug,
+                'price' => $product->price,
+                'current_price' => $product->current_price,
+                'main_image' => $product->main_image ?: ($primaryImage['url'] ?? null),
+                'average_rating' => round($product->average_rating, 1),
+                'primary_image' => $primaryImage,
+                'images' => $images,
+                'category' => $this->resolvePrimaryCategory($product),
+            ];
+        })->values();
+    }
+
+    private function mapProductImages(Product $product)
+    {
+        return $product->images->map(function ($image) {
+            return [
+                'id' => $image->id,
+                'url' => $image->large_url ?: $image->image_url,
+                'path' => $image->large_url ?: $image->image_url,
+                'image_url' => $image->image_url,
+                'thumbnail_url' => $image->thumbnail_url,
+                'medium_url' => $image->medium_url,
+                'large_url' => $image->large_url,
+                'width' => $image->width,
+                'height' => $image->height,
+                'srcset' => $image->srcset,
+                'is_primary' => (bool) $image->is_primary,
+                'sort_order' => $image->sort_order,
+            ];
+        })->values()->all();
+    }
+
+    private function resolvePrimaryCategory(Product $product): ?array
+    {
+        $category = $product->category;
+
+        if (!$category && $product->relationLoaded('categories')) {
+            $category = $product->categories->first();
+        }
+
+        if (!$category) {
+            return null;
+        }
+
+        return [
+            'id' => (int) $category->id,
+            'name' => $category->name,
+            'slug' => $category->slug,
+        ];
     }
 }

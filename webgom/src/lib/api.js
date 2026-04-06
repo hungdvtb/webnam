@@ -81,7 +81,27 @@ export async function getWebProductDetail(slug) {
 }
 
 export async function getWebRelatedProducts(slug) {
-    return fetchFromApi(`/web-api/products/${slug}/related`);
+    const response = await fetchFromApi(`/web-api/products/${slug}/related`);
+
+    if (Array.isArray(response)) {
+        return {
+            items: response,
+            meta: {
+                source: response.length > 0 ? 'legacy' : 'empty',
+                has_explicit_related: response.length > 0,
+                fallback_category: null,
+            },
+        };
+    }
+
+    return {
+        items: Array.isArray(response?.items) ? response.items : [],
+        meta: {
+            source: typeof response?.meta?.source === 'string' ? response.meta.source : 'empty',
+            has_explicit_related: Boolean(response?.meta?.has_explicit_related),
+            fallback_category: response?.meta?.fallback_category ?? null,
+        },
+    };
 }
 
 export async function placeWebOrder(orderData) {

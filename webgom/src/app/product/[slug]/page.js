@@ -6,6 +6,22 @@ import styles from './product.module.css';
 import ProductDetailContent from '@/components/ProductDetailContent';
 import RelatedProductsSection from '@/components/product/RelatedProductsSection';
 
+function buildRelatedViewAllHref(product, relatedMeta) {
+  if (relatedMeta?.has_explicit_related) {
+    return '/products';
+  }
+
+  const fallbackCategorySlug = String(
+    relatedMeta?.fallback_category?.slug
+    || product?.category?.slug
+    || ''
+  ).trim();
+
+  return fallbackCategorySlug
+    ? `/category/${encodeURIComponent(fallbackCategorySlug)}`
+    : '/products';
+}
+
 function parseVideoLinks(html) {
   if (!html) return '';
 
@@ -42,6 +58,7 @@ export default async function ProductDetailPage({ params }) {
 
   let product = null;
   let relatedProducts = [];
+  let relatedMeta = null;
 
   try {
     product = await getWebProductDetail(slug);
@@ -59,10 +76,13 @@ export default async function ProductDetailPage({ params }) {
   }
 
   try {
-    relatedProducts = await getWebRelatedProducts(slug);
+    const relatedResponse = await getWebRelatedProducts(slug);
+    relatedProducts = relatedResponse?.items || [];
+    relatedMeta = relatedResponse?.meta || null;
   } catch (error) {
     console.error('Failed to fetch related products:', error);
     relatedProducts = [];
+    relatedMeta = null;
   }
 
   const images = product.images || [];
@@ -71,6 +91,7 @@ export default async function ProductDetailPage({ params }) {
     product?.type === 'simple' ? styles.productPageMainSimple : styles.productPageMainCompact;
   const descriptionHtml = parseVideoLinks(product?.description || '');
   const hasDescription = Boolean(descriptionHtml.trim());
+  const relatedViewAllHref = buildRelatedViewAllHref(product, relatedMeta);
 
   return (
     <div className={styles.productDetail}>
@@ -107,7 +128,10 @@ export default async function ProductDetailPage({ params }) {
             </div>
           </div>
 
-          <RelatedProductsSection relatedProducts={relatedProducts} />
+          <RelatedProductsSection
+            relatedProducts={relatedProducts}
+            viewAllHref={relatedViewAllHref}
+          />
         </div>
       </main>
     </div>

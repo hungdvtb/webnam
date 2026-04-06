@@ -892,8 +892,13 @@
     gap: 0.52rem;
   }
 
+  .productCard {
+    width: min(100%, 225px);
+    justify-self: center;
+  }
+
   .imageWrapper {
-    aspect-ratio: 1 / 1.18;
+    aspect-ratio: 1 / 1;
   }
 
   .productInfo {
@@ -975,8 +980,13 @@
     gap: 0.36rem;
   }
 
+  .productCard {
+    width: min(100%, 225px);
+    justify-self: center;
+  }
+
   .imageWrapper {
-    aspect-ratio: 1 / 1.24;
+    aspect-ratio: 1 / 1;
   }
 
   .productInfo {

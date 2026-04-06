@@ -6,10 +6,40 @@ import Image from 'next/image';
 import { resolveImageObjectUrl } from '@/lib/media';
 import styles from '../../app/product/[slug]/product.module.css';
 
+const DIRECT_IMAGE_FIELDS = [
+  'thumbnail_url',
+  'medium_url',
+  'large_url',
+  'original_url',
+  'image_url',
+  'url',
+  'path',
+  'src',
+];
+
+function pickDirectImageCandidate(relatedProduct) {
+  const candidate = DIRECT_IMAGE_FIELDS.reduce((accumulator, field) => {
+    if (relatedProduct?.[field]) {
+      accumulator[field] = relatedProduct[field];
+    }
+
+    return accumulator;
+  }, {});
+
+  return Object.keys(candidate).length > 0 ? candidate : null;
+}
+
 function getRelatedImageSrc(relatedProduct) {
+  const galleryImages = [
+    ...(Array.isArray(relatedProduct?.images) ? relatedProduct.images : []),
+    ...(Array.isArray(relatedProduct?.gallery) ? relatedProduct.gallery : []),
+    ...(Array.isArray(relatedProduct?.gallery_images) ? relatedProduct.gallery_images : []),
+  ];
+
   const candidates = [
     relatedProduct?.primary_image,
-    relatedProduct?.images?.[0],
+    ...galleryImages,
+    pickDirectImageCandidate(relatedProduct),
     relatedProduct?.main_image ? { path: relatedProduct.main_image } : null,
   ];
 
@@ -41,7 +71,7 @@ function getRelatedRatingMeta(relatedProduct) {
 
   return {
     ratingValue: Number.isFinite(ratingValue) ? Math.max(0, Math.min(5, ratingValue)) : 0,
-    ratingCount: Number.isFinite(ratingCount) ? Math.max(0, ratingCount) : 0
+    ratingCount: Number.isFinite(ratingCount) ? Math.max(0, ratingCount) : 0,
   };
 }
 
@@ -75,7 +105,10 @@ function getRailStep(railElement) {
   return railElement.clientWidth;
 }
 
-export default function RelatedProductsSection({ relatedProducts = [] }) {
+export default function RelatedProductsSection({
+  relatedProducts = [],
+  viewAllHref = '/products',
+}) {
   const railRef = useRef(null);
   const [canScrollPrev, setCanScrollPrev] = useState(false);
   const [canScrollNext, setCanScrollNext] = useState(relatedProducts.length > 2);
@@ -110,7 +143,7 @@ export default function RelatedProductsSection({ relatedProducts = [] }) {
 
     railElement.scrollBy({
       left: getRailStep(railElement) * direction,
-      behavior: 'smooth'
+      behavior: 'smooth',
     });
   };
 
@@ -121,7 +154,7 @@ export default function RelatedProductsSection({ relatedProducts = [] }) {
           <h3 className={styles.relatedTitle}>Sản phẩm tương tự</h3>
           <p className={styles.relatedSub}>Gợi ý những tác phẩm cùng phong cách dành cho bạn</p>
         </div>
-        <Link href="/products" className={styles.viewAll}>
+        <Link href={viewAllHref} className={styles.viewAll}>
           Xem tất cả <span className="material-symbols-outlined">arrow_forward</span>
         </Link>
       </div>
@@ -174,6 +207,7 @@ export default function RelatedProductsSection({ relatedProducts = [] }) {
                       fill
                       sizes="(max-width: 768px) 50vw, (max-width: 1200px) 50vw, 25vw"
                       style={{ objectFit: 'cover' }}
+                      unoptimized
                     />
                   ) : (
                     <div className={styles.relatedImagePlaceholder}>

@@ -4,6 +4,13 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import {
+  branchContainsSlug,
+  buildCategoryTree,
+  flattenCategoryBranch,
+  getSelectedParentIdForSlug,
+  orderRootCategories,
+} from "@/lib/categoryNavigation";
 import { useCart } from "@/context/CartContext";
 import { resolveMediaUrl } from "@/lib/media";
 
@@ -191,30 +198,14 @@ const resolveCategoryLogoUrl = (category = {}) => {
   return "";
 };
 
-const flattenProductCategories = (categories = []) => {
-  const flattened = [];
-
-  const walk = (parentId = null, level = 0) => {
-    categories
-      .filter((category) => (parentId === null ? !category?.parent_id : category?.parent_id === parentId))
-      .forEach((category) => {
-        flattened.push({
-          id: category?.id,
-          name: String(category?.name || "").trim(),
-          slug: String(category?.slug || "").trim(),
-          level,
-          depthOffset: Math.min(level, 4) * 10,
-          count: Number(category?.products_count || 0),
-          logoUrl: resolveCategoryLogoUrl(category),
-        });
-        walk(category?.id, level + 1);
-      });
-  };
-
-  walk();
-
-  return flattened.filter((category) => category.name && category.slug);
-};
+const buildMobileProductCategoryTree = (categories = []) =>
+  buildCategoryTree(
+    categories.map((category) => ({
+      ...category,
+      count: Number(category?.products_count || 0),
+      logoUrl: resolveCategoryLogoUrl(category),
+    }))
+  );
 
 const renderNavLink = (item) => {
   const href = String(item?.url || item?.link || "#").trim() || "#";
@@ -252,6 +243,7 @@ export default function Header({
   const [isMobileProductsMenuOpen, setIsMobileProductsMenuOpen] = useState(false);
   const [currentMobileCategorySlug, setCurrentMobileCategorySlug] = useState("");
   const [currentMobileSearchParamsString, setCurrentMobileSearchParamsString] = useState("");
+  const [selectedMobileParentId, setSelectedMobileParentId] = useState(null);
   const [mobileOrderNotice, setMobileOrderNotice] = useState("");
   const [mobileCartFormReady, setMobileCartFormReady] = useState(false);
   const { cartCount } = useCart();
@@ -261,12 +253,17 @@ export default function Header({
   const searchHistoryRef = useRef(null);
   const mobileProductsMenuRef = useRef(null);
   const mobileProductsToggleRef = useRef(null);
+  const mobileProductsListRef = useRef(null);
   const mobileOrderNoticeTimerRef = useRef(null);
   const lastSearchTouchTimestampRef = useRef(0);
   const cartBadgeLabel = cartCount > 99 ? "99+" : cartCount;
   const navigationItems = menuItems.length > 0 ? menuItems : DEFAULT_NAV_ITEMS;
   const mobileMenuItems = buildMobileMenuItems(navigationItems);
-  const flattenedProductCategories = flattenProductCategories(productCategories);
+  const mobileProductCategoryTree = buildMobileProductCategoryTree(productCategories);
+  const orderedMobileProductCategories = orderRootCategories(
+    mobileProductCategoryTree,
+    selectedMobileParentId
+  );
   const currentNormalizedPath = normalizePath(pathname);
   const isAllProductsView = currentNormalizedPath === "/products" && !currentMobileSearchParamsString;
   const isProductDetailPage = currentNormalizedPath.startsWith("/product/");
@@ -418,11 +415,43 @@ export default function Header({
     }
 
     const nextSearchParamsString = window.location.search.replace(/^\?/, "");
-    const nextCategorySlug = new URLSearchParams(nextSearchParamsString).get("category") || "";
+    const nextPathname = normalizePath(window.location.pathname);
+    let nextCategorySlug = new URLSearchParams(nextSearchParamsString).get("category") || "";
+
+    if (!nextCategorySlug && nextPathname.startsWith("/category/")) {
+      const slugFromPath = nextPathname.replace(/^\/category\//, "").split("/")[0] || "";
+
+      try {
+        nextCategorySlug = decodeURIComponent(slugFromPath);
+      } catch (error) {
+        nextCategorySlug = slugFromPath;
+      }
+    }
 
     setCurrentMobileSearchParamsString(nextSearchParamsString);
     setCurrentMobileCategorySlug(nextCategorySlug);
   }, [pathname, isMobileProductsMenuOpen]);
+
+  useEffect(() => {
+    setSelectedMobileParentId(
+      getSelectedParentIdForSlug(buildMobileProductCategoryTree(productCategories), currentMobileCategorySlug)
+    );
+  }, [productCategories, currentMobileCategorySlug]);
+
+  useEffect(() => {
+    if (!isMobileProductsMenuOpen || !selectedMobileParentId || typeof window === "undefined") {
+      return undefined;
+    }
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      mobileProductsListRef.current?.scrollTo({
+        top: 0,
+        behavior: "smooth",
+      });
+    });
+
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [isMobileProductsMenuOpen, selectedMobileParentId]);
 
   const showMobileOrderNotice = (message) => {
     const nextMessage = String(message || "").trim();
@@ -580,9 +609,14 @@ export default function Header({
     setIsMobileProductsMenuOpen((currentValue) => !currentValue);
   };
 
+  const handleMobileParentMenuClick = (parentId) => {
+    setSelectedMobileParentId((currentParentId) => (currentParentId === parentId ? null : parentId));
+  };
+
   const handleMobileAllProductsClick = (event) => {
     event.preventDefault();
     setCurrentMobileCategorySlug("");
+    setSelectedMobileParentId(null);
     setIsMobileProductsMenuOpen(false);
 
     if (currentNormalizedPath !== "/products" || currentMobileSearchParamsString) {
@@ -789,7 +823,7 @@ export default function Header({
             />
           )}
 
-          {flattenedProductCategories.length > 0 && (
+          {mobileProductCategoryTree.length > 0 && (
             <div
               id="mobile-products-sheet"
               ref={mobileProductsMenuRef}
@@ -810,7 +844,7 @@ export default function Header({
                 </button>
               </div>
 
-              <div className="mobile-products-sheet__list">
+              <div ref={mobileProductsListRef} className="mobile-products-sheet__list">
                 <Link
                   href="/products"
                   className={`mobile-products-link mobile-products-link-all ${isAllProductsView ? "mobile-products-link-active" : ""}`}
@@ -820,54 +854,107 @@ export default function Header({
                     <span className="mobile-products-link__logo mobile-products-link__logo-generic" aria-hidden="true">
                       <span className="material-symbols-outlined">grid_view</span>
                     </span>
-                  <span className="mobile-products-link__name">Tất cả sản phẩm</span>
+                    <span className="mobile-products-link__name">Tất cả sản phẩm</span>
                   </span>
-                  <span className="material-symbols-outlined mobile-products-link__arrow">chevron_right</span>
+                  <span className="mobile-products-link__meta">
+                    <span className="material-symbols-outlined mobile-products-link__arrow">chevron_right</span>
+                  </span>
                 </Link>
 
-                {flattenedProductCategories.map((category) => {
-                  const isCategoryActive =
-                    currentNormalizedPath === "/products" &&
-                    currentMobileCategorySlug === category.slug;
+                {orderedMobileProductCategories.map((category) => {
+                  const hasChildren = Array.isArray(category.children) && category.children.length > 0;
+                  const isExpanded = hasChildren && category._nodeKey === selectedMobileParentId;
+                  const isBranchActive = branchContainsSlug(category, currentMobileCategorySlug);
+                  const flattenedChildren = hasChildren ? flattenCategoryBranch(category.children) : [];
+
+                  const categoryLogo = (
+                    <span
+                      className={`mobile-products-link__logo ${
+                        category.logoUrl ? "mobile-products-link__logo-has-image" : ""
+                      }`}
+                      aria-hidden="true"
+                    >
+                      {category.logoUrl ? (
+                        <Image
+                          src={category.logoUrl}
+                          alt=""
+                          width={28}
+                          height={28}
+                          sizes="28px"
+                          className="mobile-products-link__logo-image"
+                          unoptimized
+                        />
+                      ) : (
+                        <span className="mobile-products-link__logo-fallback">
+                          {(category.name || "?").trim().charAt(0).toLocaleUpperCase("vi-VN")}
+                        </span>
+                      )}
+                    </span>
+                  );
+
+                  if (!hasChildren) {
+                    return (
+                      <Link
+                        key={category._nodeKey}
+                        href={`/products?category=${category.slug}`}
+                        className={`mobile-products-link ${
+                          currentMobileCategorySlug === category.slug ? "mobile-products-link-active" : ""
+                        }`}
+                        onClick={() => setIsMobileProductsMenuOpen(false)}
+                      >
+                        <span className="mobile-products-link__main">
+                          {categoryLogo}
+                          <span className="mobile-products-link__name">{category.name}</span>
+                        </span>
+                      </Link>
+                    );
+                  }
 
                   return (
-                    <Link
-                      key={category.id || category.slug}
-                      href={`/products?category=${category.slug}`}
-                      className={`mobile-products-link ${isCategoryActive ? "mobile-products-link-active" : ""}`}
-                      onClick={() => setIsMobileProductsMenuOpen(false)}
-                      style={{ "--mobile-products-indent": `${category.depthOffset}px` }}
-                    >
-                      <span className="mobile-products-link__main">
-                        <span
-                          className={`mobile-products-link__logo ${
-                            category.logoUrl ? "mobile-products-link__logo-has-image" : ""
-                          }`}
-                          aria-hidden="true"
-                        >
-                          {category.logoUrl ? (
-                            <Image
-                              src={category.logoUrl}
-                              alt=""
-                              width={28}
-                              height={28}
-                              sizes="28px"
-                              className="mobile-products-link__logo-image"
-                              unoptimized
-                            />
-                          ) : (
-                            <span className="mobile-products-link__logo-fallback">
-                              {(category.name || "?").trim().charAt(0).toLocaleUpperCase("vi-VN")}
-                            </span>
-                          )}
+                    <div key={category._nodeKey} className="mobile-products-group">
+                      <button
+                        type="button"
+                        className={`mobile-products-link mobile-products-link-button ${
+                          isExpanded || isBranchActive ? "mobile-products-link-active" : ""
+                        }`}
+                        onClick={() => handleMobileParentMenuClick(category._nodeKey)}
+                        aria-expanded={isExpanded}
+                      >
+                        <span className="mobile-products-link__main">
+                          {categoryLogo}
+                          <span className="mobile-products-link__name">{category.name}</span>
                         </span>
-                      <span className="mobile-products-link__name">
-                        {category.level > 0 ? "— " : ""}
-                        {category.name}
-                      </span>
-                      </span>
-                      <span className="mobile-products-link__count">{category.count}</span>
-                    </Link>
+                        <span className="mobile-products-link__meta mobile-products-link__meta-parent">
+                          <span
+                            className={`material-symbols-outlined mobile-products-link__arrow ${
+                              isExpanded ? "mobile-products-link__arrow-open" : ""
+                            }`}
+                          >
+                            expand_more
+                          </span>
+                        </span>
+                      </button>
+
+                      {isExpanded ? (
+                        <div className="mobile-products-children">
+                          {flattenedChildren.map((childCategory) => (
+                            <Link
+                              key={childCategory._nodeKey}
+                              href={`/products?category=${childCategory.slug}`}
+                              className={`mobile-products-link mobile-products-link-child ${
+                                currentMobileCategorySlug === childCategory.slug ? "mobile-products-link-active" : ""
+                              }`}
+                              onClick={() => setIsMobileProductsMenuOpen(false)}
+                              style={{ paddingLeft: `${12 + (childCategory.level * 12)}px` }}
+                            >
+                              <span className="mobile-products-link__main">
+                                <span className="mobile-products-link__name">{childCategory.name}</span>
+                              </span>
+                            </Link>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                   );
                 })}
               </div>
@@ -944,7 +1031,7 @@ export default function Header({
                   </span>
                 );
 
-                if (isProductsTrigger && flattenedProductCategories.length > 0) {
+                if (isProductsTrigger && mobileProductCategoryTree.length > 0) {
                   return (
                     <button
                       key={item.id}
@@ -1604,7 +1691,7 @@ export default function Header({
             bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
             z-index: 996;
             display: block;
-            width: fit-content;
+            width: max-content;
             min-width: min(320px, calc(100vw - 24px));
             max-width: calc(100vw - 24px);
             padding: 12px;
@@ -1645,6 +1732,7 @@ export default function Header({
             align-items: center;
             justify-content: space-between;
             gap: 10px;
+            min-width: 100%;
             padding-bottom: 10px;
             border-bottom: 1px solid rgba(226, 232, 240, 0.9);
           }
@@ -1683,23 +1771,27 @@ export default function Header({
           .mobile-products-sheet__list {
             display: flex;
             flex-direction: column;
-            gap: 6px;
-            margin-top: 10px;
+            gap: 8px;
+            width: max-content;
+            min-width: 100%;
+            margin-top: 12px;
             max-height: min(52vh, 340px);
             overflow-y: auto;
             overscroll-behavior: contain;
-            padding-right: 2px;
+            padding-right: 4px;
             scrollbar-width: thin;
           }
 
           .mobile-products-link {
-            width: 100%;
-            min-height: 44px;
+            width: max-content;
+            min-width: 100%;
+            box-sizing: border-box;
+            min-height: 48px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 10px;
-            padding: 9px 12px;
+            gap: 12px;
+            padding: 10px 12px;
             border-radius: 14px;
             border: 1px solid rgba(226, 232, 240, 0.95);
             background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
@@ -1734,6 +1826,45 @@ export default function Header({
             background: linear-gradient(180deg, rgba(248, 243, 233, 0.55) 0%, #ffffff 100%);
           }
 
+          .mobile-products-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            width: max-content;
+            min-width: 100%;
+          }
+
+          .mobile-products-link-button {
+            appearance: none;
+            -webkit-appearance: none;
+            text-align: left;
+            cursor: pointer;
+            font: inherit;
+          }
+
+          .mobile-products-children {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-left: 12px;
+            padding-left: 10px;
+            border-left: 2px solid rgba(197, 160, 89, 0.18);
+          }
+
+          .mobile-products-link-child {
+            min-height: 44px;
+            padding-top: 9px;
+            padding-bottom: 9px;
+            background: #fcfaf7;
+            box-shadow:
+              0 4px 12px rgba(15, 23, 42, 0.04),
+              inset 0 1px 0 rgba(255, 255, 255, 0.88);
+          }
+
+          .mobile-products-link-child .mobile-products-link__main {
+            gap: 0;
+          }
+
           .mobile-products-link-active {
             background: linear-gradient(180deg, rgba(248, 243, 233, 0.94) 0%, rgba(255, 255, 255, 0.98) 100%);
             color: #1a2c4e;
@@ -1745,23 +1876,32 @@ export default function Header({
 
           .mobile-products-link__main {
             min-width: 0;
-            flex: 1 1 auto;
             display: inline-flex;
             align-items: center;
             gap: 10px;
-            padding-left: var(--mobile-products-indent, 0px);
+            flex: 1 1 auto;
+          }
+
+          .mobile-products-link__meta {
+            display: inline-flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            flex: 0 0 auto;
+            align-self: center;
+            white-space: nowrap;
           }
 
           .mobile-products-link__logo {
-            width: 28px;
-            height: 28px;
+            width: 26px;
+            height: 26px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            flex: 0 0 28px;
+            flex: 0 0 26px;
             overflow: hidden;
             border: 1px solid rgba(197, 160, 89, 0.16);
-            border-radius: 10px;
+            border-radius: 9px;
             background: linear-gradient(180deg, #fffdfa 0%, #f7efe2 100%);
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
           }
@@ -1771,7 +1911,7 @@ export default function Header({
           }
 
           .mobile-products-link__logo-generic :global(.material-symbols-outlined) {
-            font-size: 16px !important;
+            font-size: 15px !important;
             color: #9b7330;
           }
 
@@ -1784,59 +1924,49 @@ export default function Header({
 
           .mobile-products-link__logo-fallback {
             color: #9b7330;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 800;
             line-height: 1;
             text-transform: uppercase;
           }
 
           .mobile-products-link__name {
-            min-width: 0;
-            flex: 1;
-            padding-right: 0;
+            display: flex;
+            align-items: center;
+            min-height: 24px;
             font-size: 14px;
             font-weight: 700;
-            line-height: 1.25;
+            line-height: 1.3;
             white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            flex: 0 0 auto;
+            overflow: visible;
+            text-overflow: clip;
           }
 
-          .mobile-products-link__count {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            margin-left: 6px;
-            min-width: 28px;
-            height: 24px;
-            padding: 0 7px;
-            border-radius: 999px;
-            border: 1px solid rgba(197, 160, 89, 0.18);
-            background: #f8f3e9;
-            color: #946d26;
-            font-size: 11px;
-            font-weight: 800;
-            line-height: 1;
-            font-variant-numeric: tabular-nums;
-            flex-shrink: 0;
-            box-shadow: inset 0 -1px 0 rgba(148, 109, 38, 0.08);
+          .mobile-products-link-child .mobile-products-link__name {
+            white-space: nowrap;
+            overflow: visible;
+            text-overflow: clip;
           }
 
           .mobile-products-link__arrow {
-            width: 24px;
-            height: 24px;
+            width: 22px;
+            height: 22px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            margin-left: auto;
             border-radius: 999px;
             background: rgba(197, 160, 89, 0.12);
             color: #946d26;
-            font-size: 16px !important;
+            font-size: 15px !important;
             flex-shrink: 0;
+            transition: transform 180ms ease, background-color 180ms ease;
           }
 
-          .mobile-products-link-active .mobile-products-link__count,
+          .mobile-products-link__arrow-open {
+            transform: rotate(180deg);
+          }
+
           .mobile-products-link-active .mobile-products-link__arrow {
             background: rgba(197, 160, 89, 0.16);
             color: #8f6724;
@@ -2187,8 +2317,8 @@ export default function Header({
         @media (max-width: 420px) {
           .mobile-products-sheet {
             left: 8px;
-            width: fit-content;
-            min-width: min(304px, calc(100vw - 16px));
+            width: max-content;
+            min-width: min(320px, calc(100vw - 16px));
             max-width: calc(100vw - 16px);
             bottom: calc(env(safe-area-inset-bottom, 0px) + 82px);
             padding: 12px;
@@ -2209,6 +2339,18 @@ export default function Header({
             min-height: 46px;
             padding: 10px 11px;
             border-radius: 13px;
+            column-gap: 10px;
+          }
+
+          .mobile-products-children {
+            margin-left: 10px;
+            padding-left: 8px;
+          }
+
+          .mobile-products-link-child {
+            min-height: 42px;
+            padding-top: 8px;
+            padding-bottom: 8px;
           }
 
           .mobile-products-link__name {
@@ -2216,11 +2358,8 @@ export default function Header({
             line-height: 1.28;
           }
 
-          .mobile-products-link__count {
-            min-width: 28px;
-            height: 24px;
-            padding: 0 7px;
-            font-size: 12px;
+          .mobile-products-link__meta {
+            gap: 7px;
           }
 
           .mobile-products-link__arrow {

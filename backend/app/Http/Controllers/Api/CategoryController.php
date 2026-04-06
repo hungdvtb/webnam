@@ -8,6 +8,7 @@ use App\Models\Attribute;
 use App\Models\Category;
 use App\Models\Product;
 use App\Models\SiteDomain;
+use App\Services\CategoryDemoLogoService;
 use App\Services\MediaService;
 use App\Support\SimpleXlsx;
 use Illuminate\Http\UploadedFile;
@@ -23,7 +24,8 @@ use Throwable;
 class CategoryController extends Controller
 {
     public function __construct(
-        protected MediaService $mediaService
+        protected MediaService $mediaService,
+        protected CategoryDemoLogoService $categoryDemoLogoService
     ) {
     }
 
@@ -513,6 +515,8 @@ class CategoryController extends Controller
             if ($parsedCategoryItems !== null) {
                 $this->syncCategoryItems($category, $parsedCategoryItems);
             }
+
+            $this->categoryDemoLogoService->syncDemoLogoPath($category);
         } catch (Throwable $exception) {
             \Log::error('Error creating category: ' . $exception->getMessage());
             return response()->json(['error' => $exception->getMessage()], 500);
@@ -614,6 +618,8 @@ class CategoryController extends Controller
             if ($parsedCategoryItems !== null) {
                 $this->syncCategoryItems($category, $parsedCategoryItems);
             }
+
+            $this->categoryDemoLogoService->syncDemoLogoPath($category);
 
             if ($parentChanged) {
                 $this->resequenceCategoryOrders();
@@ -1976,6 +1982,7 @@ class CategoryController extends Controller
             }
 
             $category->save();
+            $this->categoryDemoLogoService->syncDemoLogoPath($category);
             $persistedByKey[$record['record_key']] = $category;
 
             if ($isExisting) {

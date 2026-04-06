@@ -2,16 +2,14 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { startTransition, useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import styles from "@/app/page.module.css";
 import { resolveImageObjectUrl } from "@/lib/media";
 
 const BANNER_ROTATE_MS = 10000;
 const BANNER_SLOT_COUNT = 3;
-const PRODUCTS_PER_BATCH = 8;
 const FALLBACK_PRODUCT_ALT = "Sản phẩm gốm sứ";
 const FALLBACK_PRODUCT_IMAGE = "/logo-dai-thanh.png";
-const FALLBACK_CATEGORY_TEXT = "Danh mục gốm sứ";
 
 function shuffleItems(items) {
   const nextItems = [...items];
@@ -69,16 +67,6 @@ function getActiveBanners(categories, slugs) {
   return selected.slice(0, BANNER_SLOT_COUNT);
 }
 
-function buildInitialVisibleCounts(sections) {
-  const nextCounts = {};
-
-  sections.forEach((section) => {
-    nextCounts[section.slug] = Math.min(PRODUCTS_PER_BATCH, section.products.length);
-  });
-
-  return nextCounts;
-}
-
 function formatPrice(value) {
   const numericValue = Number.parseFloat(value || 0);
   const resolvedValue = Number.isFinite(numericValue) ? numericValue : 0;
@@ -87,30 +75,6 @@ function formatPrice(value) {
     style: "currency",
     currency: "VND",
   }).format(resolvedValue);
-}
-
-function getCategoryEyebrow(category) {
-  const productsCount = Number(category?.productsCount || 0);
-  if (productsCount > 0) {
-    return `${productsCount} sản phẩm`;
-  }
-
-  const description = String(category?.description || "").trim();
-  return description || FALLBACK_CATEGORY_TEXT;
-}
-
-function getHeroDescription(category) {
-  const description = String(category?.description || "").trim();
-  if (description) {
-    return description;
-  }
-
-  const productsCount = Number(category?.productsCount || 0);
-  if (productsCount > 0) {
-    return `Khám phá ${productsCount} sản phẩm trong danh mục ${category.name}.`;
-  }
-
-  return FALLBACK_CATEGORY_TEXT;
 }
 
 function getProductImageSrc(product) {
@@ -142,7 +106,7 @@ export function HomeDesktopHero({ bannerCategories = [] }) {
     }, BANNER_ROTATE_MS);
 
     return () => window.clearInterval(intervalId);
-  }, [bannerCategories.length, rotateBanners]);
+  }, [bannerCategories.length]);
 
   const activeBanners = getActiveBanners(bannerCategories, activeBannerSlugs);
   const heroBanner = activeBanners[0];
@@ -168,9 +132,9 @@ export function HomeDesktopHero({ bannerCategories = [] }) {
             />
             <div className={styles.heroOverlay}></div>
             <div className={styles.heroContent}>
-              <p className={styles.heroSubtitle}>{getCategoryEyebrow(heroBanner)}</p>
+              <p className={styles.heroSubtitle}>{heroBanner.eyebrow}</p>
               <h2 className={`${styles.heroTitle} ${styles.dynamicHeroTitle}`}>{heroBanner.name}</h2>
-              <p className={styles.heroDescription}>{getHeroDescription(heroBanner)}</p>
+              <p className={styles.heroDescription}>{heroBanner.heroDescription}</p>
               <span className={`btn-primary ${styles.heroCta}`}>KHÁM PHÁ NGAY</span>
             </div>
           </div>
@@ -186,7 +150,7 @@ export function HomeDesktopHero({ bannerCategories = [] }) {
             style={{ backgroundImage: `url("${banner.bannerSrc}")` }}
           >
             <div className={styles.bannerText}>
-              <p>{getCategoryEyebrow(banner)}</p>
+              <p>{banner.eyebrow}</p>
               <h3>{banner.name}</h3>
               <span className={styles.sideBannerCta}>Khám phá ngay</span>
             </div>
@@ -198,12 +162,6 @@ export function HomeDesktopHero({ bannerCategories = [] }) {
 }
 
 export function HomeDesktopCatalog({ categorySections = [] }) {
-  const [visibleCounts, setVisibleCounts] = useState(() => buildInitialVisibleCounts(categorySections));
-
-  useEffect(() => {
-    setVisibleCounts(buildInitialVisibleCounts(categorySections));
-  }, [categorySections]);
-
   if (!categorySections.length) {
     return null;
   }
@@ -212,17 +170,13 @@ export function HomeDesktopCatalog({ categorySections = [] }) {
     <section className={`container ${styles.productsSection} ${styles.desktopOnly}`}>
       <div className={styles.catalogGroups}>
         {categorySections.map((section) => {
-          const visibleCount = visibleCounts[section.slug] || 0;
-          const visibleProducts = section.products.slice(0, visibleCount);
-          const hasMoreProducts = visibleProducts.length < section.products.length;
-
           return (
             <article key={section.slug} className={styles.categoryGroup}>
               <div className={styles.sectionHeader}>
                 <div className={styles.headerLeft}>
                   <div>
                     <h2 className={styles.sectionTitle}>{section.name}</h2>
-                    <p className={styles.categoryMeta}>{getCategoryEyebrow(section)}</p>
+                    <p className={styles.categoryMeta}>{section.eyebrow}</p>
                   </div>
                 </div>
                 <Link href={section.href} className={styles.viewAll}>
@@ -230,9 +184,9 @@ export function HomeDesktopCatalog({ categorySections = [] }) {
                 </Link>
               </div>
 
-              {visibleProducts.length > 0 ? (
+              {section.products.length > 0 ? (
                 <div className={styles.productsGrid}>
-                  {visibleProducts.map((product) => (
+                  {section.products.map((product) => (
                     <Link
                       href={`/product/${product.slug || product.id}`}
                       key={`${section.slug}-${product.id}`}
@@ -269,28 +223,6 @@ export function HomeDesktopCatalog({ categorySections = [] }) {
               ) : (
                 <div className={styles.emptyCategoryState}>
                   Danh mục này hiện chưa có sản phẩm để hiển thị.
-                </div>
-              )}
-
-              {hasMoreProducts && (
-                <div className={styles.loadMoreWrap}>
-                  <button
-                    type="button"
-                    className={styles.loadMoreButton}
-                    onClick={() => {
-                      startTransition(() => {
-                        setVisibleCounts((currentCounts) => ({
-                          ...currentCounts,
-                          [section.slug]: Math.min(
-                            (currentCounts[section.slug] || PRODUCTS_PER_BATCH) + PRODUCTS_PER_BATCH,
-                            section.products.length
-                          ),
-                        }));
-                      });
-                    }}
-                  >
-                    Xem thêm
-                  </button>
                 </div>
               )}
             </article>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="20" y1="18" x2="140" y2="145" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF8F1"/>
+      <stop offset="1" stop-color="#E6C49C"/>
+    </linearGradient>
+    <linearGradient id="vase" x1="61" y1="44" x2="100" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C87D45"/>
+      <stop offset="1" stop-color="#804B2A"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="144" height="144" rx="34" fill="url(#bg)"/>
+  <rect x="9.5" y="9.5" width="141" height="141" rx="32.5" stroke="#804B2A" stroke-opacity=".12" stroke-width="3"/>
+  <circle cx="120" cy="38" r="18" fill="#FFF" fill-opacity=".3"/>
+  <ellipse cx="80" cy="126" rx="39" ry="11" fill="#804B2A" fill-opacity=".12"/>
+  <path d="M68 41h24c0 8.4-3.7 13.9-11 16.6v9.1c15.2 3.7 24 13 24 26v4.8c0 15.2-11 27.5-24.5 27.5h-1c-13.5 0-24.5-12.3-24.5-27.5v-4.8c0-13 8.8-22.3 24-26v-9.1C71.7 54.9 68 49.4 68 41Z" fill="url(#vase)"/>
+  <path d="M63 89c5.4-3.3 11.1-4.9 17-4.9 6.2 0 12 1.6 17.4 4.9" stroke="#F7DFC1" stroke-width="4.8" stroke-linecap="round"/>
+  <path d="M66 101h28" stroke="#F7DFC1" stroke-width="4.8" stroke-linecap="round"/>
+  <path d="m52 58 4 4m56-4-4 4m-51 58 4-4m46 4-4-4" stroke="#C87D45" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="80" cy="53" r="6" fill="#F0CAA2"/>
+</svg>

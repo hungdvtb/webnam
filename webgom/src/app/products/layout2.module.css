@@ -185,7 +185,7 @@
 .dropdownList {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.35rem;
   max-height: 320px;
   overflow-y: auto;
 }
@@ -195,6 +195,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+  min-height: 42px;
   padding: 0.7rem 0.95rem;
   border-radius: 0.5rem;
   color: #1b365d;
@@ -216,13 +217,84 @@
 
 .optLabel {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  line-height: 1.35;
 }
 
 .optCount {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
   margin-left: 0.5rem;
-  opacity: 0.55;
-  font-size: 0.75rem;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  background: rgba(197, 160, 101, 0.12);
+  color: rgba(122, 89, 30, 0.86);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.mobileCategoryGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.mobileCategoryParentButton {
+  width: 100%;
+  border: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.mobileCategoryParentMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
+.mobileCategoryArrow {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(197, 160, 89, 0.12);
+  color: #946d26;
+  font-size: 16px !important;
+  transition: transform 0.2s ease, background-color 0.2s ease;
+}
+
+.mobileCategoryArrowExpanded {
+  transform: rotate(180deg);
+}
+
+.mobileCategoryChildren {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-left: 0.35rem;
+  padding-left: 0.35rem;
+  border-left: 2px solid rgba(197, 160, 89, 0.18);
+}
+
+.mobileCategoryChildItem {
+  background: #fcfaf7;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
 }
 
 .toggleContainer {
@@ -634,6 +706,26 @@
     max-height: 280px;
   }
 
+  .mobileCategoryGroup {
+    gap: 0.4rem;
+  }
+
+  .mobileCategoryParentButton {
+    min-height: 44px;
+  }
+
+  .mobileCategoryChildren {
+    gap: 0.35rem;
+    margin-left: 0.45rem;
+    padding-left: 0.45rem;
+  }
+
+  .mobileCategoryChildItem {
+    min-height: 40px;
+    padding-top: 0.55rem;
+    padding-bottom: 0.55rem;
+  }
+
   .dropdownOption {
     gap: 0.5rem;
     padding: 0.55rem 0.75rem;
@@ -810,6 +902,11 @@
 
   .dropdownBtnArrow {
     font-size: 17px;
+  }
+
+  .mobileCategoryChildren {
+    margin-left: 0.35rem;
+    padding-left: 0.35rem;
   }
 
   .toggleContainer {

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="20" y1="18" x2="140" y2="145" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF8EF"/>
+      <stop offset="1" stop-color="#EFD4B1"/>
+    </linearGradient>
+    <linearGradient id="plate" x1="45" y1="45" x2="116" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFDF8"/>
+      <stop offset="1" stop-color="#EFDABB"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="144" height="144" rx="34" fill="url(#bg)"/>
+  <rect x="9.5" y="9.5" width="141" height="141" rx="32.5" stroke="#8B4F28" stroke-opacity=".12" stroke-width="3"/>
+  <circle cx="122" cy="40" r="18" fill="#FFF" fill-opacity=".3"/>
+  <ellipse cx="80" cy="126" rx="38" ry="11" fill="#8B4F28" fill-opacity=".12"/>
+  <circle cx="80" cy="80" r="40" fill="#B96F3D"/>
+  <circle cx="80" cy="80" r="34" fill="url(#plate)"/>
+  <circle cx="80" cy="80" r="25" fill="#FFF9F0"/>
+  <path d="M80 59c4.4 7.9 8.3 12.8 11.6 14.8 3.2 1.9 8.5 3.4 15.8 4.2-7.3 1-12.6 2.5-15.8 4.5-3.3 1.9-7.2 6.7-11.6 14.5-4.4-7.8-8.2-12.6-11.5-14.5-3.2-2-8.5-3.5-15.8-4.5 7.3-.8 12.6-2.3 15.8-4.2C71.8 71.8 75.6 66.9 80 59Z" fill="#D98C52"/>
+  <circle cx="80" cy="78" r="7" fill="#8B4F28"/>
+  <path d="M80 67v-11M80 104v-11M91 80h11M58 80h11M88 72l7-7M65 95l7-7M88 88l7 7M65 65l7 7" stroke="#C36F3A" stroke-width="5" stroke-linecap="round"/>
+  <path d="M64 49c4.4 1.7 8 4 10.8 6.9M96 49c-4.4 1.7-8 4-10.8 6.9" stroke="#F4E0C4" stroke-width="4.5" stroke-linecap="round"/>
+</svg>

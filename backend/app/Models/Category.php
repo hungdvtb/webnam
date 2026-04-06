@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\CategoryDemoLogoService;
 use App\Services\MediaService;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
@@ -103,7 +104,15 @@ class Category extends Model
             return app(MediaService::class)->buildAssetUrl($this->logoMediaAsset, 'large');
         }
 
-        return app(MediaService::class)->normalizeLegacyUrl($value);
+        $resolvedLogoUrl = app(MediaService::class)->normalizeLegacyUrl($value);
+
+        if ($resolvedLogoUrl !== '') {
+            return $resolvedLogoUrl;
+        }
+
+        return app(MediaService::class)->normalizeLegacyUrl(
+            app(CategoryDemoLogoService::class)->demoLogoPathFor($this)
+        );
     }
 
     public function getBannerImageAttribute(): ?array
@@ -113,7 +122,13 @@ class Category extends Model
 
     public function getLogoImageAttribute(): ?array
     {
-        return app(MediaService::class)->buildAssetPayload($this->logoMediaAsset, $this->getRawOriginal('logo_path'));
+        $legacyLogoPath = $this->getRawOriginal('logo_path');
+
+        if (!filled($legacyLogoPath)) {
+            $legacyLogoPath = app(CategoryDemoLogoService::class)->demoLogoPathFor($this);
+        }
+
+        return app(MediaService::class)->buildAssetPayload($this->logoMediaAsset, $legacyLogoPath);
     }
 
     public static function normalizeCode(?string $value): ?string

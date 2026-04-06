@@ -1,14 +1,15 @@
-import Image from "next/image";
 import Link from "next/link";
 import styles from "./page.module.css";
 import { getStorefrontData, getWebCategories, getWebProducts } from "@/lib/api";
 import { HomeDesktopCatalog, HomeDesktopHero } from "@/components/HomeDesktopHomepage";
 import HomeMobileCatalog from "@/components/HomeMobileCatalog";
+import HomeMobileHero from "@/components/HomeMobileHero";
 import { resolveImageObjectUrl, resolveMediaUrl } from "@/lib/media";
 
 const FALLBACK_CATEGORY_BANNER = "/banner-store.png";
 const FALLBACK_PRODUCT_IMAGE = "/logo-dai-thanh.png";
-const DESKTOP_PRODUCT_BATCH = 8;
+const HOME_CATEGORY_PRODUCT_LIMIT = 6;
+const FALLBACK_CATEGORY_TEXT = "Danh mục gốm sứ";
 const categoryNameSorter = new Intl.Collator("vi");
 
 const FALLBACK_CATEGORIES = [
@@ -49,13 +50,12 @@ function normalizeCategory(category, index) {
     href: `/category/${slug}`,
     description: String(category?.description || "").trim(),
     productsCount: Number(category?.products_count || 0),
-    bannerSrc: (
+    bannerSrc:
       resolveImageObjectUrl(
         category?.banner_image,
         "large",
         resolveMediaUrl(category?.banner_path) || FALLBACK_CATEGORY_BANNER
-      ) || FALLBACK_CATEGORY_BANNER
-    ),
+      ) || FALLBACK_CATEGORY_BANNER,
     order: Number(category?.order ?? index),
   };
 }
@@ -78,6 +78,40 @@ function getTopLevelCategories(source = []) {
   const categories = Array.isArray(source) ? source : [];
   const topLevelCategories = categories.filter((category) => category?.parent_id == null);
   return topLevelCategories.length ? topLevelCategories : categories;
+}
+
+function resolveCategoryProductsCount(category, totalProducts) {
+  const explicitCount = Number(totalProducts);
+  if (Number.isFinite(explicitCount) && explicitCount > 0) {
+    return explicitCount;
+  }
+
+  const fallbackCount = Number(category?.productsCount || 0);
+  return Number.isFinite(fallbackCount) ? fallbackCount : 0;
+}
+
+function getCategoryEyebrow(category, totalProducts) {
+  const productsCount = resolveCategoryProductsCount(category, totalProducts);
+  if (productsCount > 0) {
+    return `${productsCount} sản phẩm`;
+  }
+
+  const description = String(category?.description || "").trim();
+  return description || FALLBACK_CATEGORY_TEXT;
+}
+
+function getCategoryHeroDescription(category, totalProducts) {
+  const description = String(category?.description || "").trim();
+  if (description) {
+    return description;
+  }
+
+  const productsCount = resolveCategoryProductsCount(category, totalProducts);
+  if (productsCount > 0) {
+    return `Khám phá ${productsCount} sản phẩm trong danh mục ${category.name}.`;
+  }
+
+  return FALLBACK_CATEGORY_TEXT;
 }
 
 export default async function Home() {
@@ -103,7 +137,9 @@ export default async function Home() {
 
   const rawCategories = fetchedCategories.length
     ? fetchedCategories
-    : (Array.isArray(homepageData?.categories) ? homepageData.categories : FALLBACK_CATEGORIES);
+    : Array.isArray(homepageData?.categories)
+      ? homepageData.categories
+      : FALLBACK_CATEGORIES;
 
   const categories = uniqueBySlug(
     getTopLevelCategories(rawCategories)
@@ -122,18 +158,21 @@ export default async function Home() {
       const productsResponse = await getWebProducts({
         category: category.slug,
         page: 1,
-        per_page: Math.max(category.productsCount || 0, DESKTOP_PRODUCT_BATCH),
+        per_page: HOME_CATEGORY_PRODUCT_LIMIT,
         sort: "popular",
       });
 
       const products = Array.isArray(productsResponse?.data)
         ? productsResponse.data.map(normalizeProduct)
         : [];
+      const totalProducts = Number(productsResponse?.total || products.length || category.productsCount || 0);
 
       return {
         ...category,
         products,
-        totalProducts: Number(productsResponse?.total || products.length || category.productsCount || 0),
+        totalProducts,
+        eyebrow: getCategoryEyebrow(category, totalProducts),
+        heroDescription: getCategoryHeroDescription(category, totalProducts),
       };
     })
   );
@@ -149,6 +188,8 @@ export default async function Home() {
       ...categories[index],
       products: [],
       totalProducts: categories[index]?.productsCount || 0,
+      eyebrow: getCategoryEyebrow(categories[index], categories[index]?.productsCount || 0),
+      heroDescription: getCategoryHeroDescription(categories[index], categories[index]?.productsCount || 0),
     };
   });
 
@@ -175,48 +216,30 @@ export default async function Home() {
 
         <HomeDesktopHero bannerCategories={bannerCategories} />
 
-        <section className={`${styles.heroSection} ${styles.mobileOnly}`}>
-          <div className={styles.heroBanner}>
-            <Image
-              src="/hero.png"
-              alt="GỐM ĐẠI THÀNH Hero"
-              fill
-              sizes="100vw"
-              style={{ objectFit: "cover" }}
-              priority
-            />
-            <div className={styles.heroOverlay}></div>
-            <div className={styles.heroContent}>
-              <p className={styles.heroSubtitle}>BỘ SƯU TẬP ĐỘC BẢN</p>
-              <h2 className={styles.heroTitle}>TINH HOA<br />ĐẤT VIỆT</h2>
-              <Link href="/products" className="btn-primary" style={{ display: "inline-block" }}>
-                KHÁM PHÁ NGAY
-              </Link>
-            </div>
-          </div>
+        <section className={`${styles.heroSection} ${styles.mobileOnly} ${styles.mobileHeroSection}`}>
+          <HomeMobileHero
+            key={bannerCategories.map((category) => category.slug).join("|")}
+            bannerCategories={bannerCategories}
+          />
         </section>
       </div>
 
       <section className={`container ${styles.valuesSection}`}>
         <div className={styles.valueCard}>
           <span className="material-symbols-outlined">auto_fix_high</span>
-          <h4>QUY TRÌNH CHẾ TÁC</h4>
-          <p>Thủ công tỉ mỉ từng công đoạn</p>
+          <h4>Chế tác thủ công</h4>
         </div>
         <div className={styles.valueCard}>
           <span className="material-symbols-outlined">brush</span>
-          <h4>NGHỆ NHÂN BÁT TRÀNG</h4>
-          <p>Hội tụ những đôi tay tài hoa nhất</p>
+          <h4>Nghệ nhân Bát Tràng</h4>
         </div>
         <div className={styles.valueCard}>
           <span className="material-symbols-outlined">factory</span>
-          <h4>DÂY CHUYỀN HIỆN ĐẠI</h4>
-          <p>Kết hợp truyền thống và công nghệ</p>
+          <h4>Dây chuyền hiện đại</h4>
         </div>
         <div className={styles.valueCard}>
           <span className="material-symbols-outlined">public</span>
-          <h4>PHÂN PHỐI TOÀN QUỐC</h4>
-          <p>Giao hàng an toàn và nhanh chóng</p>
+          <h4>Phân phối toàn quốc</h4>
         </div>
       </section>
 

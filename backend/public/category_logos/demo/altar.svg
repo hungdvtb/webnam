@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="21" y1="18" x2="140" y2="145" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF7EC"/>
+      <stop offset="1" stop-color="#E9C89B"/>
+    </linearGradient>
+    <linearGradient id="altar" x1="49" y1="58" x2="111" y2="123" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B96F3E"/>
+      <stop offset="1" stop-color="#774226"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="144" height="144" rx="34" fill="url(#bg)"/>
+  <rect x="9.5" y="9.5" width="141" height="141" rx="32.5" stroke="#774226" stroke-opacity=".12" stroke-width="3"/>
+  <circle cx="122" cy="40" r="18" fill="#FFF" fill-opacity=".3"/>
+  <ellipse cx="80" cy="127" rx="39" ry="11" fill="#774226" fill-opacity=".12"/>
+  <rect x="50" y="99" width="60" height="20" rx="10" fill="#B96F3E"/>
+  <rect x="42" y="119" width="76" height="12" rx="6" fill="#774226"/>
+  <path d="M58 93c0-14.4 9.7-26 21.7-26h.6C92.3 67 102 78.6 102 93v6H58v-6Z" fill="url(#altar)"/>
+  <ellipse cx="80" cy="73" rx="21" ry="8" fill="#D99A62"/>
+  <path d="M80 56c3.2 4.4 4.8 8.6 4.8 12.8M71 59c2 2.9 3 5.8 3 8.7M89 59c-2 2.9-3 5.8-3 8.7" stroke="#F6DFC2" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M80 36c4.8 4.8 7.2 10 7.2 15.6 0 5.6-2.4 10.8-7.2 15.4-4.8-4.6-7.2-9.8-7.2-15.4S75.2 40.8 80 36Z" fill="#8F542E"/>
+  <path d="M63 86c5.4-3.3 11.1-4.9 17-4.9 6.2 0 12 1.6 17.4 4.9" stroke="#F9E5CB" stroke-width="4.8" stroke-linecap="round"/>
+  <path d="M49 94h14M97 94h14" stroke="#8F542E" stroke-width="7" stroke-linecap="round"/>
+</svg>

@@ -2,7 +2,7 @@ import Link from "next/link";
 import InfiniteProductList from "@/components/InfiniteProductList";
 import styles from "@/app/page.module.css";
 
-const MOBILE_PRODUCTS_PER_SECTION = 4;
+const MOBILE_PRODUCTS_PER_SECTION = 6;
 
 export default function HomeMobileCatalog({ categorySections = [] }) {
   if (!categorySections.length) {
@@ -16,10 +16,15 @@ export default function HomeMobileCatalog({ categorySections = [] }) {
           {categorySections.map((section) => (
             <article key={section.slug} className={styles.homeMobileCatalogGroup}>
               <div className={styles.homeMobileCatalogHeader}>
-                <h2 className={styles.homeMobileCatalogTitle}>{section.name}</h2>
-                <Link href={section.href} className={styles.homeMobileCatalogLink}>
-                  Xem tất cả <span className="material-symbols-outlined">arrow_forward</span>
-                </Link>
+                <div className={styles.homeMobileCatalogHeading}>
+                  <div className={styles.homeMobileCatalogTitleRow}>
+                    <h2 className={styles.homeMobileCatalogTitle}>{section.name}</h2>
+                    <Link href={section.href} className={styles.homeMobileCatalogLink}>
+                      Xem tất cả <span className="material-symbols-outlined">arrow_forward</span>
+                    </Link>
+                  </div>
+                  <p className={styles.homeMobileCatalogMeta}>{section.eyebrow}</p>
+                </div>
               </div>
 
               <InfiniteProductList

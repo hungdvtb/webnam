@@ -6,12 +6,16 @@ use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Services\MediaService;
+use App\Services\ProductImageRefreshService;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 
 class ProductImageController extends Controller
 {
     public function __construct(
-        protected MediaService $mediaService
+        protected MediaService $mediaService,
+        protected ProductImageRefreshService $productImageRefreshService
     ) {
     }
 
@@ -55,6 +59,60 @@ class ProductImageController extends Controller
         }
 
         return response()->json($uploadedImages, 201);
+    }
+
+    public function bulkRefreshPreview(Request $request)
+    {
+        @set_time_limit(120);
+
+        $validated = $request->validate([
+            'images' => 'required|array|min:1',
+            'images.*' => 'required|file|image|mimes:jpeg,png,jpg,gif,webp,avif|max:10240',
+            'product_ids' => 'nullable|array',
+            'product_ids.*' => 'integer|exists:products,id',
+            'scope_selected_only' => 'nullable|boolean',
+            'update_all_matches' => 'nullable|boolean',
+        ]);
+
+        $files = array_values(array_filter(
+            (array) $request->file('images', []),
+            fn ($file) => $file instanceof UploadedFile
+        ));
+
+        return response()->json(
+            $this->productImageRefreshService->preview($files, [
+                'product_ids' => $validated['product_ids'] ?? [],
+                'scope_selected_only' => (bool) ($validated['scope_selected_only'] ?? false),
+                'update_all_matches' => (bool) ($validated['update_all_matches'] ?? false),
+            ])
+        );
+    }
+
+    public function bulkRefreshApply(Request $request)
+    {
+        @set_time_limit(120);
+
+        $validated = $request->validate([
+            'images' => 'required|array|min:1',
+            'images.*' => 'required|file|image|mimes:jpeg,png,jpg,gif,webp,avif|max:10240',
+            'product_ids' => 'nullable|array',
+            'product_ids.*' => 'integer|exists:products,id',
+            'scope_selected_only' => 'nullable|boolean',
+            'update_all_matches' => 'nullable|boolean',
+        ]);
+
+        $files = array_values(array_filter(
+            (array) $request->file('images', []),
+            fn ($file) => $file instanceof UploadedFile
+        ));
+
+        return response()->json(
+            $this->productImageRefreshService->apply($files, [
+                'product_ids' => $validated['product_ids'] ?? [],
+                'scope_selected_only' => (bool) ($validated['scope_selected_only'] ?? false),
+                'update_all_matches' => (bool) ($validated['update_all_matches'] ?? false),
+            ])
+        );
     }
 
     /**

@@ -8,6 +8,7 @@ import { BUNDLE_DISCOUNT_RATE, getCartBundlePricing } from '@/lib/bundlePricing'
 import config from '@/lib/config';
 import { placeWebOrder, saveWebOrderDraft, getWebSiteSettings } from '@/lib/api';
 import { rememberLeadAttribution } from '@/lib/leadAttribution';
+import { resolveCartItemImageUrl } from '@/lib/media';
 import SearchableSelect from '@/components/ui/SearchableSelect';
 import styles from './cart.module.css';
 import ThankYouView from '@/components/common/ThankYouView';
@@ -347,20 +348,7 @@ export default function CartPage() {
   const formatPrice = (price) =>
     new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
 
-  const getImageUrl = (item) => {
-    const img = item.image;
-    if (!img) return null;
-    // Full URL stored directly in image_url field (DB standard)
-    if (img.image_url && img.image_url.startsWith('http')) return img.image_url;
-    // Legacy url field
-    if (img.url && img.url.startsWith('http')) return img.url;
-    // Relative path
-    if (img.path) {
-      const cleanPath = img.path.startsWith('/') ? img.path.substring(1) : img.path;
-      return `${config.storageUrl}/${cleanPath}`;
-    }
-    return null;
-  };
+  const getImageUrl = (item) => resolveCartItemImageUrl(item, 'medium', '');
 
   const bundleStatesByKey = useMemo(() => {
     const bundleStateMap = new Map();

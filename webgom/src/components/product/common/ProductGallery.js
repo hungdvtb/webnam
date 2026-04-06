@@ -8,6 +8,7 @@ import { resolveVideoEmbedUrl, resolveVideoThumbnailUrl } from '@/lib/media';
 const MOBILE_MEDIA_QUERY = '(max-width: 768px)';
 const SWIPE_AXIS_LOCK_THRESHOLD = 12;
 const SWIPE_TRIGGER_THRESHOLD = 48;
+const SWIPE_SETTLE_DURATION_MS = 220;
 const EMPTY_SWIPE_STATE = {
   pointerId: null,
   startX: 0,
@@ -28,25 +29,63 @@ export default function ProductGallery({
 }) {
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [isDraggingMedia, setIsDraggingMedia] = useState(false);
+  const [dragOffsetPx, setDragOffsetPx] = useState(0);
+  const [isSwipeSettling, setIsSwipeSettling] = useState(false);
+  const [visualIndexOverride, setVisualIndexOverride] = useState(null);
+  const [stageWidthPx, setStageWidthPx] = useState(1);
   const swipeStateRef = useRef({ ...EMPTY_SWIPE_STATE });
   const thumbRefs = useRef(new Map());
+  const swipeTimeoutRef = useRef(null);
   const embedUrl = resolveVideoEmbedUrl(videoUrl);
   const videoThumbnailUrl = resolveVideoThumbnailUrl(videoUrl);
   const hasVideo = Boolean(embedUrl);
-  const activeImage = activeIndex >= 0 ? (images[activeIndex] || images[0]) : images[0];
+  const resolvedActiveIndex = visualIndexOverride ?? activeIndex;
+  const activeImage = resolvedActiveIndex >= 0 ? (images[resolvedActiveIndex] || images[0]) : images[0];
   const totalMediaItems = images.length + (hasVideo ? 1 : 0);
   const showThumbnailStrip = totalMediaItems > 1 || (showSingleThumbnail && totalMediaItems === 1);
-  const isShowingVideo = hasVideo && (activeIndex === -1 || images.length === 0);
+  const isShowingVideo = hasVideo && (resolvedActiveIndex === -1 || images.length === 0);
   const mediaSummary = isShowingVideo
     ? 'Video YouTube'
     : images.length > 0
-      ? `\u1ea2nh ${Math.min(activeIndex + 1, images.length)} / ${images.length}`
+      ? `\u1ea2nh ${Math.min(resolvedActiveIndex + 1, images.length)} / ${images.length}`
       : 'Media s\u1ea3n ph\u1ea9m';
   const canSwipeImages = isMobileViewport && !isShowingVideo && images.length > 1;
+  const currentImageIndex = Math.min(Math.max(resolvedActiveIndex, 0), Math.max(images.length - 1, 0));
+  const currentImage = images[currentImageIndex] || activeImage;
+  const swipeDirection = dragOffsetPx < 0 ? 'next' : dragOffsetPx > 0 ? 'previous' : null;
+  const stageWidth = stageWidthPx || 1;
+  const swipeProgress = Math.min(Math.abs(dragOffsetPx) / stageWidth, 1);
+  const adjacentImageIndex = swipeDirection === 'next'
+    ? currentImageIndex + 1
+    : swipeDirection === 'previous'
+      ? currentImageIndex - 1
+      : -1;
+  const adjacentImage = adjacentImageIndex >= 0 && adjacentImageIndex < images.length
+    ? images[adjacentImageIndex]
+    : null;
+  const currentImageStyle = canSwipeImages
+    ? {
+        transform: `translate3d(${dragOffsetPx}px, 0, 0)`,
+        opacity: 1 - (swipeProgress * 0.16),
+      }
+    : undefined;
+  const adjacentImageStyle = adjacentImage
+    ? {
+        transform: `translate3d(${(swipeDirection === 'next' ? stageWidth : -stageWidth) + dragOffsetPx}px, 0, 0)`,
+        opacity: Math.max(0, Math.min(1, 0.3 + (swipeProgress * 0.7))),
+      }
+    : undefined;
 
   const resetSwipeState = () => {
     swipeStateRef.current = { ...EMPTY_SWIPE_STATE };
     setIsDraggingMedia(false);
+  };
+
+  const clearSwipeTimeout = () => {
+    if (swipeTimeoutRef.current !== null) {
+      window.clearTimeout(swipeTimeoutRef.current);
+      swipeTimeoutRef.current = null;
+    }
   };
 
   useEffect(() => {
@@ -78,9 +117,16 @@ export default function ProductGallery({
 
   useEffect(() => {
     if (!canSwipeImages) {
+      clearSwipeTimeout();
       swipeStateRef.current = { ...EMPTY_SWIPE_STATE };
     }
   }, [canSwipeImages]);
+
+  useEffect(() => (
+    () => {
+      clearSwipeTimeout();
+    }
+  ), []);
 
   useEffect(() => {
     if (!isMobileViewport || !showThumbnailStrip || typeof window === 'undefined') {
@@ -118,17 +164,15 @@ export default function ProductGallery({
 
   const commitSwipe = (direction) => {
     if (!canSwipeImages) {
-      return;
+      return currentImageIndex;
     }
 
-    const currentIndex = Math.min(Math.max(activeIndex, 0), images.length - 1);
+    const currentIndex = Math.min(Math.max(currentImageIndex, 0), images.length - 1);
     const nextIndex = direction === 'next'
       ? Math.min(currentIndex + 1, images.length - 1)
       : Math.max(currentIndex - 1, 0);
 
-    if (nextIndex !== currentIndex) {
-      setActiveIndex(nextIndex);
-    }
+    return nextIndex;
   };
 
   const handlePointerDown = (event) => {
@@ -138,6 +182,13 @@ export default function ProductGallery({
       || (typeof event.button === 'number' && event.button > 0)
     ) {
       return;
+    }
+
+    clearSwipeTimeout();
+    setVisualIndexOverride(null);
+    setStageWidthPx(event.currentTarget?.getBoundingClientRect?.().width || stageWidthPx || 1);
+    if (typeof event.currentTarget?.setPointerCapture === 'function' && event.pointerId != null) {
+      event.currentTarget.setPointerCapture(event.pointerId);
     }
 
     swipeStateRef.current = {
@@ -180,6 +231,15 @@ export default function ProductGallery({
     }
 
     if (swipeState.lockedAxis === 'x' && event.cancelable) {
+      const atFirstImage = currentImageIndex === 0;
+      const atLastImage = currentImageIndex === images.length - 1;
+      const isDraggingPastStart = atFirstImage && swipeState.deltaX > 0;
+      const isDraggingPastEnd = atLastImage && swipeState.deltaX < 0;
+      const visualOffset = (isDraggingPastStart || isDraggingPastEnd)
+        ? swipeState.deltaX * 0.32
+        : swipeState.deltaX;
+
+      setDragOffsetPx(visualOffset);
       event.preventDefault();
     }
   };
@@ -194,8 +254,45 @@ export default function ProductGallery({
       return;
     }
 
-    if (swipeState.lockedAxis === 'x' && Math.abs(swipeState.deltaX) >= SWIPE_TRIGGER_THRESHOLD) {
-      commitSwipe(swipeState.deltaX < 0 ? 'next' : 'previous');
+    if (typeof event?.currentTarget?.releasePointerCapture === 'function' && event.pointerId != null) {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture may already be released; ignore.
+      }
+    }
+
+    if (swipeState.lockedAxis === 'x') {
+      const direction = swipeState.deltaX < 0 ? 'next' : 'previous';
+      const nextIndex = commitSwipe(direction);
+      const didSwipeToAnotherImage = nextIndex !== currentImageIndex;
+
+      setIsSwipeSettling(true);
+
+      if (Math.abs(swipeState.deltaX) >= SWIPE_TRIGGER_THRESHOLD && didSwipeToAnotherImage) {
+        const finalOffset = direction === 'next' ? -stageWidth : stageWidth;
+        setDragOffsetPx(finalOffset);
+        swipeTimeoutRef.current = window.setTimeout(() => {
+          setVisualIndexOverride(nextIndex);
+          setActiveIndex(nextIndex);
+          setDragOffsetPx(0);
+          setIsSwipeSettling(false);
+          resetSwipeState();
+          window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
+              setVisualIndexOverride(null);
+            });
+          });
+          swipeTimeoutRef.current = null;
+        }, SWIPE_SETTLE_DURATION_MS);
+        return;
+      }
+
+      setDragOffsetPx(0);
+      swipeTimeoutRef.current = window.setTimeout(() => {
+        setIsSwipeSettling(false);
+        swipeTimeoutRef.current = null;
+      }, SWIPE_SETTLE_DURATION_MS);
     }
 
     resetSwipeState();
@@ -236,17 +333,39 @@ export default function ProductGallery({
               referrerPolicy="strict-origin-when-cross-origin"
             />
           </div>
-        ) : activeImage ? (
-          <div className={styles.productMediaVisual}>
-            <Image
-              src={getImageUrl(activeImage)}
-              alt={productName}
-              fill
-              sizes="(max-width: 767px) 100vw, (max-width: 1279px) 52vw, 620px"
-              className={styles.productMediaImage}
-              priority
-              unoptimized
-            />
+        ) : currentImage ? (
+          <div className={styles.productMediaViewport}>
+            {adjacentImage ? (
+              <div
+                className={`${styles.productMediaVisual} ${styles.productMediaVisualSwipe}`}
+                style={adjacentImageStyle}
+                aria-hidden="true"
+              >
+                <Image
+                  src={getImageUrl(adjacentImage)}
+                  alt={productName}
+                  fill
+                  sizes="(max-width: 767px) 100vw, (max-width: 1279px) 52vw, 620px"
+                  className={styles.productMediaImage}
+                  unoptimized
+                />
+              </div>
+            ) : null}
+
+            <div
+              className={`${styles.productMediaVisual} ${styles.productMediaVisualSwipe} ${isSwipeSettling ? styles.productMediaVisualSettling : ''}`}
+              style={currentImageStyle}
+            >
+              <Image
+                src={getImageUrl(currentImage)}
+                alt={productName}
+                fill
+                sizes="(max-width: 767px) 100vw, (max-width: 1279px) 52vw, 620px"
+                className={styles.productMediaImage}
+                priority
+                unoptimized
+              />
+            </div>
           </div>
         ) : (
           <div className={styles.productMediaPlaceholder}>

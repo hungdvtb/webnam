@@ -3981,11 +3981,32 @@
   height: 100%;
 }
 
+.productMediaViewport {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
 .productMediaVisual {
   display: flex;
   align-items: center;
   justify-content: center;
   padding: clamp(0.75rem, 2vw, 1.35rem);
+}
+
+.productMediaVisualSwipe {
+  will-change: transform, opacity;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease;
+}
+
+.productMediaVisualSettling {
+  transition-duration: 220ms;
+}
+
+.productMediaStageDragging .productMediaVisualSwipe {
+  transition: none;
 }
 
 .productMediaImage {

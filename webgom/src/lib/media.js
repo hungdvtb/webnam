@@ -5,6 +5,17 @@ const DATA_URL_PATTERN = /^data:image\//i;
 const BLOB_URL_PATTERN = /^blob:/i;
 const YOUTUBE_DIRECT_URL_PATTERN = /^(?:www\.|m\.youtube\.com|youtube\.com|youtu\.be|youtube-nocookie\.com)/i;
 const YOUTUBE_VIDEO_ID_PATTERN = /^[a-zA-Z0-9_-]{6,}$/;
+const IMAGE_PREFERENCE_KEYS = ['thumbnail', 'medium', 'large', 'original'];
+const DIRECT_IMAGE_FIELDS = [
+  'thumbnail_url',
+  'medium_url',
+  'large_url',
+  'original_url',
+  'image_url',
+  'url',
+  'path',
+  'src',
+];
 
 const normalizeMediaCandidate = (value) => {
   const normalized = String(value || '').trim();
@@ -106,13 +117,54 @@ export const resolveMediaUrl = (value) => {
   return storageBase ? `${storageBase}/${cleanPath}` : normalized;
 };
 
+const normalizeImagePreference = (value = 'large') => (
+  IMAGE_PREFERENCE_KEYS.includes(value) ? value : 'large'
+);
+
+const toImageArray = (value) => (
+  Array.isArray(value) ? value.filter(Boolean) : []
+);
+
+const pickDirectImageCandidate = (image) => {
+  if (!image || typeof image !== 'object' || Array.isArray(image)) {
+    return null;
+  }
+
+  const candidate = DIRECT_IMAGE_FIELDS.reduce((accumulator, field) => {
+    if (image?.[field]) {
+      accumulator[field] = image[field];
+    }
+
+    return accumulator;
+  }, {});
+
+  return Object.keys(candidate).length > 0 ? candidate : null;
+};
+
 export const resolveImageObjectUrl = (image, preferredOrFallback = 'large', fallback = '') => {
-  const normalizedPreferred = ['thumbnail', 'medium', 'large', 'original'].includes(preferredOrFallback)
-    ? preferredOrFallback
-    : 'large';
+  const normalizedPreferred = normalizeImagePreference(preferredOrFallback);
   const resolvedFallback = normalizedPreferred === preferredOrFallback ? fallback : preferredOrFallback;
 
   if (!image) {
+    return resolvedFallback;
+  }
+
+  if (typeof image === 'string') {
+    return resolveMediaUrl(image) || resolvedFallback;
+  }
+
+  if (Array.isArray(image)) {
+    for (const candidate of image) {
+      const resolved = resolveImageObjectUrl(candidate, normalizedPreferred, '');
+      if (resolved) {
+        return resolved;
+      }
+    }
+
+    return resolvedFallback;
+  }
+
+  if (typeof image !== 'object') {
     return resolvedFallback;
   }
 
@@ -133,6 +185,89 @@ export const resolveImageObjectUrl = (image, preferredOrFallback = 'large', fall
 
   for (const candidate of candidates) {
     const resolved = resolveMediaUrl(candidate);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  return resolvedFallback;
+};
+
+export const getEntityImageCollection = (entity = {}) => {
+  if (!entity || typeof entity !== 'object' || Array.isArray(entity)) {
+    return [];
+  }
+
+  return [
+    ...toImageArray(entity.images),
+    ...toImageArray(entity.gallery),
+    ...toImageArray(entity.gallery_images),
+    ...toImageArray(entity.galleryImages),
+  ];
+};
+
+export const getEntityImageCandidates = (entity = {}) => {
+  if (!entity || typeof entity !== 'object' || Array.isArray(entity)) {
+    return [];
+  }
+
+  return [
+    entity.image,
+    entity.primary_image,
+    ...getEntityImageCollection(entity),
+    pickDirectImageCandidate(entity),
+    entity.main_image ? { path: entity.main_image } : null,
+  ].filter(Boolean);
+};
+
+export const pickEntityPrimaryImage = (entity = {}, preferredOrFallback = 'large') => {
+  const normalizedPreferred = normalizeImagePreference(preferredOrFallback);
+
+  return getEntityImageCandidates(entity).find((candidate) => (
+    Boolean(resolveImageObjectUrl(candidate, normalizedPreferred, ''))
+  )) || null;
+};
+
+export const resolveEntityImageUrl = (entity, preferredOrFallback = 'large', fallback = '') => {
+  const normalizedPreferred = normalizeImagePreference(preferredOrFallback);
+  const resolvedFallback = normalizedPreferred === preferredOrFallback ? fallback : preferredOrFallback;
+
+  for (const candidate of getEntityImageCandidates(entity)) {
+    const resolved = resolveImageObjectUrl(candidate, normalizedPreferred, '');
+
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  return resolvedFallback;
+};
+
+export const resolveCartItemImageUrl = (item, preferredOrFallback = 'medium', fallback = '') => {
+  const normalizedPreferred = normalizeImagePreference(preferredOrFallback);
+  const resolvedFallback = normalizedPreferred === preferredOrFallback ? fallback : preferredOrFallback;
+
+  const candidates = [
+    item?.variantImage,
+    item?.variant_image,
+    item?.variantPrimaryImage,
+    item?.variant_primary_image,
+    ...toImageArray(item?.variantImages),
+    ...toImageArray(item?.variant_images),
+    ...getEntityImageCandidates(item),
+    item?.parentImage,
+    item?.parent_image,
+    item?.parentPrimaryImage,
+    item?.parent_primary_image,
+    ...toImageArray(item?.parentImages),
+    ...toImageArray(item?.parent_images),
+    item?.parentMainImage ? { path: item.parentMainImage } : null,
+    item?.parent_main_image ? { path: item.parent_main_image } : null,
+  ];
+
+  for (const candidate of candidates) {
+    const resolved = resolveImageObjectUrl(candidate, normalizedPreferred, '');
+
     if (resolved) {
       return resolved;
     }

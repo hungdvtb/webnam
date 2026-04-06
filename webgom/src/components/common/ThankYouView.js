@@ -2,6 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
+import { resolveCartItemImageUrl } from '@/lib/media';
 
 export default function ThankYouView({ orderNumber, formData, cartItems, cartTotal, discount, bankSettings }) {
   const finalTotal = (cartTotal || 0) - (discount || 0);
@@ -12,11 +13,7 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
   const formatDate = () =>
     new Date().toLocaleDateString('vi-VN', { day: 'numeric', month: 'long', year: 'numeric' });
 
-  const getItemImage = (item) =>
-    item.main_image ||
-    item.image ||
-    (item.images?.find(i => i.is_primary) || item.images?.[0])?.image_url ||
-    null;
+  const getItemImage = (item) => resolveCartItemImageUrl(item, 'medium', '');
 
   const paymentMethod = formData?.paymentMethod || formData?.payment_method || 'cod';
   const isBankTransfer = paymentMethod === 'bank';

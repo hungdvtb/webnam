@@ -6,6 +6,12 @@ import {
   buildBundleCartSignature,
   createBundleCartEntry,
 } from '@/lib/bundlePricing';
+import { getWebProductDetail } from '@/lib/api';
+import {
+  getEntityImageCollection,
+  pickEntityPrimaryImage,
+  resolveCartItemImageUrl,
+} from '@/lib/media';
 
 const CartContext = createContext();
 
@@ -58,6 +64,106 @@ const buildCartItemKey = (productId, options = {}, groupedItems = []) => (
   `${productId}-${serializeOptionsForKey(options)}-${buildBundleCartSignature(groupedItems)}`
 );
 
+const cloneImageCollection = (images = []) => (
+  Array.isArray(images)
+    ? images.map((image) => cloneCartValue(image))
+    : []
+);
+
+const getCartMediaSource = (entity = null) => {
+  if (!entity || typeof entity !== 'object') {
+    return null;
+  }
+
+  return pickEntityPrimaryImage(entity, 'large') ? entity : null;
+};
+
+const buildCartItemMediaPayload = (product = {}, mediaContext = {}) => {
+  const variantSource = getCartMediaSource(mediaContext?.variantProduct);
+  const productSource = getCartMediaSource(product);
+  const parentSource = getCartMediaSource(mediaContext?.parentProduct);
+  const primarySource = variantSource || productSource || parentSource;
+
+  return {
+    image: cloneCartValue(
+      pickEntityPrimaryImage(primarySource || product || mediaContext?.parentProduct || null, 'large')
+    ),
+    images: cloneImageCollection(getEntityImageCollection(primarySource || productSource || parentSource || null)),
+    variantImage: cloneCartValue(pickEntityPrimaryImage(variantSource || null, 'large')),
+    variantImages: cloneImageCollection(getEntityImageCollection(variantSource || null)),
+    parentImage: cloneCartValue(pickEntityPrimaryImage(parentSource || null, 'large')),
+    parentImages: cloneImageCollection(getEntityImageCollection(parentSource || null)),
+    main_image: String(
+      primarySource?.main_image
+      || productSource?.main_image
+      || product?.main_image
+      || ''
+    ).trim() || null,
+    parent_main_image: String(
+      parentSource?.main_image
+      || mediaContext?.parentProduct?.main_image
+      || ''
+    ).trim() || null,
+    variant_main_image: String(
+      variantSource?.main_image
+      || mediaContext?.variantProduct?.main_image
+      || ''
+    ).trim() || null,
+  };
+};
+
+const getCartItemLookupKey = (item = {}) => {
+  const parentProductId = Number(item?.options?.parent_product_id || 0);
+  if (parentProductId > 0) {
+    return String(parentProductId);
+  }
+
+  const variantId = Number(item?.options?.variant_id || 0);
+  if (variantId > 0) {
+    return String(variantId);
+  }
+
+  const slug = String(item?.slug || '').trim();
+  if (slug) {
+    return slug;
+  }
+
+  const productId = Number(item?.id || 0);
+  return productId > 0 ? String(productId) : '';
+};
+
+const resolveLookupProducts = (item = {}, detail = null) => {
+  if (!detail || typeof detail !== 'object') {
+    return {
+      product: null,
+      variantProduct: null,
+      parentProduct: null,
+    };
+  }
+
+  const variantId = Number(item?.options?.variant_id || 0);
+  const parentProductId = Number(item?.options?.parent_product_id || 0);
+  const detailId = Number(detail?.id || 0);
+
+  const variantProduct = variantId > 0
+    ? (
+      detailId === variantId
+        ? detail
+        : detail?.variations?.find((variant) => Number(variant?.id || 0) === variantId) || null
+    )
+    : null;
+
+  const parentProduct = parentProductId > 0
+    ? (detailId === parentProductId ? detail : null)
+    : (variantProduct ? detail : null);
+
+  return {
+    product: variantProduct || detail,
+    variantProduct,
+    parentProduct,
+  };
+};
+
 const normalizeCartItem = (item = {}) => {
   const normalizedOptions = normalizeOptions(item.options);
   const normalizedGroupedItems = cloneBundleEntries(item.groupedItems);
@@ -90,6 +196,15 @@ const normalizeCartItem = (item = {}) => {
     quantity,
     price: Number(item.price ?? item.originalPrice ?? 0),
     originalPrice: Number(item.originalPrice ?? item.price ?? 0),
+    image: cloneCartValue(item.image),
+    images: cloneImageCollection(item.images),
+    variantImage: cloneCartValue(item.variantImage ?? item.variant_image ?? null),
+    variantImages: cloneImageCollection(item.variantImages ?? item.variant_images),
+    parentImage: cloneCartValue(item.parentImage ?? item.parent_image ?? null),
+    parentImages: cloneImageCollection(item.parentImages ?? item.parent_images),
+    main_image: item.main_image ?? null,
+    parent_main_image: item.parent_main_image ?? null,
+    variant_main_image: item.variant_main_image ?? null,
     options: normalizedOptions,
     groupedItems: normalizedGroupedItems,
     bundleSnapshot: normalizedBundleSnapshot,
@@ -132,6 +247,86 @@ export function CartProvider({ children }) {
     }
   }, [cartItems, isInitialized]);
 
+  useEffect(() => {
+    if (!isInitialized || cartItems.length === 0) {
+      return undefined;
+    }
+
+    const unresolvedItems = cartItems.filter((item) => !resolveCartItemImageUrl(item, 'medium', ''));
+    if (unresolvedItems.length === 0) {
+      return undefined;
+    }
+
+    let isCancelled = false;
+
+    const hydrateMissingCartImages = async () => {
+      const detailPromiseCache = new Map();
+      const updates = await Promise.all(
+        unresolvedItems.map(async (item) => {
+          const lookupKey = getCartItemLookupKey(item);
+          if (!lookupKey) {
+            return null;
+          }
+
+          try {
+            if (!detailPromiseCache.has(lookupKey)) {
+              detailPromiseCache.set(lookupKey, getWebProductDetail(lookupKey));
+            }
+
+            const detail = await detailPromiseCache.get(lookupKey);
+            const { product: resolvedProduct, variantProduct, parentProduct } = resolveLookupProducts(item, detail);
+            if (!resolvedProduct) {
+              return null;
+            }
+
+            const mediaPayload = buildCartItemMediaPayload(resolvedProduct, {
+              variantProduct,
+              parentProduct,
+            });
+
+            if (!resolveCartItemImageUrl(mediaPayload, 'medium', '')) {
+              return null;
+            }
+
+            return {
+              cartKey: item.cartKey,
+              mediaPayload,
+            };
+          } catch (error) {
+            console.error('Failed to hydrate cart item image:', error);
+            return null;
+          }
+        })
+      );
+
+      if (isCancelled) {
+        return;
+      }
+
+      const updateMap = new Map(
+        updates
+          .filter((entry) => entry?.cartKey && entry?.mediaPayload)
+          .map((entry) => [entry.cartKey, entry.mediaPayload])
+      );
+
+      if (updateMap.size === 0) {
+        return;
+      }
+
+      setCartItems((prev) => prev.map((item) => (
+        updateMap.has(item.cartKey)
+          ? normalizeCartItem({ ...item, ...updateMap.get(item.cartKey) })
+          : item
+      )));
+    };
+
+    hydrateMissingCartImages();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [cartItems, isInitialized]);
+
   const addToCart = (
     product,
     quantity = 1,
@@ -139,6 +334,7 @@ export function CartProvider({ children }) {
     groupedItems = [],
     finalPrice = null,
     bundleMeta = null,
+    mediaContext = null,
   ) => {
     const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
     const normalizedGroupedItems = cloneBundleEntries(groupedItems);
@@ -171,6 +367,7 @@ export function CartProvider({ children }) {
     }
 
     const itemKey = buildCartItemKey(product.id, normalizedOptions, normalizedGroupedItems);
+    const cartItemMediaPayload = buildCartItemMediaPayload(product, mediaContext);
 
     setCartItems((prev) => {
       const existingItem = prev.find((item) => item.cartKey === itemKey);
@@ -178,7 +375,11 @@ export function CartProvider({ children }) {
       if (existingItem) {
         return prev.map((item) => (
           item.cartKey === itemKey
-            ? { ...item, quantity: item.quantity + quantity }
+            ? normalizeCartItem({
+              ...item,
+              ...cartItemMediaPayload,
+              quantity: item.quantity + quantity,
+            })
             : item
         ));
       }
@@ -194,7 +395,7 @@ export function CartProvider({ children }) {
           productUrl: currentUrl,
           price: finalPrice ?? product.price,
           originalPrice: bundleMeta?.pricing?.currentSubtotal ?? finalPrice ?? product.price,
-          image: product.primary_image || (product.images && product.images[0]),
+          ...cartItemMediaPayload,
           quantity,
           options: normalizedOptions,
           groupedItems: normalizedGroupedItems,

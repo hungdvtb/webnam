@@ -88,6 +88,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Admin Product Image routes
     Route::post('/products/{id}/images', [ProductImageController::class , 'store']);
+    Route::post('/product-images/bulk-refresh/preview', [ProductImageController::class , 'bulkRefreshPreview']);
+    Route::post('/product-images/bulk-refresh/apply', [ProductImageController::class , 'bulkRefreshApply']);
     Route::post('/product-images/reorder', [ProductImageController::class , 'reorder']);
     Route::post('/product-images/{id}/primary', [ProductImageController::class , 'setPrimary']);
     Route::delete('/product-images/{id}', [ProductImageController::class , 'destroy']);

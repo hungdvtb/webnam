@@ -140,6 +140,12 @@ export const productImageApi = {
     upload: (productId, formData) => api.post(`/products/${productId}/images`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
     }),
+    bulkRefreshPreview: (formData) => api.post('/product-images/bulk-refresh/preview', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+    }),
+    bulkRefreshApply: (formData) => api.post('/product-images/bulk-refresh/apply', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+    }),
     setPrimary: (id) => api.post(`/product-images/${id}/primary`),
     destroy: (id) => api.delete(`/product-images/${id}`),
     reorder: (ids) => api.post('/product-images/reorder', { ids }),

@@ -61,6 +61,30 @@ class MediaService
         return $this->importFromLocalReference($normalized, $options);
     }
 
+    public function importFromAbsolutePath(string $path, array $options = []): MediaAsset
+    {
+        $resolvedPath = realpath($path);
+        if ($resolvedPath === false || !is_file($resolvedPath)) {
+            throw new RuntimeException('Khong tim thay tep anh de dong bo: ' . $path);
+        }
+
+        $contents = @file_get_contents($resolvedPath);
+        if ($contents === false || $contents === '') {
+            throw new RuntimeException('Khong the doc tep anh de dong bo: ' . $path);
+        }
+
+        $extension = pathinfo($resolvedPath, PATHINFO_EXTENSION);
+        $mimeType = @mime_content_type($resolvedPath) ?: null;
+
+        return $this->storeBinaryAsset(
+            $contents,
+            basename($resolvedPath),
+            $extension,
+            $mimeType,
+            $options
+        );
+    }
+
     public function buildAssetPayload(?MediaAsset $asset, ?string $legacyUrl = null): ?array
     {
         if (!$asset) {

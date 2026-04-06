@@ -10,6 +10,7 @@ import { useTableColumns } from '../../hooks/useTableColumns';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
 import SortIndicator from '../../components/SortIndicator';
 import ProductSortModal from '../../components/admin/ProductSortModal';
+import ProductImageRefreshModal from '../../components/admin/ProductImageRefreshModal';
 import { ACTIVE_PRODUCT_TYPE_KEYS, ACTIVE_PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_META, sanitizeActiveProductTypeValues } from '../../config/productTypes';
 import {
     formatWholeMoneyInput,
@@ -467,6 +468,7 @@ const ProductList = () => {
 
 
     const [showBulkUpdateModal, setShowBulkUpdateModal] = useState(false);
+    const [showBulkImageRefreshModal, setShowBulkImageRefreshModal] = useState(false);
     const [bulkUpdateData, setBulkUpdateData] = useState({});
     const [lastBulkUpdateLogId, setLastBulkUpdateLogId] = useState(null);
     const [openAttrId, setOpenAttrId] = useState(null);
@@ -1904,6 +1906,23 @@ const ProductList = () => {
         } finally { setLoading(false); }
     };
 
+    const handleBulkImageRefreshApplied = async (payload) => {
+        const updatedRecords = Number(payload?.summary?.updated_records || 0);
+        const updatedProducts = Number(payload?.summary?.updated_products || 0);
+        const failedRecords = Number(payload?.summary?.failed_records || 0);
+        const appliedFileNames = Number(payload?.summary?.applied_file_names || 0);
+
+        await fetchProducts(pagination.current_page, filters, sortConfig, pagination.per_page);
+
+        setNotification({
+            type: failedRecords > 0 ? 'error' : 'success',
+            message: failedRecords > 0
+                ? `Đã cập nhật ${updatedRecords} ảnh cho ${updatedProducts} sản phẩm từ ${appliedFileNames} tên file. Có ${failedRecords} bản ghi lỗi.`
+                : `Đã cập nhật ${updatedRecords} ảnh cho ${updatedProducts} sản phẩm từ ${appliedFileNames} tên file.`,
+        });
+        setTimeout(() => setNotification(null), 5000);
+    };
+
     const handleCopy = (text, message, e, copyId) => {
         if (e) e.stopPropagation();
         navigator.clipboard.writeText(text);
@@ -2957,6 +2976,16 @@ const ProductList = () => {
                             >
                                 <span className="material-symbols-outlined text-[18px]">conversion_path</span>
                             </button>
+                            {!isTrashView && (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowBulkImageRefreshModal(true)}
+                                    className="p-1.5 rounded-sm w-9 h-9 bg-sky-50 text-sky-700 shadow-sm transition-all hover:bg-sky-600 hover:text-white"
+                                    title="Cập nhật lại ảnh theo tên file"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">imagesmode</span>
+                                </button>
+                            )}
                             <button 
                                 disabled={selectedIds.length === 0} 
                                 onClick={isTrashView ? handleBulkRestore : handleBulkDelete} 
@@ -4023,6 +4052,13 @@ const ProductList = () => {
                     <img src={previewImage.url} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" />
                 </div>
             )}
+
+            <ProductImageRefreshModal
+                open={showBulkImageRefreshModal}
+                selectedIds={selectedIds}
+                onClose={() => setShowBulkImageRefreshModal(false)}
+                onApplied={handleBulkImageRefreshApplied}
+            />
 
             {showBulkUpdateModal && (
                 <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4">

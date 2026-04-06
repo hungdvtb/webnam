@@ -493,7 +493,20 @@ export default function ProductDetailContent({ product }) {
       return;
     }
 
-    addToCart(cartProduct, quantity, getSelectedOptionsPayload(), getCurrentItemsToCart(), displayPrice);
+    addToCart(
+      cartProduct,
+      quantity,
+      getSelectedOptionsPayload(),
+      getCurrentItemsToCart(),
+      displayPrice,
+      null,
+      product?.type === 'configurable'
+        ? {
+          variantProduct: currentProduct,
+          parentProduct: product,
+        }
+        : null,
+    );
   };
 
   const getMobileQuickOrderValidationMessage = () => {

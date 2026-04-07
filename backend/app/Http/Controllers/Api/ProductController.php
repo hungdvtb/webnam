@@ -4870,7 +4870,7 @@ class ProductController extends Controller
         $resolvedParent = $parentProduct ?: $product->parentConfigurable->first();
         $productName = trim((string) $product->name);
 
-        if (!$resolvedParent) {
+        if ($productName !== '' || !$resolvedParent) {
             return $productName;
         }
 
@@ -4881,19 +4881,7 @@ class ProductController extends Controller
             return trim($parentName . ' - ' . $optionLabel);
         }
 
-        if (
-            $productName !== ''
-            && $parentName !== ''
-            && Str::contains(Str::lower($productName), Str::lower($parentName))
-        ) {
-            return $productName;
-        }
-
-        if ($parentName !== '' && $productName !== '') {
-            return $parentName . ' - ' . $productName;
-        }
-
-        return $productName !== '' ? $productName : $parentName;
+        return $parentName;
     }
 
     protected function pickerBundleOptions(Product $product): array

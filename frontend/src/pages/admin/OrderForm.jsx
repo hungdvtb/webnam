@@ -862,11 +862,7 @@ const buildVariationDisplayName = (parentName, variationName, optionLabel) => {
     const normalizedVariationName = normalizeCanvasText(variationName);
     const normalizedOptionLabel = normalizeCanvasText(optionLabel);
 
-    if (
-        normalizedVariationName
-        && normalizedParentName
-        && normalizeProductSearchText(normalizedVariationName).includes(normalizeProductSearchText(normalizedParentName))
-    ) {
+    if (normalizedVariationName) {
         return normalizedVariationName;
     }
 
@@ -874,8 +870,8 @@ const buildVariationDisplayName = (parentName, variationName, optionLabel) => {
         return `${normalizedParentName} - ${normalizedOptionLabel}`;
     }
 
-    if (normalizedParentName && normalizedVariationName) {
-        return `${normalizedParentName} - ${normalizedVariationName}`;
+    if (normalizedParentName) {
+        return normalizedParentName;
     }
 
     return normalizedVariationName || normalizedParentName || 'Biến thể sản phẩm';
@@ -936,7 +932,7 @@ const resolveOrderLineItemDisplayName = ({ name, options, fallbackName = '' }) =
     if (normalizedOptions) {
         const variationDisplayName = buildVariationDisplayName(
             normalizedOptions?.variant_parent_name,
-            normalizeCanvasText(normalizedOptions?.variant_name) || normalizedName || normalizedFallbackName,
+            normalizeCanvasText(normalizedOptions?.variant_name) || normalizedFallbackName || normalizedName,
             normalizedOptions?.variant_label
         );
 
@@ -1431,10 +1427,9 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
         const parentProductId = Number(item?.parent_product_id ?? 0);
         const parentProductName = normalizeCanvasText(item?.parent_product_name);
         const baseName = normalizeCanvasText(item?.name) || 'Sản phẩm';
-        const displayName = normalizeCanvasText(item?.display_name)
-            || (entryKind === SEARCH_ENTRY_VARIATION
-                ? buildVariationDisplayName(parentProductName, baseName, item?.option_label)
-                : baseName);
+        const displayName = entryKind === SEARCH_ENTRY_VARIATION
+            ? buildVariationDisplayName(parentProductName, baseName, item?.option_label)
+            : (normalizeCanvasText(item?.display_name) || baseName);
         const sku = normalizeCanvasText(item?.sku);
         const displaySku = normalizeCanvasText(item?.display_sku) || sku;
         const optionLabel = normalizeCanvasText(item?.option_label);
@@ -2218,7 +2213,7 @@ const OrderForm = () => {
                                     sku: latest.sku ?? item?.sku ?? '',
                                     display_sku: item?.display_sku ?? latest.sku ?? item?.sku ?? '',
                                     name: latest.name ?? item?.name ?? '',
-                                    display_name: item?.display_name ?? latest.display_name ?? latest.name ?? item?.name ?? '',
+                                    display_name: latest.display_name ?? latest.name ?? item?.display_name ?? item?.name ?? '',
                                     price: resolveMoneyValue(latest.price, item?.price, 0),
                                     expected_cost: parseMoneyNumber(latest.expected_cost, parseMoneyNumber(item?.expected_cost)),
                                     cost_price: resolveProductCostPrice({ ...item, ...latest }),

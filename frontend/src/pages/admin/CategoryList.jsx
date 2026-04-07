@@ -700,6 +700,7 @@ const CategoryList = () => {
     const [dragOverProductId, setDragOverProductId] = useState(null);
     const [isCategorySortModalOpen, setIsCategorySortModalOpen] = useState(false);
     const [isCategoryItemPickerOpen, setIsCategoryItemPickerOpen] = useState(false);
+    const [categoryItemPickerMode, setCategoryItemPickerMode] = useState('form');
     const [categoryItemSearchQuery, setCategoryItemSearchQuery] = useState('');
     const [categoryItemSearchLoading, setCategoryItemSearchLoading] = useState(false);
     const [categoryItemPickerGroups, setCategoryItemPickerGroups] = useState([]);
@@ -885,6 +886,27 @@ const CategoryList = () => {
         setFormCategoryItems((currentItems) => currentItems.filter((item) => (
             item.assignment_key !== assignmentKey || item.is_removable === false
         )));
+    };
+
+    const directSelectedItemMap = React.useMemo(() => new Map(
+        categoryProducts.map((item) => [item.assignment_key, item])
+    ), [categoryProducts]);
+
+    const toggleDirectCategoryItem = (rawItem) => {
+        const normalizedItem = normalizeCategoryAssignmentItem(rawItem);
+        if (!normalizedItem.assignment_key || !normalizedItem.product_id) return;
+
+        setCategoryProducts(currentItems => {
+            const existingItemIndex = currentItems.findIndex(item => item.assignment_key === normalizedItem.assignment_key);
+            if (existingItemIndex > -1) {
+                if (currentItems[existingItemIndex].is_removable === false || currentItems[existingItemIndex].is_primary_category) return currentItems;
+                const next = [...currentItems];
+                next.splice(existingItemIndex, 1);
+                return next;
+            }
+            return [...currentItems, { ...normalizedItem, display_label: normalizedItem.display_label || 'Sản phẩm' }];
+        });
+        setCategoryProductsDirty(true);
     };
 
     const resetCategoryItemPickerState = () => {
@@ -2501,7 +2523,7 @@ const CategoryList = () => {
                                                 </div>
                                                 <button
                                                     type="button"
-                                                    onClick={() => setIsCategoryItemPickerOpen(true)}
+                                                    onClick={() => { setCategoryItemPickerMode('form'); setIsCategoryItemPickerOpen(true); }}
                                                     className="inline-flex h-9 items-center gap-2 rounded-sm border border-primary/20 bg-white px-3 text-[10px] font-black uppercase tracking-[0.14em] text-primary transition-colors hover:border-primary hover:bg-primary/5"
                                                 >
                                                     <span className="material-symbols-outlined text-[16px]">add_circle</span>
@@ -2853,6 +2875,18 @@ const CategoryList = () => {
                                     <div className="flex flex-wrap items-center justify-end gap-2">
                                         <button
                                             type="button"
+                                            onClick={() => {
+                                                setCategoryItemPickerMode('direct');
+                                                setIsCategoryItemPickerOpen(true);
+                                            }}
+                                            disabled={categoryProductsLoading || categoryProductsSaving}
+                                            className="flex h-9 w-9 items-center justify-center rounded-sm border border-gold/15 text-stone/60 transition-colors hover:bg-primary/5 hover:border-primary hover:text-primary disabled:opacity-40"
+                                            title="Thêm sản phẩm vào danh mục"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">add_circle</span>
+                                        </button>
+                                        <button
+                                            type="button"
                                             onClick={() => setIsCategorySortModalOpen(true)}
                                             disabled={categoryProductsLoading}
                                             className="flex h-9 items-center gap-2 rounded-sm border border-gold/15 px-3 text-[10px] font-black uppercase tracking-[0.14em] text-stone/60 transition-colors hover:border-primary hover:text-primary disabled:opacity-40"
@@ -2993,8 +3027,8 @@ const CategoryList = () => {
                 searchQuery={categoryItemSearchQuery}
                 onSearchChange={setCategoryItemSearchQuery}
                 groups={categoryItemPickerGroups}
-                selectedItemMap={selectedCategoryItemMap}
-                onToggleItem={toggleFormCategoryItem}
+                selectedItemMap={categoryItemPickerMode === 'direct' ? directSelectedItemMap : selectedCategoryItemMap}
+                onToggleItem={categoryItemPickerMode === 'direct' ? toggleDirectCategoryItem : toggleFormCategoryItem}
                 isLoading={categoryItemSearchLoading}
             />
             <CategoryProductSortModal

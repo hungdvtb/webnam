@@ -952,49 +952,11 @@ class CategoryController extends Controller
                 ]);
         }
 
-        $existingRows = $this->loadCategoryAssignmentRows((int) $category->id);
-        $existingByKey = $existingRows->keyBy(function ($row) {
-            $itemType = $row->item_type === 'bundle_option' ? 'bundle_option' : 'product';
-
-            return $this->buildCategoryAssignmentKey(
-                $itemType,
-                (int) $row->product_id,
-                trim((string) ($row->bundle_option_key ?? ''))
-            );
-        });
-        $existingAssignmentKeys = $existingByKey->keys()->values();
-        $requestedAssignmentKeys = $requestedItems
-            ->pluck('assignment_key')
-            ->values();
-
-        if (
-            $requestedAssignmentKeys->count() !== $existingAssignmentKeys->count()
-            || $requestedAssignmentKeys->diff($existingAssignmentKeys)->isNotEmpty()
-            || $existingAssignmentKeys->diff($requestedAssignmentKeys)->isNotEmpty()
-        ) {
-            return response()->json([
-                'message' => 'Danh sach san pham khong hop le cho danh muc nay.',
-            ], 422);
+        if ($request->has('items')) {
+            $this->syncCategoryItems($category, $request->input('items'));
+        } else {
+            $this->syncCategoryItems($category, $requestedItems->toArray());
         }
-
-        DB::transaction(function () use ($requestedItems, $existingByKey) {
-            $timestamp = now();
-
-            foreach ($requestedItems as $index => $item) {
-                $existingRow = $existingByKey->get($item['assignment_key']);
-
-                if (!$existingRow) {
-                    continue;
-                }
-
-                DB::table('category_product')
-                    ->where('id', $existingRow->id)
-                    ->update([
-                        'sort_order' => $index,
-                        'updated_at' => $timestamp,
-                    ]);
-            }
-        });
 
         Category::ensureProductAssignments((int) $category->id);
 

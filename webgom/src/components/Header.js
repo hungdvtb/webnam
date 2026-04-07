@@ -1564,6 +1564,8 @@ export default function Header({
             min-height: 60px;
             height: 100%;
             flex-wrap: nowrap;
+            padding-left: 0.25rem;
+            padding-right: 1rem;
           }
 
           .logo-section {
@@ -1621,6 +1623,8 @@ export default function Header({
             height: 100%;
             flex-wrap: nowrap;
             gap: 0.625rem;
+            padding-left: 0.125rem;
+            padding-right: 1rem;
           }
 
           .logo-section {
@@ -1688,6 +1692,8 @@ export default function Header({
             min-height: 60px;
             height: 100%;
             gap: 0.5rem;
+            padding-left: 0;
+            padding-right: 1rem;
           }
 
           .logo-section {

@@ -51,7 +51,17 @@ class MediaService
         }
 
         if ($existingPublicId = $this->extractPublicIdFromUrl($normalized)) {
-            return MediaAsset::query()->where('public_id', $existingPublicId)->first();
+            $existingAsset = MediaAsset::query()->where('public_id', $existingPublicId)->first();
+            if ($existingAsset) {
+                if (!empty($options['clone_existing'])) {
+                    $path = parse_url($normalized, PHP_URL_PATH) ?: $normalized;
+                    $originalName = basename((string) $path) ?: null;
+
+                    return $this->cloneAssetFromExisting($existingAsset, $options, $originalName);
+                }
+
+                return $existingAsset;
+            }
         }
 
         if ($this->isHttpUrl($normalized)) {

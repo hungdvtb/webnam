@@ -28,6 +28,11 @@ const dateFormatter = new Intl.DateTimeFormat('vi-VN', {
   year: 'numeric',
 });
 
+const ADDRESS_LINE_HEIGHT = 32;
+const SUPPORT_NOTICE_LINE_HEIGHT = 30;
+const renderLegacyHeaderNote = false;
+const renderLegacyContactBlock = false;
+
 const clampNumber = (value, fallback = 0) => {
   const parsed = Number(value);
 
@@ -50,6 +55,16 @@ export const getReceiptAddress = (formData = {}) => (
 export const getReceiptPhone = (formData = {}) => (
   String(formData?.phone || formData?.customer_phone || '').trim()
 );
+
+const getReceiptSupportMessage = (supportHotline = '') => {
+  const hotline = String(supportHotline || '').trim();
+
+  if (hotline) {
+    return `Trong quá trình giao hàng nếu có vấn đề gì, anh chị vui lòng liên hệ với bộ phận CSKH bên em theo số Hotline ${hotline} ạ`;
+  }
+
+  return 'Trong quá trình giao hàng nếu có vấn đề gì, anh chị vui lòng liên hệ với bộ phận CSKH bên em để được hỗ trợ ạ.';
+};
 
 export const getReceiptOrderDate = (value) => {
   const date = value ? new Date(value) : new Date();
@@ -272,12 +287,20 @@ const buildReceiptMetrics = (ctx, options = {}) => {
   const items = getReceiptItems(options.cartItems);
   const address = getReceiptAddress(options.formData);
   const addressLabelWidth = 170;
+  const supportMessage = getReceiptSupportMessage(options.supportHotline);
 
   ctx.font = '600 24px Arial, sans-serif';
   const addressLines = wrapText(
     ctx,
     address || 'Khách chưa để lại địa chỉ.',
     CONTENT_WIDTH - addressLabelWidth - 24
+  );
+
+  ctx.font = '500 22px Arial, sans-serif';
+  const supportMessageLines = wrapText(
+    ctx,
+    supportMessage,
+    CONTENT_WIDTH - 48
   );
 
   ctx.font = '700 26px Arial, sans-serif';
@@ -292,7 +315,9 @@ const buildReceiptMetrics = (ctx, options = {}) => {
   });
 
   const productsHeight = rowMetrics.reduce((sum, item) => sum + item.height, 0);
-  const addressBlockHeight = 94 + (Math.max(addressLines.length - 1, 0) * 32);
+  const contactBoxHeight = 208
+    + (Math.max(addressLines.length - 1, 0) * ADDRESS_LINE_HEIGHT)
+    + (Math.max(supportMessageLines.length - 1, 0) * SUPPORT_NOTICE_LINE_HEIGHT);
 
   const canvasHeight = Math.max(
     1260,
@@ -305,14 +330,17 @@ const buildReceiptMetrics = (ctx, options = {}) => {
       + 68
       + productsHeight
       + 44
-      + addressBlockHeight
-      + 98
+      + contactBoxHeight
+      + 56
   );
 
   return {
     items,
     rowMetrics,
     addressLines,
+    supportMessage,
+    supportMessageLines,
+    contactBoxHeight,
     canvasHeight,
   };
 };
@@ -335,6 +363,7 @@ export const downloadOrderReceiptImage = async ({
   cartTotal,
   discount,
   createdAt,
+  supportHotline,
 }) => {
   if (typeof window === 'undefined' || typeof document === 'undefined') {
     throw new Error('Order receipt image can only be generated in the browser.');
@@ -348,6 +377,7 @@ export const downloadOrderReceiptImage = async ({
   }
 
   const phone = getReceiptPhone(formData) || 'Khách chưa để lại số điện thoại.';
+  const addressText = getReceiptAddress(formData) || 'Khách chưa để lại địa chỉ.';
   const total = Math.max(clampNumber(cartTotal) - clampNumber(discount), 0);
   const tempCanvas = createCanvas(IMAGE_WIDTH, 1200);
   const tempContext = tempCanvas.getContext('2d');
@@ -359,6 +389,7 @@ export const downloadOrderReceiptImage = async ({
   const metrics = buildReceiptMetrics(tempContext, {
     cartItems,
     formData,
+    supportHotline,
   });
   const canvas = createCanvas(IMAGE_WIDTH, metrics.canvasHeight);
   const ctx = canvas.getContext('2d');
@@ -405,9 +436,12 @@ export const downloadOrderReceiptImage = async ({
   ctx.font = '700 44px Arial, sans-serif';
   ctx.fillText('ẢNH ĐƠN HÀNG', contentX, cardY + 102);
 
-  ctx.font = '500 23px Arial, sans-serif';
+  if (renderLegacyHeaderNote) {
+    ctx.font = '500 23px Arial, sans-serif';
   ctx.fillStyle = '#D8E1EE';
   ctx.fillText('Lưu để tiện đối chiếu khi nhận hàng hoặc gửi qua Zalo.', contentX, cardY + 138);
+
+  }
 
   const summaryBoxWidth = 286;
   const summaryBoxHeight = 108;
@@ -512,6 +546,52 @@ export const downloadOrderReceiptImage = async ({
   });
 
   const contactBoxY = currentRowY + 12;
+  const contactBoxHeight = metrics.contactBoxHeight;
+  fillRoundedRect(ctx, contentX, contactBoxY, CONTENT_WIDTH, contactBoxHeight, 24, '#FBF7F0');
+  strokeRoundedRect(ctx, contentX, contactBoxY, CONTENT_WIDTH, contactBoxHeight, 24, 'rgba(197, 160, 89, 0.2)');
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#1B365D';
+  ctx.font = '700 28px Arial, sans-serif';
+  ctx.fillText('Thông tin giao hàng', contentX + 24, contactBoxY + 38);
+
+  ctx.font = '600 24px Arial, sans-serif';
+  ctx.fillStyle = '#64748B';
+  ctx.fillText('Số điện thoại', contentX + 24, contactBoxY + 80);
+  ctx.fillStyle = '#1F2937';
+  ctx.font = '700 26px Arial, sans-serif';
+  ctx.fillText(phone, contentX + 194, contactBoxY + 80);
+
+  ctx.font = '600 24px Arial, sans-serif';
+  ctx.fillStyle = '#64748B';
+  ctx.fillText('Địa chỉ', contentX + 24, contactBoxY + 124);
+  ctx.fillStyle = '#1F2937';
+  ctx.font = '600 24px Arial, sans-serif';
+  drawWrappedText(
+    ctx,
+    addressText,
+    contentX + 194,
+    contactBoxY + 124,
+    CONTENT_WIDTH - 218,
+    ADDRESS_LINE_HEIGHT
+  );
+
+  const supportTextY = contactBoxY
+    + 168
+    + (Math.max(metrics.addressLines.length - 1, 0) * ADDRESS_LINE_HEIGHT);
+  ctx.fillStyle = '#5B6B83';
+  ctx.font = '500 22px Arial, sans-serif';
+  drawWrappedText(
+    ctx,
+    metrics.supportMessage,
+    contentX + 24,
+    supportTextY,
+    CONTENT_WIDTH - 48,
+    SUPPORT_NOTICE_LINE_HEIGHT
+  );
+
+  if (renderLegacyContactBlock) {
+    const contactBoxY = currentRowY + 12;
   const contactBoxHeight = 142 + (Math.max(metrics.addressLines.length - 1, 0) * 32);
   fillRoundedRect(ctx, contentX, contactBoxY, CONTENT_WIDTH, contactBoxHeight, 24, '#FBF7F0');
   strokeRoundedRect(ctx, contentX, contactBoxY, CONTENT_WIDTH, contactBoxHeight, 24, 'rgba(197, 160, 89, 0.2)');
@@ -547,6 +627,8 @@ export const downloadOrderReceiptImage = async ({
   ctx.font = '500 19px Arial, sans-serif';
   ctx.textAlign = 'left';
   ctx.fillText('Ảnh đơn hàng được tạo từ trang cảm ơn sau khi đặt hàng thành công.', contentX, footerY);
+
+  }
 
   const fileNameOrder = String(orderNumber || 'don-hang').replace(/[^a-zA-Z0-9-_]/g, '') || 'don-hang';
   const blob = await canvasToBlob(canvas);

@@ -388,27 +388,31 @@ export default async function ProductsPage({ searchParams }) {
                   const renderTree = (parentId = null, level = 0) => (
                     categories
                       .filter((category) => (parentId === null ? !category.parent_id : category.parent_id === parentId))
-                      .map((category) => (
-                        <li key={category.id} style={{ marginLeft: level > 0 ? `${level * 12}px` : 0 }}>
-                          <Link
-                            href={`/products?category=${category.slug}`}
-                            className={`${styles.sidebarLink} ${currentCategorySlug === category.slug ? styles.sidebarLinkActive : ''}`}
-                            style={{
-                              fontSize: level === 0 ? '0.9rem' : '0.85rem',
-                              fontWeight: level === 0 ? '700' : '500',
-                              opacity: level === 0 ? 1 : 0.8,
-                            }}
-                          >
-                            <span>{level > 0 ? '— ' : ''}{category.name}</span>
-                            <span className={styles.count}>({category.products_count || 0})</span>
-                          </Link>
-                          {categories.some((item) => item.parent_id === category.id) && (
-                            <ul className={styles.sidebarList}>
-                              {renderTree(category.id, level + 1)}
-                            </ul>
-                          )}
-                        </li>
-                      ))
+                      .map((category) => {
+                        const hasChildren = categories.some((item) => item.parent_id === category.id);
+                        const linkClassName = [
+                          styles.sidebarLink,
+                          level === 0 ? styles.sidebarParentLink : styles.sidebarChildLink,
+                          currentCategorySlug === category.slug ? styles.sidebarLinkActive : '',
+                        ].filter(Boolean).join(' ');
+
+                        return (
+                          <li key={category.id} className={styles.sidebarItem}>
+                            <Link
+                              href={`/products?category=${category.slug}`}
+                              className={linkClassName}
+                            >
+                              <span className={styles.sidebarLinkLabel}>{category.name}</span>
+                              <span className={styles.sidebarCount}>{category.products_count || 0}</span>
+                            </Link>
+                            {hasChildren && (
+                              <ul className={`${styles.sidebarList} ${styles.sidebarChildList}`}>
+                                {renderTree(category.id, level + 1)}
+                              </ul>
+                            )}
+                          </li>
+                        );
+                      })
                   );
 
                   return renderTree();

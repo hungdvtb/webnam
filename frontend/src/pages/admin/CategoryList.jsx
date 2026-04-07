@@ -22,6 +22,8 @@ const CustomNode = ({
     onToggle,
     onEdit,
     onDelete,
+    onRestore,
+    isTrashView,
     isSelected,
     onSelect,
     isChecked,
@@ -67,7 +69,11 @@ const CustomNode = ({
                 onClick={(e) => {
                     if (node.droppable) onToggle();
                 }}
-                onDoubleClick={() => onEdit(node)}
+                onDoubleClick={() => {
+                    if (!isTrashView) {
+                        onEdit(node);
+                    }
+                }}
             >
                 {node.droppable ? (
                     <span className={`material-symbols-outlined text-stone text-sm transition-transform duration-300 ${isOpen ? 'rotate-90 text-primary' : ''}`}>
@@ -95,6 +101,16 @@ const CustomNode = ({
                 </div>
             ) : null}
             <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                {isTrashView ? (
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onRestore(node); }}
+                        className="text-stone hover:text-emerald-600 transition-colors p-1"
+                        title="Khôi phục"
+                    >
+                        <span className="material-symbols-outlined text-sm">restore_from_trash</span>
+                    </button>
+                ) : (
+                    <React.Fragment>
                 <button 
                     onClick={(e) => { e.stopPropagation(); onEdit(node); }} 
                     className="text-stone hover:text-primary transition-colors p-1" 
@@ -109,6 +125,8 @@ const CustomNode = ({
                 >
                     <span className="material-symbols-outlined text-sm">delete</span>
                 </button>
+                    </React.Fragment>
+                )}
             </div>
         </div>
     );
@@ -312,7 +330,27 @@ const normalizeTreeParentId = (value) => {
     return Number.isInteger(numericValue) && numericValue > 0 ? numericValue : 0;
 };
 
-const formatCategoriesForTree = (categories = []) => {
+const formatCategoryTimestamp = (value) => {
+    if (!value) {
+        return 'Chưa xác định';
+    }
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return String(value);
+    }
+
+    return new Intl.DateTimeFormat('vi-VN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    }).format(date);
+};
+
+const formatCategoriesForTree = (categories = [], { promoteOrphansToRoot = false } = {}) => {
     const normalizedCategories = Array.isArray(categories)
         ? categories.map((category, index) => ({
             ...category,
@@ -322,14 +360,24 @@ const formatCategoriesForTree = (categories = []) => {
             __originalIndex: index,
         }))
         : [];
+    const categoryIds = new Set(normalizedCategories.map((category) => category.id));
 
     const childrenByParent = new Map();
 
     normalizedCategories.forEach((category) => {
-        const parentId = normalizeTreeParentId(category.parent_id);
-        const siblings = childrenByParent.get(parentId) || [];
-        siblings.push(category);
-        childrenByParent.set(parentId, siblings);
+        const originalParentId = normalizeTreeParentId(category.parent_id);
+        const viewParentId = promoteOrphansToRoot && originalParentId > 0 && !categoryIds.has(originalParentId)
+            ? 0
+            : originalParentId;
+        const siblings = childrenByParent.get(viewParentId) || [];
+
+        siblings.push({
+            ...category,
+            __originalParentId: originalParentId,
+            __viewParentId: viewParentId,
+            __isOrphanedInView: viewParentId === 0 && originalParentId > 0,
+        });
+        childrenByParent.set(viewParentId, siblings);
     });
 
     childrenByParent.forEach((siblings) => {
@@ -373,14 +421,22 @@ const formatCategoriesForTree = (categories = []) => {
         }
     });
 
-    return orderedCategories.map(({ __originalIndex, ...category }) => ({
+    return orderedCategories.map(({
+        __originalIndex,
+        __originalParentId,
+        __viewParentId,
+        __isOrphanedInView,
+        ...category
+    }) => ({
         id: category.id,
-        parent: normalizeTreeParentId(category.parent_id),
+        parent: normalizeTreeParentId(__viewParentId),
         text: category.name,
         droppable: true,
         data: {
             ...category,
-            parent_id: category.parent_id || null,
+            parent_id: __originalParentId || null,
+            view_parent_id: normalizeTreeParentId(__viewParentId) || null,
+            is_orphaned_in_view: __isOrphanedInView,
         },
     }));
 };
@@ -689,7 +745,11 @@ const CategoryList = () => {
     const [selectedChildOrderSaving, setSelectedChildOrderSaving] = useState(false);
     const [formData, setFormData] = useState(createInitialFormData);
     const [selectedIds, setSelectedIds] = useState(new Set());
+    const [isTrashView, setIsTrashView] = useState(false);
+    const [trashCount, setTrashCount] = useState(0);
     const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+    const [isBulkRestoring, setIsBulkRestoring] = useState(false);
+    const [restoringNodeId, setRestoringNodeId] = useState(null);
     const [allAttributes, setAllAttributes] = useState([]);
     const [selectedCategoryMeta, setSelectedCategoryMeta] = useState(null);
     const [categoryProducts, setCategoryProducts] = useState([]);
@@ -713,8 +773,9 @@ const CategoryList = () => {
     const [pendingImportFile, setPendingImportFile] = useState(null);
     const [importMode, setImportMode] = useState(DEFAULT_IMPORT_MODE);
     const [importUpdateFieldIds, setImportUpdateFieldIds] = useState([]);
+    const hasLoadedInitialDataRef = useRef(false);
     const isSelectiveImport = importMode === 'update_selected_fields';
-    const canReorderTree = !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all';
+    const canReorderTree = !isTrashView && !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all';
 
     // Close dropdowns on outside click
     useEffect(() => {
@@ -739,9 +800,9 @@ const CategoryList = () => {
 
         // Apply Level filter
         if (filterLevel === 'root') {
-            matchedNodes = matchedNodes.filter(n => n.parent === 0 || n.parent === null);
+            matchedNodes = matchedNodes.filter((node) => normalizeTreeParentId(node.data?.parent_id) === 0);
         } else if (filterLevel === 'child') {
-            matchedNodes = matchedNodes.filter(n => n.parent !== 0 && n.parent !== null);
+            matchedNodes = matchedNodes.filter((node) => normalizeTreeParentId(node.data?.parent_id) !== 0);
         }
 
         // Apply Search Query
@@ -797,6 +858,45 @@ const CategoryList = () => {
         () => treeData.find((node) => node.id === selectedId) || null,
         [treeData, selectedId],
     );
+
+    const selectedTrashPreviewNodes = React.useMemo(() => {
+        if (!isTrashView || !selectedCategoryNode) {
+            return [];
+        }
+
+        const ancestors = [];
+        let parentId = normalizeTreeParentId(selectedCategoryNode.parent);
+
+        while (parentId > 0) {
+            const parentNode = treeData.find((node) => node.id === parentId);
+
+            if (!parentNode) {
+                break;
+            }
+
+            ancestors.unshift({
+                node: parentNode,
+                role: 'ancestor',
+            });
+            parentId = normalizeTreeParentId(parentNode.parent);
+        }
+
+        const descendants = getDescendants(treeData, selectedCategoryNode.id).map((node) => ({
+            node,
+            role: 'descendant',
+        }));
+
+        return [
+            ...ancestors,
+            {
+                node: selectedCategoryNode,
+                role: 'selected',
+            },
+            ...descendants,
+        ];
+    }, [isTrashView, selectedCategoryNode, treeData]);
+
+    const selectedTrashRestoreCount = selectedTrashPreviewNodes.length;
 
     const selectedChildNodes = React.useMemo(() => {
         if (!selectedCategoryNode) {
@@ -927,11 +1027,35 @@ const CategoryList = () => {
     };
 
     const openCategoryCreateForm = () => {
+        if (isTrashView) {
+            return;
+        }
+
         setFormData(createInitialFormData());
         resetCategoryItemPickerState();
         setIsCategoryItemPickerOpen(false);
         setIsFormOpen(true);
     };
+
+    useEffect(() => {
+        setSelectedIds(new Set());
+        setSelectedId(null);
+        setShowFilterMenu(false);
+        setIsTreeOrderMode(false);
+        setTreeOrderDrafts({});
+        setSelectedChildOrderDrafts({});
+        setSelectedChildOrderSaving(false);
+        setIsCategorySortModalOpen(false);
+        setCategoryProducts([]);
+        setCategoryProductsDirty(false);
+        setSelectedCategoryMeta(null);
+        closeCategoryItemPicker();
+
+        if (isTrashView) {
+            setIsFormOpen(false);
+            setFormData(createInitialFormData());
+        }
+    }, [isTrashView]);
 
     const fetchCategoryProductsData = async (categoryId) => {
         const response = await categoryApi.getProducts(categoryId);
@@ -979,7 +1103,7 @@ const CategoryList = () => {
     }, [selectedId, selectedChildPositionMap]);
 
     const loadCategoryProducts = async (categoryId = selectedId) => {
-        if (!categoryId) {
+        if (isTrashView || !categoryId) {
             setSelectedCategoryMeta(null);
             setCategoryProducts([]);
             setCategoryProductsDirty(false);
@@ -1072,11 +1196,18 @@ const CategoryList = () => {
             : false;
 
         if (selectedStillExists) {
-            if (reloadProducts) {
+            if (reloadProducts && !isTrashView) {
                 loadCategoryProducts(selectedId);
             }
         } else {
             setSelectedId(null);
+            setSelectedCategoryMeta(null);
+            setCategoryProducts([]);
+            setCategoryProductsDirty(false);
+            setIsCategorySortModalOpen(false);
+        }
+
+        if (isTrashView) {
             setSelectedCategoryMeta(null);
             setCategoryProducts([]);
             setCategoryProductsDirty(false);
@@ -1223,18 +1354,37 @@ const CategoryList = () => {
         }
     };
 
+    const fetchTrashCount = async () => {
+        try {
+            const response = await categoryApi.getAll({ is_trash: 1 });
+            const trashedCategories = Array.isArray(response.data) ? response.data : [];
+            setTrashCount(trashedCategories.length);
+        } catch (error) {
+            console.error('Error fetching category trash count:', error);
+        }
+    };
+
     const fetchInitialData = async () => {
         setLoading(true);
         try {
-            const [catRes, attrRes] = await Promise.all([
-                categoryApi.getAll(),
-                attributeApi.getAll() // Fetch all to ensure names show even if inactive in this view
+            const [catRes, attrRes, trashRes] = await Promise.all([
+                categoryApi.getAll(isTrashView ? { is_trash: 1 } : undefined),
+                attributeApi.getAll(), // Fetch all to ensure names show even if inactive in this view
+                categoryApi.getAll({ is_trash: 1 }),
             ]);
 
-            applyFormattedTreeData(formatCategoriesForTree(catRes.data), { reloadProducts: false });
+            const visibleCategories = Array.isArray(catRes.data) ? catRes.data : [];
+            const trashedCategories = Array.isArray(trashRes.data) ? trashRes.data : [];
+
+            applyFormattedTreeData(
+                formatCategoriesForTree(visibleCategories, { promoteOrphansToRoot: isTrashView }),
+                { reloadProducts: false },
+            );
 
             // Set attributes for selection
             setAllAttributes(attrRes.data || []);
+            setTrashCount(trashedCategories.length);
+            hasLoadedInitialDataRef.current = true;
         } catch (error) {
             console.error('Error fetching data:', error);
         } finally {
@@ -1242,10 +1392,25 @@ const CategoryList = () => {
         }
     };
 
-    const fetchCategories = async () => {
+    const fetchCategories = async ({ showLoading = false, reloadProducts = true } = {}) => {
+        if (showLoading) {
+            setLoading(true);
+        }
+
         try {
-            const res = await categoryApi.getAll();
-            applyFormattedTreeData(formatCategoriesForTree(res.data));
+            const res = await categoryApi.getAll(isTrashView ? { is_trash: 1 } : undefined);
+            const categories = Array.isArray(res.data) ? res.data : [];
+
+            applyFormattedTreeData(
+                formatCategoriesForTree(categories, { promoteOrphansToRoot: isTrashView }),
+                { reloadProducts },
+            );
+
+            if (isTrashView) {
+                setTrashCount(categories.length);
+            } else {
+                fetchTrashCount();
+            }
         } catch (error) {
             console.error('Error fetching categories:', error);
             showModal({
@@ -1253,12 +1418,24 @@ const CategoryList = () => {
                 content: 'Không thể tải lại danh sách danh mục.',
                 type: 'error',
             });
+        } finally {
+            if (showLoading) {
+                setLoading(false);
+            }
         }
     };
 
     useEffect(() => {
         fetchInitialData();
     }, []);
+
+    useEffect(() => {
+        if (!hasLoadedInitialDataRef.current) {
+            return;
+        }
+
+        fetchCategories({ showLoading: true, reloadProducts: false });
+    }, [isTrashView]);
 
     useEffect(() => {
         const handleKeyDown = (e) => {
@@ -1271,7 +1448,7 @@ const CategoryList = () => {
     }, [closeCategoryForm, isCategoryItemPickerOpen, isFormOpen]);
 
     useEffect(() => {
-        if (!selectedId) {
+        if (isTrashView || !selectedId) {
             setSelectedCategoryMeta(null);
             setCategoryProducts([]);
             setCategoryProductsDirty(false);
@@ -1280,7 +1457,7 @@ const CategoryList = () => {
         }
 
         loadCategoryProducts(selectedId);
-    }, [selectedId]);
+    }, [isTrashView, selectedId]);
 
     useEffect(() => {
         if (!selectedId) {
@@ -1492,6 +1669,10 @@ const CategoryList = () => {
     };
 
     const handleEdit = async (node) => {
+        if (isTrashView) {
+            return;
+        }
+
         const cat = node.data;
         const bannerUrl = resolveCategoryAssetUrl(cat.banner_image || cat.banner_path, 'medium');
         const logoUrl = resolveCategoryAssetUrl(cat.logo_image || cat.logo_path, 'thumbnail');
@@ -1533,15 +1714,76 @@ const CategoryList = () => {
     };
 
     const handleDelete = async (node) => {
-        if (window.confirm(`Bạn có chắc muốn xóa danh mục "${node.text}"? Tất cả danh mục con cũng sẽ bị xóa.`)) {
-            try {
-                await categoryApi.destroy(node.id);
-                fetchCategories();
-            } catch (error) {
-                console.error("Lỗi khi xóa:", error);
-                alert("Không thể xóa danh mục này.");
-            }
+        if (isTrashView) {
+            return;
         }
+
+        showModal({
+            title: 'Chuyển vào Thùng rác',
+            content: `Bạn có chắc muốn chuyển danh mục <strong>${escapeHtml(node.text)}</strong> vào Thùng rác?<br /><br />Nếu đây là danh mục cha, toàn bộ danh mục con sẽ được chuyển theo đúng cây hiện tại.`,
+            type: 'warning',
+            actionText: 'Chuyển vào Thùng rác',
+            onAction: async () => {
+                try {
+                    const response = await categoryApi.destroy(node.id);
+                    const trashedCount = Number(response?.data?.trashed_count || 1);
+                    showToast({
+                        message: trashedCount > 1
+                            ? `Đã chuyển ${trashedCount} danh mục vào Thùng rác.`
+                            : 'Đã chuyển danh mục vào Thùng rác.',
+                        type: 'success',
+                    });
+                    await fetchCategories();
+                } catch (error) {
+                    console.error('Category trash error:', error);
+                    showModal({
+                        title: 'Lỗi',
+                        content: error?.response?.data?.message || 'Không thể chuyển danh mục này vào Thùng rác.',
+                        type: 'error',
+                    });
+                }
+            },
+        });
+    };
+
+    const handleRestore = (node) => {
+        if (!isTrashView) {
+            return;
+        }
+
+        const previewCount = selectedCategoryNode?.id === node.id && selectedTrashRestoreCount > 0
+            ? selectedTrashRestoreCount
+            : 1 + getDescendants(treeData, node.id).length;
+
+        showModal({
+            title: 'Khôi phục danh mục',
+            content: `Khôi phục danh mục <strong>${escapeHtml(node.text)}</strong> từ Thùng rác?<br /><br />Hệ thống sẽ khôi phục lại đúng cấu trúc cây đã xóa${previewCount > 1 ? ` cho khoảng <strong>${previewCount}</strong> danh mục liên quan` : ''}.`,
+            type: 'info',
+            actionText: 'Khôi phục',
+            onAction: async () => {
+                setRestoringNodeId(node.id);
+                try {
+                    const response = await categoryApi.restore(node.id);
+                    const restoredCount = Number(response?.data?.restored_count || 1);
+                    showToast({
+                        message: restoredCount > 1
+                            ? `Đã khôi phục ${restoredCount} danh mục.`
+                            : 'Đã khôi phục danh mục.',
+                        type: 'success',
+                    });
+                    await fetchCategories();
+                } catch (error) {
+                    console.error('Category restore error:', error);
+                    showModal({
+                        title: 'Lỗi',
+                        content: error?.response?.data?.message || 'Không thể khôi phục danh mục đã chọn.',
+                        type: 'error',
+                    });
+                } finally {
+                    setRestoringNodeId(null);
+                }
+            },
+        });
     };
 
     const handleCheck = (id) => {
@@ -1562,23 +1804,24 @@ const CategoryList = () => {
     };
 
     const handleBulkDelete = () => {
-        if (selectedIds.size === 0 || isBulkDeleting) return;
+        if (isTrashView || selectedIds.size === 0 || isBulkDeleting) return;
 
         const ids = Array.from(selectedIds);
         const selectedCount = ids.length;
 
         showModal({
-            title: 'Xóa danh mục đã chọn',
-            content: `Bạn có chắc muốn xóa <strong>${selectedCount}</strong> danh mục đã chọn?<br /><br />Nếu trong số đó có danh mục cha, toàn bộ danh mục con bên trong cũng sẽ bị xóa theo.`,
+            title: 'Chuyển các danh mục đã chọn vào Thùng rác',
+            content: `Bạn có chắc muốn chuyển <strong>${selectedCount}</strong> danh mục đã chọn vào Thùng rác?<br /><br />Nếu trong số đó có danh mục cha, toàn bộ danh mục con bên trong cũng sẽ được chuyển theo cùng cây.`,
             type: 'warning',
-            actionText: 'Xóa danh mục',
+            actionText: 'Chuyển vào Thùng rác',
             onAction: async () => {
                 setIsBulkDeleting(true);
                 try {
-                    await categoryApi.bulkDelete(ids);
+                    const response = await categoryApi.bulkDelete(ids);
+                    const trashedCount = Number(response?.data?.trashed_count || selectedCount);
                     setSelectedIds(new Set());
                     showToast({
-                        message: `Đã xóa ${selectedCount} danh mục đã chọn.`,
+                        message: `Đã chuyển ${trashedCount} danh mục vào Thùng rác.`,
                         type: 'success',
                     });
                     await fetchCategories();
@@ -1591,6 +1834,42 @@ const CategoryList = () => {
                     });
                 } finally {
                     setIsBulkDeleting(false);
+                }
+            },
+        });
+    };
+
+    const handleBulkRestore = () => {
+        if (!isTrashView || selectedIds.size === 0 || isBulkRestoring) return;
+
+        const ids = Array.from(selectedIds);
+        const selectedCount = ids.length;
+
+        showModal({
+            title: 'Khôi phục danh mục đã chọn',
+            content: `Khôi phục <strong>${selectedCount}</strong> danh mục đang chọn từ Thùng rác?<br /><br />Nếu bạn chọn danh mục cha, toàn bộ cây danh mục con bên trong cũng sẽ được khôi phục lại đúng cấu trúc cũ.`,
+            type: 'info',
+            actionText: 'Khôi phục',
+            onAction: async () => {
+                setIsBulkRestoring(true);
+                try {
+                    const response = await categoryApi.bulkRestore(ids);
+                    const restoredCount = Number(response?.data?.restored_count || selectedCount);
+                    setSelectedIds(new Set());
+                    showToast({
+                        message: `Đã khôi phục ${restoredCount} danh mục.`,
+                        type: 'success',
+                    });
+                    await fetchCategories();
+                } catch (error) {
+                    console.error('Bulk restore error:', error);
+                    showModal({
+                        title: 'Lỗi',
+                        content: error?.response?.data?.message || 'Không thể khôi phục các danh mục đã chọn.',
+                        type: 'error',
+                    });
+                } finally {
+                    setIsBulkRestoring(false);
                 }
             },
         });
@@ -1957,13 +2236,14 @@ const CategoryList = () => {
                         <div className="flex gap-1.5 items-center w-full max-w-3xl">
                             <button
                                 onClick={openCategoryCreateForm}
-                                className="bg-brick text-white p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 shadow-sm shrink-0"
-                                title="Thêm danh mục mới"
+                                className={`p-1.5 transition-all flex items-center justify-center rounded-sm w-9 h-9 shadow-sm shrink-0 ${isTrashView ? 'bg-stone/10 text-stone/30 cursor-not-allowed' : 'bg-brick text-white hover:bg-umber'}`}
+                                title={isTrashView ? 'Thùng rác chỉ hỗ trợ khôi phục danh mục đã xóa' : 'Thêm danh mục mới'}
+                                disabled={isTrashView}
                             >
                                 <span className="material-symbols-outlined text-[18px]">add</span>
                             </button>
                             <button
-                                onClick={fetchCategories}
+                                onClick={() => fetchCategories({ showLoading: true })}
                                 className={`bg-primary text-white border border-primary p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 ${loading ? 'opacity-70' : ''}`}
                                 title="Làm mới"
                                 disabled={loading}
@@ -1971,16 +2251,22 @@ const CategoryList = () => {
                                 <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>refresh</span>
                             </button>
                             <button
-                                onClick={handleBulkDelete}
+                                onClick={isTrashView ? handleBulkRestore : handleBulkDelete}
                                 className={`relative border p-1.5 transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 shadow-sm ${
                                     selectedIds.size > 0
-                                        ? 'bg-brick text-white border-brick hover:bg-umber hover:border-umber'
+                                        ? (isTrashView
+                                            ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700 hover:border-emerald-700'
+                                            : 'bg-brick text-white border-brick hover:bg-umber hover:border-umber')
                                         : 'bg-white border-gold/20 text-stone/35'
-                                } ${isBulkDeleting ? 'opacity-70' : ''}`}
-                                title={selectedIds.size > 0 ? `Xóa ${selectedIds.size} danh mục đã chọn` : 'Chọn danh mục để xóa'}
-                                disabled={selectedIds.size === 0 || isBulkDeleting}
+                                } ${(isBulkDeleting || isBulkRestoring) ? 'opacity-70' : ''}`}
+                                title={isTrashView
+                                    ? (selectedIds.size > 0 ? `Khôi phục ${selectedIds.size} danh mục đã chọn` : 'Chọn danh mục để khôi phục')
+                                    : (selectedIds.size > 0 ? `Chuyển ${selectedIds.size} danh mục vào Thùng rác` : 'Chọn danh mục để chuyển vào Thùng rác')}
+                                disabled={selectedIds.size === 0 || isBulkDeleting || isBulkRestoring}
                             >
-                                <span className={`material-symbols-outlined text-[18px] ${isBulkDeleting ? 'animate-pulse' : ''}`}>delete</span>
+                                <span className={`material-symbols-outlined text-[18px] ${(isBulkDeleting || isBulkRestoring) ? 'animate-pulse' : ''}`}>
+                                    {isTrashView ? 'restore_from_trash' : 'delete'}
+                                </span>
                                 {selectedIds.size > 0 && (
                                     <span className="absolute -right-1.5 -top-1.5 min-w-[18px] rounded-full bg-gold px-1 text-center text-[9px] font-black leading-[18px] text-primary shadow-sm">
                                         {selectedIds.size}
@@ -1992,7 +2278,7 @@ const CategoryList = () => {
                                 onClick={handleDownloadTemplate}
                                 className={`bg-white border border-gold/20 p-1.5 hover:border-gold/40 hover:text-primary transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 shadow-sm ${isDownloadingTemplate ? 'text-primary' : 'text-stone'}`}
                                 title="Táº£i file máº«u Excel"
-                                disabled={isDownloadingTemplate}
+                                disabled={isDownloadingTemplate || isTrashView}
                             >
                                 <span className={`material-symbols-outlined text-[18px] ${isDownloadingTemplate ? 'animate-spin' : ''}`}>
                                     {isDownloadingTemplate ? 'sync' : 'description'}
@@ -2003,7 +2289,7 @@ const CategoryList = () => {
                                 onClick={handleDownloadExcel}
                                 className={`bg-white border border-gold/20 p-1.5 hover:border-gold/40 hover:text-primary transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 shadow-sm ${isExportingExcel ? 'text-primary' : 'text-stone'}`}
                                 title={selectedIds.size > 0 ? `Xuáº¥t ${selectedIds.size} danh má»¥c Ä‘Ã£ chá»n` : 'Xuáº¥t Excel'}
-                                disabled={isExportingExcel}
+                                disabled={isExportingExcel || isTrashView}
                             >
                                 <span className={`material-symbols-outlined text-[18px] ${isExportingExcel ? 'animate-spin' : ''}`}>
                                     {isExportingExcel ? 'sync' : 'download'}
@@ -2014,7 +2300,7 @@ const CategoryList = () => {
                                 onClick={handleOpenImportPicker}
                                 className={`bg-white border border-gold/20 p-1.5 hover:border-gold/40 hover:text-primary transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 shadow-sm ${isImportingExcel ? 'text-primary' : 'text-stone'}`}
                                 title="Import Excel"
-                                disabled={isImportingExcel}
+                                disabled={isImportingExcel || isTrashView}
                             >
                                 <span className={`material-symbols-outlined text-[18px] ${isImportingExcel ? 'animate-spin' : ''}`}>
                                     {isImportingExcel ? 'sync' : 'upload_file'}
@@ -2081,6 +2367,19 @@ const CategoryList = () => {
                                     </div>
                                 )}
                             </div>
+
+                            <button
+                                onClick={() => setIsTrashView((current) => !current)}
+                                className={`relative flex w-9 h-9 items-center justify-center rounded-sm border transition-all ${isTrashView ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white border-gold/20 text-stone hover:border-gold/40 hover:text-primary shadow-sm'}`}
+                                title={isTrashView ? 'Quay lại danh mục hiện có' : 'Mở Thùng rác'}
+                            >
+                                <span className="material-symbols-outlined text-[18px]">{isTrashView ? 'arrow_back' : 'delete'}</span>
+                                {!isTrashView && trashCount > 0 ? (
+                                    <span className="absolute -right-1.5 -top-1.5 min-w-[18px] rounded-full bg-brick px-1 text-center text-[9px] font-black leading-[18px] text-white shadow-sm">
+                                        {trashCount > 99 ? '99+' : trashCount}
+                                    </span>
+                                ) : null}
+                            </button>
 
                             <button 
                                 onClick={async () => {
@@ -2157,7 +2456,7 @@ const CategoryList = () => {
                             </div>
                         </div>
                         <div className="text-[11px] font-bold text-stone/40 uppercase tracking-[0.1em] hidden sm:block shrink-0">
-                            {treeData.length} danh mục đã khởi tạo
+                            {isTrashView ? `${treeData.length} mục trong Thùng rác` : `${treeData.length} danh mục đang hoạt động`}
                         </div>
                     </div>
                 </div>
@@ -2170,11 +2469,30 @@ const CategoryList = () => {
                         <div className="flex-none px-4 py-3 bg-gold/5 border-b border-gold/10 flex justify-between items-center">
                             <h2 className="text-[11px] font-black uppercase tracking-[0.15em] text-primary flex items-center gap-2">
                                 <span className="material-symbols-outlined text-[16px]">account_tree</span>
-                                Cấu Trúc Cây Danh Mục
+                                {isTrashView ? 'Thùng rác danh mục' : 'Cấu Trúc Cây Danh Mục'}
                             </h2>
                             
                             <div className="flex items-center gap-2">
-                                {isTreeOrderMode ? (
+                                {isTrashView ? (
+                                    <React.Fragment>
+                                        {selectedCategoryNode ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => handleRestore(selectedCategoryNode)}
+                                                disabled={restoringNodeId === selectedCategoryNode.id}
+                                                className="inline-flex h-8 items-center gap-1 rounded-sm border border-emerald-200 bg-emerald-50 px-3 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700 transition-all hover:border-emerald-600 hover:bg-emerald-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                <span className={`material-symbols-outlined text-[14px] ${restoringNodeId === selectedCategoryNode.id ? 'animate-spin' : ''}`}>
+                                                    {restoringNodeId === selectedCategoryNode.id ? 'sync' : 'restore_from_trash'}
+                                                </span>
+                                                Khôi phục
+                                            </button>
+                                        ) : null}
+                                        <span className="hidden text-[9px] font-black uppercase tracking-widest italic text-stone/30 sm:block">
+                                            {selectedCategoryNode ? 'Khôi phục đúng lại cây đã xoá' : 'Chọn danh mục để khôi phục'}
+                                        </span>
+                                    </React.Fragment>
+                                ) : isTreeOrderMode ? (
                                     <>
                                         <button
                                             type="button"
@@ -2225,7 +2543,7 @@ const CategoryList = () => {
                             </div>
                         </div>
 
-                        {selectedCategoryNode ? (
+                        {selectedCategoryNode && !isTrashView ? (
                             <div className="flex-none border-b border-gold/10 px-4 py-3">
                                 <div className="flex flex-wrap items-start justify-between gap-3">
                                     <div>
@@ -2324,8 +2642,10 @@ const CategoryList = () => {
                                     className="size-4 rounded-sm accent-primary cursor-pointer"
                                 />
                             </div>
-                            <div className="flex-1 text-[10px] font-black uppercase tracking-[0.2em] text-primary/40 pl-11">Tên Danh Mục</div>
-                            {isTreeOrderMode ? (
+                            <div className="flex-1 text-[10px] font-black uppercase tracking-[0.2em] text-primary/40 pl-11">
+                                {isTrashView ? 'Danh mục đã xoá' : 'Tên Danh Mục'}
+                            </div>
+                            {isTreeOrderMode && !isTrashView ? (
                                 <div className="w-20 text-center text-[10px] font-black uppercase tracking-[0.2em] text-primary/60">
                                     STT
                                 </div>
@@ -2343,8 +2663,13 @@ const CategoryList = () => {
                                 </div>
                             ) : filteredTreeData.length === 0 ? (
                                 <div className="h-full flex flex-col items-center justify-center gap-3 opacity-30">
-                                    <span className="material-symbols-outlined text-[60px]">search_off</span>
-                                    <span className="text-[12px] font-bold italic uppercase tracking-widest">Không tìm thấy danh mục</span>
+                                    <span className="material-symbols-outlined text-[60px]">{isTrashView ? 'delete_sweep' : 'search_off'}</span>
+                                    <span className="text-[12px] font-bold italic uppercase tracking-widest">
+                                        {isTrashView ? 'Thùng rác đang trống' : 'Không tìm thấy danh mục'}
+                                    </span>
+                                    <span className="text-[11px] text-stone/50">
+                                        {isTrashView ? 'Các danh mục đã xoá sẽ xuất hiện tại đây để bạn khôi phục.' : 'Thử thay đổi bộ lọc hoặc từ khóa tìm kiếm.'}
+                                    </span>
                                 </div>
                             ) : (
                                     <Tree
@@ -2379,14 +2704,16 @@ const CategoryList = () => {
                                                 isDropTarget={options.isDropTarget}
                                                 onEdit={handleEdit}
                                                 onDelete={handleDelete}
+                                                onRestore={handleRestore}
+                                                isTrashView={isTrashView}
                                                 isSelected={selectedId === node.id}
                                                 onSelect={(id) => setSelectedId(id)}
                                                 isChecked={selectedIds.has(node.id)}
                                                 onCheck={handleCheck}
-                                                showOrderInput={isTreeOrderMode}
+                                                showOrderInput={isTreeOrderMode && !isTrashView}
                                                 orderValue={treeOrderDrafts[node.id] ?? siblingPositionMap[node.id] ?? ''}
                                                 onOrderChange={handleTreeOrderDraftChange}
-                                                orderDisabled={treeOrderSaving}
+                                                orderDisabled={treeOrderSaving || restoringNodeId === node.id}
                                             />
                                         )}
                                         renderPlaceholder={(props) => <Placeholder {...props} />}
@@ -2436,7 +2763,7 @@ const CategoryList = () => {
 
                     {/* Update Form Area */}
                     <div className="category-panel min-w-0">
-                        {isFormOpen ? (
+                        {!isTrashView && isFormOpen ? (
                             <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-sm border border-gold/20 bg-white p-6 shadow-premium animate-in slide-in-from-right duration-300">
                                 <div className="mb-6 flex-none border-b border-gold/10 pb-4">
                                     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2822,6 +3149,96 @@ const CategoryList = () => {
                                     </form>
                                 </div>
                             </div>
+                        ) : isTrashView ? (
+                            <div className="flex h-full min-h-0 flex-col rounded-sm border border-gold/10 bg-white p-6 shadow-sm">
+                                <div className="flex-none border-b border-gold/10 pb-4">
+                                    <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-primary italic">
+                                        <span className="material-symbols-outlined text-[16px]">delete</span>
+                                        Chi Tiết Thùng Rác
+                                    </h3>
+                                    <p className="mt-2 text-[11px] leading-relaxed text-stone/55">
+                                        Chọn một danh mục đã xoá ở cây bên trái để xem thông tin và khôi phục lại đúng cấu trúc cũ.
+                                    </p>
+                                </div>
+                                <div className="flex-1 overflow-auto custom-scrollbar">
+                                    {!selectedCategoryNode ? (
+                                        <div className="flex h-full min-h-[220px] flex-col items-center justify-center gap-3 text-center opacity-50">
+                                            <span className="material-symbols-outlined text-[48px] text-stone/40">restore_from_trash</span>
+                                            <p className="text-[12px] font-bold uppercase tracking-[0.18em] text-stone/50">
+                                                Chọn một danh mục đã xoá
+                                            </p>
+                                            <p className="max-w-[280px] text-[12px] leading-relaxed text-stone/55">
+                                                Khi chọn một danh mục trong Thùng rác, bạn sẽ thấy phạm vi khôi phục và có thể đưa cả cây danh mục đó trở lại như cũ.
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-4 pt-4 pr-1">
+                                            <div className="rounded-sm border border-gold/10 bg-gold/5 p-4">
+                                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <h4 className="truncate text-[16px] font-bold text-primary">
+                                                            {selectedCategoryNode.text}
+                                                        </h4>
+                                                        <p className="mt-1 text-[11px] leading-relaxed text-stone/55">
+                                                            Khôi phục sẽ giữ nguyên quan hệ cha-con và vị trí của cây danh mục trước khi xoá.
+                                                        </p>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleRestore(selectedCategoryNode)}
+                                                        disabled={restoringNodeId === selectedCategoryNode.id}
+                                                        className="inline-flex h-9 items-center gap-2 rounded-sm bg-emerald-600 px-3 text-[10px] font-black uppercase tracking-[0.14em] text-white transition-colors hover:bg-emerald-700 disabled:opacity-60"
+                                                    >
+                                                        <span className={`material-symbols-outlined text-[16px] ${restoringNodeId === selectedCategoryNode.id ? 'animate-spin' : ''}`}>
+                                                            {restoringNodeId === selectedCategoryNode.id ? 'sync' : 'restore'}
+                                                        </span>
+                                                        Khôi phục
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <div className="grid gap-3 sm:grid-cols-2">
+                                                <div className="rounded-sm border border-gold/10 bg-white p-3">
+                                                    <div className="text-[10px] font-black uppercase tracking-[0.14em] text-stone/45">Đã xoá lúc</div>
+                                                    <div className="mt-1 text-[12px] font-bold text-primary">
+                                                        {formatCategoryTimestamp(selectedCategoryNode.data?.deleted_at)}
+                                                    </div>
+                                                </div>
+                                                <div className="rounded-sm border border-gold/10 bg-white p-3">
+                                                    <div className="text-[10px] font-black uppercase tracking-[0.14em] text-stone/45">Danh mục cha gốc</div>
+                                                    <div className="mt-1 text-[12px] font-bold text-primary">
+                                                        {selectedCategoryNode.data?.parent_id
+                                                            ? (selectedCategoryNode.data?.parent?.name || `ID ${selectedCategoryNode.data.parent_id}`)
+                                                            : 'Danh mục gốc'}
+                                                    </div>
+                                                </div>
+                                                <div className="rounded-sm border border-gold/10 bg-white p-3">
+                                                    <div className="text-[10px] font-black uppercase tracking-[0.14em] text-stone/45">Phạm vi khôi phục</div>
+                                                    <div className="mt-1 text-[12px] font-bold text-primary">
+                                                        {selectedTrashRestoreCount || 1} danh mục
+                                                    </div>
+                                                </div>
+                                                <div className="rounded-sm border border-gold/10 bg-white p-3">
+                                                    <div className="text-[10px] font-black uppercase tracking-[0.14em] text-stone/45">Trạng thái trước khi xoá</div>
+                                                    <div className={`mt-1 text-[12px] font-bold ${Number(selectedCategoryNode.data?.status ?? 0) === 1 ? 'text-emerald-700' : 'text-stone-500'}`}>
+                                                        {Number(selectedCategoryNode.data?.status ?? 0) === 1 ? 'Đang hiển thị' : 'Đang ẩn'}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {selectedCategoryNode.data?.is_orphaned_in_view ? (
+                                                <div className="rounded-sm border border-amber-200 bg-amber-50 px-3 py-3 text-[11px] leading-relaxed text-amber-800">
+                                                    Danh mục này đang được hiển thị tạm ở cấp gốc vì danh mục cha gốc của nó không nằm trong danh sách đang xem. Việc khôi phục vẫn trả lại đúng cha gốc ban đầu.
+                                                </div>
+                                            ) : null}
+
+                                            <div className="rounded-sm border border-dashed border-gold/20 bg-stone/5 px-3 py-3 text-[11px] leading-relaxed text-stone/60">
+                                                Nhấn “Khôi phục” để đưa danh mục đã chọn và toàn bộ cây liên quan quay trở lại danh sách hiện có.
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
                         ) : (
                             <div className="flex h-full min-h-0 flex-col rounded-sm border border-gold/10 bg-white p-6 shadow-sm">
                                 <div className="flex-none border-b border-gold/10 pb-4">
@@ -2858,6 +3275,123 @@ const CategoryList = () => {
                     </div>
 
                         <div className="category-panel flex h-full min-h-[320px] flex-col overflow-hidden rounded-sm border border-gold/10 bg-white shadow-sm">
+                            {isTrashView ? (
+                                <React.Fragment>
+                                    <div className="flex items-start justify-between gap-3 border-b border-gold/10 bg-gold/5 px-4 py-4">
+                                        <div>
+                                            <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-primary flex items-center gap-2">
+                                                <span className="material-symbols-outlined text-[16px]">restore_page</span>
+                                                Cây khôi phục
+                                            </h3>
+                                            <p className="mt-1 text-[11px] leading-relaxed text-stone/60">
+                                                {selectedCategoryNode
+                                                    ? `Danh mục "${selectedCategoryNode.text}" sẽ được khôi phục cùng toàn bộ cây liên quan đúng như trước khi xoá.`
+                                                    : 'Chọn một danh mục trong Thùng rác để xem trước các mục sẽ được khôi phục.'}
+                                            </p>
+                                        </div>
+
+                                        {selectedCategoryNode ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => handleRestore(selectedCategoryNode)}
+                                                disabled={restoringNodeId === selectedCategoryNode.id}
+                                                className="flex h-9 items-center gap-2 rounded-sm border border-emerald-200 bg-emerald-50 px-3 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700 transition-all hover:border-emerald-600 hover:bg-emerald-600 hover:text-white disabled:opacity-60"
+                                            >
+                                                <span className={`material-symbols-outlined text-[16px] ${restoringNodeId === selectedCategoryNode.id ? 'animate-spin' : ''}`}>
+                                                    {restoringNodeId === selectedCategoryNode.id ? 'sync' : 'restore'}
+                                                </span>
+                                                Khôi phục cây
+                                            </button>
+                                        ) : null}
+                                    </div>
+
+                                    {selectedCategoryNode ? (
+                                        <div className="flex flex-wrap items-center gap-2 border-b border-gold/10 px-4 py-3">
+                                            <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-primary">
+                                                {selectedTrashRestoreCount || 1} mục sẽ khôi phục
+                                            </span>
+                                            <span className="rounded-full bg-white px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-stone-500 border border-gold/10">
+                                                Xoá lúc: {formatCategoryTimestamp(selectedCategoryNode.data?.deleted_at)}
+                                            </span>
+                                        </div>
+                                    ) : null}
+
+                                    <div className="flex-1 overflow-auto custom-scrollbar p-4">
+                                        {!selectedCategoryNode ? (
+                                            <div className="flex h-full min-h-[220px] flex-col items-center justify-center gap-3 text-center opacity-50">
+                                                <span className="material-symbols-outlined text-[48px] text-stone/40">account_tree</span>
+                                                <p className="text-[12px] font-bold uppercase tracking-[0.18em] text-stone/50">
+                                                    Chưa chọn danh mục để preview
+                                                </p>
+                                                <p className="max-w-[280px] text-[12px] leading-relaxed text-stone/55">
+                                                    Preview này cho bạn biết cây danh mục nào sẽ được đưa trở lại khi bấm khôi phục.
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-2">
+                                                {selectedTrashPreviewNodes.map(({ node, role }) => (
+                                                    <div
+                                                        key={`${role}-${node.id}`}
+                                                        className={`rounded-sm border px-3 py-3 ${
+                                                            role === 'selected'
+                                                                ? 'border-emerald-200 bg-emerald-50/70'
+                                                                : role === 'ancestor'
+                                                                    ? 'border-sky-200 bg-sky-50/70'
+                                                                    : 'border-gold/10 bg-white'
+                                                        }`}
+                                                    >
+                                                        <div className="flex items-start gap-3">
+                                                            <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm text-[11px] font-black ${
+                                                                role === 'selected'
+                                                                    ? 'bg-emerald-600 text-white'
+                                                                    : role === 'ancestor'
+                                                                        ? 'bg-sky-600 text-white'
+                                                                        : 'bg-primary/10 text-primary'
+                                                            }`}>
+                                                                {role === 'selected' ? 'G' : role === 'ancestor' ? 'C' : 'N'}
+                                                            </div>
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="flex flex-wrap items-center gap-2">
+                                                                    <div className="truncate text-[12px] font-bold text-primary">
+                                                                        {node.text}
+                                                                    </div>
+                                                                    <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${
+                                                                        role === 'selected'
+                                                                            ? 'bg-emerald-100 text-emerald-700'
+                                                                            : role === 'ancestor'
+                                                                                ? 'bg-sky-100 text-sky-700'
+                                                                                : 'bg-gold/10 text-primary'
+                                                                    }`}>
+                                                                        {role === 'selected' ? 'Đang chọn' : role === 'ancestor' ? 'Cha cần khôi phục' : 'Danh mục con'}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-stone/55">
+                                                                    <span>ID: {node.id}</span>
+                                                                    <span>
+                                                                        {node.data?.parent_id
+                                                                            ? `Cha gốc: ${node.data?.parent?.name || `ID ${node.data.parent_id}`}`
+                                                                            : 'Danh mục gốc'}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {selectedCategoryNode ? (
+                                        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-gold/10 px-4 py-3 text-[10px] text-stone/50">
+                                            <span>Khôi phục sẽ đưa cây này trở lại đúng cấu trúc ban đầu.</span>
+                                            <span className="font-bold uppercase tracking-[0.14em]">
+                                                Không khôi phục sai cha-con
+                                            </span>
+                                        </div>
+                                    ) : null}
+                                </React.Fragment>
+                            ) : (
+                            <React.Fragment>
                             <div className="flex items-start justify-between gap-3 border-b border-gold/10 bg-gold/5 px-4 py-4">
                                 <div>
                                     <h3 className="text-[11px] font-black uppercase tracking-[0.18em] text-primary flex items-center gap-2">
@@ -3017,6 +3551,8 @@ const CategoryList = () => {
                                     </span>
                                 </div>
                             ) : null}
+                            </React.Fragment>
+                            )}
                         </div>
                     </div>
                 </div>

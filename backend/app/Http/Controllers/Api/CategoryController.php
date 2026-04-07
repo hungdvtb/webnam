@@ -11,11 +11,15 @@ use App\Models\SiteDomain;
 use App\Services\CategoryDemoLogoService;
 use App\Services\MediaService;
 use App\Support\SimpleXlsx;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -23,6 +27,8 @@ use Throwable;
 
 class CategoryController extends Controller
 {
+    private bool $categoryTrashSchemaEnsured = false;
+
     public function __construct(
         protected MediaService $mediaService,
         protected CategoryDemoLogoService $categoryDemoLogoService
@@ -443,9 +449,30 @@ class CategoryController extends Controller
         });
     }
 
-    public function index()
+    public function index(Request $request)
     {
-        $categories = Category::with(['bannerMediaAsset', 'logoMediaAsset'])
+        $isTrashView = $this->shouldUseCategoryTrashView($request);
+
+        if ($isTrashView) {
+            $this->ensureCategoryTrashSchema();
+        }
+
+        $query = $isTrashView
+            ? Category::onlyTrashed()
+            : Category::query();
+
+        $categories = $query
+            ->with([
+                'bannerMediaAsset',
+                'logoMediaAsset',
+                'parent' => static function ($parentQuery) use ($isTrashView) {
+                    if ($isTrashView) {
+                        $parentQuery->withTrashed();
+                    }
+
+                    $parentQuery->select(['id', 'name']);
+                },
+            ])
             ->withCount('products')
             ->orderBy('order')
             ->orderBy('id')
@@ -642,10 +669,37 @@ class CategoryController extends Controller
 
     public function destroy($id)
     {
-        $category = Category::findOrFail($id);
-        $category->delete();
+        $this->ensureCategoryTrashSchema();
 
-        return response()->json(['message' => 'Category deleted successfully']);
+        $category = Category::findOrFail($id);
+        $cascadeIds = $this->resolveCategoryTrashCascadeIds([(int) $category->id]);
+        $deletedBy = auth()->id();
+
+        DB::transaction(function () use ($cascadeIds, $deletedBy) {
+            Category::query()
+                ->whereIn('id', $cascadeIds)
+                ->delete();
+
+            $this->stampDeletedByForCategories($cascadeIds, $deletedBy);
+        });
+
+        return response()->json([
+            'message' => 'Đã chuyển danh mục vào Thùng rác.',
+            'trashed_count' => count($cascadeIds),
+        ]);
+    }
+
+    public function restore($id)
+    {
+        $this->ensureCategoryTrashSchema();
+
+        $category = Category::onlyTrashed()->findOrFail($id);
+        $restoredIds = $this->restoreCategoryTree([(int) $category->id]);
+
+        return response()->json([
+            'message' => 'Đã khôi phục danh mục từ Thùng rác.',
+            'restored_count' => count($restoredIds),
+        ]);
     }
 
     public function reorder(Request $request)
@@ -751,6 +805,8 @@ class CategoryController extends Controller
 
     public function bulkDestroy(Request $request)
     {
+        $this->ensureCategoryTrashSchema();
+
         $request->validate([
             'ids' => 'required|array|min:1',
             'ids.*' => 'integer|distinct',
@@ -780,15 +836,61 @@ class CategoryController extends Controller
             ]);
         }
 
-        DB::transaction(function () use ($existingIds) {
+        $cascadeIds = $this->resolveCategoryTrashCascadeIds($existingIds->all());
+        $deletedBy = auth()->id();
+
+        DB::transaction(function () use ($cascadeIds, $deletedBy) {
             Category::query()
-                ->whereIn('id', $existingIds)
+                ->whereIn('id', $cascadeIds)
                 ->delete();
+
+            $this->stampDeletedByForCategories($cascadeIds, $deletedBy);
         });
 
         return response()->json([
-            'message' => 'Da xoa cac danh muc da chon.',
-            'deleted_count' => $existingIds->count(),
+            'message' => 'Đã chuyển các danh mục đã chọn vào Thùng rác.',
+            'trashed_count' => count($cascadeIds),
+        ]);
+    }
+
+    public function bulkRestore(Request $request)
+    {
+        $this->ensureCategoryTrashSchema();
+
+        $request->validate([
+            'ids' => 'required|array|min:1',
+            'ids.*' => 'integer|distinct',
+        ]);
+
+        $ids = collect($request->input('ids', []))
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            throw ValidationException::withMessages([
+                'ids' => ['Vui lòng chọn ít nhất một danh mục hợp lệ để khôi phục.'],
+            ]);
+        }
+
+        $existingIds = Category::onlyTrashed()
+            ->whereIn('id', $ids)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values();
+
+        if ($existingIds->count() !== $ids->count()) {
+            throw ValidationException::withMessages([
+                'ids' => ['Một hoặc nhiều danh mục không còn trong Thùng rác hoặc không hợp lệ.'],
+            ]);
+        }
+
+        $restoredIds = $this->restoreCategoryTree($existingIds->all());
+
+        return response()->json([
+            'message' => 'Đã khôi phục các danh mục đã chọn.',
+            'restored_count' => count($restoredIds),
         ]);
     }
 
@@ -1600,6 +1702,323 @@ class CategoryController extends Controller
         $maxOrder = $query->max('order');
 
         return $maxOrder === null ? 0 : ((int) $maxOrder + 1);
+    }
+
+    private function ensureCategoryTrashSchema(): void
+    {
+        if ($this->categoryTrashSchemaEnsured) {
+            return;
+        }
+
+        if (!Schema::hasTable('categories')) {
+            $this->refreshCategoryTrashModelState();
+            $this->categoryTrashSchemaEnsured = true;
+
+            return;
+        }
+
+        $needsDeletedAt = !Schema::hasColumn('categories', 'deleted_at');
+        $needsDeletedBy = !Schema::hasColumn('categories', 'deleted_by');
+
+        if ($needsDeletedAt || $needsDeletedBy) {
+            Schema::table('categories', function (Blueprint $table) use ($needsDeletedAt, $needsDeletedBy) {
+                if ($needsDeletedAt) {
+                    $table->softDeletes()->after('updated_at');
+                }
+
+                if ($needsDeletedBy) {
+                    $table->unsignedBigInteger('deleted_by')->nullable()->after($needsDeletedAt ? 'deleted_at' : 'updated_at');
+                }
+            });
+        }
+
+        if (Schema::hasColumn('categories', 'deleted_at') && !Schema::hasIndex('categories', ['deleted_at'])) {
+            Schema::table('categories', function (Blueprint $table) {
+                $table->index('deleted_at');
+            });
+        }
+
+        if (Schema::hasColumn('categories', 'deleted_by') && !Schema::hasIndex('categories', ['deleted_by'])) {
+            Schema::table('categories', function (Blueprint $table) {
+                $table->index('deleted_by');
+            });
+        }
+
+        if (
+            Schema::hasColumn('categories', 'parent_id')
+            && Schema::hasColumn('categories', 'deleted_at')
+            && Schema::hasColumn('categories', 'order')
+            && !Schema::hasIndex('categories', ['parent_id', 'deleted_at', 'order'])
+        ) {
+            Schema::table('categories', function (Blueprint $table) {
+                $table->index(['parent_id', 'deleted_at', 'order'], 'categories_parent_deleted_at_order_index');
+            });
+        }
+
+        $this->refreshCategoryTrashModelState();
+        $this->categoryTrashSchemaEnsured = true;
+    }
+
+    private function refreshCategoryTrashModelState(): void
+    {
+        Category::forgetOptionalSoftDeleteSupportCache();
+        Model::clearBootedModels();
+    }
+
+    private function categoryUsesSoftDeletes(): bool
+    {
+        Category::forgetOptionalSoftDeleteSupportCache();
+
+        return Category::supportsTrash();
+    }
+
+    private function stampDeletedByForCategories(array $categoryIds, ?int $userId): void
+    {
+        if (empty($categoryIds) || !Category::supportsTrashAudit()) {
+            return;
+        }
+
+        Category::withTrashed()
+            ->whereIn('id', $categoryIds)
+            ->update([
+                'deleted_by' => $userId,
+                'updated_at' => now(),
+            ]);
+    }
+
+    private function clearDeletedByForCategories(array $categoryIds): void
+    {
+        if (empty($categoryIds) || !Category::supportsTrashAudit()) {
+            return;
+        }
+
+        Category::query()
+            ->whereIn('id', $categoryIds)
+            ->update([
+                'deleted_by' => null,
+                'updated_at' => now(),
+            ]);
+    }
+
+    private function shouldUseCategoryTrashView(Request $request): bool
+    {
+        $rawValue = $request->query('is_trash', $request->query('trashed', false));
+
+        if (is_bool($rawValue)) {
+            $wantsTrash = $rawValue;
+        } else {
+            $wantsTrash = in_array(
+                Str::lower(trim((string) $rawValue)),
+                ['1', 'true', 'yes', 'trash', 'trashed'],
+                true
+            );
+        }
+
+        if (! $wantsTrash) {
+            return false;
+        }
+
+        if (auth()->check() || Auth::guard('sanctum')->check()) {
+            return true;
+        }
+
+        abort(403, 'Ban can dang nhap de xem Thung rac danh muc.');
+    }
+
+    private function categoryTreeState(bool $withTrashed = false): Collection
+    {
+        $query = $withTrashed
+            ? Category::withTrashed()
+            : Category::query();
+
+        $columns = ['id', 'parent_id', 'order'];
+
+        if ($this->categoryUsesSoftDeletes()) {
+            $columns[] = 'deleted_at';
+        }
+
+        return $query
+            ->orderBy('order')
+            ->orderBy('id')
+            ->get($columns)
+            ->keyBy(fn ($category) => (int) $category->id);
+    }
+
+    private function buildCategoryChildrenLookup(Collection $categories): array
+    {
+        $lookup = [];
+
+        foreach ($categories as $category) {
+            $parentId = $category->parent_id ? (int) $category->parent_id : 0;
+            $lookup[$parentId][] = (int) $category->id;
+        }
+
+        return $lookup;
+    }
+
+    private function collectCategorySubtreeIds(array $rootIds, Collection $categories): array
+    {
+        $childrenLookup = $this->buildCategoryChildrenLookup($categories);
+        $stack = collect($rootIds)
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter(fn ($id) => $id !== null && $categories->has($id))
+            ->unique()
+            ->values()
+            ->all();
+
+        $resolvedIds = [];
+
+        while (!empty($stack)) {
+            $currentId = array_pop($stack);
+
+            if (isset($resolvedIds[$currentId])) {
+                continue;
+            }
+
+            $resolvedIds[$currentId] = true;
+
+            foreach (array_reverse($childrenLookup[$currentId] ?? []) as $childId) {
+                $stack[] = (int) $childId;
+            }
+        }
+
+        return array_map('intval', array_keys($resolvedIds));
+    }
+
+    private function collectCategoryAncestorIds(array $ids, Collection $categories): array
+    {
+        $resolvedIds = [];
+
+        foreach ($ids as $rawId) {
+            $currentId = is_numeric($rawId) ? (int) $rawId : null;
+
+            while ($currentId !== null && $categories->has($currentId)) {
+                if (isset($resolvedIds[$currentId])) {
+                    break;
+                }
+
+                $resolvedIds[$currentId] = true;
+                $parentId = $categories->get($currentId)?->parent_id;
+                $currentId = $parentId ? (int) $parentId : null;
+            }
+        }
+
+        return array_map('intval', array_keys($resolvedIds));
+    }
+
+    private function resolveCategoryTrashCascadeIds(array $ids): array
+    {
+        return $this->collectCategorySubtreeIds($ids, $this->categoryTreeState());
+    }
+
+    private function resolveCategoryRestoreCascadeIds(array $ids): array
+    {
+        $categories = $this->categoryTreeState(true);
+
+        return collect([
+            ...$this->collectCategoryAncestorIds($ids, $categories),
+            ...$this->collectCategorySubtreeIds($ids, $categories),
+        ])
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function restoreCategoryTree(array $ids): array
+    {
+        $restoreIds = $this->resolveCategoryRestoreCascadeIds($ids);
+
+        $trashedIds = Category::onlyTrashed()
+            ->whereIn('id', $restoreIds)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+
+        if (empty($trashedIds)) {
+            return [];
+        }
+
+        DB::transaction(function () use ($trashedIds) {
+            Category::onlyTrashed()
+                ->whereIn('id', $trashedIds)
+                ->restore();
+
+            $this->normalizeRestoredCategoryOrders($trashedIds);
+            $this->clearDeletedByForCategories($trashedIds);
+        });
+
+        return $trashedIds;
+    }
+
+    private function normalizeRestoredCategoryOrders(array $restoredIds): void
+    {
+        if (empty($restoredIds)) {
+            return;
+        }
+
+        $restoredGroups = Category::query()
+            ->whereIn('id', $restoredIds)
+            ->get(['id', 'parent_id', 'order'])
+            ->groupBy(fn ($category) => $this->parentGroupKey($category->parent_id));
+
+        $timestamp = now();
+
+        foreach ($restoredGroups as $siblings) {
+            if ($siblings->isEmpty()) {
+                continue;
+            }
+
+            $parentId = $siblings->first()->parent_id ? (int) $siblings->first()->parent_id : null;
+            $restoredIdLookup = array_fill_keys(
+                $siblings->pluck('id')->map(fn ($id) => (int) $id)->all(),
+                true
+            );
+
+            $activeSiblings = Category::query()
+                ->where('parent_id', $parentId)
+                ->orderBy('order')
+                ->orderBy('id')
+                ->get(['id', 'order']);
+
+            $finalOrder = $activeSiblings
+                ->reject(fn ($category) => isset($restoredIdLookup[(int) $category->id]))
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->values()
+                ->all();
+
+            $siblings
+                ->sortBy([
+                    ['order', 'asc'],
+                    ['id', 'asc'],
+                ])
+                ->values()
+                ->each(function ($category) use (&$finalOrder): void {
+                    $targetIndex = (int) ($category->order ?? count($finalOrder));
+                    $targetIndex = max(0, min($targetIndex, count($finalOrder)));
+
+                    array_splice($finalOrder, $targetIndex, 0, [(int) $category->id]);
+                });
+
+            $currentOrderById = $activeSiblings->mapWithKeys(fn ($category) => [
+                (int) $category->id => (int) ($category->order ?? 0),
+            ]);
+
+            foreach ($finalOrder as $index => $categoryId) {
+                if (($currentOrderById->get($categoryId) ?? -1) === $index) {
+                    continue;
+                }
+
+                Category::query()
+                    ->whereKey($categoryId)
+                    ->update([
+                        'order' => $index,
+                        'updated_at' => $timestamp,
+                    ]);
+            }
+        }
     }
 
     private function validateCategoryImportRows(array $rows, array $importOptions): array

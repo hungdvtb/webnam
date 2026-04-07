@@ -33,6 +33,7 @@ export default function ThankYouView({
   const name = formData?.customer_name || formData?.name || '';
   const phone = getReceiptPhone(formData);
   const address = getReceiptAddress(formData);
+  const supportHotline = String(bankSettings?.contact_phone || bankSettings?.footer_hotline || '').trim();
 
   const emitMobileOrderNotice = (message) => {
     if (typeof window === 'undefined') {
@@ -65,6 +66,7 @@ export default function ThankYouView({
         cartTotal,
         discount,
         createdAt,
+        supportHotline,
       });
       emitMobileOrderNotice('Ảnh đơn hàng đã được tải xuống máy.');
       return true;
@@ -95,6 +97,26 @@ export default function ThankYouView({
 
     return () => {
       window.removeEventListener('webgom:thank-you-download-request', handleSaveRequest);
+    };
+  }, [handleSaveOrderImage]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const searchParams = new URLSearchParams(window.location.search);
+
+    if (searchParams.get('selftest') !== 'thankyou') {
+      return undefined;
+    }
+
+    window.__webgomThankYouSaveOrderImage = handleSaveOrderImage;
+
+    return () => {
+      if (window.__webgomThankYouSaveOrderImage === handleSaveOrderImage) {
+        delete window.__webgomThankYouSaveOrderImage;
+      }
     };
   }, [handleSaveOrderImage]);
 

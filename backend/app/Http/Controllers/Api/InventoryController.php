@@ -2930,46 +2930,185 @@ class InventoryController extends Controller
             'products.deleted_at',
         ]);
 
-        $importQtySub = \App\Models\ImportItem::query()
+        $importQtySub = $this->buildImportQuantitySubquery($request);
+        $exportQtySub = $this->buildExportQuantitySubquery($request);
+        $exportAdjustmentQtySub = $this->buildExportAdjustmentQuantitySubquery($request);
+        $returnQtySub = $this->buildReturnQuantitySubquery($request);
+        $damagedQtySub = $this->buildDamagedQuantitySubquery($request);
+        $adjustmentQtySub = $this->buildStockAdjustmentQuantitySubquery($request);
+        $variantCountSub = $this->buildVariantCountSubquery();
+        $parentIdSub = $this->buildParentProductSubquery();
+        $pendingOutboundQtySub = $this->buildPendingOutboundQuantitySubquery($request);
+        $pendingReturnQtySub = $this->buildPendingReturnQuantitySubquery($request);
+
+        $query->leftJoinSub($importQtySub, 'import_totals', function ($join) {
+            $join->on('import_totals.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($exportQtySub, 'export_totals', function ($join) {
+            $join->on('export_totals.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($exportAdjustmentQtySub, 'export_adjustments', function ($join) {
+            $join->on('export_adjustments.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($returnQtySub, 'return_totals', function ($join) {
+            $join->on('return_totals.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($damagedQtySub, 'damaged_totals', function ($join) {
+            $join->on('damaged_totals.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($adjustmentQtySub, 'stock_adjustments', function ($join) {
+            $join->on('stock_adjustments.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($variantCountSub, 'variant_links', function ($join) {
+            $join->on('variant_links.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($parentIdSub, 'parent_links', function ($join) {
+            $join->on('parent_links.variant_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($pendingOutboundQtySub, 'pending_outbound', function ($join) {
+            $join->on('pending_outbound.product_id', '=', 'products.id');
+        });
+        $query->leftJoinSub($pendingReturnQtySub, 'pending_returns', function ($join) {
+            $join->on('pending_returns.product_id', '=', 'products.id');
+        });
+
+        $importQtySql = 'COALESCE(import_totals.total_imported, 0)';
+        $exportQtySql = 'COALESCE(export_totals.total_exported, 0)';
+        $exportAdjustmentQtySql = 'COALESCE(export_adjustments.total_export_adjusted, 0)';
+        $returnQtySql = 'COALESCE(return_totals.total_returned, 0)';
+        $damagedQtySql = 'COALESCE(damaged_totals.total_damaged, 0)';
+        $adjustmentQtySql = 'COALESCE(stock_adjustments.total_adjusted, 0)';
+        $pendingExportQtySql = 'COALESCE(pending_outbound.pending_export_quantity, 0)';
+        $pendingReturnQtySql = 'COALESCE(pending_returns.pending_return_quantity, 0)';
+        $correctedExportQtySql = '(' . $exportQtySql . ' + ' . $exportAdjustmentQtySql . ')';
+        $computedStockSql = '('
+            . $importQtySql
+            . ' - '
+            . $correctedExportQtySql
+            . ' + '
+            . $returnQtySql
+            . ' - '
+            . $damagedQtySql
+            . ' + '
+            . $adjustmentQtySql
+            . ')';
+        $actualStockSql = '(' . $computedStockSql . ' - ' . $pendingExportQtySql . ' + ' . $pendingReturnQtySql . ')';
+        $inventoryValueSql = '(' . $actualStockSql . ' * COALESCE(products.cost_price, products.expected_cost, 0))';
+
+        if ($compact) {
+            $query = $query
+                ->selectRaw('COALESCE(variant_links.variant_count, 0) as variant_count')
+                ->selectRaw('parent_links.parent_product_id as parent_product_id')
+                ->selectRaw('COALESCE(products.cost_price, products.expected_cost, 0) as display_cost')
+                ->selectRaw($computedStockSql . ' as computed_stock')
+                ->selectRaw($pendingExportQtySql . ' as pending_export_quantity')
+                ->selectRaw($pendingReturnQtySql . ' as pending_return_quantity')
+                ->selectRaw($actualStockSql . ' as actual_stock')
+                ->selectRaw($inventoryValueSql . ' as inventory_value');
+
+            $this->applyInventoryProductFilters($query, $request);
+
+            return $query;
+        }
+
+        $query = $query
+            ->selectRaw($importQtySql . ' as total_imported')
+            ->selectRaw($correctedExportQtySql . ' as total_exported')
+            ->selectRaw($returnQtySql . ' as total_returned')
+            ->selectRaw($damagedQtySql . ' as total_damaged')
+            ->selectRaw($adjustmentQtySql . ' as total_adjusted')
+            ->selectRaw('COALESCE(variant_links.variant_count, 0) as variant_count')
+            ->selectRaw('parent_links.parent_product_id as parent_product_id')
+            ->selectRaw('COALESCE(products.cost_price, products.expected_cost, 0) as display_cost')
+            ->selectRaw($computedStockSql . ' as computed_stock')
+            ->selectRaw($pendingExportQtySql . ' as pending_export_quantity')
+            ->selectRaw($pendingReturnQtySql . ' as pending_return_quantity')
+            ->selectRaw($actualStockSql . ' as actual_stock')
+            ->selectRaw($inventoryValueSql . ' as inventory_value');
+
+        $this->applyInventoryProductFilters($query, $request);
+
+        if ($request->filled('stock_alert')) {
+            $stockAlert = trim((string) $request->input('stock_alert'));
+            if ($stockAlert === 'low') {
+                $query
+                    ->whereRaw($actualStockSql . ' > 0')
+                    ->whereRaw($actualStockSql . ' <= 5');
+            } elseif ($stockAlert === 'out') {
+                $query->whereRaw($actualStockSql . ' <= 0');
+            } elseif ($stockAlert === 'available') {
+                $query->whereRaw($actualStockSql . ' > 5');
+            }
+        }
+
+        return $query;
+    }
+
+    private function buildImportQuantitySubquery(Request $request)
+    {
+        $query = \App\Models\ImportItem::query()
             ->join('imports', 'imports.id', '=', 'import_items.import_id')
             ->leftJoin('inventory_import_statuses', 'inventory_import_statuses.id', '=', 'imports.inventory_import_status_id')
-            ->selectRaw('COALESCE(SUM(import_items.received_quantity), 0)')
-            ->whereColumn('import_items.product_id', 'products.id');
+            ->selectRaw('import_items.product_id')
+            ->selectRaw('COALESCE(SUM(import_items.received_quantity), 0) as total_imported')
+            ->groupBy('import_items.product_id');
+
         if (Schema::hasColumn('imports', 'deleted_at')) {
-            $importQtySub->whereNull('imports.deleted_at');
+            $query->whereNull('imports.deleted_at');
         }
-        $importQtySub->where(function ($builder) {
+
+        $query->where(function ($builder) {
             $builder
                 ->whereNull('inventory_import_statuses.id')
                 ->orWhere('inventory_import_statuses.affects_inventory', true);
         });
-        $this->applyDateRange($importQtySub, 'imports.import_date', $request);
 
-        $exportQtySub = $this->buildExportQuantitySubquery($request);
-        $exportAdjustmentQtySub = $this->buildExportAdjustmentQuantitySubquery($request);
+        $this->applyDateRange($query, 'imports.import_date', $request);
 
-        $returnQtySub = \App\Models\InventoryDocumentItem::query()
+        return $query;
+    }
+
+    private function buildReturnQuantitySubquery(Request $request)
+    {
+        $query = \App\Models\InventoryDocumentItem::query()
             ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
-            ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0)')
-            ->whereColumn('inventory_document_items.product_id', 'products.id')
-            ->where('inventory_documents.type', 'return');
+            ->selectRaw('inventory_document_items.product_id')
+            ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0) as total_returned')
+            ->where('inventory_documents.type', 'return')
+            ->groupBy('inventory_document_items.product_id');
+
         if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
-            $returnQtySub->whereNull('inventory_documents.deleted_at');
+            $query->whereNull('inventory_documents.deleted_at');
         }
-        $this->applyDateRange($returnQtySub, 'inventory_documents.document_date', $request);
 
-        $damagedQtySub = \App\Models\InventoryDocumentItem::query()
+        $this->applyDateRange($query, 'inventory_documents.document_date', $request);
+
+        return $query;
+    }
+
+    private function buildDamagedQuantitySubquery(Request $request)
+    {
+        $query = \App\Models\InventoryDocumentItem::query()
             ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
-            ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0)')
-            ->whereColumn('inventory_document_items.product_id', 'products.id')
-            ->where('inventory_documents.type', 'damaged');
+            ->selectRaw('inventory_document_items.product_id')
+            ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0) as total_damaged')
+            ->where('inventory_documents.type', 'damaged')
+            ->groupBy('inventory_document_items.product_id');
+
         if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
-            $damagedQtySub->whereNull('inventory_documents.deleted_at');
+            $query->whereNull('inventory_documents.deleted_at');
         }
-        $this->applyDateRange($damagedQtySub, 'inventory_documents.document_date', $request);
 
-        $adjustmentQtySub = \App\Models\InventoryDocumentItem::query()
+        $this->applyDateRange($query, 'inventory_documents.document_date', $request);
+
+        return $query;
+    }
+
+    private function buildStockAdjustmentQuantitySubquery(Request $request)
+    {
+        $query = \App\Models\InventoryDocumentItem::query()
             ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
+            ->selectRaw('inventory_document_items.product_id')
             ->selectRaw("
                 COALESCE(SUM(
                     CASE
@@ -2981,118 +3120,40 @@ class InventoryController extends Controller
                             THEN -inventory_document_items.quantity
                         ELSE 0
                     END
-                ), 0)
+                ), 0) as total_adjusted
             ")
-            ->whereColumn('inventory_document_items.product_id', 'products.id')
             ->where('inventory_documents.type', 'adjustment')
             ->where(function ($builder) {
                 $builder
                     ->whereNull('inventory_documents.adjustment_kind')
                     ->orWhere('inventory_documents.adjustment_kind', InventoryDocument::ADJUSTMENT_KIND_STOCK);
-            });
+            })
+            ->groupBy('inventory_document_items.product_id');
+
         if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
-            $adjustmentQtySub->whereNull('inventory_documents.deleted_at');
-        }
-        $this->applyDateRange($adjustmentQtySub, 'inventory_documents.document_date', $request);
-
-        $variantCountSub = DB::table('product_links')
-            ->selectRaw('COUNT(*)')
-            ->whereColumn('product_links.product_id', 'products.id')
-            ->where('product_links.link_type', 'super_link');
-
-        $parentIdSub = DB::table('product_links')
-            ->select('product_links.product_id')
-            ->whereColumn('product_links.linked_product_id', 'products.id')
-            ->where('product_links.link_type', 'super_link')
-            ->limit(1);
-        $correctedExportQtySql = '(('
-            . $exportQtySub->toSql()
-            . ') + ('
-            . $exportAdjustmentQtySub->toSql()
-            . '))';
-        $exportQtyBindings = array_merge(
-            $exportQtySub->getBindings(),
-            $exportAdjustmentQtySub->getBindings(),
-        );
-        $computedStockSql = '(('
-            . $importQtySub->toSql()
-            . ') - '
-            . $correctedExportQtySql
-            . ' + ('
-            . $returnQtySub->toSql()
-            . ') - ('
-            . $damagedQtySub->toSql()
-            . ') + ('
-            . $adjustmentQtySub->toSql()
-            . '))';
-        $computedStockBindings = array_merge(
-            $importQtySub->getBindings(),
-            $exportQtyBindings,
-            $returnQtySub->getBindings(),
-            $damagedQtySub->getBindings(),
-            $adjustmentQtySub->getBindings(),
-        );
-        $pendingOutboundQtySub = $this->buildPendingOutboundQuantitySubquery($request);
-        $pendingExportQtySql = 'COALESCE(pending_outbound.pending_export_quantity, 0)';
-        $pendingReturnQtySub = $this->buildPendingReturnQuantitySubquery($request);
-        $pendingReturnQtySql = 'COALESCE(pending_returns.pending_return_quantity, 0)';
-        $actualStockSql = '(' . $computedStockSql . ' - ' . $pendingExportQtySql . ' + ' . $pendingReturnQtySql . ')';
-        $inventoryValueSql = '(' . $actualStockSql . ' * COALESCE(products.cost_price, products.expected_cost, 0))';
-
-        $query->leftJoinSub($pendingOutboundQtySub, 'pending_outbound', function ($join) {
-            $join->on('pending_outbound.product_id', '=', 'products.id');
-        });
-        $query->leftJoinSub($pendingReturnQtySub, 'pending_returns', function ($join) {
-            $join->on('pending_returns.product_id', '=', 'products.id');
-        });
-
-        if ($compact) {
-            $query = $query
-                ->selectSub($variantCountSub, 'variant_count')
-                ->selectSub($parentIdSub, 'parent_product_id')
-                ->selectRaw('COALESCE(products.cost_price, products.expected_cost, 0) as display_cost')
-                ->selectRaw($computedStockSql . ' as computed_stock', $computedStockBindings)
-                ->selectRaw($pendingExportQtySql . ' as pending_export_quantity')
-                ->selectRaw($pendingReturnQtySql . ' as pending_return_quantity')
-                ->selectRaw($actualStockSql . ' as actual_stock', $computedStockBindings)
-                ->selectRaw($inventoryValueSql . ' as inventory_value', $computedStockBindings);
-
-            $this->applyInventoryProductFilters($query, $request);
-
-            return $query;
+            $query->whereNull('inventory_documents.deleted_at');
         }
 
-        $query = $query
-            ->selectSub($importQtySub, 'total_imported')
-            ->selectRaw($correctedExportQtySql . ' as total_exported', $exportQtyBindings)
-            ->selectSub($returnQtySub, 'total_returned')
-            ->selectSub($damagedQtySub, 'total_damaged')
-            ->selectSub($adjustmentQtySub, 'total_adjusted')
-            ->selectSub($variantCountSub, 'variant_count')
-            ->selectSub($parentIdSub, 'parent_product_id')
-            ->selectRaw('COALESCE(products.cost_price, products.expected_cost, 0) as display_cost')
-            ->selectRaw($computedStockSql . ' as computed_stock', $computedStockBindings)
-            ->selectRaw($pendingExportQtySql . ' as pending_export_quantity')
-            ->selectRaw($pendingReturnQtySql . ' as pending_return_quantity')
-            ->selectRaw($actualStockSql . ' as actual_stock', $computedStockBindings)
-            ->selectRaw($inventoryValueSql . ' as inventory_value', $computedStockBindings);
-
-        $this->applyInventoryProductFilters($query, $request);
-
-        if ($request->filled('stock_alert')) {
-            $stockAlert = trim((string) $request->input('stock_alert'));
-            if ($stockAlert === 'low') {
-                $query
-                    ->whereRaw($actualStockSql . ' > 0', $computedStockBindings)
-                    ->whereRaw($actualStockSql . ' <= 5', $computedStockBindings);
-            } elseif ($stockAlert === 'out') {
-                $query->whereRaw($actualStockSql . ' <= 0', $computedStockBindings);
-            } elseif ($stockAlert === 'available') {
-                $query->whereRaw($actualStockSql . ' > 5', $computedStockBindings);
-            }
-        }
+        $this->applyDateRange($query, 'inventory_documents.document_date', $request);
 
         return $query;
+    }
+
+    private function buildVariantCountSubquery()
+    {
+        return DB::table('product_links')
+            ->selectRaw('product_links.product_id')
+            ->selectRaw('COUNT(*) as variant_count')
+            ->where('product_links.link_type', 'super_link')
+            ->groupBy('product_links.product_id');
+    }
+
+    private function buildParentProductSubquery()
+    {
+        return DB::table('product_links')
+            ->selectRaw('product_links.linked_product_id as variant_id')
+            ->selectRaw('product_links.product_id as parent_product_id')
+            ->where('product_links.link_type', 'super_link');
     }
 
     private function buildExportQuantitySubquery(Request $request)
@@ -3228,14 +3289,16 @@ class InventoryController extends Controller
                     ->on('automatic_exports.order_id', '=', 'export_keys.order_id')
                     ->on('automatic_exports.product_id', '=', 'export_keys.product_id');
             })
-            ->selectRaw('COALESCE(SUM(GREATEST(COALESCE(manual_exports.manual_export_quantity, 0), COALESCE(automatic_exports.automatic_export_quantity, 0))), 0)')
-            ->whereColumn('export_keys.product_id', 'products.id');
+            ->selectRaw('export_keys.product_id')
+            ->selectRaw('COALESCE(SUM(GREATEST(COALESCE(manual_exports.manual_export_quantity, 0), COALESCE(automatic_exports.automatic_export_quantity, 0))), 0) as total_exported')
+            ->groupBy('export_keys.product_id');
     }
 
     private function buildExportAdjustmentQuantitySubquery(Request $request)
     {
         $query = \App\Models\InventoryDocumentItem::query()
             ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
+            ->selectRaw('inventory_document_items.product_id')
             ->selectRaw("
                 COALESCE(SUM(
                     CASE
@@ -3245,12 +3308,12 @@ class InventoryController extends Controller
                             THEN -inventory_document_items.quantity
                         ELSE 0
                     END
-                ), 0)
+                ), 0) as total_export_adjusted
             ")
-            ->whereColumn('inventory_document_items.product_id', 'products.id')
             ->where('inventory_documents.type', 'adjustment')
             ->where('inventory_documents.adjustment_kind', InventoryDocument::ADJUSTMENT_KIND_EXPORT)
-            ->where('inventory_document_items.stock_bucket', 'sellable');
+            ->where('inventory_document_items.stock_bucket', 'sellable')
+            ->groupBy('inventory_document_items.product_id');
 
         if (Schema::hasColumn('inventory_documents', 'deleted_at')) {
             $query->whereNull('inventory_documents.deleted_at');
@@ -3697,11 +3760,15 @@ class InventoryController extends Controller
     private function applyDateRangeExpression($query, string $expression, Request $request): void
     {
         if ($request->filled('date_from')) {
-            $query->whereRaw("DATE({$expression}) >= ?", [$request->input('date_from')]);
+            $query->whereRaw("({$expression}) >= ?", [
+                Carbon::parse((string) $request->input('date_from'))->startOfDay()->toDateTimeString(),
+            ]);
         }
 
         if ($request->filled('date_to')) {
-            $query->whereRaw("DATE({$expression}) <= ?", [$request->input('date_to')]);
+            $query->whereRaw("({$expression}) < ?", [
+                Carbon::parse((string) $request->input('date_to'))->addDay()->startOfDay()->toDateTimeString(),
+            ]);
         }
     }
 

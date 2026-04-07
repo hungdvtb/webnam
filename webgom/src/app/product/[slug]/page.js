@@ -144,9 +144,14 @@ export async function generateMetadata({ params }) {
 
   try {
     const product = await getWebProductDetail(slug);
+    const seoTitle = String(product.meta_title || '').trim();
+    const seoDescription = product.meta_description || product.description?.substring(0, 160);
+    const seoKeywords = String(product.meta_keywords || '').trim();
+
     return {
-      title: `${product.name} | GỐM ĐẠI THÀNH`,
-      description: product.meta_description || product.description?.substring(0, 160),
+      title: `${seoTitle || product.name} | GỐM ĐẠI THÀNH`,
+      description: seoDescription,
+      keywords: seoKeywords || undefined,
     };
   } catch (error) {
     return {

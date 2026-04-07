@@ -3837,7 +3837,18 @@ const InventoryMovement = () => {
     };
 
     const togglePanel = (section, panel) => {
-        setOpenPanels((prev) => ({ ...prev, [section]: { ...prev[section], [panel]: !prev[section]?.[panel] } }));
+        const nextOpen = !openPanels[section]?.[panel];
+        setOpenPanels((prev) => ({ ...prev, [section]: { ...prev[section], [panel]: nextOpen } }));
+
+        if (section === 'products' && panel === 'stats' && nextOpen && activeTab === 'products') {
+            void fetchProducts(
+                productPagination.current_page || 1,
+                pageSizes.products,
+                sortConfigs.products,
+                productFilters,
+                { includeSummary: true },
+            );
+        }
     };
     const updatePageSize = (key, size) => {
         const nextSize = pageSizeOptions.includes(size) ? size : 20;
@@ -4539,12 +4550,25 @@ const InventoryMovement = () => {
         setDailyOutboundDrawer({ open: false, product: null });
     };
 
-    const fetchProducts = async (page = 1, perPage = pageSizes.products, sortOverride = null, filtersOverride = productFilters) => {
+    const fetchProducts = async (
+        page = 1,
+        perPage = pageSizes.products,
+        sortOverride = null,
+        filtersOverride = productFilters,
+        options = {},
+    ) => {
+        const includeSummary = options.includeSummary ?? openPanels.products.stats;
         setFlag('products', true);
         try {
-            const response = await inventoryApi.getProducts({ ...filtersOverride, page, per_page: perPage, ...buildSortParams('products', sortOverride) });
+            const response = await inventoryApi.getProducts({
+                ...filtersOverride,
+                page,
+                per_page: perPage,
+                without_summary: includeSummary ? undefined : 1,
+                ...buildSortParams('products', sortOverride),
+            });
             setProducts(response.data.data || []);
-            setProductSummary(response.data.summary || null);
+            setProductSummary(includeSummary ? (response.data.summary || null) : null);
             pageState(setProductPagination, response);
         } catch (error) {
             fail(error, 'Không thể tải sản phẩm kho.');

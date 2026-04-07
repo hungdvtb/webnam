@@ -140,11 +140,21 @@ export const productImageApi = {
     upload: (productId, formData) => api.post(`/products/${productId}/images`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
     }),
-    bulkRefreshPreview: (formData) => api.post('/product-images/bulk-refresh/preview', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+    bulkAppendPreview: (formData, config = {}) => api.post('/product-images/bulk-append/preview', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        ...config,
     }),
-    bulkRefreshApply: (formData) => api.post('/product-images/bulk-refresh/apply', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+    bulkAppendApply: (formData, config = {}) => api.post('/product-images/bulk-append/apply', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        ...config,
+    }),
+    bulkRefreshPreview: (formData, config = {}) => api.post('/product-images/bulk-refresh/preview', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        ...config,
+    }),
+    bulkRefreshApply: (formData, config = {}) => api.post('/product-images/bulk-refresh/apply', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        ...config,
     }),
     setPrimary: (id) => api.post(`/product-images/${id}/primary`),
     destroy: (id) => api.delete(`/product-images/${id}`),
@@ -152,7 +162,7 @@ export const productImageApi = {
 };
 
 export const categoryApi = {
-    getAll: () => api.get('/categories'),
+    getAll: (params) => api.get('/categories', params ? { params } : {}),
     getOne: (id) => api.get(`/categories/${id}`),
     getProducts: (id) => api.get(`/categories/${id}/products`),
     downloadExcel: (params) => api.get('/categories/export', { params, responseType: 'blob' }),
@@ -162,6 +172,8 @@ export const categoryApi = {
     update: (id, data) => api.post(`/categories/${id}`, data, multipartConfig(data)),
     destroy: (id) => api.delete(`/categories/${id}`),
     bulkDelete: (ids) => api.delete('/categories/bulk-delete', { data: { ids } }),
+    restore: (id) => api.post(`/categories/${id}/restore`),
+    bulkRestore: (ids) => api.post('/categories/bulk-restore', { ids }),
     reorder: (items) => api.post('/categories/reorder', { items }),
     reorderProducts: (id, items) => {
         const normalizedItems = Array.isArray(items) ? items : [];

@@ -1012,12 +1012,17 @@ const mergeOrderAiItemMeta = (existingMeta, incomingMeta) => {
 };
 const isOrderAiItem = (item) => Boolean(item?.ai_meta?.source === 'order_ai');
 const isPendingOrderAiItem = (item) => isOrderAiItem(item) && item?.ai_meta?.review_state !== 'confirmed';
+const applySequentialOrderLineSortOrder = (items = []) => (Array.isArray(items) ? items : []).map((item, index) => ({
+    ...item,
+    sort_order: index + 1,
+}));
 const createOrderLineItem = ({
     line_id,
     product_id,
     name,
     sku,
     unit_name,
+    sort_order,
     quantity = 1,
     price = 0,
     cost_price = 0,
@@ -1041,6 +1046,7 @@ const createOrderLineItem = ({
         name: resolveOrderLineItemDisplayName({ name, options: normalizedOptions }),
         sku: normalizeCanvasText(sku) || 'N/A',
         unit_name: resolveOrderUnitLabel({ unit_name }),
+        sort_order: Math.max(1, Number(sort_order) || 1),
         quantity: Math.max(1, Number(quantity) || 1),
         price: Number(price) || 0,
         cost_price: resolveRoundedImportCostValue(cost_price, 0),
@@ -1127,7 +1133,7 @@ const appendOrderItemsWithMergeResult = (currentItems = [], additions = [], { in
     });
 
     return {
-        items: nextItems,
+        items: applySequentialOrderLineSortOrder(nextItems),
         touchedLineIds: Array.from(new Set(touchedLineIds.map((lineId) => normalizeCanvasText(lineId)).filter(Boolean))),
     };
 };
@@ -1889,9 +1895,11 @@ const OrderAiLineReplacePanel = ({
     onSelect,
     currencyFormatter,
 }) => {
+    const isAiLine = isOrderAiItem(currentLine);
     const currentSourceLabel = currentLine?.ai_meta?.source_phrase || currentLine?.name || '';
     const currentVariantLabel = currentLine?.options?.variant_label || '';
     const currentSku = currentLine?.sku || '';
+    const panelHeading = isAiLine ? 'Đổi sản phẩm AI' : 'Đổi sản phẩm';
     const hasSearchTerm = searchTerm.trim().length >= 2;
     const emptyStateMessage = hasSearchTerm
         ? 'Không thấy sản phẩm phù hợp, thử đổi từ khóa tìm kiếm.'
@@ -1955,7 +1963,7 @@ const OrderAiLineReplacePanel = ({
                     <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
                             <div className="text-[10px] font-black uppercase tracking-[0.14em] text-sky-700">
-                                Đổi sản phẩm AI
+                                {panelHeading}
                             </div>
                         </div>
                         <button
@@ -2895,6 +2903,10 @@ const OrderForm = () => {
 
     const handleOpenOrderAiReplacePicker = useCallback((lineId, seedTerm = '', triggerElement = null) => {
         orderAiReplaceAnchorRef.current = triggerElement;
+        setShowSearchDropdown(false);
+        setShowSearchHistory(false);
+        setShowProductQuickSetupPanel(false);
+        setShowProductQuickFilterPanel(false);
         setOrderAiReplaceLineId(lineId);
         setOrderAiReplaceSearchTerm(seedTerm || '');
         setOrderAiReplaceResults([]);
@@ -2954,29 +2966,39 @@ const OrderForm = () => {
 
         const replacement = buildOrderItemsFromSearchEntry(entry)[0];
         if (!replacement) {
-            showTransientNotification('error', 'KhÃ´ng thá»ƒ Ä‘á»•i sang sáº£n pháº©m Ä‘Ã£ chá»n.');
+            showTransientNotification('error', 'Không thể đổi sang sản phẩm đã chọn.');
             return;
         }
 
-        let nextReplacement = null;
+        const currentLine = formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(lineId));
+        if (!currentLine) {
+            closeOrderAiReplacePicker();
+            showTransientNotification('error', 'Không tìm thấy dòng sản phẩm cần đổi.');
+            return;
+        }
+
+        const replacedLineWasAi = isOrderAiItem(currentLine);
+        const nextReplacement = createOrderLineItem({
+            ...replacement,
+            line_id: currentLine.line_id,
+            sort_order: currentLine.sort_order,
+            quantity: Math.max(1, Number(currentLine.quantity) || 1),
+            ai_meta: replacedLineWasAi
+                ? mergeOrderAiItemMeta(currentLine.ai_meta, {
+                    review_state: currentLine?.ai_meta?.review_state || 'pending',
+                    match_status: 'review',
+                    confidence: 0,
+                    confidence_label: 'Đã đổi tay',
+                    match_reasons: ['Đổi sản phẩm tại dòng AI'],
+                })
+                : undefined,
+        });
+
         setFormData((prev) => {
             const nextItems = prev.items.map((item) => {
                 if (normalizeCanvasText(item?.line_id) !== normalizeCanvasText(lineId)) {
                     return item;
                 }
-
-                nextReplacement = createOrderLineItem({
-                    ...replacement,
-                    line_id: item.line_id,
-                    quantity: Math.max(1, Number(item.quantity) || 1),
-                    ai_meta: mergeOrderAiItemMeta(item.ai_meta, {
-                        review_state: item?.ai_meta?.review_state || 'pending',
-                        match_status: 'review',
-                        confidence: 0,
-                        confidence_label: 'ÄÃ£ Ä‘á»•i tay',
-                        match_reasons: ['Äá»•i sáº£n pháº©m táº¡i dÃ²ng AI'],
-                    }),
-                });
 
                 return nextReplacement;
             });
@@ -2994,8 +3016,13 @@ const OrderForm = () => {
             await refreshOrderItemInventorySnapshot([nextReplacement]);
         }
 
-        showTransientNotification('success', 'ÄÃ£ Ä‘á»•i nhanh sáº£n pháº©m cho dÃ²ng AI.');
-    }, [closeOrderAiReplacePicker, refreshOrderItemInventorySnapshot, showTransientNotification]);
+        showTransientNotification(
+            'success',
+            replacedLineWasAi
+                ? 'Đã đổi nhanh sản phẩm cho dòng AI.'
+                : 'Đã đổi sản phẩm cho dòng trong đơn.'
+        );
+    }, [closeOrderAiReplacePicker, formData.items, refreshOrderItemInventorySnapshot, showTransientNotification]);
 
     const handleRunOrderAiPreview = useCallback(async () => {
         const preferredRuleKey = orderAiSelectedRuleKey.trim();
@@ -3876,6 +3903,7 @@ const OrderForm = () => {
                 }),
                 sku: item.product_sku_snapshot || item.product?.sku || 'N/A',
                 unit_name: resolveOrderUnitLabel(item, item?.product),
+                sort_order: Number(item.sort_order) || index + 1,
                 quantity: parseMoneyNumber(item.quantity, 0) || 0,
                 price: parseMoneyNumber(item.price, 0) || 0,
                 cost_price: resolveOrderItemCostPrice(item, shouldUseCurrentProductCost),
@@ -4221,7 +4249,7 @@ const OrderForm = () => {
 
     const removeItem = React.useCallback((lineId) => {
         setFormData(prev => {
-            const newItems = prev.items.filter(item => item.line_id !== lineId);
+            const newItems = applySequentialOrderLineSortOrder(prev.items.filter(item => item.line_id !== lineId));
             const costTotal = calculateItemsCostTotal(newItems);
             return {
                 ...prev,
@@ -4230,6 +4258,30 @@ const OrderForm = () => {
             };
         });
     }, []);
+
+    const handleRemoveAllItems = useCallback(() => {
+        if (formData.items.length === 0) {
+            return;
+        }
+
+        showModal({
+            title: 'Xóa toàn bộ sản phẩm?',
+            content: 'Thao tác này sẽ xóa toàn bộ dòng sản phẩm hiện có trong đơn.<br/>Bạn sẽ không thể khôi phục tự động sau khi xác nhận.',
+            type: 'warning',
+            actionText: 'Xóa tất cả',
+            onAction: () => {
+                closeOrderAiReplacePicker();
+                setShowOrderAiInputReviewModal(false);
+                setOrderAiLastRun(null);
+                setFormData((prev) => ({
+                    ...prev,
+                    items: [],
+                    cost_total: 0,
+                }));
+                showTransientNotification('success', 'Đã xóa toàn bộ sản phẩm trong đơn.');
+            },
+        });
+    }, [closeOrderAiReplacePicker, formData.items.length, showModal, showTransientNotification]);
 
     const pendingOrderAiItems = useMemo(
         () => formData.items.filter((item) => isPendingOrderAiItem(item)),
@@ -4819,8 +4871,9 @@ const OrderForm = () => {
                 })).filter((item) => item.product_id && item.quantity > 0)
                 : [];
             const normalizedItems = (Array.isArray(formData.items) ? formData.items : [])
-                .map((item) => ({
+                .map((item, index) => ({
                     product_id: Number(item.product_id) || 0,
+                    sort_order: index + 1,
                     quantity: Math.max(0, Number(item.quantity) || 0),
                     price: Math.max(0, Number(item.price) || 0),
                     cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
@@ -4915,7 +4968,7 @@ const OrderForm = () => {
     }, []);
 
     const handleReorder = React.useCallback((newItems) => {
-        setFormData(prev => ({ ...prev, items: newItems }));
+        setFormData(prev => ({ ...prev, items: applySequentialOrderLineSortOrder(newItems) }));
     }, []);
 
     const availableQuoteTemplates = quoteTemplates.filter((template) => template.is_active !== false);
@@ -5647,6 +5700,7 @@ const OrderForm = () => {
                                             {columnOrder.filter(id => visibleColumns.includes(id)).map((colId) => {
                                                 const def = COLUMN_DEFS[colId];
                                                 const width = columnWidths[colId];
+                                                const isActionColumn = colId === 'actions';
                                                 return (
                                                     <th
                                                         key={colId}
@@ -5654,7 +5708,20 @@ const OrderForm = () => {
                                                         style={width ? { width: `${width}px` } : { width: 'auto' }}
                                                     >
                                                         <div className={`flex items-center ${getOrderFormHeaderJustifyClass(def.align)}`}>
-                                                            <OrderFormHeaderLabel label={def.label} tooltip={def.tooltip} />
+                                                            {isActionColumn ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={handleRemoveAllItems}
+                                                                    onMouseDown={(event) => event.stopPropagation()}
+                                                                    disabled={formData.items.length === 0}
+                                                                    className="inline-flex size-7 items-center justify-center rounded-sm text-primary/30 transition-all hover:bg-rose-50 hover:text-brick disabled:cursor-not-allowed disabled:opacity-20 disabled:hover:bg-transparent disabled:hover:text-primary/30"
+                                                                    title="Xóa toàn bộ sản phẩm trong đơn"
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[16px]">delete_sweep</span>
+                                                                </button>
+                                                            ) : (
+                                                                <OrderFormHeaderLabel label={def.label} tooltip={def.tooltip} />
+                                                            )}
                                                         </div>
                                                         {/* Resize Handle */}
                                                         <div
@@ -5842,31 +5909,29 @@ const OrderForm = () => {
                                                         case 'actions':
                                                             return (
                                                                 <td key={colId} className="py-2.5 px-2 text-center border border-primary/10 align-top">
-                                                                    <div className="flex flex-col items-center gap-2">
+                                                                    <div className="flex justify-center">
                                                                         <div className="flex items-center gap-1">
-                                                                            {isOrderAiItem(item) && (
-                                                                                <button
-                                                                                    type="button"
-                                                                                    onPointerDown={(event) => event.stopPropagation()}
-                                                                                    onClick={(event) => handleOpenOrderAiReplacePicker(
-                                                                                        item.line_id,
-                                                                                        item.ai_meta?.source_phrase || item.name || '',
-                                                                                        event.currentTarget
-                                                                                    )}
-                                                                                    className="inline-flex size-8 items-center justify-center rounded-sm border border-sky-200 bg-sky-50 text-sky-700 transition-all hover:border-sky-300 hover:bg-sky-100"
-                                                                                    title="Đổi sản phẩm AI"
-                                                                                >
-                                                                                    <span className="material-symbols-outlined text-[16px]">swap_horiz</span>
-                                                                                </button>
-                                                                            )}
+                                                                            <button
+                                                                                type="button"
+                                                                                onPointerDown={(event) => event.stopPropagation()}
+                                                                                onClick={(event) => handleOpenOrderAiReplacePicker(
+                                                                                    item.line_id,
+                                                                                    item.ai_meta?.source_phrase || item.name || item.sku || '',
+                                                                                    event.currentTarget
+                                                                                )}
+                                                                                className="inline-flex size-7 items-center justify-center rounded-sm border border-sky-200 bg-sky-50 text-sky-700 opacity-0 translate-x-1 pointer-events-none transition-all hover:border-sky-300 hover:bg-sky-100 group-hover:translate-x-0 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:translate-x-0 group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
+                                                                                title={isOrderAiItem(item) ? 'Đổi sản phẩm AI' : 'Đổi sản phẩm'}
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[14px]">swap_horiz</span>
+                                                                            </button>
                                                                             <button
                                                                                 type="button"
                                                                                 onPointerDown={(event) => event.stopPropagation()}
                                                                                 onClick={() => removeItem(item.line_id)}
-                                                                                className="inline-flex size-8 items-center justify-center rounded-sm text-primary/20 transition-all hover:bg-rose-50 hover:text-brick"
+                                                                                className="inline-flex size-7 items-center justify-center rounded-sm text-primary/20 transition-all hover:bg-rose-50 hover:text-brick"
                                                                                 title="Xóa dòng"
                                                                             >
-                                                                                <span className="material-symbols-outlined text-[18px]">delete_outline</span>
+                                                                                <span className="material-symbols-outlined text-[16px]">delete_outline</span>
                                                                             </button>
                                                                         </div>
                                                                     </div>

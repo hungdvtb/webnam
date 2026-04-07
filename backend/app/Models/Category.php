@@ -6,11 +6,13 @@ use App\Services\CategoryDemoLogoService;
 use App\Services\MediaService;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class Category extends Model
 {
     use \App\Traits\BelongsToAccount;
+    use \App\Models\Concerns\OptionalSoftDeletes;
 
     protected $fillable = [
         'name',
@@ -34,7 +36,9 @@ class Category extends Model
         'logo_media_asset_id' => 'integer',
         'filterable_attribute_ids' => 'array',
         'status' => 'integer',
-        'order' => 'integer'
+        'order' => 'integer',
+        'deleted_at' => 'datetime',
+        'deleted_by' => 'integer',
     ];
 
     protected $appends = [
@@ -44,7 +48,7 @@ class Category extends Model
 
     protected static function booted(): void
     {
-        static::deleted(function (Category $category): void {
+        static::forceDeleted(function (Category $category): void {
             $mediaService = app(MediaService::class);
 
             if ($category->banner_media_asset_id) {
@@ -284,9 +288,24 @@ class Category extends Model
         DB::table('category_product')->insert($insertRows);
     }
 
+    public static function supportsTrash(): bool
+    {
+        return (new static())->supportsSoftDeletes();
+    }
+
+    public static function supportsTrashAudit(): bool
+    {
+        $instance = new static();
+        $connection = $instance->getConnectionName() ?: config('database.default');
+        $schema = Schema::connection($connection);
+
+        return $schema->hasTable($instance->getTable())
+            && $schema->hasColumn($instance->getTable(), 'deleted_by');
+    }
+
     private static function codeExists(string $code, ?int $exceptId = null): bool
     {
-        return static::query()
+        return static::withTrashed()
             ->where('code', $code)
             ->when($exceptId, fn ($query) => $query->where('id', '!=', $exceptId))
             ->exists();

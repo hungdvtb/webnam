@@ -1,8 +1,6 @@
 <?php
 
 use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\DB;
 
 
@@ -13,7 +11,12 @@ return new class extends Migration
      */
     public function up(): void
     {
-        // 1. Enable pg_trgm extension if not exists
+        if (DB::getDriverName() !== 'pgsql') {
+            return;
+        }
+
+        // 1. Enable required extensions if not exists
+        DB::statement('CREATE EXTENSION IF NOT EXISTS unaccent');
         DB::statement('CREATE EXTENSION IF NOT EXISTS pg_trgm');
 
         // 2. Create IMMUTABLE unaccent wrapper (necessary for indexing in Postgres)
@@ -30,6 +33,10 @@ return new class extends Migration
      */
     public function down(): void
     {
+        if (DB::getDriverName() !== 'pgsql') {
+            return;
+        }
+
         DB::statement('DROP INDEX IF EXISTS idx_products_name_trgm');
         DB::statement('DROP INDEX IF EXISTS idx_products_sku_trgm');
         // We usually don't drop the extension in down() as it might be used elsewhere

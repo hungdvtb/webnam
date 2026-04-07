@@ -237,6 +237,151 @@ class OrderDraftFlowTest extends TestCase
         $this->assertSame(0, $order->items()->count());
     }
 
+    public function test_draft_order_item_order_persists_across_reopen_and_multiple_updates(): void
+    {
+        [$account] = $this->authenticate();
+        $productA = $this->createProduct($account, [
+            'name' => 'San pham thu tu A',
+            'sku' => 'DRAFT-ORDER-A',
+            'price' => 110000,
+        ]);
+        $productB = $this->createProduct($account, [
+            'name' => 'San pham thu tu B',
+            'sku' => 'DRAFT-ORDER-B',
+            'price' => 120000,
+        ]);
+        $productC = $this->createProduct($account, [
+            'name' => 'San pham thu tu C',
+            'sku' => 'DRAFT-ORDER-C',
+            'price' => 130000,
+        ]);
+        $productD = $this->createProduct($account, [
+            'name' => 'San pham thu tu D',
+            'sku' => 'DRAFT-ORDER-D',
+            'price' => 140000,
+        ]);
+
+        $storeResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => 'Khach thu tu',
+                'customer_phone' => '0912345678',
+                'shipping_address' => '123 Nguyen Trai',
+                'items' => [
+                    $this->buildOrderItemPayload($productC, 1),
+                    $this->buildOrderItemPayload($productA, 2),
+                    $this->buildOrderItemPayload($productD, 1),
+                    $this->buildOrderItemPayload($productB, 3),
+                ],
+            ]);
+
+        $storeResponse->assertCreated();
+
+        $orderId = (int) $storeResponse->json('id');
+        $initialOrder = [$productC->id, $productA->id, $productD->id, $productB->id];
+
+        $this->assertOrderItemSequence($account, $orderId, $initialOrder);
+        $this->assertOrderItemSequence($account, $orderId, $initialOrder);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$orderId}", [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => 'Khach thu tu lan 2',
+                'customer_phone' => '0912345678',
+                'shipping_address' => '123 Nguyen Trai',
+                'items' => [
+                    $this->buildOrderItemPayload($productB, 1),
+                    $this->buildOrderItemPayload($productD, 2),
+                    $this->buildOrderItemPayload($productA, 1),
+                    $this->buildOrderItemPayload($productC, 4),
+                ],
+            ])
+            ->assertOk();
+
+        $secondOrder = [$productB->id, $productD->id, $productA->id, $productC->id];
+
+        $this->assertOrderItemSequence($account, $orderId, $secondOrder);
+        $this->assertOrderItemSequence($account, $orderId, $secondOrder);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$orderId}", [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => 'Khach thu tu lan 3',
+                'customer_phone' => '0912345678',
+                'shipping_address' => '123 Nguyen Trai',
+                'items' => [
+                    $this->buildOrderItemPayload($productA, 2),
+                    $this->buildOrderItemPayload($productC, 1),
+                    $this->buildOrderItemPayload($productB, 2),
+                    $this->buildOrderItemPayload($productD, 1),
+                ],
+            ])
+            ->assertOk();
+
+        $finalOrder = [$productA->id, $productC->id, $productB->id, $productD->id];
+
+        $this->assertOrderItemSequence($account, $orderId, $finalOrder);
+        $this->assertOrderItemSequence($account, $orderId, $finalOrder);
+    }
+
+    public function test_duplicate_draft_order_preserves_item_order_and_sort_order(): void
+    {
+        [$account] = $this->authenticate();
+        $productA = $this->createProduct($account, [
+            'name' => 'San pham duplicate A',
+            'sku' => 'DRAFT-DUP-A',
+            'price' => 210000,
+        ]);
+        $productB = $this->createProduct($account, [
+            'name' => 'San pham duplicate B',
+            'sku' => 'DRAFT-DUP-B',
+            'price' => 220000,
+        ]);
+        $productC = $this->createProduct($account, [
+            'name' => 'San pham duplicate C',
+            'sku' => 'DRAFT-DUP-C',
+            'price' => 230000,
+        ]);
+
+        $storeResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => 'Khach duplicate',
+                'customer_phone' => '0912345678',
+                'shipping_address' => '123 Nguyen Trai',
+                'items' => [
+                    $this->buildOrderItemPayload($productB, 1),
+                    $this->buildOrderItemPayload($productC, 2),
+                    $this->buildOrderItemPayload($productA, 1),
+                ],
+            ]);
+
+        $storeResponse->assertCreated();
+
+        $sourceOrderId = (int) $storeResponse->json('id');
+        $expectedOrder = [$productB->id, $productC->id, $productA->id];
+
+        $duplicateResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson("/api/orders/{$sourceOrderId}/duplicate", [
+                'target_kind' => Order::KIND_DRAFT,
+            ]);
+
+        $duplicateResponse
+            ->assertOk()
+            ->assertJsonPath('order_kind', Order::KIND_DRAFT);
+
+        $duplicatedOrderId = (int) $duplicateResponse->json('id');
+
+        $this->assertNotSame($sourceOrderId, $duplicatedOrderId);
+        $this->assertOrderItemSequence($account, $sourceOrderId, $expectedOrder);
+        $this->assertOrderItemSequence($account, $duplicatedOrderId, $expectedOrder);
+    }
+
     public function test_draft_order_costs_round_up_to_the_nearest_thousand(): void
     {
         [$account] = $this->authenticate();
@@ -697,6 +842,49 @@ class OrderDraftFlowTest extends TestCase
         $this->assertTrue(Str::startsWith($draftTwo->order_number, 'OR'));
         $this->assertSame(1, Order::withTrashed()->where('order_number', $draftOne->order_number)->count());
         $this->assertSame(1, Order::withTrashed()->where('order_number', $draftTwo->order_number)->count());
+    }
+
+    private function assertOrderItemSequence(Account $account, int $orderId, array $expectedProductIds): void
+    {
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson("/api/orders/{$orderId}")
+            ->assertOk();
+
+        $responseItems = collect($response->json('items', []));
+
+        $this->assertSame(
+            $expectedProductIds,
+            $responseItems->pluck('product_id')->map(fn ($productId) => (int) $productId)->all()
+        );
+        $this->assertSame(
+            range(1, count($expectedProductIds)),
+            $responseItems->pluck('sort_order')->map(fn ($sortOrder) => (int) $sortOrder)->all()
+        );
+
+        $storedItems = OrderItem::query()
+            ->where('order_id', $orderId)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get();
+
+        $this->assertSame(
+            $expectedProductIds,
+            $storedItems->pluck('product_id')->map(fn ($productId) => (int) $productId)->all()
+        );
+        $this->assertSame(
+            range(1, count($expectedProductIds)),
+            $storedItems->pluck('sort_order')->map(fn ($sortOrder) => (int) $sortOrder)->all()
+        );
+    }
+
+    private function buildOrderItemPayload(Product $product, int $quantity = 1, ?float $price = null): array
+    {
+        return [
+            'product_id' => $product->id,
+            'quantity' => $quantity,
+            'price' => $price ?? (float) ($product->price ?? 0),
+        ];
     }
 
     private function authenticate(): array

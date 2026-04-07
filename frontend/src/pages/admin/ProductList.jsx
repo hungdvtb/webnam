@@ -10,6 +10,7 @@ import { useTableColumns } from '../../hooks/useTableColumns';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
 import SortIndicator from '../../components/SortIndicator';
 import ProductSortModal from '../../components/admin/ProductSortModal';
+import ProductImageBulkAppendModal from '../../components/admin/ProductImageBulkAppendModal';
 import ProductImageRefreshModal from '../../components/admin/ProductImageRefreshModal';
 import { ACTIVE_PRODUCT_TYPE_KEYS, ACTIVE_PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_META, sanitizeActiveProductTypeValues } from '../../config/productTypes';
 import {
@@ -468,6 +469,7 @@ const ProductList = () => {
 
 
     const [showBulkUpdateModal, setShowBulkUpdateModal] = useState(false);
+    const [showBulkImageAppendModal, setShowBulkImageAppendModal] = useState(false);
     const [showBulkImageRefreshModal, setShowBulkImageRefreshModal] = useState(false);
     const [bulkUpdateData, setBulkUpdateData] = useState({});
     const [lastBulkUpdateLogId, setLastBulkUpdateLogId] = useState(null);
@@ -1923,6 +1925,22 @@ const ProductList = () => {
         setTimeout(() => setNotification(null), 5000);
     };
 
+    const handleBulkImageAppendApplied = async (payload) => {
+        const appliedProducts = Number(payload?.summary?.applied_products || 0);
+        const createdRecords = Number(payload?.summary?.created_records || 0);
+        const failedProducts = Number(payload?.summary?.failed_products || 0);
+
+        await fetchProducts(pagination.current_page, filters, sortConfig, pagination.per_page);
+
+        setNotification({
+            type: failedProducts > 0 ? 'error' : 'success',
+            message: failedProducts > 0
+                ? `Đã thêm ${createdRecords} ảnh vào ${appliedProducts} sản phẩm. Có ${failedProducts} sản phẩm lỗi.`
+                : `Đã thêm ${createdRecords} ảnh vào ${appliedProducts} sản phẩm.`,
+        });
+        setTimeout(() => setNotification(null), 5000);
+    };
+
     const handleCopy = (text, message, e, copyId) => {
         if (e) e.stopPropagation();
         navigator.clipboard.writeText(text);
@@ -2976,6 +2994,16 @@ const ProductList = () => {
                             >
                                 <span className="material-symbols-outlined text-[18px]">conversion_path</span>
                             </button>
+                            {!isTrashView && (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowBulkImageAppendModal(true)}
+                                    className="p-1.5 rounded-sm w-9 h-9 bg-primary/10 text-primary shadow-sm transition-all hover:bg-primary hover:text-white"
+                                    title="ThÃªm áº£nh hÃ ng loáº¡t"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">add_photo_alternate</span>
+                                </button>
+                            )}
                             {!isTrashView && (
                                 <button
                                     type="button"
@@ -4052,6 +4080,13 @@ const ProductList = () => {
                     <img src={previewImage.url} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" />
                 </div>
             )}
+
+            <ProductImageBulkAppendModal
+                open={showBulkImageAppendModal}
+                selectedIds={selectedIds}
+                onClose={() => setShowBulkImageAppendModal(false)}
+                onApplied={handleBulkImageAppendApplied}
+            />
 
             <ProductImageRefreshModal
                 open={showBulkImageRefreshModal}

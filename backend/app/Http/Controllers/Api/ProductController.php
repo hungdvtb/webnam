@@ -13,6 +13,7 @@ use App\Models\Post;
 use App\Models\Product;
 use App\Models\ProductAttributeValue;
 use App\Models\ProductImage;
+use App\Models\MediaAsset;
 use App\Models\SiteDomain;
 use App\Models\BulkUpdateLog;
 use App\Services\Inventory\ProductPricingService;
@@ -849,28 +850,30 @@ class ProductController extends Controller
 
     private function parseImportedImagePayload(string $primaryValue, string $galleryValue, int $rowNumber, array &$errors): array
     {
-        $provided = trim($primaryValue) !== '' || trim($galleryValue) !== '';
+        $normalizedPrimaryValue = $this->sanitizeImportedImageInput($primaryValue);
+        $normalizedGalleryValue = $this->sanitizeImportedImageInput($galleryValue);
+        $provided = $normalizedPrimaryValue !== '' || $normalizedGalleryValue !== '';
         if (!$provided) {
             return ['provided' => false, 'clear' => false, 'primary' => null, 'gallery' => []];
         }
 
-        $clearPrimary = trim($primaryValue) !== '' && $this->isImportNullishValue($primaryValue);
-        $clearGallery = trim($galleryValue) !== '' && $this->isImportNullishValue($galleryValue);
+        $clearPrimary = $normalizedPrimaryValue !== '' && $this->isImportNullishValue($normalizedPrimaryValue);
+        $clearGallery = $normalizedGalleryValue !== '' && $this->isImportNullishValue($normalizedGalleryValue);
 
-        if (($clearPrimary || trim($primaryValue) === '') && ($clearGallery || trim($galleryValue) === '')) {
+        if (($clearPrimary || $normalizedPrimaryValue === '') && ($clearGallery || $normalizedGalleryValue === '')) {
             return ['provided' => true, 'clear' => true, 'primary' => null, 'gallery' => []];
         }
 
         $primary = null;
-        if (trim($primaryValue) !== '' && !$clearPrimary) {
-            $primary = $this->normalizeImportedImageUrl($primaryValue);
+        if ($normalizedPrimaryValue !== '' && !$clearPrimary) {
+            $primary = $this->normalizeImportedImageUrl($normalizedPrimaryValue);
 
             if ($primary === null || !$this->isValidImportedImageUrl($primary)) {
                 $errors[] = $this->importError($rowNumber, 'Ảnh đại diện', 'Link ảnh đại diện phải là URL http/https hợp lệ.');
             }
         }
 
-        $gallery = $this->parseImportedUrlList($galleryValue, $rowNumber, 'Thư viện ảnh', $errors);
+        $gallery = $this->parseImportedUrlList($normalizedGalleryValue, $rowNumber, 'Thư viện ảnh', $errors);
         $gallery = collect($gallery)
             ->reject(fn ($url) => $primary !== null && $url === $primary)
             ->values()
@@ -882,16 +885,24 @@ class ProductController extends Controller
     private function parseImportedUrlList(mixed $value, int $rowNumber, string $column, array &$errors): array
     {
         if (is_array($value)) {
-            $urls = collect($value)->map(fn ($item) => trim((string) $item))->filter()->values()->all();
+            $urls = collect($value)
+                ->map(fn ($item) => $this->sanitizeImportedImageInput((string) $item))
+                ->filter()
+                ->values()
+                ->all();
         } else {
-            $trimmed = trim((string) $value);
+            $trimmed = $this->sanitizeImportedImageInput((string) $value);
             if ($trimmed === '' || $this->isImportNullishValue($trimmed)) {
                 return [];
             }
 
             $decoded = $this->decodeSpreadsheetJsonValue($trimmed);
             if (is_array($decoded)) {
-                $urls = collect($decoded)->map(fn ($item) => trim((string) $item))->filter()->values()->all();
+                $urls = collect($decoded)
+                    ->map(fn ($item) => $this->sanitizeImportedImageInput((string) $item))
+                    ->filter()
+                    ->values()
+                    ->all();
             } else {
                 $urls = $this->splitImportListTokens($trimmed);
             }
@@ -915,7 +926,7 @@ class ProductController extends Controller
 
     private function normalizeImportedImageUrl(string $value): ?string
     {
-        $normalized = trim(html_entity_decode($value, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        $normalized = $this->sanitizeImportedImageInput($value);
         if ($normalized === '') {
             return null;
         }
@@ -935,6 +946,17 @@ class ProductController extends Controller
         }
 
         return null;
+    }
+
+    private function sanitizeImportedImageInput(string $value): string
+    {
+        $normalized = html_entity_decode($value, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $normalized = preg_replace('/[\x{200B}-\x{200D}\x{2060}\x{FEFF}]/u', '', $normalized) ?? $normalized;
+        $normalized = str_replace("\u{00A0}", ' ', $normalized);
+        $normalized = str_replace(["\r\n", "\r", "\xC2\xA0"], ["\n", "\n", ' '], $normalized);
+        $normalized = trim($normalized);
+
+        return trim($normalized, " \t\n\r\0\x0B\"'`“”‘’");
     }
 
     private function isValidImportedImageUrl(string $value): bool
@@ -987,8 +1009,10 @@ class ProductController extends Controller
 
     private function splitImportListTokens(string $value): array
     {
-        return collect(preg_split('/\r\n|\n|\||;/', $value) ?: [])
-            ->map(fn ($item) => trim((string) $item))
+        $normalized = str_replace(["\r\n", "\r"], "\n", $this->sanitizeImportedImageInput($value));
+
+        return collect(preg_split('/\n|\||;|\x{2028}|\x{2029}/u', $normalized) ?: [])
+            ->map(fn ($item) => $this->sanitizeImportedImageInput((string) $item))
             ->filter()
             ->unique()
             ->values()
@@ -1567,7 +1591,12 @@ class ProductController extends Controller
             }
 
             $errors = array_merge($errors, $this->syncImportedAttributePayloadsToProductV2($product, $attributePayloads, $context['attributes'], $rowNumber, $summary));
-            $summary['images_imported'] += $this->syncImportedImagePayloadToProductV2($product, $imagePayload);
+            try {
+                $summary['images_imported'] += $this->syncImportedImagePayloadToProductV2($product, $imagePayload);
+            } catch (Throwable $exception) {
+                $errors[] = $this->importError($rowNumber, 'Ảnh', $exception->getMessage());
+                return ['status' => 'failed', 'errors' => $errors];
+            }
 
             if (!empty($variantPayload['provided'])) {
                 $errors = array_merge($errors, $this->syncImportedVariantsToProductV2($product, $variantPayload, $context['attributes'], $rowNumber, $summary));
@@ -1637,7 +1666,12 @@ class ProductController extends Controller
         }
 
         $errors = array_merge($errors, $this->syncImportedAttributePayloadsToProductV2($product, $attributePayloads, $context['attributes'], $rowNumber, $summary));
-        $summary['images_imported'] += $this->syncImportedImagePayloadToProductV2($product, $imagePayload);
+        try {
+            $summary['images_imported'] += $this->syncImportedImagePayloadToProductV2($product, $imagePayload);
+        } catch (Throwable $exception) {
+            $errors[] = $this->importError($rowNumber, 'Ảnh', $exception->getMessage());
+            return ['status' => 'failed', 'errors' => $errors];
+        }
 
         if (!empty($variantPayload['provided'])) {
             $errors = array_merge($errors, $this->syncImportedVariantsToProductV2($product, $variantPayload, $context['attributes'], $rowNumber, $summary));
@@ -2015,17 +2049,45 @@ class ProductController extends Controller
         }
 
         $primaryUrl = $payload['primary'] ?: $urls[0];
+        $stagedAssets = [];
 
-        foreach ($urls as $index => $url) {
-            $this->createProductImageFromReference(
-                $product,
-                $url,
-                $index,
-                $url === $primaryUrl
-            );
+        try {
+            foreach ($urls as $index => $url) {
+                $stagedAssets[] = [
+                    'asset' => $this->importProductImageAssetFromReference($url),
+                    'reference' => $url,
+                    'sort_order' => $index,
+                    'is_primary' => $url === $primaryUrl,
+                ];
+            }
+
+            $this->deleteProductImagesForProduct($product);
+
+            foreach ($stagedAssets as $stagedAsset) {
+                $this->createProductImageFromAsset(
+                    $product,
+                    $stagedAsset['asset'],
+                    $stagedAsset['reference'],
+                    (int) $stagedAsset['sort_order'],
+                    (bool) $stagedAsset['is_primary']
+                );
+            }
+        } catch (Throwable $exception) {
+            foreach ($stagedAssets as $stagedAsset) {
+                $asset = $stagedAsset['asset'] ?? null;
+                if ($asset instanceof MediaAsset) {
+                    try {
+                        $this->mediaService->deleteAsset($asset);
+                    } catch (Throwable) {
+                        // Best-effort cleanup for assets imported during a failed row.
+                    }
+                }
+            }
+
+            throw $exception;
         }
 
-        return count($urls);
+        return count($stagedAssets);
     }
 
     private function createProductImageRecord(Product $product, \Illuminate\Http\UploadedFile $file, int $sortOrder, bool $isPrimary): ProductImage
@@ -2046,17 +2108,34 @@ class ProductController extends Controller
         ]);
     }
 
-    private function createProductImageFromReference(Product $product, string $reference, int $sortOrder, bool $isPrimary): ?ProductImage
+    private function createProductImageFromReference(Product $product, string $reference, int $sortOrder, bool $isPrimary): ProductImage
+    {
+        return $this->createProductImageFromAsset(
+            $product,
+            $this->importProductImageAssetFromReference($reference),
+            $reference,
+            $sortOrder,
+            $isPrimary
+        );
+    }
+
+    private function importProductImageAssetFromReference(string $reference): MediaAsset
     {
         $asset = $this->mediaService->importFromReference($reference, [
             'collection' => 'products',
             'source' => 'product-import',
+            'clone_existing' => true,
         ]);
 
         if (!$asset) {
-            return null;
+            throw new \RuntimeException('Khong the luu anh tu URL: ' . $reference);
         }
 
+        return $asset;
+    }
+
+    private function createProductImageFromAsset(Product $product, MediaAsset $asset, string $reference, int $sortOrder, bool $isPrimary): ProductImage
+    {
         return ProductImage::query()->create([
             'product_id' => $product->id,
             'media_asset_id' => $asset->id,
@@ -2203,10 +2282,20 @@ class ProductController extends Controller
                 ]);
             }
 
-            $summary['images_imported'] += $this->syncImportedImagePayloadToProductV2(
-                $variant,
-                $variantData['images'] ?? ['provided' => false, 'clear' => false, 'primary' => null, 'gallery' => []]
-            );
+            try {
+                $summary['images_imported'] += $this->syncImportedImagePayloadToProductV2(
+                    $variant,
+                    $variantData['images'] ?? ['provided' => false, 'clear' => false, 'primary' => null, 'gallery' => []]
+                );
+            } catch (Throwable $exception) {
+                $variantLabel = $resolvedSku !== '' ? $resolvedSku : ($variantName !== '' ? $variantName : ('#' . ($index + 1)));
+                $errors[] = $this->importError(
+                    $rowNumber,
+                    'Biến thể',
+                    'Khong the import anh cho bien the ' . $variantLabel . ': ' . $exception->getMessage()
+                );
+                continue;
+            }
 
             $product->linkedProducts()->syncWithoutDetaching([
                 $variant->id => [

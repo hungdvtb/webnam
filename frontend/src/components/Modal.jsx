@@ -30,6 +30,17 @@ const Modal = ({ show, onClose, title, children, type = 'info', actionText = 'Đ
     };
 
     const styles = getTypeStyles();
+    const handleActionClick = () => {
+        const actionPromise = Promise.resolve().then(() => onAction?.());
+
+        if (onClose) {
+            onClose();
+        }
+
+        void actionPromise.catch((error) => {
+            console.error('Modal action failed', error);
+        });
+    };
 
     return (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 animate-in fade-in duration-300">
@@ -62,6 +73,7 @@ const Modal = ({ show, onClose, title, children, type = 'info', actionText = 'Đ
                     <div className="flex justify-end gap-3 pt-4">
                         {onClose && (
                             <button
+                                type="button"
                                 onClick={onClose}
                                 className="px-6 py-2 border border-gold/20 font-ui font-bold text-[10px] uppercase tracking-widest text-stone hover:bg-gold/5 transition-all"
                             >
@@ -70,7 +82,8 @@ const Modal = ({ show, onClose, title, children, type = 'info', actionText = 'Đ
                         )}
                         {onAction && (
                             <button
-                                onClick={() => { onAction(); if (onClose) onClose(); }}
+                                type="button"
+                                onClick={handleActionClick}
                                 className="px-6 py-2 bg-primary text-white font-ui font-bold text-[10px] uppercase tracking-widest hover:bg-umber transition-all"
                             >
                                 {actionText}

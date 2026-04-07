@@ -10,11 +10,12 @@ class OrderItem extends Model
 
     protected $fillable = [
         'order_id', 'product_id', 'product_name_snapshot', 'product_sku_snapshot', 'product_group_id', 
-        'quantity', 'price', 'cost_price', 'cost_total', 'profit_total', 'options', 'account_id'
+        'sort_order', 'quantity', 'price', 'cost_price', 'cost_total', 'profit_total', 'options', 'account_id'
     ];
 
     protected $casts = [
         'options' => 'array',
+        'sort_order' => 'integer',
         'cost_price' => 'decimal:2',
         'cost_total' => 'decimal:2',
         'profit_total' => 'decimal:2',

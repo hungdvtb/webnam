@@ -88,6 +88,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Admin Product Image routes
     Route::post('/products/{id}/images', [ProductImageController::class , 'store']);
+    Route::post('/product-images/bulk-append/preview', [ProductImageController::class , 'bulkAppendPreview']);
+    Route::post('/product-images/bulk-append/apply', [ProductImageController::class , 'bulkAppendApply']);
     Route::post('/product-images/bulk-refresh/preview', [ProductImageController::class , 'bulkRefreshPreview']);
     Route::post('/product-images/bulk-refresh/apply', [ProductImageController::class , 'bulkRefreshApply']);
     Route::post('/product-images/reorder', [ProductImageController::class , 'reorder']);
@@ -101,8 +103,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/categories/import', [CategoryController::class , 'importExcel']);
     Route::post('/categories/reorder', [CategoryController::class , 'reorder']);
     Route::delete('/categories/bulk-delete', [CategoryController::class , 'bulkDestroy']);
+    Route::post('/categories/bulk-restore', [CategoryController::class , 'bulkRestore']);
     Route::get('/categories/{id}/products', [CategoryController::class , 'products'])->whereNumber('id');
     Route::post('/categories/{id}/products/reorder', [CategoryController::class , 'reorderProducts'])->whereNumber('id');
+    Route::post('/categories/{id}/restore', [CategoryController::class , 'restore'])->whereNumber('id');
     Route::post('/categories/{id}', [CategoryController::class , 'update'])->whereNumber('id');
     Route::delete('/categories/{id}', [CategoryController::class , 'destroy'])->whereNumber('id');
 

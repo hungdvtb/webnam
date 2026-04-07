@@ -380,8 +380,14 @@ class InventoryService
     public function attachInventoryToOrder(Order $order, array $rawItems): array
     {
         $normalizedItems = collect($rawItems)
+            ->map(fn ($item) => is_array($item) ? $item : [])
             ->filter(fn ($item) => (int) ($item['quantity'] ?? 0) > 0 && !empty($item['product_id']))
-            ->values();
+            ->values()
+            ->map(function (array $item, int $index) {
+                $item['sort_order'] = $index + 1;
+
+                return $item;
+            });
 
         if ($normalizedItems->isEmpty()) {
             throw ValidationException::withMessages([
@@ -422,6 +428,7 @@ class InventoryService
                 'product_id' => $product->id,
                 'product_name_snapshot' => filled($item['name'] ?? null) ? (string) $item['name'] : $product->name,
                 'product_sku_snapshot' => filled($item['sku'] ?? null) ? (string) $item['sku'] : $product->sku,
+                'sort_order' => (int) $item['sort_order'],
                 'quantity' => $quantity,
                 'price' => $sellingPrice,
                 'cost_price' => $avgUnitCost,
@@ -462,6 +469,8 @@ class InventoryService
     {
         $items = $order->items()
             ->where('quantity', '>', 0)
+            ->orderBy('sort_order')
+            ->orderBy('id')
             ->get();
 
         if ($items->isEmpty()) {
@@ -539,7 +548,11 @@ class InventoryService
         $this->refreshProducts($touchedProductIds);
 
         return [
-            'items' => $order->items()->whereIn('id', $items->pluck('id'))->get(),
+            'items' => $order->items()
+                ->whereIn('id', $items->pluck('id'))
+                ->orderBy('sort_order')
+                ->orderBy('id')
+                ->get(),
             'total_price' => round($totalPrice, 2),
             'cost_total' => round($costTotal, 2),
             'profit_total' => round($profitTotal, 2),

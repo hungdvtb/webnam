@@ -229,6 +229,7 @@ class OrderController extends Controller
                     'product_id',
                     'product_name_snapshot',
                     'product_sku_snapshot',
+                    'sort_order',
                     'quantity',
                     'price',
                     'cost_price',
@@ -236,6 +237,8 @@ class OrderController extends Controller
                     'profit_total',
                     'options',
                 ])
+                ->orderBy('sort_order')
+                ->orderBy('id')
                 ->with([
                     'product' => fn ($productQuery) => $productQuery
                         ->select(['id', 'name', 'sku', 'cost_price', 'expected_cost', 'inventory_unit_id'])
@@ -290,9 +293,12 @@ class OrderController extends Controller
                     'product_id',
                     'product_name_snapshot',
                     'product_sku_snapshot',
+                    'sort_order',
                     'quantity',
                     'price',
                 ])
+                ->orderBy('sort_order')
+                ->orderBy('id')
                 ->with([
                     'product:id,name,sku',
                 ]),
@@ -605,11 +611,7 @@ class OrderController extends Controller
     private function collectRequestItems(Request $request, bool $allowEmptyItems = false): array
     {
         if ($request->has('items')) {
-            return collect($request->input('items', []))
-                ->map(fn ($item) => is_array($item) ? $item : [])
-                ->filter(fn ($item) => !empty($item['product_id']) && (int) ($item['quantity'] ?? 0) > 0)
-                ->values()
-                ->all();
+            return $this->normalizeOrderedOrderItems($request->input('items', []))->all();
         }
 
         if ($allowEmptyItems) {
@@ -623,11 +625,12 @@ class OrderController extends Controller
             ]);
         }
 
-        return $cart->items->map(function ($item) {
+        return $cart->items->values()->map(function ($item, int $index) {
             $product = $item->product;
 
             return [
                 'product_id' => $item->product_id,
+                'sort_order' => $index + 1,
                 'quantity' => $item->quantity,
                 'price' => $product ? ($product->current_price ?? $item->price) : $item->price,
                 'cost_price' => ImportCostRounding::roundUnitCost($product?->cost_price ?? $product?->expected_cost ?? 0),
@@ -636,12 +639,22 @@ class OrderController extends Controller
         })->all();
     }
 
-    private function syncManualOrderItems(Order $order, array $rawItems, bool $allowEmptyItems = false): array
+    private function normalizeOrderedOrderItems(iterable $rawItems): Collection
     {
-        $normalizedItems = collect($rawItems)
+        return collect($rawItems)
             ->map(fn ($item) => is_array($item) ? $item : [])
             ->filter(fn ($item) => (int) ($item['quantity'] ?? 0) > 0 && !empty($item['product_id']))
-            ->values();
+            ->values()
+            ->map(function (array $item, int $index) {
+                $item['sort_order'] = $index + 1;
+
+                return $item;
+            });
+    }
+
+    private function syncManualOrderItems(Order $order, array $rawItems, bool $allowEmptyItems = false): array
+    {
+        $normalizedItems = $this->normalizeOrderedOrderItems($rawItems);
 
         if ($normalizedItems->isEmpty()) {
             if ($allowEmptyItems) {
@@ -690,6 +703,7 @@ class OrderController extends Controller
                 'product_id' => $product->id,
                 'product_name_snapshot' => $item['name'] ?? $product->name,
                 'product_sku_snapshot' => $item['sku'] ?? $product->sku,
+                'sort_order' => (int) $item['sort_order'],
                 'quantity' => $quantity,
                 'price' => $price,
                 'cost_price' => $costPrice,
@@ -1020,6 +1034,7 @@ class OrderController extends Controller
                         'product_id' => $item->product_id,
                         'name' => $item->product_name_snapshot,
                         'sku' => $item->product_sku_snapshot,
+                        'sort_order' => (int) ($item->sort_order ?? 0),
                         'quantity' => $item->quantity,
                         'price' => $item->price,
                         'cost_price' => $item->cost_price,

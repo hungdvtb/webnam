@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\ProductImage;
+use App\Services\ProductImageBulkAppendService;
 use App\Services\MediaService;
 use App\Services\ProductImageRefreshService;
 use Illuminate\Http\Request;
@@ -15,7 +16,8 @@ class ProductImageController extends Controller
 {
     public function __construct(
         protected MediaService $mediaService,
-        protected ProductImageRefreshService $productImageRefreshService
+        protected ProductImageRefreshService $productImageRefreshService,
+        protected ProductImageBulkAppendService $productImageBulkAppendService
     ) {
     }
 
@@ -111,6 +113,68 @@ class ProductImageController extends Controller
                 'product_ids' => $validated['product_ids'] ?? [],
                 'scope_selected_only' => (bool) ($validated['scope_selected_only'] ?? false),
                 'update_all_matches' => (bool) ($validated['update_all_matches'] ?? false),
+            ])
+        );
+    }
+
+    public function bulkAppendPreview(Request $request)
+    {
+        @set_time_limit(120);
+
+        $validated = $request->validate([
+            'images' => 'required|array|min:1',
+            'images.*' => 'required|file|image|mimes:jpeg,png,jpg,gif,webp,avif|max:10240',
+            'product_ids' => 'nullable|array',
+            'product_ids.*' => 'integer|exists:products,id',
+            'scope_selected_only' => 'nullable|boolean',
+            'insertion_mode' => 'required|string|in:start,after_index,end',
+            'after_index' => 'nullable|integer|min:1',
+            'preview_limit' => 'nullable|integer|min:1|max:100',
+        ]);
+
+        $files = array_values(array_filter(
+            (array) $request->file('images', []),
+            fn ($file) => $file instanceof UploadedFile
+        ));
+
+        return response()->json(
+            $this->productImageBulkAppendService->preview($files, [
+                'product_ids' => $validated['product_ids'] ?? [],
+                'scope_selected_only' => (bool) ($validated['scope_selected_only'] ?? false),
+                'insertion_mode' => $validated['insertion_mode'],
+                'after_index' => $validated['after_index'] ?? null,
+                'preview_limit' => $validated['preview_limit'] ?? null,
+            ])
+        );
+    }
+
+    public function bulkAppendApply(Request $request)
+    {
+        @set_time_limit(120);
+
+        $validated = $request->validate([
+            'images' => 'required|array|min:1',
+            'images.*' => 'required|file|image|mimes:jpeg,png,jpg,gif,webp,avif|max:10240',
+            'product_ids' => 'nullable|array',
+            'product_ids.*' => 'integer|exists:products,id',
+            'scope_selected_only' => 'nullable|boolean',
+            'insertion_mode' => 'required|string|in:start,after_index,end',
+            'after_index' => 'nullable|integer|min:1',
+            'preview_limit' => 'nullable|integer|min:1|max:100',
+        ]);
+
+        $files = array_values(array_filter(
+            (array) $request->file('images', []),
+            fn ($file) => $file instanceof UploadedFile
+        ));
+
+        return response()->json(
+            $this->productImageBulkAppendService->apply($files, [
+                'product_ids' => $validated['product_ids'] ?? [],
+                'scope_selected_only' => (bool) ($validated['scope_selected_only'] ?? false),
+                'insertion_mode' => $validated['insertion_mode'],
+                'after_index' => $validated['after_index'] ?? null,
+                'preview_limit' => $validated['preview_limit'] ?? null,
             ])
         );
     }

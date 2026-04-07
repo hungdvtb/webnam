@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './layouts/Layout';
 import Home from './pages/Home';
 import Shop from './pages/Shop';
@@ -15,6 +15,7 @@ import UserDashboard from './pages/UserDashboard';
 
 // Storefront (Website bán hàng)
 import StorefrontLayout from './layouts/StorefrontLayout';
+import StorefrontHome from './pages/storefront/StorefrontHome';
 import StorefrontProducts from './pages/storefront/StorefrontProducts';
 import StorefrontProductDetail from './pages/storefront/StorefrontProductDetail';
 import StorefrontCheckout from './pages/storefront/StorefrontCheckout';
@@ -55,21 +56,6 @@ import { CartProvider } from './context/CartContext';
 import { UIProvider } from './context/UIContext';
 import siteConfig from './config/site';
 import { accountApi } from './services/api';
-
-const StorefrontIndexRedirect = () => {
-  const location = useLocation();
-
-  return (
-    <Navigate
-      to={{
-        pathname: '/san-pham',
-        search: location.search,
-        hash: location.hash,
-      }}
-      replace
-    />
-  );
-};
 
 function App() {
   const [siteReady, setSiteReady] = useState(false);
@@ -117,7 +103,7 @@ function App() {
             <Routes>
               {/* ─── Storefront (Website bán hàng - Public) ─── */}
               <Route element={<StorefrontLayout />}>
-                <Route index element={<StorefrontIndexRedirect />} />
+                <Route index element={<StorefrontHome />} />
                 <Route path="san-pham" element={<StorefrontProducts />} />
                 <Route path="san-pham/:slugOrId" element={<StorefrontProductDetail />} />
                 <Route path="danh-muc/:slug" element={<StorefrontProducts />} />

@@ -4946,6 +4946,10 @@ class ProductController extends Controller
                         'sku' => $resolvedProduct->sku,
                         'display_name' => $resolvedProduct->name,
                         'display_sku' => $resolvedProduct->sku,
+                        'inventory_unit_id' => $resolvedProduct->inventory_unit_id !== null
+                            ? (int) $resolvedProduct->inventory_unit_id
+                            : ($bundleItem->inventory_unit_id !== null ? (int) $bundleItem->inventory_unit_id : null),
+                        'unit_name' => $resolvedProduct->unit?->name ?? $bundleItem->unit?->name,
                         'quantity' => max(1, (int) ($bundleItem->pivot->quantity ?? 1)),
                         'price' => (float) ($bundleItem->pivot->price
                             ?? $resolvedProduct->price
@@ -4989,6 +4993,7 @@ class ProductController extends Controller
             'products.expected_cost',
             'products.stock_quantity',
             'products.type',
+            'products.inventory_unit_id',
         ]);
 
         $searchRankingSql = null;
@@ -5008,15 +5013,19 @@ class ProductController extends Controller
         }
 
         $query->with([
+            'unit:id,name',
             'images:id,product_id,image_url,is_primary,sort_order',
             'attributeValues:id,product_id,attribute_id,value',
-            'variations:id,sku,name,price,cost_price,expected_cost,type',
+            'variations:id,sku,name,price,cost_price,expected_cost,type,inventory_unit_id',
+            'variations.unit:id,name',
             'variations.attributeValues:id,product_id,attribute_id,value',
             'variations.images:id,product_id,image_url,is_primary,sort_order',
-            'bundleItems:id,sku,name,price,cost_price,expected_cost,type',
+            'bundleItems:id,sku,name,price,cost_price,expected_cost,type,inventory_unit_id',
+            'bundleItems.unit:id,name',
             'bundleItems.attributeValues:id,product_id,attribute_id,value',
             'bundleItems.images:id,product_id,image_url,is_primary,sort_order',
-            'bundleItems.variations:id,sku,name,price,cost_price,expected_cost,type',
+            'bundleItems.variations:id,sku,name,price,cost_price,expected_cost,type,inventory_unit_id',
+            'bundleItems.variations.unit:id,name',
             'bundleItems.variations.attributeValues:id,product_id,attribute_id,value',
             'bundleItems.variations.images:id,product_id,image_url,is_primary,sort_order',
         ]);
@@ -5040,6 +5049,8 @@ class ProductController extends Controller
                 'id' => (int) $product->id,
                 'sku' => $product->sku,
                 'name' => $product->name,
+                'inventory_unit_id' => $product->inventory_unit_id !== null ? (int) $product->inventory_unit_id : null,
+                'unit_name' => $product->unit?->name,
                 'price' => (float) ($product->price ?? 0),
                 'expected_cost' => $product->expected_cost !== null ? (float) $product->expected_cost : null,
                 'cost_price' => (float) ($product->cost_price ?? $product->expected_cost ?? 0),
@@ -5052,6 +5063,10 @@ class ProductController extends Controller
                         'id' => (int) $variation->id,
                         'sku' => $variation->sku,
                         'name' => $variation->name,
+                        'inventory_unit_id' => $variation->inventory_unit_id !== null
+                            ? (int) $variation->inventory_unit_id
+                            : ($product->inventory_unit_id !== null ? (int) $product->inventory_unit_id : null),
+                        'unit_name' => $variation->unit?->name ?? $product->unit?->name,
                         'price' => (float) ($variation->price ?? 0),
                         'expected_cost' => $variation->expected_cost !== null ? (float) $variation->expected_cost : null,
                         'cost_price' => (float) ($variation->cost_price ?? $variation->expected_cost ?? 0),
@@ -5458,8 +5473,43 @@ class ProductController extends Controller
                 ->selectRaw("{$variantSortProjection['number_value']} AS sort_numeric_value");
 
             $searchMatches = $directMatchQuery->toBase()->unionAll($variantMatchQuery->toBase());
-            $rankedMatches = DB::query()
+            $collapsedMatches = DB::query()
                 ->fromSub($searchMatches, 'search_matches')
+                ->leftJoin('product_links as matched_variant_parent_links', function ($join) {
+                    $join->on('matched_variant_parent_links.linked_product_id', '=', 'search_matches.id')
+                        ->where('matched_variant_parent_links.link_type', 'super_link');
+                })
+                ->selectRaw('COALESCE(matched_variant_parent_links.product_id, search_matches.id) AS id')
+                ->selectRaw('search_matches.search_score')
+                ->selectRaw('search_matches.sort_empty_rank')
+                ->selectRaw('search_matches.sort_text_value')
+                ->selectRaw('search_matches.sort_numeric_value');
+
+            $collapsedMatchRows = DB::query()
+                ->fromSub($collapsedMatches, 'collapsed_search_matches')
+                ->select([
+                    'collapsed_search_matches.id',
+                    'collapsed_search_matches.search_score',
+                    'collapsed_search_matches.sort_empty_rank',
+                    'collapsed_search_matches.sort_text_value',
+                    'collapsed_search_matches.sort_numeric_value',
+                ]);
+
+            // Collapse variant hits back to their configurable parent before pagination.
+            // The admin table already renders variants inside the expanded parent row,
+            // so keeping child rows at the top level causes duplicate output.
+            if ($directSortProjection['mode'] === 'text') {
+                $collapsedMatchRows->selectRaw("ROW_NUMBER() OVER (PARTITION BY collapsed_search_matches.id ORDER BY collapsed_search_matches.search_score DESC, collapsed_search_matches.sort_empty_rank ASC, collapsed_search_matches.sort_text_value {$order}, collapsed_search_matches.id DESC) AS match_rank");
+            } else {
+                $collapsedMatchRows->selectRaw("ROW_NUMBER() OVER (PARTITION BY collapsed_search_matches.id ORDER BY collapsed_search_matches.search_score DESC, collapsed_search_matches.sort_numeric_value {$order}, collapsed_search_matches.id DESC) AS match_rank");
+            }
+
+            $deduplicatedMatches = DB::query()
+                ->fromSub($collapsedMatchRows, 'collapsed_matches')
+                ->where('match_rank', 1);
+
+            $rankedMatches = DB::query()
+                ->fromSub($deduplicatedMatches, 'search_matches')
                 ->orderByDesc('search_score');
 
             if ($directSortProjection['mode'] === 'text') {
@@ -8429,12 +8479,14 @@ class ProductController extends Controller
             ->values();
 
         $products = Product::withTrashed()
-            ->select(['id', 'sku', 'name', 'price', 'cost_price', 'expected_cost', 'status', 'deleted_at'])
+            ->select(['id', 'sku', 'name', 'price', 'cost_price', 'expected_cost', 'status', 'deleted_at', 'inventory_unit_id'])
             ->with([
+                'unit:id,name',
                 'attributeValues:id,product_id,attribute_id,value',
                 'parentConfigurable' => fn ($query) => $query
                     ->withTrashed()
-                    ->select('products.id', 'products.name'),
+                    ->select('products.id', 'products.name', 'products.inventory_unit_id')
+                    ->with(['unit:id,name']),
             ])
             ->whereIn('id', $requestedItems->pluck('product_id')->all())
             ->get()
@@ -8476,6 +8528,10 @@ class ProductController extends Controller
                 'entry_kind' => $parentProduct ? 'variation' : 'product',
                 'parent_product_id' => $parentProduct?->id ? (int) $parentProduct->id : null,
                 'parent_product_name' => $parentProduct ? (string) $parentProduct->name : '',
+                'inventory_unit_id' => $product->inventory_unit_id !== null
+                    ? (int) $product->inventory_unit_id
+                    : ($parentProduct?->inventory_unit_id !== null ? (int) $parentProduct->inventory_unit_id : null),
+                'unit_name' => $product->unit?->name ?? $parentProduct?->unit?->name,
                 'option_label' => $optionLabel,
                 'variant_name' => $product->name,
                 'price' => (float) ($product->price ?? 0),

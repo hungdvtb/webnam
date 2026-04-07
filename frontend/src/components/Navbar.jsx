@@ -63,7 +63,7 @@ const Navbar = () => {
     const topNoticeText = (headerConfig.topNoticeText || '').trim();
     const brandText = headerConfig.brandText || 'GỐM ĐẠI THÀNH';
     const logoUrl = headerConfig.logoUrl || '/logo-brand.jpg';
-    const logoTargetPath = isLegacyPath ? '/old/shop' : '/san-pham';
+    const logoTargetPath = isLegacyPath ? '/old' : '/';
 
     const handleLogout = async () => {
         await logout();

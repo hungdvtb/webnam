@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { cmsApi } from '../services/api';
 import { buildFooterConfig } from '../utils/footerSettings';
 
 const Footer = () => {
+    const location = useLocation();
     const [footerConfig, setFooterConfig] = useState(buildFooterConfig({}));
 
     useEffect(() => {
@@ -17,6 +19,8 @@ const Footer = () => {
 
         fetchSettings();
     }, []);
+
+    const logoTargetPath = location.pathname.startsWith('/old') ? '/old' : '/';
 
     const {
         logoUrl,
@@ -35,10 +39,10 @@ const Footer = () => {
             <div className="container mx-auto">
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-[minmax(0,1.35fr)_repeat(3,minmax(0,1fr))] gap-12 mb-16">
                     <div className="space-y-5">
-                        <div className="flex items-center gap-3">
+                        <Link to={logoTargetPath} className="flex items-center gap-3 transition-opacity hover:opacity-90">
                             <img src={logoUrl || '/logo.png'} alt={brandText} className="h-12 rounded-sm bg-white p-1 object-contain" />
                             <span className="font-display text-xl font-bold uppercase tracking-wider">{brandText}</span>
-                        </div>
+                        </Link>
 
                         <p className="font-body text-stone/80 text-lg leading-relaxed">
                             {description}

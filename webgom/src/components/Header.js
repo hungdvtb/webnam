@@ -16,6 +16,7 @@ import { resolveMediaUrl } from "@/lib/media";
 
 const DEFAULT_BRAND_TITLE = "G\u1ed1m \u0110\u1ea1i Th\u00e0nh";
 const DEFAULT_SEARCH_PLACEHOLDER = "B\u1ea1n c\u1ea7n t\u00ecm s\u1ea3n ph\u1ea9m g\u00ec";
+const HOME_PATH = "/";
 const LEGACY_SEARCH_PLACEHOLDER_KEYS = new Set([
   "ban can tim san pham gi?",
   "ban can tim san pham gi",
@@ -246,6 +247,7 @@ export default function Header({
   const [selectedMobileParentId, setSelectedMobileParentId] = useState(null);
   const [mobileOrderNotice, setMobileOrderNotice] = useState("");
   const [mobileCartFormReady, setMobileCartFormReady] = useState(false);
+  const [mobileThankYouActive, setMobileThankYouActive] = useState(false);
   const { cartCount } = useCart();
   const router = useRouter();
   const pathname = usePathname();
@@ -355,6 +357,7 @@ export default function Header({
   useEffect(() => {
     if (!isCartCheckoutView) {
       setMobileCartFormReady(false);
+      setMobileThankYouActive(false);
     }
   }, [isCartCheckoutView]);
 
@@ -365,6 +368,7 @@ export default function Header({
 
     const handleMobileCartStatus = (event) => {
       setMobileCartFormReady(Boolean(event?.detail?.isCheckoutFormValid));
+      setMobileThankYouActive(Boolean(event?.detail?.isThankYouActive));
     };
 
     window.addEventListener("webgom:mobile-cart-status", handleMobileCartStatus);
@@ -469,6 +473,35 @@ export default function Header({
       setMobileOrderNotice("");
     }, 3200);
   };
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const handleMobileOrderNoticeEvent = (event) => {
+      const nextMessage = String(event?.detail?.message || "").trim();
+
+      if (!nextMessage) {
+        return;
+      }
+
+      if (mobileOrderNoticeTimerRef.current) {
+        window.clearTimeout(mobileOrderNoticeTimerRef.current);
+      }
+
+      setMobileOrderNotice(nextMessage);
+      mobileOrderNoticeTimerRef.current = window.setTimeout(() => {
+        setMobileOrderNotice("");
+      }, 3200);
+    };
+
+    window.addEventListener("webgom:mobile-order-notice", handleMobileOrderNoticeEvent);
+
+    return () => {
+      window.removeEventListener("webgom:mobile-order-notice", handleMobileOrderNoticeEvent);
+    };
+  }, []);
 
   const persistSearchHistory = (items) => {
     setSearchHistory(items);
@@ -629,6 +662,28 @@ export default function Header({
     setIsMobileProductsMenuOpen(false);
 
     if (isCartCheckoutView && typeof window !== "undefined") {
+      if (mobileThankYouActive) {
+        let requestHandled = false;
+
+        window.dispatchEvent(
+          new CustomEvent("webgom:thank-you-download-request", {
+            detail: {
+              source: "mobile-bottom-order",
+              respond: () => {
+                requestHandled = true;
+              },
+            },
+          })
+        );
+
+        if (requestHandled) {
+          return;
+        }
+
+        showMobileOrderNotice("Vui lòng chờ tải xong trang cảm ơn rồi thử lại.");
+        return;
+      }
+
       let requestHandled = false;
       let requestMessage = "";
       let shouldShowNotice = false;
@@ -694,7 +749,7 @@ export default function Header({
       <header className="site-header">
         <div className="container header-content">
         <Link
-          href="/products"
+          href={HOME_PATH}
           className="logo-section"
           aria-label={resolvedBrandTitle}
         >
@@ -972,8 +1027,9 @@ export default function Header({
               {mobileMenuItems.map((item) => {
                 const isProductsTrigger = item.id === "header-default-products" || item.shortLabel === "Sản phẩm";
                 const isOrderItem = item.id === MOBILE_ORDER_ITEM.id;
-                const isOrderEntryMode = isOrderItem && isCartCheckoutView && !mobileCartFormReady;
-                const isOrderConfirmMode = isOrderItem && isCartCheckoutView && mobileCartFormReady;
+                const isOrderSaveMode = isOrderItem && isCartCheckoutView && mobileThankYouActive;
+                const isOrderEntryMode = isOrderItem && isCartCheckoutView && !mobileThankYouActive && !mobileCartFormReady;
+                const isOrderConfirmMode = isOrderItem && isCartCheckoutView && !mobileThankYouActive && mobileCartFormReady;
                 const isActive = isProductsTrigger
                   ? isMobileProductsMenuOpen || isMobileMenuItemActive(pathname, item)
                   : isMobileMenuItemActive(pathname, item);
@@ -981,13 +1037,19 @@ export default function Header({
                   isProductsTrigger ? "mobile-bottom-item-products" : ""
                 } ${isOrderItem ? "mobile-bottom-item-order" : ""} ${
                   isOrderEntryMode ? "mobile-bottom-item-order-entry" : ""
-                } ${isOrderConfirmMode ? "mobile-bottom-item-order-confirm" : ""}`;
-                const itemTitle = isOrderEntryMode
+                } ${isOrderConfirmMode ? "mobile-bottom-item-order-confirm" : ""} ${
+                  isOrderSaveMode ? "mobile-bottom-item-order-save mobile-bottom-item-order-confirm" : ""
+                }`;
+                const itemTitle = isOrderSaveMode
+                  ? "Lưu ảnh"
+                  : isOrderEntryMode
                   ? "Địa chỉ nhận hàng"
                   : isOrderConfirmMode
                     ? "Xác nhận đơn hàng"
                     : item.title;
-                const itemLabelLines = isOrderEntryMode
+                const itemLabelLines = isOrderSaveMode
+                  ? ["Lưu", "ảnh"]
+                  : isOrderEntryMode
                   ? ["Địa chỉ", "nhận hàng"]
                   : isOrderConfirmMode
                     ? ["Xác nhận", "đơn hàng"]
@@ -1005,7 +1067,7 @@ export default function Header({
                           isActive ? "mobile-bottom-item__icon-active" : ""
                         }`}
                       >
-                        {item.icon}
+                        {isOrderSaveMode ? "download" : item.icon}
                       </span>
                     </span>
                     <span

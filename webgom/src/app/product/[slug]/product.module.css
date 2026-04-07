@@ -92,7 +92,7 @@
     position: sticky;
     top: 20px;
     align-self: start;
-    height: calc(100vh - 160px);
+    height: auto;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -3919,8 +3919,8 @@
 .productMediaStage {
   position: relative;
   width: 100%;
-  min-height: clamp(320px, 78vw, 520px);
-  aspect-ratio: 1 / 1.05;
+  min-height: 0;
+  aspect-ratio: 1 / 1;
   border: 1px solid rgba(27, 54, 93, 0.09);
   border-radius: 1.4rem;
   overflow: hidden;
@@ -4173,10 +4173,6 @@
 }
 
 @media (min-width: 768px) {
-  .productMediaStage {
-    min-height: 480px;
-  }
-
   .productMediaRail {
     grid-auto-columns: 96px;
   }
@@ -4184,13 +4180,13 @@
 
 @media (min-width: 1024px) {
   .productMediaGallery {
-    height: 100%;
+    height: auto;
   }
 
   .productMediaStage {
-    flex: 1 1 auto;
+    flex: none;
     min-height: 0;
-    aspect-ratio: auto;
+    aspect-ratio: 1 / 1;
   }
 
   .productMediaRail {

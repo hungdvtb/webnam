@@ -237,7 +237,14 @@ class OrderController extends Controller
                     'options',
                 ])
                 ->with([
-                    'product:id,name,sku,cost_price,expected_cost',
+                    'product' => fn ($productQuery) => $productQuery
+                        ->select(['id', 'name', 'sku', 'cost_price', 'expected_cost', 'inventory_unit_id'])
+                        ->with([
+                            'unit:id,name',
+                            'parentConfigurable' => fn ($parentQuery) => $parentQuery
+                                ->select(['products.id', 'products.name', 'products.inventory_unit_id'])
+                                ->with(['unit:id,name']),
+                        ]),
                 ]),
             'attributeValues' => fn ($query) => $query
                 ->select(['id', 'order_id', 'attribute_id', 'value'])
@@ -260,7 +267,14 @@ class OrderController extends Controller
                     'notes',
                 ])
                 ->with([
-                    'product:id,name,sku,cost_price,expected_cost',
+                    'product' => fn ($productQuery) => $productQuery
+                        ->select(['id', 'name', 'sku', 'cost_price', 'expected_cost', 'inventory_unit_id'])
+                        ->with([
+                            'unit:id,name',
+                            'parentConfigurable' => fn ($parentQuery) => $parentQuery
+                                ->select(['products.id', 'products.name', 'products.inventory_unit_id'])
+                                ->with(['unit:id,name']),
+                        ]),
                 ]),
         ];
     }

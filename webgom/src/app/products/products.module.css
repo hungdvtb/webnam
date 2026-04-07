@@ -565,7 +565,7 @@
   position: relative;
   display: block;
   width: 100%;
-  aspect-ratio: 1 / 1.08;
+  aspect-ratio: 1 / 1;
   overflow: hidden;
   border-bottom: 1px solid rgba(27, 54, 93, 0.05);
   background: #f0f0f0;
@@ -727,10 +727,6 @@
   .productGrid {
     grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
     gap: 0.82rem;
-  }
-
-  .imageWrapper {
-    aspect-ratio: 1 / 1.1;
   }
 
   .productInfo {

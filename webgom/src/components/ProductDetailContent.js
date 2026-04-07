@@ -599,8 +599,36 @@ export default function ProductDetailContent({ product }) {
     setActiveIndex(0);
   };
 
+  const checkAndScrollToOptions = () => {
+    let needsSelection = false;
+    if (hasVariants) {
+      const isStructuredIncomplete = hasStructuredVariantAttributes && (product.super_attributes || []).some((attr) => !selectedOptions[attr.code]);
+      if (isStructuredIncomplete || !matchingVariant || !currentProduct?.id || (hasConfigurableChoices && !hasExplicitVariantSelection)) {
+         needsSelection = true;
+      }
+    } else if (product?.type === 'bundle') {
+      const { itemsToCart } = buildBundleCartPayload(resolvedActiveBundleConfig);
+      if (itemsToCart.length === 0) {
+         needsSelection = true;
+      }
+    }
+
+    if (needsSelection) {
+      // Find the selection section
+      const targetNode = document.querySelector('#bundle-list, #variants-selection');
+      if (targetNode) {
+         const yOffset = -80; // offset for sticky header
+         const y = targetNode.getBoundingClientRect().top + window.scrollY + yOffset;
+         window.scrollTo({ top: y, behavior: 'smooth' });
+      }
+      return true;
+    }
+    return false;
+  };
+
   const handleAddToCart = (e) => {
     if (e) e.preventDefault();
+    if (checkAndScrollToOptions()) return;
     addCurrentSelectionToCart();
     flyToCart(e, images?.[0] ? getImageUrl(images[0]) : '/logo-dai-thanh.png');
   };
@@ -619,6 +647,7 @@ export default function ProductDetailContent({ product }) {
 
   const handleBuyNow = (e) => {
     if (e) e.preventDefault();
+    if (checkAndScrollToOptions()) return;
     addCurrentSelectionToCart();
     router.push('/cart');
   };
@@ -630,8 +659,13 @@ export default function ProductDetailContent({ product }) {
 
     const handleMobileOrderRequest = (event) => {
       const respond = typeof event.detail?.respond === 'function' ? event.detail.respond : () => {};
-      const validationMessage = getMobileQuickOrderValidationMessage();
 
+      if (checkAndScrollToOptions()) {
+        respond({ success: true }); // pretend success to prevent default error toast UI
+        return;
+      }
+
+      const validationMessage = getMobileQuickOrderValidationMessage();
       if (validationMessage) {
         respond({ success: false, message: validationMessage });
         return;

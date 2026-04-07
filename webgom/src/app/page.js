@@ -11,6 +11,7 @@ const FALLBACK_PRODUCT_IMAGE = "/logo-dai-thanh.png";
 const HOME_CATEGORY_PRODUCT_LIMIT = 6;
 const FALLBACK_CATEGORY_TEXT = "Danh mục gốm sứ";
 const categoryNameSorter = new Intl.Collator("vi");
+const VIETNAMESE_LOCALE = "vi-VN";
 
 const FALLBACK_CATEGORIES = [
   { name: "Gốm Men Lam", slug: "gom-men-lam" },
@@ -35,9 +36,27 @@ function uniqueBySlug(items = []) {
   });
 }
 
+function hasLowercaseLetter(value) {
+  return /\p{Ll}/u.test(value);
+}
+
+function toNaturalCategoryName(value) {
+  const trimmedValue = String(value || "").trim();
+
+  if (!trimmedValue || hasLowercaseLetter(trimmedValue)) {
+    return trimmedValue;
+  }
+
+  return trimmedValue
+    .toLocaleLowerCase(VIETNAMESE_LOCALE)
+    .replace(/(^|[\s/-])(\p{L})/gu, (match, prefix, character) =>
+      `${prefix}${character.toLocaleUpperCase(VIETNAMESE_LOCALE)}`
+    );
+}
+
 function normalizeCategory(category, index) {
   const slug = String(category?.slug || "").trim();
-  const name = String(category?.name || "").trim();
+  const name = toNaturalCategoryName(category?.name);
 
   if (!slug || !name) {
     return null;
@@ -227,19 +246,19 @@ export default async function Home() {
       <section className={`container ${styles.valuesSection}`}>
         <div className={styles.valueCard}>
           <span className="material-symbols-outlined">auto_fix_high</span>
-          <h4>Chế tác thủ công</h4>
+          <h4>Chế tác <br />thủ công</h4>
         </div>
         <div className={styles.valueCard}>
           <span className="material-symbols-outlined">brush</span>
-          <h4>Nghệ nhân Bát Tràng</h4>
+          <h4>Nghệ nhân <wbr />Bát Tràng</h4>
         </div>
         <div className={styles.valueCard}>
           <span className="material-symbols-outlined">factory</span>
-          <h4>Dây chuyền hiện đại</h4>
+          <h4>Dây chuyền <wbr />hiện đại</h4>
         </div>
         <div className={styles.valueCard}>
           <span className="material-symbols-outlined">public</span>
-          <h4>Phân phối toàn quốc</h4>
+          <h4>Phân phối <wbr />toàn quốc</h4>
         </div>
       </section>
 

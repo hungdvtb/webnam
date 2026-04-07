@@ -290,7 +290,7 @@ export default function ConfigurableProductView({
 
             {/* Variants Selection */}
             {hasStructuredVariantAttributes ? (
-              <div className={styles.variantsCard}>
+              <div id="variants-selection" className={styles.variantsCard}>
                 {product.super_attributes.map((attr) => {
                   // Filter options that are possible with current selections of OTHER attributes
                   const validOptions = (attr.options || []).filter(opt => {
@@ -392,7 +392,7 @@ export default function ConfigurableProductView({
                 ) : null}
               </div>
             ) : (
-              <div className={styles.variantsCard}>
+              <div id="variants-selection" className={styles.variantsCard}>
                 <div className={styles.variantGroup}>
                   <h4 className={styles.variantLabel}>Chọn phân loại</h4>
                   <div className={styles.variantList}>

@@ -19,7 +19,7 @@ const StorefrontHeader = ({ headerConfig, siteInfo }) => {
     const [searchQuery, setSearchQuery] = useState('');
     const [scrolled, setScrolled] = useState(false);
     const location = useLocation();
-    const logoTargetPath = '/san-pham';
+    const logoTargetPath = '/';
 
     const noticeText = (headerConfig?.topNoticeText || '').trim();
     const logoUrl = headerConfig?.logoUrl || '/logo-brand.jpg';
@@ -170,7 +170,7 @@ const StorefrontFooter = ({ siteInfo, footerConfig }) => (
         <div className="mx-auto max-w-7xl px-4 py-12 md:py-16">
             <div className="grid grid-cols-1 gap-8 md:grid-cols-2 xl:grid-cols-[minmax(0,1.35fr)_repeat(3,minmax(0,1fr))] md:gap-12">
                 <div className="space-y-4">
-                    <div className="mb-4 flex items-center gap-3">
+                    <Link to="/" className="mb-4 flex items-center gap-3 transition-opacity hover:opacity-90">
                         <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg bg-primary">
                             <img src={footerConfig?.logoUrl || '/logo-brand.jpg'} alt={footerConfig?.brandText || siteInfo?.name || 'Cửa hàng'} className="h-full w-full object-contain bg-white" />
                         </div>
@@ -178,7 +178,7 @@ const StorefrontFooter = ({ siteInfo, footerConfig }) => (
                             <h3 className="text-lg font-black uppercase tracking-tight text-white">{footerConfig?.brandText || siteInfo?.name || 'Cửa hàng'}</h3>
                             <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-stone-400">Gốm sứ Bát Tràng</p>
                         </div>
-                    </div>
+                    </Link>
                     <p className="max-w-md text-sm leading-relaxed text-stone-400">
                         {footerConfig?.description}
                     </p>

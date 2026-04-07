@@ -1,17 +1,29 @@
 "use client";
 
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { resolveCartItemImageUrl } from '@/lib/media';
+import {
+  downloadOrderReceiptImage,
+  formatReceiptCurrency,
+  getReceiptAddress,
+  getReceiptOrderDate,
+  getReceiptPhone,
+  getReceiptUnitPrice,
+} from '@/lib/orderReceiptImage';
 
-export default function ThankYouView({ orderNumber, formData, cartItems, cartTotal, discount, bankSettings }) {
-  const finalTotal = (cartTotal || 0) - (discount || 0);
-
-  const formatPrice = (price) =>
-    new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price || 0);
-
-  const formatDate = () =>
-    new Date().toLocaleDateString('vi-VN', { day: 'numeric', month: 'long', year: 'numeric' });
+export default function ThankYouView({
+  orderNumber,
+  formData,
+  cartItems,
+  cartTotal,
+  discount,
+  bankSettings,
+  createdAt,
+}) {
+  const finalTotal = Math.max((cartTotal || 0) - (discount || 0), 0);
+  const [isSavingImage, setIsSavingImage] = useState(false);
+  const isSavingImageRef = useRef(false);
 
   const getItemImage = (item) => resolveCartItemImageUrl(item, 'medium', '');
 
@@ -19,9 +31,72 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
   const isBankTransfer = paymentMethod === 'bank';
 
   const name = formData?.customer_name || formData?.name || '';
-  const phone = formData?.phone || formData?.customer_phone || '';
-  const address = [formData?.address, formData?.ward, formData?.district, formData?.province]
-    .filter(Boolean).join(', ');
+  const phone = getReceiptPhone(formData);
+  const address = getReceiptAddress(formData);
+
+  const emitMobileOrderNotice = (message) => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.dispatchEvent(
+      new CustomEvent('webgom:mobile-order-notice', {
+        detail: {
+          message,
+        },
+      })
+    );
+  };
+
+  const handleSaveOrderImage = async () => {
+    if (isSavingImageRef.current) {
+      emitMobileOrderNotice('Ảnh đơn hàng đang được tạo, vui lòng chờ thêm một chút.');
+      return false;
+    }
+
+    isSavingImageRef.current = true;
+    setIsSavingImage(true);
+
+    try {
+      await downloadOrderReceiptImage({
+        orderNumber,
+        formData,
+        cartItems,
+        cartTotal,
+        discount,
+        createdAt,
+      });
+      emitMobileOrderNotice('Ảnh đơn hàng đã được tải xuống máy.');
+      return true;
+    } catch (error) {
+      console.error('Failed to download order receipt image:', error);
+      emitMobileOrderNotice('Không thể tạo ảnh đơn hàng. Vui lòng thử lại.');
+      return false;
+    } finally {
+      isSavingImageRef.current = false;
+      setIsSavingImage(false);
+    }
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const handleSaveRequest = (event) => {
+      if (typeof event?.detail?.respond === 'function') {
+        event.detail.respond({ success: true, showNotice: false });
+      }
+
+      void handleSaveOrderImage();
+    };
+
+    window.addEventListener('webgom:thank-you-download-request', handleSaveRequest);
+
+    return () => {
+      window.removeEventListener('webgom:thank-you-download-request', handleSaveRequest);
+    };
+  }, [handleSaveOrderImage]);
 
   return (
     <div className="ty-page">
@@ -54,6 +129,12 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
           </div>
 
           {/* ─── Info grid ─── */}
+          <p className="ty-reminder" aria-live="polite">
+            {isSavingImage
+              ? 'Đang tạo ảnh đơn hàng, vui lòng chờ trong giây lát.'
+              : 'Anh chị vui lòng tải ảnh đơn hàng về để khi nhận hàng tiện so sánh'}
+          </p>
+
           <div className="ty-info-grid">
 
             {/* Order Info */}
@@ -69,7 +150,7 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
                 </div>
                 <div className="ty-info-row">
                   <span className="ty-label">Ngày đặt:</span>
-                  <span className="ty-value">{formatDate()}</span>
+                  <span className="ty-value">{getReceiptOrderDate(createdAt)}</span>
                 </div>
                 <div className="ty-info-row">
                   <span className="ty-label">Phương thức:</span>
@@ -79,7 +160,7 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
                 </div>
                 <div className="ty-info-row ty-info-row--total">
                   <span className="ty-label ty-label--total">Tổng cộng:</span>
-                  <span className="ty-total">{formatPrice(finalTotal)}</span>
+                  <span className="ty-total">{formatReceiptCurrency(finalTotal)}</span>
                 </div>
               </div>
             </div>
@@ -118,9 +199,7 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
               <div className="ty-product-list">
                 {cartItems.map((item, idx) => {
                   const imgSrc = getItemImage(item);
-                  const itemPrice = item.groupedItems?.length > 0
-                    ? item.groupedItems.reduce((s, gi) => s + (parseFloat(gi.price || 0) * (gi.qty || 1)), 0)
-                    : (item.price || 0);
+                  const itemPrice = getReceiptUnitPrice(item);
                   return (
                     <div key={idx} className="ty-product-row">
                       <div className="ty-product-img">
@@ -131,10 +210,10 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
                       </div>
                       <div className="ty-product-info">
                         <h4 className="ty-product-name">{item.name}</h4>
-                        <p className="ty-product-meta">Đơn giá: {formatPrice(itemPrice)}</p>
+                        <p className="ty-product-meta">Đơn giá: {formatReceiptCurrency(itemPrice)}</p>
                       </div>
                       <div className="ty-product-right">
-                        <p className="ty-product-total">{formatPrice(itemPrice * (item.quantity || 1))}</p>
+                        <p className="ty-product-total">{formatReceiptCurrency(itemPrice * (item.quantity || 1))}</p>
                         <p className="ty-product-qty">
                           Số lượng: {(item.quantity || 1) < 10 ? `0${item.quantity || 1}` : item.quantity || 1}
                         </p>
@@ -280,6 +359,16 @@ export default function ThankYouView({ orderNumber, formData, cartItems, cartTot
         .ty-subtitle {
           font-size: 1rem; color: #64748b;
           line-height: 1.7; max-width: 600px; margin: 0 auto;
+        }
+        .ty-reminder {
+          margin: 0 0 2rem;
+          padding: 0.9rem 1rem;
+          border-radius: 0.5rem;
+          background: rgba(197,160,89,0.12);
+          color: #7c5b26;
+          font-size: 0.94rem;
+          line-height: 1.6;
+          text-align: center;
         }
 
         /* Info grid */

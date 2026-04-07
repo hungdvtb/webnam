@@ -94,14 +94,16 @@ const orderFormColumnOrderStorageKey = 'order_form_column_order';
 const orderFormVisibleColumnsStorageKey = 'order_form_visible_columns';
 const orderFormColumnWidthsStorageKey = 'order_column_widths';
 const orderFormCostPriceMigrationStorageKey = 'added_cost_price_migrated_form';
+const orderFormUnitVisibleMigrationStorageKey = 'added_unit_visible_migrated_form';
 const orderFormAvailableToSellVisibleMigrationStorageKey = 'added_available_to_sell_migrated_form';
 const ORDER_FORM_AVAILABLE_TO_SELL_TOOLTIP = 'Có thể bán = Tồn kho - SL chờ xuất';
-const ORDER_FORM_DEFAULT_COLUMN_IDS = ['stt', 'sku', 'name', 'quantity', 'available_to_sell', 'price', 'cost_price', 'total', 'actions'];
+const ORDER_FORM_DEFAULT_COLUMN_IDS = ['stt', 'sku', 'name', 'quantity', 'unit', 'available_to_sell', 'price', 'cost_price', 'total', 'actions'];
 const ORDER_FORM_DEFAULT_COLUMN_WIDTHS = {
     stt: 50,
     sku: 150,
     name: null,
     quantity: 90,
+    unit: 104,
     available_to_sell: 120,
     price: 150,
     cost_price: 150,
@@ -178,16 +180,21 @@ const insertOrderFormColumnAfter = (columnIds, columnId, afterColumnId) => {
 };
 const normalizeStoredOrderFormColumnOrder = (value) => {
     const nextColumnIds = normalizeStoredOrderFormColumnIds(value);
+    const hasUnitColumn = nextColumnIds.includes('unit');
     const hasAvailableToSellColumn = nextColumnIds.includes('available_to_sell');
 
     ORDER_FORM_DEFAULT_COLUMN_IDS.forEach((columnId) => {
-        if (columnId !== 'available_to_sell' && !nextColumnIds.includes(columnId)) {
+        if (!['unit', 'available_to_sell'].includes(columnId) && !nextColumnIds.includes(columnId)) {
             nextColumnIds.push(columnId);
         }
     });
 
+    if (!hasUnitColumn) {
+        return insertOrderFormColumnAfter(nextColumnIds, 'unit', 'quantity');
+    }
+
     if (!hasAvailableToSellColumn) {
-        return insertOrderFormColumnAfter(nextColumnIds, 'available_to_sell', 'quantity');
+        return insertOrderFormColumnAfter(nextColumnIds, 'available_to_sell', nextColumnIds.includes('unit') ? 'unit' : 'quantity');
     }
 
     return nextColumnIds;
@@ -247,11 +254,18 @@ const getStoredOrderFormVisibleColumns = () => {
         });
     }
 
+    storedColumns = migrateStoredOrderFormColumns(storedColumns, {
+        storageKey: orderFormVisibleColumnsStorageKey,
+        migrationStorageKey: orderFormUnitVisibleMigrationStorageKey,
+        columnId: 'unit',
+        afterColumnId: 'quantity',
+    });
+
     return migrateStoredOrderFormColumns(storedColumns, {
         storageKey: orderFormVisibleColumnsStorageKey,
         migrationStorageKey: orderFormAvailableToSellVisibleMigrationStorageKey,
         columnId: 'available_to_sell',
-        afterColumnId: 'quantity',
+        afterColumnId: storedColumns.includes('unit') ? 'unit' : 'quantity',
     });
 };
 const getStoredOrderFormColumnWidths = () => normalizeStoredOrderFormColumnWidths(
@@ -409,6 +423,7 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                 price: Number(item?.price ?? 0) || 0,
                 expected_cost: parseMoneyNumber(item?.expected_cost),
                 cost_price: resolveProductCostPrice(item),
+                unit_name: resolveOrderUnitLabel(item),
                 ...resolveInventorySnapshot(item),
                 main_image: String(item?.main_image ?? '').trim(),
                 type: String(item?.type ?? '').trim(),
@@ -656,6 +671,52 @@ const resolveInventorySnapshot = (source, fallbackSource = null) => {
         available_to_sell: availableToSell,
     };
 };
+const resolveOrderUnitLabel = (...sources) => {
+    for (const source of sources) {
+        if (!source || typeof source !== 'object') continue;
+
+        const candidates = [
+            source.unit_name,
+            source.unit_label,
+            source.inventory_unit_name,
+            source.product_unit_name,
+            source.product_unit_snapshot,
+            source.unit?.name,
+            source.inventory_unit?.name,
+            source.parentConfigurable?.unit_name,
+            source.parentConfigurable?.unit_label,
+            source.parentConfigurable?.inventory_unit_name,
+            source.parentConfigurable?.product_unit_name,
+            source.parentConfigurable?.product_unit_snapshot,
+            source.parentConfigurable?.unit?.name,
+            source.parentConfigurable?.inventory_unit?.name,
+            source.product?.unit_name,
+            source.product?.unit_label,
+            source.product?.inventory_unit_name,
+            source.product?.product_unit_name,
+            source.product?.product_unit_snapshot,
+            source.product?.unit?.name,
+            source.product?.inventory_unit?.name,
+            source.product?.parentConfigurable?.unit_name,
+            source.product?.parentConfigurable?.unit_label,
+            source.product?.parentConfigurable?.inventory_unit_name,
+            source.product?.parentConfigurable?.product_unit_name,
+            source.product?.parentConfigurable?.product_unit_snapshot,
+            source.product?.parentConfigurable?.unit?.name,
+            source.product?.parentConfigurable?.inventory_unit?.name,
+        ];
+
+        for (const candidate of candidates) {
+            const normalizedCandidate = normalizeCanvasText(candidate);
+            if (normalizedCandidate) {
+                return normalizedCandidate;
+            }
+        }
+    }
+
+    return '';
+};
+const getOrderUnitDisplay = (source, fallback = '-') => resolveOrderUnitLabel(source) || fallback;
 const hasInventorySnapshot = (source) => {
     const snapshot = resolveInventorySnapshot(source);
 
@@ -706,6 +767,7 @@ const normalizeProductPickerEntry = (product) => {
         price: resolveMoneyValue(product?.price, 0),
         expected_cost: parseMoneyNumber(product?.expected_cost),
         cost_price: resolveProductCostPrice(product),
+        unit_name: resolveOrderUnitLabel(product),
         variations: Array.isArray(product?.variations)
             ? product.variations.map((variation) => ({
                 ...variation,
@@ -713,6 +775,7 @@ const normalizeProductPickerEntry = (product) => {
                 price: resolveMoneyValue(variation?.price, 0),
                 expected_cost: parseMoneyNumber(variation?.expected_cost),
                 cost_price: resolveProductCostPrice(variation),
+                unit_name: resolveOrderUnitLabel(variation, product),
             }))
             : product?.variations,
         bundle_options: Array.isArray(product?.bundle_options)
@@ -725,6 +788,7 @@ const normalizeProductPickerEntry = (product) => {
                         price: resolveMoneyValue(bundleItem?.price, 0),
                         expected_cost: parseMoneyNumber(bundleItem?.expected_cost),
                         cost_price: resolveProductCostPrice(bundleItem),
+                        unit_name: resolveOrderUnitLabel(bundleItem, product),
                     }))
                     : bundleOption?.items,
             }))
@@ -957,6 +1021,7 @@ const createOrderLineItem = ({
     product_id,
     name,
     sku,
+    unit_name,
     quantity = 1,
     price = 0,
     cost_price = 0,
@@ -979,6 +1044,7 @@ const createOrderLineItem = ({
         product_id: Number(product_id) || 0,
         name: resolveOrderLineItemDisplayName({ name, options: normalizedOptions }),
         sku: normalizeCanvasText(sku) || 'N/A',
+        unit_name: resolveOrderUnitLabel({ unit_name }),
         quantity: Math.max(1, Number(quantity) || 1),
         price: Number(price) || 0,
         cost_price: resolveRoundedImportCostValue(cost_price, 0),
@@ -1043,6 +1109,7 @@ const appendOrderItemsWithMergeResult = (currentItems = [], additions = [], { in
                     fallbackName: existingItem.name,
                 }),
                 sku: incomingSku && incomingSku !== 'N/A' ? incomingSku : existingItem.sku,
+                unit_name: resolveOrderUnitLabel(normalizedAddition, existingItem),
                 quantity: Math.max(1, (Number(existingItem.quantity) || 0) + (Number(normalizedAddition.quantity) || 0)),
                 price: Number(normalizedAddition.price ?? existingItem.price ?? 0) || 0,
                 cost_price: resolveRoundedImportCostValue(
@@ -1087,6 +1154,7 @@ const buildOrderItemsFromSearchEntry = (entry) => {
                 product_id: Number(bundleItem?.product_id ?? bundleItem?.target_product_id ?? bundleItem?.id) || 0,
                 name: normalizeCanvasText(bundleItem?.display_name || bundleItem?.name) || 'Sản phẩm bundle',
                 sku: normalizeCanvasText(bundleItem?.display_sku || bundleItem?.sku),
+                unit_name: resolveOrderUnitLabel(bundleItem),
                 quantity: Math.max(1, Number(bundleItem?.quantity) || 1),
                 price: Number(bundleItem?.price ?? 0) || 0,
                 cost_price: resolveProductCostPrice(bundleItem),
@@ -1128,6 +1196,7 @@ const buildOrderItemsFromSearchEntry = (entry) => {
         product_id: targetProductId,
         name: normalizeCanvasText(entry?.display_name || entry?.name) || `Sản phẩm #${targetProductId}`,
         sku: normalizeCanvasText(entry?.display_sku || entry?.sku),
+        unit_name: resolveOrderUnitLabel(entry),
         quantity: 1,
         price: Number(entry?.price ?? 0) || 0,
         cost_price: resolveProductCostPrice(entry),
@@ -1212,6 +1281,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
             price: Number(product?.price ?? 0) || 0,
             expected_cost: parseMoneyNumber(product?.expected_cost),
             cost_price: resolveProductCostPrice(product),
+            unit_name: resolveOrderUnitLabel(product),
             ...resolveInventorySnapshot(product),
             type: normalizeCanvasText(product?.type),
             main_image: getPickerPrimaryImage(product),
@@ -1258,6 +1328,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 price: Number(variation?.price ?? 0) || 0,
                 expected_cost: parseMoneyNumber(variation?.expected_cost),
                 cost_price: resolveProductCostPrice(variation),
+                unit_name: resolveOrderUnitLabel(variation, product),
                 ...resolveInventorySnapshot(variation),
                 type: normalizeCanvasText(variation?.type || 'simple'),
                 main_image: getPickerPrimaryImage(variation) || baseEntry.main_image,
@@ -1287,6 +1358,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                     price: Number(bundleItem?.price ?? 0) || 0,
                     expected_cost: parseMoneyNumber(bundleItem?.expected_cost),
                     cost_price: resolveProductCostPrice(bundleItem),
+                    unit_name: resolveOrderUnitLabel(bundleItem, product),
                     ...resolveInventorySnapshot(bundleItem),
                     main_image: getPickerPrimaryImage(bundleItem),
                     attribute_values: getPickerAttributeValues(bundleItem),
@@ -1387,6 +1459,7 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
             price: Number(item?.price ?? 0) || 0,
             expected_cost: parseMoneyNumber(item?.expected_cost),
             cost_price: resolveProductCostPrice(item),
+            unit_name: resolveOrderUnitLabel(item),
             ...resolveInventorySnapshot(item),
             type: normalizeCanvasText(item?.type),
             main_image: getPickerPrimaryImage(item),
@@ -1600,6 +1673,7 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                             <th className="w-[240px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold">Hình ảnh sản phẩm</th>
                             <th className="border border-[#2F1A14] px-3 py-3 text-[12px] font-bold">Tên sản phẩm</th>
                             <th className="w-[84px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold text-center">SL</th>
+                            <th className="w-[96px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold text-center">ÄVT</th>
                             <th className="w-[150px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold text-right">Đơn giá</th>
                             <th className="w-[170px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold text-right">Thành tiền</th>
                         </tr>
@@ -1628,14 +1702,16 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                                 )}
                                 <td className="border border-[#D5CEC9] px-4 py-3 text-[12px] leading-6">{item.name}</td>
                                 <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold">{item.quantity}</td>
+                                <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold text-slate-700">{getOrderUnitDisplay(item)}</td>
                                 <td className="border border-[#D5CEC9] px-4 py-3 text-[12px] text-right">{formatQuoteMoney(item.price)}</td>
                                 <td className="border border-[#D5CEC9] px-4 py-3 text-[12px] text-right font-semibold">{formatQuoteMoney(item.price * item.quantity)}</td>
                             </tr>
                         ))}
                         <tr className="bg-[#F5E7BF]">
-                            <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold uppercase">Tổng món</td>
+                            <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold uppercase" colSpan={2}>Tổng món</td>
                             <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-center">{totalQuantity}</td>
-                            <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-center" colSpan={2}>Tổng tiền</td>
+                            <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-center">&nbsp;</td>
+                            <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-center">Tổng tiền</td>
                             <td className="border border-[#2F1A14] px-4 py-3 text-[13px] font-bold text-right">{formatQuoteMoney(subtotal)}</td>
                         </tr>
                     </tbody>
@@ -2181,6 +2257,7 @@ const OrderForm = () => {
                     ...item,
                     name: resolveLatestOrderItemName({ ...item, options: mergedOptions }, latest),
                     sku: normalizeCanvasText(latest.display_sku || latest.sku) || item.sku,
+                    unit_name: resolveOrderUnitLabel(latest, item),
                     price: Number(latest.price ?? item.price ?? 0) || 0,
                     cost_price: resolveProductCostPrice(latest, item.cost_price),
                     options: mergedOptions,
@@ -2232,6 +2309,7 @@ const OrderForm = () => {
 
                 return {
                     ...item,
+                    unit_name: resolveOrderUnitLabel(latest, item),
                     ...resolveInventorySnapshot(latest, item),
                 };
             }),
@@ -2295,6 +2373,7 @@ const OrderForm = () => {
         sku: { label: 'Mã sản phẩm', width: 'w-40', align: 'left' },
         name: { label: 'Tên sản phẩm', width: '', align: 'left' },
         quantity: { label: 'Số lượng', width: 'w-24', align: 'center' },
+        unit: { label: 'Đơn vị tính', width: 'w-28', align: 'center' },
         available_to_sell: { label: 'Có thể bán', width: 'w-32', align: 'center', tooltip: ORDER_FORM_AVAILABLE_TO_SELL_TOOLTIP },
         price: { label: 'Đơn giá', width: 'w-44', align: 'center' },
         cost_price: { label: 'Giá nhập', width: 'w-44', align: 'center' },
@@ -3412,6 +3491,7 @@ const OrderForm = () => {
                 price: product.price,
                 expected_cost: parseMoneyNumber(product?.expected_cost),
                 cost_price: resolveProductCostPrice(product),
+                unit_name: resolveOrderUnitLabel(product),
                 ...resolveInventorySnapshot(product),
                 main_image: product.main_image,
                 type: product.type,
@@ -3786,6 +3866,7 @@ const OrderForm = () => {
                     fallbackName: item.product?.name || `Sản phẩm #${item.product_id}`,
                 }),
                 sku: item.product_sku_snapshot || item.product?.sku || `N/A`,
+                unit_name: resolveOrderUnitLabel(item, item?.product),
                 quantity: parseMoneyNumber(item.quantity, 0) || 0,
                 price: parseMoneyNumber(item.price, 0) || 0,
                 cost_price: resolveOrderItemCostPrice(item, shouldUseCurrentProductCost)
@@ -3799,6 +3880,7 @@ const OrderForm = () => {
                     fallbackName: item.product?.name || `Sản phẩm #${item.product_id}`,
                 }),
                 sku: item.product_sku_snapshot || item.product?.sku || 'N/A',
+                unit_name: resolveOrderUnitLabel(item, item?.product),
                 quantity: parseMoneyNumber(item.quantity, 0) || 0,
                 price: parseMoneyNumber(item.price, 0) || 0,
                 cost_price: resolveOrderItemCostPrice(item, shouldUseCurrentProductCost),
@@ -3908,6 +3990,7 @@ const OrderForm = () => {
                 product_id: item.product_id,
                 name: item.name || item.product_name || `Sản phẩm #${item.product_id}`,
                 sku: item.sku || item.product_sku || 'N/A',
+                unit_name: resolveOrderUnitLabel(item),
                 quantity: Number(item.quantity) || 1,
                 price: Number(item.price) || 0,
                 cost_price: resolveProductCostPrice(item),
@@ -4278,9 +4361,15 @@ const OrderForm = () => {
             const footerHeight = 56;
             const imageColWidth = 260;
             const qtyColWidth = 92;
+            const unitColWidth = 108;
             const priceColWidth = 170;
             const totalColWidth = 180;
-            const nameColWidth = pageWidth - imageColWidth - qtyColWidth - priceColWidth - totalColWidth;
+            const nameColWidth = pageWidth - imageColWidth - qtyColWidth - unitColWidth - priceColWidth - totalColWidth;
+            const xName = imageColWidth;
+            const xQty = xName + nameColWidth;
+            const xUnit = xQty + qtyColWidth;
+            const xPrice = xUnit + unitColWidth;
+            const xTotal = xPrice + priceColWidth;
             const bodyStartY = headerHeight + tableHeaderHeight;
             const borderColor = '#D7C7B8';
             const borderStrong = '#B79D86';
@@ -4413,15 +4502,11 @@ const OrderForm = () => {
             ctx.font = `700 13px ${quoteCanvasFontFamily}`;
             ctx.textAlign = 'center';
             ctx.fillText(normalizeCanvasText('Ảnh bộ / mẫu'), imageColWidth / 2, headerHeight + 18);
-            ctx.fillText(normalizeCanvasText('Tên sản phẩm'), imageColWidth + (nameColWidth / 2), headerHeight + 18);
-            ctx.fillText('SL', imageColWidth + nameColWidth + (qtyColWidth / 2), headerHeight + 18);
-            ctx.fillText(normalizeCanvasText('Đơn giá'), imageColWidth + nameColWidth + qtyColWidth + (priceColWidth / 2), headerHeight + 18);
-            ctx.fillText(normalizeCanvasText('Thành tiền'), imageColWidth + nameColWidth + qtyColWidth + priceColWidth + (totalColWidth / 2), headerHeight + 18);
-
-            const xName = imageColWidth;
-            const xQty = xName + nameColWidth;
-            const xPrice = xQty + qtyColWidth;
-            const xTotal = xPrice + priceColWidth;
+            ctx.fillText(normalizeCanvasText('Tên sản phẩm'), xName + (nameColWidth / 2), headerHeight + 18);
+            ctx.fillText('SL', xQty + (qtyColWidth / 2), headerHeight + 18);
+            ctx.fillText(normalizeCanvasText('ĐVT'), xUnit + (unitColWidth / 2), headerHeight + 18);
+            ctx.fillText(normalizeCanvasText('Đơn giá'), xPrice + (priceColWidth / 2), headerHeight + 18);
+            ctx.fillText(normalizeCanvasText('Thành tiền'), xTotal + (totalColWidth / 2), headerHeight + 18);
 
             ctx.fillStyle = imagePanelBg;
             ctx.fillRect(0, bodyStartY, imageColWidth, itemsHeight);
@@ -4464,6 +4549,7 @@ const OrderForm = () => {
                 ctx.strokeStyle = borderColor;
                 ctx.strokeRect(xName + 0.5, currentY + 0.5, nameColWidth - 1, rowHeight - 1);
                 ctx.strokeRect(xQty + 0.5, currentY + 0.5, qtyColWidth - 1, rowHeight - 1);
+                ctx.strokeRect(xUnit + 0.5, currentY + 0.5, unitColWidth - 1, rowHeight - 1);
                 ctx.strokeRect(xPrice + 0.5, currentY + 0.5, priceColWidth - 1, rowHeight - 1);
                 ctx.strokeRect(xTotal + 0.5, currentY + 0.5, totalColWidth - 1, rowHeight - 1);
 
@@ -4478,6 +4564,7 @@ const OrderForm = () => {
                 ctx.font = `400 13px ${quoteCanvasFontFamily}`;
                 ctx.textBaseline = 'middle';
                 ctx.fillText(String(item.quantity || 0), xQty + (qtyColWidth / 2), valueY);
+                ctx.fillText(getOrderUnitDisplay(item), xUnit + (unitColWidth / 2), valueY);
 
                 ctx.textAlign = 'right';
                 ctx.fillStyle = textPrimary;
@@ -4494,7 +4581,7 @@ const OrderForm = () => {
             ctx.fillRect(0, bodyStartY + itemsHeight, pageWidth, footerHeight);
             ctx.strokeStyle = borderStrong;
             ctx.strokeRect(0.5, bodyStartY + itemsHeight + 0.5, pageWidth - 1, footerHeight - 1);
-            [imageColWidth, xQty, xPrice].forEach((x) => {
+            [xQty, xUnit, xPrice, xTotal].forEach((x) => {
                 ctx.beginPath();
                 ctx.moveTo(x, bodyStartY + itemsHeight);
                 ctx.lineTo(x, pageHeight);
@@ -4506,8 +4593,35 @@ const OrderForm = () => {
             ctx.textAlign = 'left';
             ctx.fillText(normalizeCanvasText('Tổng món'), 18, bodyStartY + itemsHeight + 18);
             ctx.textAlign = 'center';
-            ctx.fillText(String(quoteTotalQuantity), imageColWidth + (nameColWidth / 2), bodyStartY + itemsHeight + 18);
+            ctx.fillText(String(quoteTotalQuantity), xQty + (qtyColWidth / 2), bodyStartY + itemsHeight + 18);
             ctx.fillText(normalizeCanvasText('Tổng tiền'), xQty + ((qtyColWidth + priceColWidth) / 2), bodyStartY + itemsHeight + 18);
+            ctx.fillStyle = footerBg;
+            ctx.fillRect(xQty + 1, bodyStartY + itemsHeight + 1, (xTotal - xQty) - 2, footerHeight - 2);
+            ctx.strokeStyle = borderStrong;
+            [xQty, xUnit, xPrice, xTotal].forEach((x) => {
+                ctx.beginPath();
+                ctx.moveTo(x, bodyStartY + itemsHeight);
+                ctx.lineTo(x, pageHeight);
+                ctx.stroke();
+            });
+            ctx.fillStyle = textPrimary;
+            ctx.font = `700 15px ${quoteCanvasFontFamily}`;
+            ctx.textAlign = 'center';
+            ctx.fillText(String(quoteTotalQuantity), xQty + (qtyColWidth / 2), bodyStartY + itemsHeight + 18);
+            ctx.fillText(normalizeCanvasText('Tá»•ng tiá»n'), xPrice + (priceColWidth / 2), bodyStartY + itemsHeight + 18);
+            ctx.fillStyle = footerBg;
+            ctx.fillRect(xPrice + 1, bodyStartY + itemsHeight + 1, priceColWidth - 2, footerHeight - 2);
+            ctx.strokeStyle = borderStrong;
+            [xPrice, xTotal].forEach((x) => {
+                ctx.beginPath();
+                ctx.moveTo(x, bodyStartY + itemsHeight);
+                ctx.lineTo(x, pageHeight);
+                ctx.stroke();
+            });
+            ctx.fillStyle = textPrimary;
+            ctx.font = `700 15px ${quoteCanvasFontFamily}`;
+            ctx.textAlign = 'center';
+            ctx.fillText(normalizeCanvasText('\u0054\u1ed5ng ti\u1ec1n'), xPrice + (priceColWidth / 2), bodyStartY + itemsHeight + 18);
             ctx.textAlign = 'right';
             ctx.fillText(formatQuoteMoney(quoteSubtotal), pageWidth - 18, bodyStartY + itemsHeight + 18);
 
@@ -5666,6 +5780,12 @@ const OrderForm = () => {
                                                                         onChange={(e) => updateItem(index, 'quantity', parseInt(e.target.value) || 0)}
                                                                         className="w-16 h-8 text-center bg-blue-50/50 border-none focus:bg-white focus:ring-1 focus:ring-blue-200 focus:outline-none text-[13px] font-bold rounded-sm shadow-inner text-slate-900"
                                                                     />
+                                                                </td>
+                                                            );
+                                                        case 'unit':
+                                                            return (
+                                                                <td key={colId} className="py-2.5 px-3 border border-primary/10 text-center">
+                                                                    <span className="font-sans text-[13px] font-bold text-primary/65">{getOrderUnitDisplay(item)}</span>
                                                                 </td>
                                                             );
                                                         case 'available_to_sell': {

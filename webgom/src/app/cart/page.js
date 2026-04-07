@@ -97,6 +97,38 @@ const CHECKOUT_PHONE_REGEX = /^(0)[0-9]{9}$/;
 const CHECKOUT_DRAFT_DELAY_MS = 10 * 60 * 1000;
 const CHECKOUT_DRAFT_UPDATE_DELAY_MS = 2000;
 const CHECKOUT_DRAFT_STORAGE_KEY = `webgom_checkout_draft_${config.siteCode}`;
+const THANK_YOU_SELFTEST_DATA = {
+  orderNumber: 'SELFTEST123',
+  createdAt: '2026-04-07T10:15:00.000Z',
+  discount: 0,
+  cartTotal: 2112000,
+  formData: {
+    customer_name: 'Codex Mobile Test',
+    phone: '0901234567',
+    address: '123 Lê Lợi',
+    province: 'Hà Nội',
+    district: '',
+    ward: 'Phường Hàng Bạc',
+    email: '',
+    notes: '',
+    paymentMethod: 'cod',
+  },
+  cartItems: [
+    {
+      id: 1161,
+      name: 'Bộ test men lam',
+      slug: 'bo-test-men-lam',
+      sku: 'SELFTEST-ORDER-IMAGE',
+      productUrl: '/product/bo-test-men-lam',
+      price: 1056000,
+      quantity: 2,
+      options: {},
+      groupedItems: [],
+      images: [],
+      image: null,
+    },
+  ],
+};
 
 const getCartItemUnitPrice = (item) => {
   if (item?.groupedItems?.length) {
@@ -213,6 +245,28 @@ export default function CartPage() {
 
   useEffect(() => {
     getWebSiteSettings().then(res => setBankSettings(res)).catch(e => console.error("Error fetching settings:", e));
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const searchParams = new URLSearchParams(window.location.search);
+
+    if (searchParams.get('selftest') !== 'thankyou') {
+      return;
+    }
+
+    setOrderNumber(THANK_YOU_SELFTEST_DATA.orderNumber);
+    setSuccessOrderData({
+      cartItems: [...THANK_YOU_SELFTEST_DATA.cartItems],
+      cartTotal: THANK_YOU_SELFTEST_DATA.cartTotal,
+      discount: THANK_YOU_SELFTEST_DATA.discount,
+      formData: { ...THANK_YOU_SELFTEST_DATA.formData },
+      createdAt: THANK_YOU_SELFTEST_DATA.createdAt,
+    });
+    setIsOrderSuccess(true);
   }, []);
 
   const clearFieldErrors = (...fieldNames) => {
@@ -919,13 +973,15 @@ export default function CartPage() {
     try {
       const orderData = buildCheckoutPayload();
       const response = await placeWebOrder(orderData);
+      const createdAt = new Date().toISOString();
       setOrderNumber(response.order_number);
       // Cache details for thank you page
       setSuccessOrderData({
         cartItems: [...cartItems],
         cartTotal,
         discount,
-        formData: { ...formData }
+        formData: { ...formData },
+        createdAt,
       });
       checkoutCompletedRef.current = true;
       setIsOrderSuccess(true);
@@ -952,7 +1008,14 @@ export default function CartPage() {
 
       if (isOrderSuccess) {
         respond({ success: true, showNotice: false });
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        window.dispatchEvent(
+          new CustomEvent('webgom:thank-you-download-request', {
+            detail: {
+              source: 'mobile-cart-confirm-fallback',
+              respond: () => {},
+            },
+          })
+        );
         return;
       }
 
@@ -1016,6 +1079,7 @@ export default function CartPage() {
       new CustomEvent('webgom:mobile-cart-status', {
         detail: {
           isCheckoutFormValid: isCheckoutFormReady,
+          isThankYouActive: isOrderSuccess,
         },
       })
     );
@@ -1025,11 +1089,12 @@ export default function CartPage() {
         new CustomEvent('webgom:mobile-cart-status', {
           detail: {
             isCheckoutFormValid: false,
+            isThankYouActive: false,
           },
         })
       );
     };
-  }, [isCheckoutFormReady]);
+  }, [isCheckoutFormReady, isOrderSuccess]);
 
   if (isOrderSuccess) {
     return (
@@ -1040,6 +1105,7 @@ export default function CartPage() {
         cartTotal={successOrderData?.cartTotal || 0}
         discount={successOrderData?.discount || 0}
         bankSettings={bankSettings}
+        createdAt={successOrderData?.createdAt}
       />
     );
   }

@@ -17,6 +17,8 @@ const DIRECT_IMAGE_FIELDS = [
   'src',
 ];
 
+const DESKTOP_RELATED_BREAKPOINT = 1024;
+
 function pickDirectImageCandidate(relatedProduct) {
   const candidate = DIRECT_IMAGE_FIELDS.reduce((accumulator, field) => {
     if (relatedProduct?.[field]) {
@@ -105,13 +107,25 @@ function getRailStep(railElement) {
   return railElement.clientWidth;
 }
 
+function isDesktopRelatedRailEnabled() {
+  return typeof window !== 'undefined' && window.innerWidth >= DESKTOP_RELATED_BREAKPOINT;
+}
+
 export default function RelatedProductsSection({
   relatedProducts = [],
   viewAllHref = '/products',
 }) {
   const railRef = useRef(null);
+  const dragStateRef = useRef({
+    activePointerId: null,
+    hasMoved: false,
+    startScrollLeft: 0,
+    startX: 0,
+  });
+  const suppressClickRef = useRef(false);
   const [canScrollPrev, setCanScrollPrev] = useState(false);
   const [canScrollNext, setCanScrollNext] = useState(relatedProducts.length > 2);
+  const [isDraggingRail, setIsDraggingRail] = useState(false);
 
   const hasRelatedProducts = relatedProducts.length > 0;
   const showArrows = relatedProducts.length > 2;
@@ -147,12 +161,104 @@ export default function RelatedProductsSection({
     });
   };
 
+  const resetRailDrag = () => {
+    dragStateRef.current = {
+      activePointerId: null,
+      hasMoved: false,
+      startScrollLeft: 0,
+      startX: 0,
+    };
+    setIsDraggingRail(false);
+  };
+
+  const handleRailPointerDown = (event) => {
+    if (event.pointerType !== 'mouse' || event.button !== 0 || !isDesktopRelatedRailEnabled()) {
+      return;
+    }
+
+    const railElement = railRef.current;
+    if (!railElement) return;
+
+    suppressClickRef.current = false;
+    dragStateRef.current = {
+      activePointerId: event.pointerId,
+      hasMoved: false,
+      startScrollLeft: railElement.scrollLeft,
+      startX: event.clientX,
+    };
+    railElement.setPointerCapture?.(event.pointerId);
+    setIsDraggingRail(true);
+  };
+
+  const handleRailPointerMove = (event) => {
+    const railElement = railRef.current;
+    const dragState = dragStateRef.current;
+
+    if (!railElement || dragState.activePointerId !== event.pointerId) {
+      return;
+    }
+
+    const deltaX = event.clientX - dragState.startX;
+
+    if (!dragState.hasMoved && Math.abs(deltaX) > 6) {
+      dragState.hasMoved = true;
+      suppressClickRef.current = true;
+    }
+
+    if (!dragState.hasMoved) return;
+
+    railElement.scrollLeft = dragState.startScrollLeft - deltaX;
+    event.preventDefault();
+  };
+
+  const handleRailPointerEnd = (event) => {
+    if (dragStateRef.current.activePointerId !== event.pointerId) {
+      return;
+    }
+
+    resetRailDrag();
+  };
+
+  const handleRailLostPointerCapture = () => {
+    if (dragStateRef.current.activePointerId === null) return;
+    resetRailDrag();
+  };
+
+  const handleRailClickCapture = (event) => {
+    if (!suppressClickRef.current) return;
+
+    suppressClickRef.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const handleRailWheel = (event) => {
+    const railElement = railRef.current;
+
+    if (
+      !railElement ||
+      !isDesktopRelatedRailEnabled() ||
+      !event.shiftKey ||
+      Math.abs(event.deltaY) < 1 ||
+      Math.abs(event.deltaX) > 0
+    ) {
+      return;
+    }
+
+    railElement.scrollLeft += event.deltaY;
+    event.preventDefault();
+  };
+
+  const handleRailDragStart = (event) => {
+    if (!isDesktopRelatedRailEnabled()) return;
+    event.preventDefault();
+  };
+
   return (
     <div className={`${styles.relatedSection} ${!hasRelatedProducts ? styles.relatedSectionEmpty : ''}`}>
       <div className={styles.relatedHeader}>
         <div>
           <h3 className={styles.relatedTitle}>Sản phẩm tương tự</h3>
-          <p className={styles.relatedSub}>Gợi ý những tác phẩm cùng phong cách dành cho bạn</p>
         </div>
         <Link href={viewAllHref} className={styles.viewAll}>
           Xem tất cả <span className="material-symbols-outlined">arrow_forward</span>
@@ -185,8 +291,16 @@ export default function RelatedProductsSection({
 
         <div
           ref={railRef}
-          className={`${styles.relatedGrid} ${!hasRelatedProducts ? styles.relatedGridLoading : ''}`}
+          className={`${styles.relatedGrid} ${!hasRelatedProducts ? styles.relatedGridLoading : ''} ${isDraggingRail ? styles.relatedGridDragging : ''}`}
           data-testid="related-products-rail"
+          onClickCapture={handleRailClickCapture}
+          onDragStart={handleRailDragStart}
+          onLostPointerCapture={handleRailLostPointerCapture}
+          onPointerCancel={handleRailPointerEnd}
+          onPointerDown={handleRailPointerDown}
+          onPointerMove={handleRailPointerMove}
+          onPointerUp={handleRailPointerEnd}
+          onWheel={handleRailWheel}
         >
           {hasRelatedProducts ? relatedProducts.map((relatedProduct) => {
             const imageSrc = getRelatedImageSrc(relatedProduct);

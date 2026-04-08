@@ -1874,7 +1874,51 @@
 
 @media (min-width: 1024px) {
   .relatedGrid {
-    grid-template-columns: repeat(4, 1fr);
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 1.5rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0.1rem 0 0.75rem;
+    scroll-snap-type: x proximity;
+    scroll-padding-inline: 0.1rem;
+    overscroll-behavior-x: contain;
+    overscroll-behavior-y: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(27, 54, 93, 0.18) transparent;
+    cursor: grab;
+    touch-action: pan-y;
+  }
+
+  .relatedGrid::-webkit-scrollbar {
+    height: 0.5rem;
+  }
+
+  .relatedGrid::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .relatedGrid::-webkit-scrollbar-thumb {
+    background: rgba(27, 54, 93, 0.18);
+    border-radius: 999px;
+  }
+
+  .relatedGridDragging {
+    cursor: grabbing;
+    scroll-snap-type: none;
+    user-select: none;
+  }
+
+  .relatedGridDragging .relatedCard:hover,
+  .relatedGridDragging .relatedCard:hover .relImage img {
+    transform: none;
+  }
+
+  .relatedCard {
+    flex: 0 0 clamp(15.5rem, 21vw, 18.5rem);
+    min-width: clamp(15.5rem, 21vw, 18.5rem);
+    scroll-snap-align: start;
   }
 }
 

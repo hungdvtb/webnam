@@ -6,6 +6,7 @@ import styles2 from './layout2.module.css';
 import InfiniteProductList from '@/components/InfiniteProductList';
 import InfiniteProductListLayout2 from '@/components/InfiniteProductListLayout2';
 import CategoryDropdown from '@/components/CategoryDropdown';
+import DesktopCategorySidebar from '@/components/DesktopCategorySidebar';
 import SortSelect from '@/components/SortSelect';
 import AttributeFiltersDropdown from '@/components/AttributeFiltersDropdown';
 import { resolveMediaUrl } from '@/lib/media';
@@ -381,44 +382,10 @@ export default async function ProductsPage({ searchParams }) {
 
         <div className={styles.contentLayout}>
           <aside className={styles.sidebar}>
-            <div className={styles.sidebarSection}>
-              <h3 className={styles.sidebarTitle}>Danh mục</h3>
-              <ul className={styles.sidebarList}>
-                {(() => {
-                  const renderTree = (parentId = null, level = 0) => (
-                    categories
-                      .filter((category) => (parentId === null ? !category.parent_id : category.parent_id === parentId))
-                      .map((category) => {
-                        const hasChildren = categories.some((item) => item.parent_id === category.id);
-                        const linkClassName = [
-                          styles.sidebarLink,
-                          level === 0 ? styles.sidebarParentLink : styles.sidebarChildLink,
-                          currentCategorySlug === category.slug ? styles.sidebarLinkActive : '',
-                        ].filter(Boolean).join(' ');
-
-                        return (
-                          <li key={category.id} className={styles.sidebarItem}>
-                            <Link
-                              href={`/products?category=${category.slug}`}
-                              className={linkClassName}
-                            >
-                              <span className={styles.sidebarLinkLabel}>{category.name}</span>
-                              <span className={styles.sidebarCount}>{category.products_count || 0}</span>
-                            </Link>
-                            {hasChildren && (
-                              <ul className={`${styles.sidebarList} ${styles.sidebarChildList}`}>
-                                {renderTree(category.id, level + 1)}
-                              </ul>
-                            )}
-                          </li>
-                        );
-                      })
-                  );
-
-                  return renderTree();
-                })()}
-              </ul>
-            </div>
+            <DesktopCategorySidebar
+              categories={categories}
+              currentCategorySlug={currentCategorySlug}
+            />
 
             {productsData.available_filters?.map((filter) => {
               if (filter.type === 'price_range') {

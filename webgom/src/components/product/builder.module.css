@@ -634,6 +634,22 @@
   text-decoration: none;
 }
 
+.itemNameLink {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.itemNameLink:hover .itemName,
+.itemNameLink:focus-visible .itemName {
+  color: #8e5229;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
 .itemName {
   font-size: 14px;
   font-weight: 800;

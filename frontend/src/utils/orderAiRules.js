@@ -48,6 +48,52 @@ const getPrimaryImage = (product) => normalizeText(
     || product?.image_url
 );
 
+const resolveUnitNameFromSource = (...sources) => {
+    for (const source of sources) {
+        if (!source || typeof source !== 'object') continue;
+
+        const candidates = [
+            source.unit_name,
+            source.unit_label,
+            source.inventory_unit_name,
+            source.product_unit_name,
+            source.product_unit_snapshot,
+            source.unit?.name,
+            source.inventory_unit?.name,
+            source.parentConfigurable?.unit_name,
+            source.parentConfigurable?.unit_label,
+            source.parentConfigurable?.inventory_unit_name,
+            source.parentConfigurable?.product_unit_name,
+            source.parentConfigurable?.product_unit_snapshot,
+            source.parentConfigurable?.unit?.name,
+            source.parentConfigurable?.inventory_unit?.name,
+            source.product?.unit_name,
+            source.product?.unit_label,
+            source.product?.inventory_unit_name,
+            source.product?.product_unit_name,
+            source.product?.product_unit_snapshot,
+            source.product?.unit?.name,
+            source.product?.inventory_unit?.name,
+            source.product?.parentConfigurable?.unit_name,
+            source.product?.parentConfigurable?.unit_label,
+            source.product?.parentConfigurable?.inventory_unit_name,
+            source.product?.parentConfigurable?.product_unit_name,
+            source.product?.parentConfigurable?.product_unit_snapshot,
+            source.product?.parentConfigurable?.unit?.name,
+            source.product?.parentConfigurable?.inventory_unit?.name,
+        ];
+
+        for (const candidate of candidates) {
+            const normalizedCandidate = normalizeText(candidate);
+            if (normalizedCandidate) {
+                return normalizedCandidate;
+            }
+        }
+    }
+
+    return '';
+};
+
 const buildVariationDisplayName = (parentName, optionLabel, variationName) => {
     const normalizedParentName = normalizeText(parentName);
     const normalizedOptionLabel = normalizeText(optionLabel);
@@ -96,6 +142,7 @@ export const createOrderAiRuleItem = (entry = null) => ({
     display_sku: normalizeText(entry?.display_sku ?? entry?.sku),
     option_label: normalizeText(entry?.option_label),
     main_image: normalizeText(entry?.main_image),
+    unit_name: resolveUnitNameFromSource(entry),
     price: Number(entry?.price ?? 0) || 0,
     cost_price: Number(entry?.cost_price ?? 0) || 0,
 });
@@ -171,6 +218,7 @@ export const buildOrderAiPickerEntries = (products = []) => {
             price: Number(product?.price ?? 0) || 0,
             cost_price: Number(product?.cost_price ?? product?.expected_cost ?? 0) || 0,
             expected_cost: product?.expected_cost == null ? null : (Number(product.expected_cost) || 0),
+            unit_name: resolveUnitNameFromSource(product),
             main_image: getPrimaryImage(product),
             attribute_values: Array.isArray(product?.attribute_values) ? product.attribute_values : [],
             attribute_summary: getAttributeSummary(product),
@@ -198,6 +246,7 @@ export const buildOrderAiPickerEntries = (products = []) => {
                 price: Number(variation?.price ?? 0) || 0,
                 cost_price: Number(variation?.cost_price ?? variation?.expected_cost ?? 0) || 0,
                 expected_cost: variation?.expected_cost == null ? null : (Number(variation.expected_cost) || 0),
+                unit_name: resolveUnitNameFromSource(variation, product),
                 main_image: getPrimaryImage(variation) || getPrimaryImage(product),
                 attribute_values: Array.isArray(variation?.attribute_values) ? variation.attribute_values : [],
                 attribute_summary: optionLabel,

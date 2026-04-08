@@ -899,6 +899,10 @@ const ProductList = () => {
     const [quickEditLoading, setQuickEditLoading] = useState(false);
     const [quickEditSubmitting, setQuickEditSubmitting] = useState(false);
     const [quickEditRowErrors, setQuickEditRowErrors] = useState({});
+    const quickEditTableScrollRef = useRef(null);
+    const quickEditTopScrollbarRef = useRef(null);
+    const quickEditHorizontalSyncSourceRef = useRef(null);
+    const [quickEditTableMetrics, setQuickEditTableMetrics] = useState({ scrollWidth: 0, clientWidth: 0 });
 
     const [editingProductId, setEditingProductId] = useState(null);
     const [editForm, setEditForm] = useState({ price: '', expected_cost: '' });
@@ -907,6 +911,109 @@ const ProductList = () => {
     const quickEditSelectedAttributes = allAttributes.filter((attribute) => (
         quickEditSelectedAttributeIds.includes(String(attribute.id))
     ));
+    const quickEditSelectedCoreFieldKey = quickEditSelectedCoreFields.join('|');
+    const quickEditSelectedAttributeKey = quickEditSelectedAttributeIds.join('|');
+    const quickEditHasHorizontalOverflow = quickEditTableMetrics.scrollWidth > (quickEditTableMetrics.clientWidth + 1);
+    const quickEditTopScrollbarWidth = Math.max(quickEditTableMetrics.scrollWidth, quickEditTableMetrics.clientWidth, 0);
+
+    const measureQuickEditTableMetrics = useCallback(() => {
+        const scrollElement = quickEditTableScrollRef.current;
+        if (!scrollElement) {
+            setQuickEditTableMetrics((prev) => (
+                prev.scrollWidth === 0 && prev.clientWidth === 0
+                    ? prev
+                    : { scrollWidth: 0, clientWidth: 0 }
+            ));
+            return;
+        }
+
+        const nextMetrics = {
+            scrollWidth: scrollElement.scrollWidth,
+            clientWidth: scrollElement.clientWidth,
+        };
+
+        setQuickEditTableMetrics((prev) => (
+            prev.scrollWidth === nextMetrics.scrollWidth && prev.clientWidth === nextMetrics.clientWidth
+                ? prev
+                : nextMetrics
+        ));
+    }, []);
+
+    const syncQuickEditHorizontalScroll = useCallback((source, scrollLeft) => {
+        const target = source === 'top'
+            ? quickEditTableScrollRef.current
+            : quickEditTopScrollbarRef.current;
+
+        if (!target) {
+            return;
+        }
+
+        quickEditHorizontalSyncSourceRef.current = source;
+        target.scrollLeft = scrollLeft;
+
+        if (typeof window === 'undefined') {
+            quickEditHorizontalSyncSourceRef.current = null;
+            return;
+        }
+
+        window.requestAnimationFrame(() => {
+            if (quickEditHorizontalSyncSourceRef.current === source) {
+                quickEditHorizontalSyncSourceRef.current = null;
+            }
+        });
+    }, []);
+
+    const handleQuickEditTopScrollbarScroll = useCallback((event) => {
+        if (quickEditHorizontalSyncSourceRef.current === 'table') {
+            return;
+        }
+
+        syncQuickEditHorizontalScroll('top', event.currentTarget.scrollLeft);
+    }, [syncQuickEditHorizontalScroll]);
+
+    const handleQuickEditTableScroll = useCallback((event) => {
+        if (quickEditHorizontalSyncSourceRef.current === 'top') {
+            return;
+        }
+
+        syncQuickEditHorizontalScroll('table', event.currentTarget.scrollLeft);
+    }, [syncQuickEditHorizontalScroll]);
+
+    useEffect(() => {
+        if (!showQuickEditModal) {
+            return undefined;
+        }
+
+        const syncMetricsAndScrollbar = () => {
+            measureQuickEditTableMetrics();
+
+            const tableScrollElement = quickEditTableScrollRef.current;
+            const topScrollElement = quickEditTopScrollbarRef.current;
+            if (tableScrollElement && topScrollElement && topScrollElement.scrollLeft !== tableScrollElement.scrollLeft) {
+                topScrollElement.scrollLeft = tableScrollElement.scrollLeft;
+            }
+        };
+
+        if (typeof window === 'undefined') {
+            syncMetricsAndScrollbar();
+            return undefined;
+        }
+
+        const frameId = window.requestAnimationFrame(syncMetricsAndScrollbar);
+        window.addEventListener('resize', syncMetricsAndScrollbar);
+
+        return () => {
+            window.cancelAnimationFrame(frameId);
+            window.removeEventListener('resize', syncMetricsAndScrollbar);
+        };
+    }, [
+        showQuickEditModal,
+        quickEditLoading,
+        quickEditProducts.length,
+        quickEditSelectedCoreFieldKey,
+        quickEditSelectedAttributeKey,
+        measureQuickEditTableMetrics,
+    ]);
 
     const resetQuickEditState = () => {
         setShowQuickEditModal(false);
@@ -919,6 +1026,8 @@ const ProductList = () => {
         setQuickEditLoading(false);
         setQuickEditSubmitting(false);
         setQuickEditRowErrors({});
+        setQuickEditTableMetrics({ scrollWidth: 0, clientWidth: 0 });
+        quickEditHorizontalSyncSourceRef.current = null;
     };
 
     const closeQuickEditModal = () => {
@@ -4275,15 +4384,15 @@ const ProductList = () => {
                                 disabled={selectedIds.length === 0 || isTrashView}
                                 onClick={() => openQuickEditModal(selectedIds)}
                                 data-quick-edit-trigger="bulk"
-                                className={`px-3 h-9 rounded-sm transition-all flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider ${
+                                className={`p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center ${
                                     selectedIds.length > 0 && !isTrashView
                                         ? 'bg-sky-50 text-sky-700 hover:bg-sky-600 hover:text-white shadow-sm'
                                         : 'bg-slate-100 text-primary/30 cursor-not-allowed opacity-50 grayscale'
                                 }`}
                                 title="Sửa nhanh các sản phẩm đã chọn"
+                                aria-label="Sửa nhanh các sản phẩm đã chọn"
                             >
                                 <span className="material-symbols-outlined text-[18px]">flash_on</span>
-                                <span className="hidden md:inline">Sửa nhanh</span>
                             </button>
                             <button 
                                 disabled={selectedIds.length === 0} 
@@ -5626,21 +5735,47 @@ const ProductList = () => {
                                         Không có sản phẩm nào sẵn sàng để sửa nhanh.
                                     </div>
                                 ) : (
-                                    <div className="rounded-sm border border-primary/10 overflow-hidden">
-                                        <div className="overflow-x-auto">
+                                    <div className="rounded-sm border border-primary/10 overflow-hidden bg-white shadow-sm">
+                                        {quickEditHasHorizontalOverflow ? (
+                                            <div className="border-b border-primary/10 bg-[#F8FAFC] px-4 py-3">
+                                                <div className="flex items-center gap-3 rounded-sm border border-primary/10 bg-white px-3 py-2">
+                                                    <span className="material-symbols-outlined text-[16px] text-sky-600">swap_horiz</span>
+                                                    <div
+                                                        ref={quickEditTopScrollbarRef}
+                                                        data-quick-edit-top-scrollbar="true"
+                                                        onScroll={handleQuickEditTopScrollbarScroll}
+                                                        className="flex-1 overflow-x-auto overflow-y-hidden custom-scrollbar"
+                                                    >
+                                                        <div
+                                                            className="h-2 rounded-full bg-gradient-to-r from-primary/10 via-sky-400/30 to-primary/10"
+                                                            style={{ width: quickEditTopScrollbarWidth }}
+                                                        />
+                                                    </div>
+                                                    <span className="shrink-0 text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                                        Cuộn ngang nhanh
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        ) : null}
+                                        <div
+                                            ref={quickEditTableScrollRef}
+                                            data-quick-edit-table-scroll="true"
+                                            onScroll={handleQuickEditTableScroll}
+                                            className="max-h-[54vh] overflow-auto custom-scrollbar"
+                                        >
                                             <table data-quick-edit-table="true" className="min-w-full border-collapse">
-                                                <thead className="bg-[#F8FAFC]">
+                                                <thead className="sticky top-0 z-20 bg-[#F8FAFC] shadow-sm">
                                                     <tr>
-                                                        <th className="min-w-[240px] px-3 py-3 border border-primary/10 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60">
+                                                        <th className="min-w-[240px] px-3 py-3 border border-primary/10 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60 bg-[#F8FAFC]">
                                                             Sản phẩm
                                                         </th>
                                                         {quickEditSelectedCoreFields.map((fieldId) => (
-                                                            <th key={`quick-edit-head-${fieldId}`} className="min-w-[180px] px-3 py-3 border border-primary/10 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60">
+                                                            <th key={`quick-edit-head-${fieldId}`} className="min-w-[180px] px-3 py-3 border border-primary/10 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60 bg-[#F8FAFC]">
                                                                 {QUICK_EDIT_CORE_FIELDS.find((field) => field.id === fieldId)?.label || fieldId}
                                                             </th>
                                                         ))}
                                                         {quickEditSelectedAttributes.map((attribute) => (
-                                                            <th key={`quick-edit-head-attr-${attribute.id}`} className="min-w-[220px] px-3 py-3 border border-primary/10 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60">
+                                                            <th key={`quick-edit-head-attr-${attribute.id}`} className="min-w-[220px] px-3 py-3 border border-primary/10 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60 bg-[#F8FAFC]">
                                                                 {attribute.name}
                                                             </th>
                                                         ))}

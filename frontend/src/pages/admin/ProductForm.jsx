@@ -6380,11 +6380,10 @@ const ProductForm = () => {
                                             onClick={() => setShowBundleOptionSorter(true)}
                                             disabled={bundleOptions.length < 2}
                                             className="flex items-center gap-2 rounded-sm border border-primary/15 bg-primary/[0.04] px-3 py-1.5 text-[0px] font-black uppercase tracking-widest text-primary transition-all hover:bg-primary/[0.08] disabled:cursor-not-allowed disabled:border-stone/10 disabled:bg-stone/5 disabled:text-stone/35"
-                                            title="Mo bang sap xep nhanh cho toan bo tuy chon bundle"
+                                            title="Mở bảng sắp xếp nhanh cho toàn bộ tùy chọn bundle"
                                         >
                                             <span className="material-symbols-outlined text-[18px]">view_list</span>
-                                            <span className="text-[11px] font-black uppercase tracking-widest">Sap xep tuy chon</span>
-                                            Sáº¯p xáº¿p tÃ¹y chá»n
+                                            <span className="text-[11px] font-black uppercase tracking-widest">Sắp xếp tùy chọn</span>
                                         </button>
                                         <button
                                             type="button"
@@ -6471,16 +6470,35 @@ const ProductForm = () => {
                                                         />
                                                      </div>
                                                      <div className="flex shrink-0 items-center gap-3">
-                                                         <button
-                                                            type="button"
-                                                            onClick={() => toggleBundleSorting(option.id)}
-                                                            aria-label={isSortingBundle[option.id] ? 'Hoàn tất sắp xếp' : 'Sắp xếp thứ tự sản phẩm'}
-                                                            className={`inline-flex h-10 w-10 items-center justify-center rounded-sm text-[0px] transition-all ${isSortingBundle[option.id] ? 'bg-amber-500 text-white shadow-premium' : 'bg-gold/10 text-gold hover:bg-gold/20'}`}
-                                                            title="Sắp xếp thứ tự sản phẩm"
-                                                         >
-                                                            <span className="material-symbols-outlined text-[18px]">{isSortingBundle[option.id] ? 'done_all' : 'reorder'}</span>
-                                                            {isSortingBundle[option.id] ? 'Xong' : 'Sắp xếp'}
-                                                         </button>
+                                                         <div className="relative">
+                                                             <input
+                                                                 type="file"
+                                                                 id={`bundle-option-image-${option.id}`}
+                                                                 className="hidden"
+                                                                 accept="image/*"
+                                                                 onChange={(e) => handleUploadBundleOptionImage(option.id, e)}
+                                                             />
+                                                             {option.image_url ? (
+                                                                 <div className="relative group/optimg size-10 rounded-sm border border-gold/20 overflow-hidden shadow-sm">
+                                                                     <img src={option.image_url} alt="" className="size-full object-cover" />
+                                                                     <button
+                                                                        type="button"
+                                                                        onClick={() => handleRemoveBundleOptionImage(option.id)}
+                                                                        className="absolute inset-0 flex items-center justify-center bg-black/40 text-white opacity-0 group-hover/optimg:opacity-100 transition-opacity"
+                                                                     >
+                                                                        <span className="material-symbols-outlined text-[16px]">close</span>
+                                                                     </button>
+                                                                 </div>
+                                                             ) : (
+                                                                 <label
+                                                                     htmlFor={`bundle-option-image-${option.id}`}
+                                                                     className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-sm bg-gold/10 text-gold transition-all hover:bg-gold/20"
+                                                                     title="Thêm ảnh tùy chọn"
+                                                                 >
+                                                                     <span className="material-symbols-outlined text-[20px]">add_a_photo</span>
+                                                                 </label>
+                                                             )}
+                                                         </div>
                                                          <button
                                                             type="button"
                                                             onClick={() => openBundleItemQuickSorter(option.id)}

@@ -1039,22 +1039,23 @@ const applySequentialOrderLineSortOrder = (items = []) => (Array.isArray(items) 
     ...item,
     sort_order: index + 1,
 }));
-const createOrderLineItem = ({
-    line_id,
-    product_id,
-    name,
-    sku,
-    unit_name,
-    sort_order,
-    quantity = 1,
-    price = 0,
-    cost_price = 0,
-    computed_stock = null,
-    pending_export_quantity = null,
-    available_to_sell = null,
-    options = undefined,
-    ai_meta = undefined,
-}) => {
+const createOrderLineItem = (payload = {}) => {
+    const {
+        line_id,
+        product_id,
+        name,
+        sku,
+        unit_name,
+        sort_order,
+        quantity = 1,
+        price = 0,
+        cost_price = 0,
+        computed_stock = null,
+        pending_export_quantity = null,
+        available_to_sell = null,
+        options = undefined,
+        ai_meta = undefined,
+    } = payload || {};
     const normalizedOptions = normalizeOrderLineOptions(options);
     const inventorySnapshot = resolveInventorySnapshot({
         computed_stock,
@@ -1068,7 +1069,7 @@ const createOrderLineItem = ({
         product_id: Number(product_id) || 0,
         name: resolveOrderLineItemDisplayName({ name, options: normalizedOptions }),
         sku: normalizeCanvasText(sku) || 'N/A',
-        unit_name: resolveOrderUnitLabel({ unit_name }),
+        unit_name: resolveOrderUnitLabel(payload, { unit_name }),
         sort_order: Math.max(1, Number(sort_order) || 1),
         quantity: Math.max(1, Number(quantity) || 1),
         price: Number(price) || 0,
@@ -2248,6 +2249,7 @@ const OrderForm = () => {
                                     price: resolveMoneyValue(latest.price, item?.price, 0),
                                     expected_cost: parseMoneyNumber(latest.expected_cost, parseMoneyNumber(item?.expected_cost)),
                                     cost_price: resolveProductCostPrice({ ...item, ...latest }),
+                                    unit_name: resolveOrderUnitLabel(latest, item),
                                     ...resolveInventorySnapshot(latest, item),
                                     main_image: String(latest.main_image ?? item?.main_image ?? '').trim(),
                                     type: latest.type ?? item?.type ?? '',

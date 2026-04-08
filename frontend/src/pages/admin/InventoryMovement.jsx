@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import Pagination from '../../components/Pagination';
 import SortIndicator from '../../components/SortIndicator';
@@ -298,13 +298,22 @@ const nextSortConfig = (current, columnId) => {
 
 const formatCurrency = (value) => `${new Intl.NumberFormat('vi-VN').format(Math.round(Number(value || 0)))}đ`;
 const formatImportCost = (value) => `${formatRoundedImportCost(value)}đ`;
-const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0));
+const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value ?? 0));
 const stripNumericValue = (value) => String(value ?? '').replace(/[^0-9]/g, '');
 const getProductStockAlertMeta = (row) => {
     const stock = Number(row?.actual_stock ?? row?.computed_stock ?? 0);
     const normalizedAlert = String(row?.stock_alert || '').trim();
 
-    if (normalizedAlert === 'out' || stock <= 0) {
+    if (stock < 0) {
+        return {
+            key: 'oversold',
+            label: 'Bán trước',
+            badgeClass: 'border-rose-300 bg-rose-100 text-rose-800',
+            textClass: 'text-rose-800',
+        };
+    }
+
+    if (normalizedAlert === 'out' || stock === 0) {
         return {
             key: 'out',
             label: 'Hết hàng',
@@ -332,7 +341,8 @@ const getProductStockAlertMeta = (row) => {
 const getActualStockCellMeta = (row) => {
     const baseMeta = getProductStockAlertMeta(row);
 
-    if (baseMeta.key === 'available') {
+    // 'available' and 'oversold' use their own defined textClass from baseMeta
+    if (baseMeta.key === 'available' || baseMeta.key === 'oversold') {
         return baseMeta;
     }
 
@@ -6651,7 +6661,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             const stockMeta = getActualStockCellMeta(row);
             return (
                 <div className="flex flex-col items-end gap-0.5">
-                    <span className={`text-[14px] font-black ${stockMeta.textClass}`}>{formatNumber(row.actual_stock || 0)}</span>
+                    <span className={`text-[14px] font-black ${stockMeta.textClass}`}>{formatNumber(row.actual_stock ?? 0)}</span>
                     <span className={`text-[11px] ${stockMeta.key === 'available' ? 'text-primary/45' : 'text-rose-600'}`}>{stockMeta.label}</span>
                 </div>
             );

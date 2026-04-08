@@ -63,10 +63,19 @@ const getMobileStickyHeaderHeight = () => {
 };
 
 const sentenceCaseButtonStyle = { textTransform: 'none' };
+const BUNDLE_WORKSPACE_STATE_KEY = '__webgomBundleWorkspace';
 
 
 const BUNDLE_ITEM_CHANGE_LABEL = 'Đổi kích thước';
 const BUNDLE_ITEM_CHANGE_TITLE = 'Đổi kích thước cho sản phẩm trong bộ';
+
+const getBundleWorkspacePageKey = () => {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  return `${window.location.pathname}${window.location.search}`;
+};
 
 function DropdownChevron({ className = '', openClassName = '', isOpen = false }) {
   return (
@@ -283,8 +292,31 @@ export default function BundleProductView({
   const [isMobileHeroConfigMenuOpen, setIsMobileHeroConfigMenuOpen] = useState(false);
   const [isMobileConfigMenuOpen, setIsMobileConfigMenuOpen] = useState(false);
   const bundleListRef = useRef(null);
+  const pendingBundleWorkspaceRestoreRef = useRef(null);
+  const bundleWorkspaceRestoreTimersRef = useRef([]);
   const closeMobileHeroConfigMenu = () => setIsMobileHeroConfigMenuOpen(false);
   const closeMobileConfigMenu = () => setIsMobileConfigMenuOpen(false);
+  const clearBundleWorkspaceRestoreTimers = () => {
+    if (typeof window === 'undefined') {
+      bundleWorkspaceRestoreTimersRef.current = [];
+      return;
+    }
+
+    bundleWorkspaceRestoreTimersRef.current.forEach((timer) => {
+      if (!timer) {
+        return;
+      }
+
+      if (timer.type === 'raf') {
+        window.cancelAnimationFrame(timer.id);
+        return;
+      }
+
+      window.clearTimeout(timer.id);
+    });
+
+    bundleWorkspaceRestoreTimersRef.current = [];
+  };
   const stopDropdownEventPropagation = (event) => {
     event.stopPropagation();
   };
@@ -333,6 +365,47 @@ export default function BundleProductView({
     return getImageUrl(item?.primary_image || item?.images?.[0] || { path: item?.main_image });
   };
 
+  const saveBundleWorkspaceState = (configName = resolvedActiveTab) => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const pageKey = getBundleWorkspacePageKey();
+
+    if (!pageKey) {
+      return;
+    }
+
+    const currentHistoryState = (
+      window.history?.state
+      && typeof window.history.state === 'object'
+      && !Array.isArray(window.history.state)
+    )
+      ? window.history.state
+      : {};
+
+    try {
+      window.history.replaceState(
+        {
+          ...currentHistoryState,
+          [BUNDLE_WORKSPACE_STATE_KEY]: {
+            pageKey,
+            activeTab: String(configName || '').trim(),
+            scrollY: Math.max(0, Math.round(window.scrollY || window.pageYOffset || 0)),
+          },
+        },
+        '',
+        window.location.href,
+      );
+    } catch (error) {
+      console.warn('Failed to save bundle workspace state.', error);
+    }
+  };
+
+  const handleBundleItemLinkClick = (item) => {
+    saveBundleWorkspaceState(getBundleOptionTitle(item) || resolvedActiveTab);
+  };
+
   const renderBundleItemImage = (item) => {
     const href = buildBundleComponentDetailHref(item);
     const imageAlt = item?.name || 'Sản phẩm thành phần';
@@ -358,9 +431,33 @@ export default function BundleProductView({
         className={builderStyles.tableImgLink}
         title={`Xem chi tiết ${imageAlt}`}
         aria-label={`Xem chi tiết ${imageAlt}`}
+        onClick={() => handleBundleItemLinkClick(item)}
         prefetch={false}
       >
         {imageNode}
+      </Link>
+    );
+  };
+
+  const renderBundleItemName = (item) => {
+    const href = buildBundleComponentDetailHref(item);
+    const itemName = item?.name || '';
+    const detailTitle = `Xem chi tiết ${itemName}`;
+
+    if (!href || !itemName) {
+      return <p className={builderStyles.itemName}>{itemName}</p>;
+    }
+
+    return (
+      <Link
+        href={href}
+        className={builderStyles.itemNameLink}
+        title={detailTitle}
+        aria-label={detailTitle}
+        onClick={() => handleBundleItemLinkClick(item)}
+        prefetch={false}
+      >
+        <p className={builderStyles.itemName}>{itemName}</p>
       </Link>
     );
   };
@@ -460,6 +557,87 @@ export default function BundleProductView({
     setIsMobileHeroConfigMenuOpen(false);
     setIsMobileConfigMenuOpen(false);
   }, [resolvedActiveTab]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const savedWorkspaceState = window.history?.state?.[BUNDLE_WORKSPACE_STATE_KEY];
+    const currentPageKey = getBundleWorkspacePageKey();
+
+    if (!savedWorkspaceState || savedWorkspaceState.pageKey !== currentPageKey) {
+      return undefined;
+    }
+
+    pendingBundleWorkspaceRestoreRef.current = {
+      activeTab: String(savedWorkspaceState.activeTab || '').trim(),
+      scrollY: Math.max(0, Number(savedWorkspaceState.scrollY) || 0),
+    };
+
+    return () => {
+      clearBundleWorkspaceRestoreTimers();
+    };
+  }, []);
+
+  useEffect(() => {
+    const pendingWorkspaceState = pendingBundleWorkspaceRestoreRef.current;
+
+    if (!pendingWorkspaceState || typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const desiredActiveTab = pendingWorkspaceState.activeTab;
+
+    if (bundleItems.length === 0) {
+      return undefined;
+    }
+
+    if (
+      desiredActiveTab
+      && configurations.includes(desiredActiveTab)
+      && desiredActiveTab !== resolvedActiveTab
+    ) {
+      setManualActiveTab(desiredActiveTab);
+      if (switchBundleConfiguration) {
+        switchBundleConfiguration(desiredActiveTab);
+      }
+      return undefined;
+    }
+
+    clearBundleWorkspaceRestoreTimers();
+
+    const applySavedScrollPosition = () => {
+      window.scrollTo(0, pendingWorkspaceState.scrollY);
+    };
+
+    const outerAnimationFrame = window.requestAnimationFrame(() => {
+      applySavedScrollPosition();
+
+      const innerAnimationFrame = window.requestAnimationFrame(() => {
+        applySavedScrollPosition();
+      });
+
+      bundleWorkspaceRestoreTimersRef.current.push({
+        type: 'raf',
+        id: innerAnimationFrame,
+      });
+    });
+    const firstTimeout = window.setTimeout(applySavedScrollPosition, 120);
+    const secondTimeout = window.setTimeout(applySavedScrollPosition, 320);
+
+    bundleWorkspaceRestoreTimersRef.current.push(
+      { type: 'raf', id: outerAnimationFrame },
+      { type: 'timeout', id: firstTimeout },
+      { type: 'timeout', id: secondTimeout },
+    );
+
+    pendingBundleWorkspaceRestoreRef.current = null;
+
+    return () => {
+      clearBundleWorkspaceRestoreTimers();
+    };
+  }, [bundleItems.length, configurations, resolvedActiveTab, switchBundleConfiguration]);
 
   useEffect(() => {
     if ((!isMobileHeroConfigMenuOpen && !isMobileConfigMenuOpen) || typeof document === 'undefined') {
@@ -1559,7 +1737,7 @@ export default function BundleProductView({
                           <div className={builderStyles.mobileItemContent}>
                             <div className={builderStyles.colName}>
                               <div className={builderStyles.nameRow}>
-                                <p className={builderStyles.itemName}>{item.name}</p>
+                                {renderBundleItemName(item)}
                                 <button
                                   className={builderStyles.inlineChangeBtn}
                                   onClick={() => openSelectionModal(item)}
@@ -1630,7 +1808,7 @@ export default function BundleProductView({
                         {/* Name + change button inline */}
                         <div className={builderStyles.colName}>
                           <div className={builderStyles.nameRow}>
-                            <p className={builderStyles.itemName}>{item.name}</p>
+                            {renderBundleItemName(item)}
                             <button
                               className={builderStyles.inlineChangeBtn}
                               onClick={() => openSelectionModal(item)}

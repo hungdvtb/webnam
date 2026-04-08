@@ -3479,8 +3479,43 @@ class ProductController extends Controller
 
     protected function attachActualStockSubqueries(Builder $query, Request $request): array
     {
+        $accountId = (int) $request->header('X-Account-Id');
+
+        // Compute real-time base stock from inventory_batches (same source of truth
+        // as InventoryService::refreshProducts). This avoids stale products.stock_quantity
+        // which can diverge when stock is set manually via product import or the edit form.
+        $batchStockSub = DB::table('inventory_batches')
+            ->selectRaw('product_id')
+            ->selectRaw('COALESCE(SUM(remaining_quantity), 0) AS batch_available')
+            ->where('remaining_quantity', '>', 0)
+            ->where(function ($q) {
+                $q->whereNull('source_type')
+                    ->orWhere('source_type', '!=', 'oversold_reserve');
+            })
+            ->groupBy('product_id');
+
+        $oversoldReserveSub = DB::table('inventory_batch_allocations')
+            ->join('inventory_batches', 'inventory_batches.id', '=', 'inventory_batch_allocations.inventory_batch_id')
+            ->where('inventory_batches.source_type', 'oversold_reserve')
+            ->selectRaw('inventory_batch_allocations.product_id')
+            ->selectRaw('COALESCE(SUM(inventory_batch_allocations.quantity), 0) AS oversold_qty')
+            ->groupBy('inventory_batch_allocations.product_id');
+
+        if ($accountId > 0) {
+            $batchStockSub->where('account_id', $accountId);
+            $oversoldReserveSub->where('inventory_batch_allocations.account_id', $accountId);
+        }
+
         $pendingOutboundQtySub = $this->buildPendingOutboundQuantitySubquery($request);
         $pendingReturnQtySub = $this->buildPendingReturnQuantitySubquery($request);
+
+        $query->leftJoinSub($batchStockSub, 'inv_batch_stock', function ($join) {
+            $join->on('inv_batch_stock.product_id', '=', 'products.id');
+        });
+
+        $query->leftJoinSub($oversoldReserveSub, 'inv_oversold_reserve', function ($join) {
+            $join->on('inv_oversold_reserve.product_id', '=', 'products.id');
+        });
 
         $query->leftJoinSub($pendingOutboundQtySub, 'pending_outbound', function ($join) {
             $join->on('pending_outbound.product_id', '=', 'products.id');
@@ -3490,9 +3525,11 @@ class ProductController extends Controller
             $join->on('pending_returns.product_id', '=', 'products.id');
         });
 
-        $baseStockSql = 'COALESCE(products.stock_quantity, 0)';
+        // Base stock = batch available stock minus any oversold reservations
+        $baseStockSql = '(COALESCE(inv_batch_stock.batch_available, 0) - COALESCE(inv_oversold_reserve.oversold_qty, 0))';
         $pendingExportQtySql = 'COALESCE(pending_outbound.pending_export_quantity, 0)';
         $pendingReturnQtySql = 'COALESCE(pending_returns.pending_return_quantity, 0)';
+        // available_to_sell = base_stock - pending_export (negative allowed for pre-sales / back-orders)
         $availableToSellSql = '(' . $baseStockSql . ' - ' . $pendingExportQtySql . ')';
 
         return [
@@ -3691,7 +3728,7 @@ class ProductController extends Controller
         }
 
         $stockQuery = Product::withTrashed()
-            ->select(['products.id', 'products.stock_quantity'])
+            ->select(['products.id'])
             ->whereIn('products.id', $normalizedIds->all());
 
         $stockContext = $this->attachActualStockSubqueries($stockQuery, $request);
@@ -3700,7 +3737,7 @@ class ProductController extends Controller
             ->selectRaw($stockContext['actual_stock_sql'] . ' AS actual_stock')
             ->get()
             ->mapWithKeys(function (Product $product) {
-                $actualStock = (int) round((float) ($product->actual_stock ?? $product->stock_quantity ?? 0));
+                $actualStock = (int) round((float) ($product->actual_stock ?? 0));
 
                 return [(int) $product->id => $actualStock];
             })
@@ -3720,7 +3757,7 @@ class ProductController extends Controller
         }
 
         $stockQuery = Product::withTrashed()
-            ->select(['products.id', 'products.stock_quantity'])
+            ->select(['products.id'])
             ->whereIn('products.id', $normalizedIds->all());
 
         $stockContext = $this->attachActualStockSubqueries($stockQuery, $request);
@@ -3730,13 +3767,15 @@ class ProductController extends Controller
             ->selectRaw($stockContext['pending_export_sql'] . ' AS pending_export_quantity')
             ->get()
             ->mapWithKeys(function (Product $product) {
-                $computedStock = (int) round((float) ($product->computed_stock ?? $product->stock_quantity ?? 0));
+                $computedStock = (int) round((float) ($product->computed_stock ?? 0));
                 $pendingExportQuantity = (int) round((float) ($product->pending_export_quantity ?? 0));
+                // available_to_sell is allowed to be negative (pre-sales / back-orders)
+                $availableToSell = $computedStock - $pendingExportQuantity;
 
                 return [(int) $product->id => [
                     'computed_stock' => $computedStock,
                     'pending_export_quantity' => $pendingExportQuantity,
-                    'available_to_sell' => $computedStock - $pendingExportQuantity,
+                    'available_to_sell' => $availableToSell,
                 ]];
             })
             ->all();

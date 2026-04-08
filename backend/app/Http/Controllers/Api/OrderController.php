@@ -521,7 +521,9 @@ class OrderController extends Controller
         $orderKind = $this->normalizeOrderKind($orderKind);
         $prefix = $this->orderNumberPrefix($orderKind);
 
-        $latestOrderNumber = Order::withTrashed()
+        $orderNumberQuery = Order::withoutGlobalScope('account_id')->withTrashed();
+
+        $latestOrderNumber = (clone $orderNumberQuery)
             ->where('order_number', 'LIKE', $prefix . '%A0')
             ->orderByRaw('LENGTH(order_number) DESC')
             ->orderBy('order_number', 'desc')
@@ -534,7 +536,7 @@ class OrderController extends Controller
 
         while (true) {
             $candidate = "{$prefix}{$nextNumber}A0";
-            $existsQuery = Order::withTrashed()->where('order_number', $candidate);
+            $existsQuery = (clone $orderNumberQuery)->where('order_number', $candidate);
 
             if ($ignoreOrderId) {
                 $existsQuery->where('id', '!=', $ignoreOrderId);
@@ -1695,6 +1697,7 @@ class OrderController extends Controller
             ->with([
                 'images:id,product_id,image_url,is_primary,sort_order',
                 'attributeValues:id,product_id,attribute_id,value',
+                'unit:id,name',
             ])
             ->get()
             ->keyBy(fn (Product $product) => (int) $product->id);
@@ -1732,6 +1735,9 @@ class OrderController extends Controller
                             'sku' => trim((string) $product->sku),
                             'price' => round((float) ($product->price ?? 0), 2),
                             'cost_price' => ImportCostRounding::roundUnitCost($product->cost_price ?? $product->expected_cost ?? 0),
+                            'unit_name' => $product->unit?->name
+                                ?? $parentProduct?->unit?->name
+                                ?? (trim((string) ($item['unit_name'] ?? '')) ?: ''),
                             'main_image' => $primaryImage?->image_url ?: $item['main_image'] ?: $parentPrimaryImage?->image_url,
                             'attribute_values' => $product->attributeValues
                                 ->map(fn ($attributeValue) => [

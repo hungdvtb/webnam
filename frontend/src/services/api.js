@@ -86,7 +86,7 @@ api.interceptors.response.use(
 
 const multipartConfig = (data) => (
     data instanceof FormData
-        ? { headers: { 'Content-Type': 'multipart/form-data' } }
+        ? { headers: { 'Content-Type': undefined } }
         : undefined
 );
 
@@ -165,7 +165,7 @@ export const productApi = {
     getOne: (id) => api.get(`/products/${id}`),
     downloadExcel: (params) => api.get('/products/export', { params, responseType: 'blob' }),
     downloadImportTemplate: () => api.get('/products/import/template', { responseType: 'blob' }),
-    importExcel: (data) => api.post('/products/import', data, { headers: { 'Content-Type': 'multipart/form-data' } }),
+    importExcel: (data) => api.post('/products/import', data, multipartConfig(data)),
     refreshOrderItems: (data) => api.post('/products/refresh-order-items', data),
     convertToConfigurable: (id, data) => api.post(`/products/${id}/convert-to-configurable`, data, multipartConfig(data)),
     store: (data) => api.post('/products', data, multipartConfig(data)),
@@ -184,23 +184,21 @@ export const productApi = {
 };
 
 export const productImageApi = {
-    upload: (productId, formData) => api.post(`/products/${productId}/images`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-    }),
+    upload: (productId, formData) => api.post(`/products/${productId}/images`, formData, multipartConfig(formData)),
     bulkAppendPreview: (formData, config = {}) => api.post('/product-images/bulk-append/preview', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        ...multipartConfig(formData),
         ...config,
     }),
     bulkAppendApply: (formData, config = {}) => api.post('/product-images/bulk-append/apply', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        ...multipartConfig(formData),
         ...config,
     }),
     bulkRefreshPreview: (formData, config = {}) => api.post('/product-images/bulk-refresh/preview', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        ...multipartConfig(formData),
         ...config,
     }),
     bulkRefreshApply: (formData, config = {}) => api.post('/product-images/bulk-refresh/apply', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        ...multipartConfig(formData),
         ...config,
     }),
     setPrimary: (id) => api.post(`/product-images/${id}/primary`),
@@ -214,7 +212,7 @@ export const categoryApi = {
     getProducts: (id) => api.get(`/categories/${id}/products`),
     downloadExcel: (params) => api.get('/categories/export', { params, responseType: 'blob' }),
     downloadImportTemplate: () => api.get('/categories/import/template', { responseType: 'blob' }),
-    importExcel: (data) => api.post('/categories/import', data, { headers: { 'Content-Type': 'multipart/form-data' } }),
+    importExcel: (data) => api.post('/categories/import', data, multipartConfig(data)),
     store: (data) => api.post('/categories', data, multipartConfig(data)),
     update: (id, data) => api.post(`/categories/${id}`, data, multipartConfig(data)),
     destroy: (id) => api.delete(`/categories/${id}`),
